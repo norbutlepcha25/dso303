@@ -4,7 +4,7 @@
 
 <p align="justify">
 
-This module aims to provide a comprehensive understanding of <strong>algorithmic foundations</strong>, covering fundamental concepts to advanced topics essential for computer science practitioners. Through a structured approach, it aims to familiarise students with the theoretical underpinnings, practical methodologies, and techniques in <strong>algorithm design, analysis, and implementation</strong>. By delving into mathematical foundations, asymptotic analysis, recurrence relations, divide and conquer strategies, sorting algorithms, dynamic programming, and greedy algorithms, students will gain a holistic view of algorithmic problem-solving.
+This module provides a comprehensive understanding of cloud-native solution design using Amazon Web Services (AWS). It focuses on leveraging AWS services and best practices to architect, implement, and deploy scalable, resilient, and efficient cloud-native applications. Students will learn to utilize key AWS services for containerization, serverless computing, microservices architecture, and DevOps practices. The module covers core concepts such as containerization with Amazon ECS and EKS, serverless computing with AWS Lambda, microservices implementation using various AWS services, continuous integration and delivery (CI/CD) with AWS developer tools, and integration of essential AWS services for storage, databases, and messaging. By the end of the module, students will have the skills to architect and develop cloud-native solutions that fully leverage the AWS ecosystem, addressing concerns of scalability, security, and operational excellence in cloud environments.
 
 </p>
 
@@ -12,21 +12,16 @@ This module aims to provide a comprehensive understanding of <strong>algorithmic
 
 On completion of the module, students will be able to:
 
-🎯 Define key concepts in number theory, combinatorics, and probability theory as they relate to algorithmic design.
-
-🎯 Explain the principles of asymptotic analysis and the role of algorithms in computing.
-
-🎯 Assess the efficiency of different approaches to solving recurrence relations, including the substitution method, recursion-tree method, and master method.
-
-🎯 Implement divide-and-conquer algorithms such as Strassen's algorithm for matrix multiplication and the Fast Fourier Transform.
-
-🎯 Compare and contrast various sorting algorithms, evaluating their time complexity and performance characteristics.
-
-🎯 Design dynamic programming solutions for complex problems such as the rod cutting problem and optimal binary search trees.
-
-🎯 Develop greedy algorithms for optimization problems, such as the fractional knapsack problem and activity selection.
-
-🎯 Examine the principles and applications of randomised algorithms in problem-solving. - Critique the effectiveness of different algorithm design paradigms (divide-and-conquer, dynamic programming, greedy) for various problem types.
+Explain the principles of cloud-native architectures and their implementation using AWS services, including the benefits and trade-offs of different service models (IaaS, PaaS, FaaS).
+Design and implement containerized applications using Amazon Elastic Container Service (ECS) and Elastic Kubernetes Service (EKS), demonstrating proficiency in container orchestration and management on AWS.
+Develop serverless applications using AWS Lambda, integrating with other AWS services to create event-driven, scalable solutions.
+Architect microservices-based applications on AWS, utilizing services such as API Gateway, AppSync, and App Mesh for effective service communication and management.
+Implement robust CI/CD pipelines for cloud-native applications using AWS developer tools (CodeCommit, CodeBuild, CodeDeploy, CodePipeline), enhancing software delivery processes.
+Integrate various AWS services (e.g., S3, RDS, DynamoDB, SQS, SNS) into cloud-native applications, demonstrating the ability to leverage AWS's managed services effectively.
+Apply AWS-specific patterns and best practices for building resilient, scalable, and high-performance cloud-native applications.
+Implement comprehensive monitoring, logging, and observability solutions for cloud-native applications using AWS services such as CloudWatch, X-Ray, and CloudTrail.
+Design and implement security measures for cloud-native applications on AWS, including identity and access management (IAM), network security, and data protection.
+Analyze and optimize AWS resource usage and costs in cloud-native deployments, demonstrating an understanding of AWS pricing models and cost optimization strategies.
 
 ## Learning and Teaching Approach
 

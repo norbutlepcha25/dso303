@@ -102,20 +102,20 @@ plugins:
       minify_html: true
 
 nav:
-  - Home: index.md
+  - Home: index.mdclaude
 
   - Unit 1:
-      - Overview: unit1/overview.md
-      - 1.1 Number Theory: unit1/topic1.md
-      - 1.2 Combinatorics: unit1/topic2.md
-      - 1.3 Combinatorics: unit1/topic3.md
-      - 1.4 Basics of Game Theory: unit1/topic4.md
-      - Summary: unit1/summary.md
+      # - Overview: unit1/overview.md
+      # - 1. AWS Cloud overview: unit1/topic1.md
+      # - 1.2 Combinatorics: unit1/topic2.md
+      # - 1.3 Combinatorics: unit1/topic3.md
+      # - 1.4 Basics of Game Theory: unit1/topic4.md
+      # - Questions: unit1/summary.md
 
   # - Unit 2:
   #     - Overview: unit2/overview.md
   #     - 2.1 Asymptotic Analysis: unit2/topic1.md
-  # - 2.2 Model of Computation (Word-RAM): unit2/topic2.md
+  #     - 2.2 Model of Computation (Word-RAM): unit2/topic2.md
   #     - 2.3 Role of Algorithms in Computing: unit2/topic3.md
   #     - 2.4 Analysing and Designing Algorithms: unit2/topic4.md
   #     - 2.5 O-notation, Ω-notation, and Θ-notation: unit2/topic5.md
@@ -169,7 +169,15 @@ nav:
   #     - 7.4 Activity Selection Problems: unit7/topic4.md
   #     - 7.5 Dijkstra's Algorithm: unit7/topic5.md
   #     - 7.6 Minimum Spanning Tree (Prim's and Kruskal's Algorithms): unit7/topic6.md
-  # - Summary: unit7/summary.md
+  
+  - Lab:
+      - Lab 1: floci_lab/lab1_iam.md
+      # - 7.1 Greedy Algorithm Design Principles: unit7/topic1.md
+      # - 7.2 Fractional Knapsack Problem: unit7/topic2.md
+      # - 7.3 Huffman Coding: unit7/topic3.md
+      # - 7.4 Activity Selection Problems: unit7/topic4.md
+      # - 7.5 Dijkstra's Algorithm: unit7/topic5.md
+      # - 7.6 Minimum Spanning Tree (Prim's and Kruskal's Algorithms): unit7/topic6.md
 
   # - Practical 2: questions.md
   # - Practical 3: q2.md

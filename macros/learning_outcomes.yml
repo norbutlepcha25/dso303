@@ -1,6 +1,5 @@
 unit1:
-  - Define key concepts in number theory, combinatorics, and probability theory as they relate to algorithmic design.
-
+  - Explain the principles of cloud-native architectures and their implementation using AWS services, including the benefits and trade-offs of different service models (IaaS, PaaS, FaaS).
 unit2:
   - Explain the principles of asymptotic analysis and the role of algorithms in computing.
 
