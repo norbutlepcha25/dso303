@@ -1,22 +1,3 @@
-<!-- # Lab 1
-
-| Lab | Topic                            |
-| --- | -------------------------------- |
-| 1   | IAM Fundamentals & Environment   |
-| 2   | IAM Users                        |
-| 3   | IAM Policies                     |
-| 4   | IAM Groups                       |
-| 5   | IAM Permission Evaluation        |
-| 6   | Least Privilege                  |  
-| 7   | IAM Roles                        |  
-| 8   | STS AssumeRole                   |
-| 9   | Resource Policies                |  
-| 10  | Cross-Account Access (Simulated) |  
-| 11  | Policy Conditions                |
-| 12  | IAM Policy Variables             |
-| 13  | Permission Boundaries            |
-| 14  | IAM Security Audit               |
-| 15  | Enterprise IAM Challenge         | -->
 
 
 # Lab Environment
@@ -213,7 +194,7 @@ Attach it.
 
 ```bash
 aws iam attach-user-policy \
-    --user-name developer \
+    --user-name President \
     --policy-arn arn:aws:iam::000000000000:policy/ListBucketPolicy
 ```
 
@@ -234,7 +215,7 @@ Instead of a managed policy, create an inline policy.
 
 ```bash
 aws iam put-user-policy \
-    --user-name intern \
+    --user-name HOD \
     --policy-name ReadOnly \
     --policy-document file://listbucket.json
 ```
@@ -273,7 +254,7 @@ Add users.
 ```bash
 aws iam add-user-to-group \
     --group-name Developers \
-    --user-name developer
+    --user-name <user-name>
 ```
 
 Also
@@ -281,7 +262,7 @@ Also
 ```bash
 aws iam add-user-to-group \
     --group-name Developers \
-    --user-name alice
+    --user-name Penjo
 ```
 
 List members.
@@ -447,7 +428,7 @@ Explicit Deny
 
 Create:
 
-* Users: `alice`, `bob`
+* Users: `Nima`, `Dawa`
 * Group: `HR`
 * Bucket: `employee-records`
 
