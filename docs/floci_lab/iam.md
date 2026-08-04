@@ -33,7 +33,7 @@ Before your first lab session, confirm each item:
 
 | # | Requirement | Verification command | Expected |
 |---|---|---|---|
-| 1 | Docker running | `docker info --format '{{.ServerVersion}}'` | a version string |
+| 1 | Docker running | `docker info --format '{{ServerVersion}}'` | a version string |
 | 2 | Floci CLI installed | `floci --version` | a version string |
 | 3 | AWS CLI v2 installed | `aws --version` | `aws-cli/2.x.x ...` |
 | 4 | `jq` installed | `jq --version` | `jq-1.6` or later |

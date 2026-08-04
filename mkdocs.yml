@@ -102,9 +102,9 @@ plugins:
       minify_html: true
 
 nav:
-  - Home: index.mdclaude
+  - Home: index.md
 
-  - Unit 1:
+  # - Unit 1:
       # - Overview: unit1/overview.md
       # - 1. AWS Cloud overview: unit1/topic1.md
       # - 1.2 Combinatorics: unit1/topic2.md
@@ -172,6 +172,7 @@ nav:
   
   - Lab:
       - Lab 1: floci_lab/lab1_iam.md
+      - Lab 2: floci_lab/iam.md
       # - 7.1 Greedy Algorithm Design Principles: unit7/topic1.md
       # - 7.2 Fractional Knapsack Problem: unit7/topic2.md
       # - 7.3 Huffman Coding: unit7/topic3.md
