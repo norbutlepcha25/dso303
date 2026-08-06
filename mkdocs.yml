@@ -43,7 +43,7 @@ extra_css:
   - https://unpkg.com/katex@0/dist/katex.min.css
 
 copyright: |
-  &copy; 2025 <a href="https://github.com/cslivenote" target="_blank" rel="noopener">Norbu Tshering Lepcha</a>
+  &copy; 2026 <a href="https://github.com/cslivenote" target="_blank" rel="noopener">Norbu Tshering Lepcha</a>
 
 extra:
   generator: false
@@ -171,14 +171,15 @@ nav:
   #     - 7.6 Minimum Spanning Tree (Prim's and Kruskal's Algorithms): unit7/topic6.md
   
   - Lab:
-      - Lab 1: floci_lab/lab1_iam.md
-      - Lab 2: floci_lab/iam.md
+      - Lab Overview: Lab/overview.md
+      - Lab 1: Lab/lab1_iam.md
+      - Lab 2: Lab/iam.md
       # - 7.1 Greedy Algorithm Design Principles: unit7/topic1.md
       # - 7.2 Fractional Knapsack Problem: unit7/topic2.md
-      # - 7.3 Huffman Coding: unit7/topic3.md
-      # - 7.4 Activity Selection Problems: unit7/topic4.md
+      # - 7.3 Huffman Coding: unit7/topic3.mdß
+      # - 7.4 Activity Selection Problems: unit7/topic4.mdßß
       # - 7.5 Dijkstra's Algorithm: unit7/topic5.md
-      # - 7.6 Minimum Spanning Tree (Prim's and Kruskal's Algorithms): unit7/topic6.md
+      # - 7.6 Minimum Spanning Tree (Prißm's and Kruskal'ßs Algorithms): unit7/topic6.md
 
   # - Practical 2: questions.md
   # - Practical 3: q2.md
