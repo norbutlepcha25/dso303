@@ -173,8 +173,8 @@ nav:
   - Lab:
       - Lab Overview: Lab/overview.md
       - Lab 1: Lab/lab1_iam.md
-      - Lab 2: Lab/iam.md
-      - Lab 3: Lab/vpc.md
+      # - Lab 2: Lab/iam.md
+      # - Lab 3: Lab/vpc.md
       # - 7.1 Greedy Algorithm Design Principles: unit7/topic1.md
       # - 7.2 Fractional Knapsack Problem: unit7/topic2.md
       # - 7.3 Huffman Coding: unit7/topic3.mdß
