@@ -107,10 +107,10 @@ nav:
   - Unit 1:
       - Overview: unit1/overview.md
       - 1.1 AWS Cloud overview: unit1/topic1.md
-      - 1.2 Design Pattern: unit1/topic2.md
-      - 1.3 Combinatorics: unit1/topic3.md
-      - 1.4 Basics of Game Theory: unit1/topic4.md
-      - Questions: unit1/summary.md
+      # - 1.2 Design Pattern: unit1/topic2.md
+      # - 1.3 Combinatorics: unit1/topic3.md
+      # - 1.4 Basics of Game Theory: unit1/topic4.md
+      # - Questions: unit1/summary.md
 
   # - Unit 2:
   #     - Overview: unit2/overview.md
@@ -170,14 +170,14 @@ nav:
   #     - 7.5 Dijkstra's Algorithm: unit7/topic5.md
   #     - 7.6 Minimum Spanning Tree (Prim's and Kruskal's Algorithms): unit7/topic6.md
   
-  - Lab:
-      - Lab Overview: Lab/overview.md
-      - Lab 0: Lab/lab1_iam.md
-      - Lab 2: Lab/ima.md
-      - Lab 3: Lab/vpc.md
-      - Lab 4: Lab/vps.md
-      - Lab 5: Lab/stats.md
-      # - 7.1 Greedy Algorithm Design Principles: unit7/topic1.md
+  # - Lab:
+  #     - Lab Overview: Lab/overview.md
+  #     - Lab 0: Lab/lab1_iam.md
+  #     - Lab 2: Lab/ima.md
+  #     - Lab 3: Lab/vpc.md
+  #     - Lab 4: Lab/vps.md
+  #     - Lab 5: Lab/stats.md
+  #     # - 7.1 Greedy Algorithm Design Principles: unit7/topic1.md
       # - 7.2 Fractional Knapsack Problem: unit7/topic2.md
       # - 7.3 Huffman Coding: unit7/topic3.mdß
       # - 7.4 Activity Selection Problems: unit7/topic4.mdßß
