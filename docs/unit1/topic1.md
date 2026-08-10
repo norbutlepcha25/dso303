@@ -1,12 +1,92 @@
 # AWS Cloud overview: Global Infrastructure, Regions and Availability Zones, Edge Locations and CloudFront
 
----
-
 ## Definition
 
 **Cloud computing** is the on-demand delivery of IT resources (compute, storage, networking, databases, analytics, and higher-level services) over the Internet with pay-as-you-go pricing. Instead of purchasing, installing, and operating physical servers, an organization provisions resources programmatically from a provider that operates the physical infrastructure at massive scale.
 
-The **AWS Global Infrastructure** is the physical and logical foundation on which every AWS service runs. It consists of three principal layers:
+Cloud computing enables you to stop thinking of your infrastructure as hardware and instead think of (and use) it as software. 
+
+<figure markdown="span">
+    ![PHYSICALSERVER](../img/U1/physicalServer.png){width="80%"}
+    <figcaption>Physical Server Example</figcaption>
+    <!-- <p align='right' style="font-size:0.8em"><i>NA</i></p> -->
+</figure>
+
+## Why This Service or Concept Exists
+
+### The problem: physical infrastructure is hard, slow, and fragile
+
+Before cloud computing, running a production application required:
+
+1. **Capital expenditure (CapEx):** buying servers, storage arrays, switches, routers, racks, generators, and cooling — often 6 to 12 months before serving the first user.
+2. **Capacity guessing:** you had to forecast peak demand years ahead. Over-provisioning wasted money; under-provisioning caused outages during success (the "Slashdot effect").
+3. **Single points of failure:** most companies operated one data centre. A fire, flood, power failure, or fibre cut took the entire business offline.
+4. **Undifferentiated heavy lifting:** engineers spent their time racking servers, patching hypervisors, and replacing failed disks rather than building product features.
+5. **Global reach was unaffordable:** serving users in Asia, Europe, and the Americas with low latency required building or leasing data centres on every continent — feasible only for the largest corporations.
+
+
+### The AWS approach
+
+AWS inverts each of these problems:
+
+| Traditional approach                               | AWS approach                                   | Benefit                                  |
+| -------------------------------------------------- | ---------------------------------------------- | ---------------------------------------- |
+| Buy hardware up front (CapEx)                      | Rent capacity per second/hour (OpEx)           | No upfront investment; costs track usage |
+| Forecast capacity years ahead                      | Elastic scaling on demand                      | Capacity matches actual load             |
+| One data centre, one fault domain                  | Multiple AZs per Region, multiple Regions      | Engineered fault isolation               |
+| Build your own global footprint                    | 30+ Regions, 100+ AZs, 700+ PoPs already built | Global deployment in minutes             |
+| Operate power, cooling, physical security yourself | AWS operates the facility layer                | Teams focus on applications              |
+
+
+## Cloud Service Model
+<figure markdown="span">
+    ![PHYSICALSERVER](../img/U1/CloudServiceModel.png){width="80%"}
+    <figcaption>Cloud Service Model</figcaption>
+    <!-- <p align='right' style="font-size:0.8em"><i>NA</i></p> -->
+</figure>
+
+There are three main cloud service models. Each model represents a different part of the cloud computing stack and gives you a different level of control over your IT resources:
+
+1. **Infrastructure as a service (IaaS)**: Services in this category are the basic building blocks for cloud IT and typically provide you with access to networking features, computers (virtual or on dedicated hardware), and data storage space. IaaS provides you with the highest level of flexibility and management control over your IT resources. It is the most similar to existing IT resources that many IT departments and developers are familiar with today.
+
+2. **Platform as a service (PaaS)**: Services in this category reduce the need for you to manage the underlying infrastructure (usually hardware and operating systems) and enable you to focus on the deployment and management of your applications. 
+
+3. **Software as a service (SaaS)**: Services in this category provide you with a completed product that the service provider runs and manages. In most cases, software as a service refers to end-user applications. With a SaaS offering, you do not have to think about how the service is maintained or how the underlying infrastructure is managed. You need to think only about how you plan to use that particular piece of software. A common example of a SaaS application is web-based email, where you can send and receive email without managing feature additions to the email product or maintaining the servers and operating systems that the email program runs on.
+
+## Cloud Deployment Model
+
+There are three main cloud computing deployment models, which represent the cloud environments that your applications can be deployed in:
+
+<figure markdown="span">
+    ![PHYSICALSERVER](../img/U1/Deployment.png){width="80%"}
+    <figcaption>Cloud Deployment Model</figcaption>
+    <!-- <p align='right' style="font-size:0.8em"><i>NA</i></p> -->
+</figure>
+
+1. Cloud: A cloud-based application is fully deployed in the cloud, and all parts of the application run in the cloud. Applications in the cloud have either been created in the cloud or have been migrated from an existing infrastructure to take advantage of the benefits of cloud computing ([Read More](see https://aws.amazon.com/what-is-cloud-computing/)). Cloud-based applications can be built on low-level infrastructure pieces or they can use higher-level services that provide abstraction from the management, architecting, and scaling requirements of core infrastructure.
+
+2. Hybrid: A hybrid deployment is a way to connect infrastructure and applications between cloud-based resources and existing resources that are not located in the cloud. The most common method of hybrid deployment is between the cloud and existing on-premises infrastructure. This model enables an organization to extend and grow their infrastructure into the cloud while connecting cloud resources to internal systems. 
+
+3. On-premises: Deploying resources on-premises, using virtualization and resource management tools, is sometimes called private cloud. While on-premises deployment does not provide many of the benefits of cloud computing, it is sometimes sought for its ability to provide dedicated resources. In most cases, this deployment model is the same as legacy IT infrastructure, but it might also use application management and virtualization technologies to increase resource utilization.
+
+## What is AWS?
+
+Amazon Web Services (AWS) is a secure cloud platform that offers a broad set of global cloud-based products. Because these products are delivered over the internet, you have on-demand access to the compute, storage, network, database, and other IT resources that you might need for your projects—and the tools to manage them. You can immediately provision and launch AWS resources. The resources are ready for you to use in minutes.
+
+AWS offers flexibility. Your AWS environment can be reconfigured and updated on demand, scaled up or down automatically to meet usage patterns and optimize spending, or shut down temporarily or permanently. The billing for AWS services becomes an operational expense instead of a capital expense.
+
+AWS services are designed to work together to support virtually any type of application or workload. Think of these services like building blocks, which you can assemble quickly to build sophisticated, scalable solutions, and then adjust them as your needs change.
+
+!!! info "AWS Stats"
+
+    - $128.7 Billion in anual revenue as of 2025
+    - 31% of the global cloud Market is dominated by AWS making it #1
+    - 15 years of consecutive market leader
+    - 1 Million plus active users in the world
+
+## AWS Global Infrastructure 
+
+The **AWS Global Infrastructure** ([Explore AWS Infrstructure](https://aws.amazon.com/about-aws/global-infrastructure/))is the physical and logical foundation on which every AWS service runs. It consists of three principal layers:
 
 | Layer                                       | What it is                                                                                         | Primary purpose                                                      |
 | ------------------------------------------- | -------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------- |
@@ -22,31 +102,8 @@ Where these fit in AWS architecture: every resource you create (an EC2 instance,
 
     Regions, AZs, and Edge Locations are not merely trivia to memorize. They are **fault domains** and **latency domains**. Every availability, disaster-recovery, latency, and compliance decision you will ever make on AWS is ultimately a decision about how to place workloads across these three layers.
 
----
 
-## Why This Service or Concept Exists
 
-### The problem: physical infrastructure is hard, slow, and fragile
-
-Before cloud computing, running a production application required:
-
-1. **Capital expenditure (CapEx):** buying servers, storage arrays, switches, routers, racks, generators, and cooling — often 6 to 12 months before serving the first user.
-2. **Capacity guessing:** you had to forecast peak demand years ahead. Over-provisioning wasted money; under-provisioning caused outages during success (the "Slashdot effect").
-3. **Single points of failure:** most companies operated one data centre. A fire, flood, power failure, or fibre cut took the entire business offline.
-4. **Undifferentiated heavy lifting:** engineers spent their time racking servers, patching hypervisors, and replacing failed disks rather than building product features.
-5. **Global reach was unaffordable:** serving users in Asia, Europe, and the Americas with low latency required building or leasing data centres on every continent — feasible only for the largest corporations.
-
-### The AWS approach
-
-AWS inverts each of these problems:
-
-| Traditional approach                               | AWS approach                                   | Benefit                                  |
-| -------------------------------------------------- | ---------------------------------------------- | ---------------------------------------- |
-| Buy hardware up front (CapEx)                      | Rent capacity per second/hour (OpEx)           | No upfront investment; costs track usage |
-| Forecast capacity years ahead                      | Elastic scaling on demand                      | Capacity matches actual load             |
-| One data centre, one fault domain                  | Multiple AZs per Region, multiple Regions      | Engineered fault isolation               |
-| Build your own global footprint                    | 30+ Regions, 100+ AZs, 700+ PoPs already built | Global deployment in minutes             |
-| Operate power, cooling, physical security yourself | AWS operates the facility layer                | Teams focus on applications              |
 
 ### Why the specific Region/AZ/Edge structure?
 
@@ -57,7 +114,8 @@ AWS could have exposed a single flat pool of "servers somewhere." It deliberatel
 - **Law:** data-protection regulations (GDPR in the EU, data-sovereignty laws in many countries) require data to remain within specific jurisdictions. Regions give customers an explicit, auditable data boundary — AWS does not replicate customer data out of a Region unless the customer configures it.
 
 !!! note "Why CloudFront exists"
-Even with Regions on every continent, most applications deploy to one or a few Regions. CloudFront exists to close the remaining gap: it moves _content_ (and TLS termination, and increasingly compute via edge functions) to within a few tens of kilometres of users, without the application team operating any additional infrastructure.
+
+    Even with Regions on every continent, most applications deploy to one or a few Regions. CloudFront exists to close the remaining gap: it moves _content_ (and TLS termination, and increasingly compute via edge functions) to within a few tens of kilometres of users, without the application team operating any additional infrastructure.
 
 ---
 
@@ -107,7 +165,8 @@ Key properties:
 - AZs are identified by letters appended to the Region code: `us-east-1a`, `us-east-1b`, etc.
 
 !!! warning "AZ names are randomized per account"
-The mapping between an AZ _name_ (`us-east-1a`) and the underlying physical zone is **shuffled independently for each AWS account**. Your `us-east-1a` is probably not another account's `us-east-1a`. AWS does this to spread load evenly across zones. When AZ identity must be coordinated across accounts (for example, to avoid cross-AZ data-transfer charges between accounts), use the **AZ ID** (such as `use1-az4`), which is consistent for everyone.
+
+    The mapping between an AZ _name_ (`us-east-1a`) and the underlying physical zone is **shuffled independently for each AWS account**. Your `us-east-1a` is probably not another account's `us-east-1a`. AWS does this to spread load evenly across zones. When AZ identity must be coordinated across accounts (for example, to avoid cross-AZ data-transfer charges between accounts), use the **AZ ID** (such as `use1-az4`), which is consistent for everyone.
 
 ### Fault domain and blast radius
 
@@ -160,7 +219,8 @@ A **CDN** caches copies of content at many locations near users. The two perform
 | **Zonal**    | EC2 instances, EBS volumes, subnets                | Bound to exactly one AZ; _you_ are responsible for multi-AZ redundancy |
 
 !!! tip "Architect's rule of thumb"
-Regional managed services (S3, DynamoDB, SQS, Lambda) give you multi-AZ resilience _for free_ — AWS handles it. Zonal primitives (EC2, EBS) make multi-AZ _your_ job. This is one of the strongest arguments for cloud-native, managed-service architectures over lift-and-shift EC2 fleets, and it is a recurring theme throughout DSO303.
+
+    Regional managed services (S3, DynamoDB, SQS, Lambda) give you multi-AZ resilience _for free_ — AWS handles it. Zonal primitives (EC2, EBS) make multi-AZ _your_ job. This is one of the strongest arguments for cloud-native, managed-service architectures over lift-and-shift EC2 fleets, and it is a recurring theme throughout DSO303.
 
 ---
 
@@ -188,7 +248,8 @@ Every AWS service is internally split into:
 AWS deliberately engineers data planes to keep working even when the control plane is impaired — an architectural principle called **static stability**. A statically stable multi-AZ design pre-provisions capacity in each AZ so that surviving an AZ failure requires _no_ control-plane action (no new instance launches) at the exact moment when the control plane may itself be under stress.
 
 !!! tip "Static stability in your own designs"
-If your recovery plan for an AZ failure is "the Auto Scaling group will launch replacement instances," you depend on the EC2 control plane during a Regional bad day. A stricter design runs N+1 capacity spread across three AZs so that losing one AZ leaves enough already-running capacity. Route 53's data plane (answering queries) is similarly designed to survive control-plane failure — health-check-driven failover works even if the Route 53 API is down.
+    
+    If your recovery plan for an AZ failure is "the Auto Scaling group will launch replacement instances," you depend on the EC2 control plane during a Regional bad day. A stricter design runs N+1 capacity spread across three AZs so that losing one AZ leaves enough already-running capacity. Route 53's data plane (answering queries) is similarly designed to survive control-plane failure — health-check-driven failover works even if the Route 53 API is down.
 
 ### How CloudFront works internally
 
@@ -299,7 +360,8 @@ sequenceDiagram
 ```
 
 !!! note "Synchronous vs asynchronous"
-Everything on the numbered path above is **synchronous** — the user is waiting. The architectural goal is to make the synchronous path as short as possible (ideally: edge cache hit) and move everything else to **asynchronous** patterns (queues, events), which you will study with SQS, SNS, and EventBridge later in this module.
+
+    Everything on the numbered path above is **synchronous** — the user is waiting. The architectural goal is to make the synchronous path as short as possible (ideally: edge cache hit) and move everything else to **asynchronous** patterns (queues, events), which you will study with SQS, SNS, and EventBridge later in this module.
 
 ---
 
@@ -422,7 +484,8 @@ Although the global infrastructure itself is not "configured," architects make e
 - **Maintainability & operational complexity.** Each added Region multiplies deployment pipelines, monitoring, data-consistency questions, and failure modes. The honest progression is: single-AZ (dev only) → multi-AZ (production default) → multi-Region (only when RTO/RPO or global latency demands it).
 
 !!! danger "The single-AZ production system"
-Deploying production workloads in one AZ to avoid ~$0.02/GB cross-AZ transfer is a classic false economy. AZ-level events happen every year somewhere. Multi-AZ is the non-negotiable production baseline in this module.
+
+    Deploying production workloads in one AZ to avoid ~$0.02/GB cross-AZ transfer is a classic false economy. AZ-level events happen every year somewhere. Multi-AZ is the non-negotiable production baseline in this module.
 
 ---
 

@@ -394,35 +394,7 @@ obtain temporary credentials.
 
 ---
 
-# Activity 11
-
-## Permission Evaluation
-
-Create
-
-User
-
-↓
-
-Group
-
-↓
-
-Managed Policy
-
-↓
-
-Inline Policy
-
-↓
-
-Resource Policy
-
-↓
-
-Explicit Deny
-
----
+## Practice
 
 ### Case 1 — HR Department
 
