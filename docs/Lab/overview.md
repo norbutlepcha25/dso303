@@ -54,9 +54,9 @@
     - Typical applications
 
 
-    ### 3. Real-World Use Case
+    ### 3. Use Case
 
-    Describe one or more real-world scenarios where this AWS service is commonly used.
+    Describe where this AWS service is commonly used.
 
     > **Example**
     >
@@ -203,7 +203,7 @@
     - Identity Federation
 
 
-    ### 3. Real-World Use Case
+    ### 3. Use Case
 
     A software company employs developers, testers, DevOps engineers, and system administrators.
 

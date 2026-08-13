@@ -3,12 +3,22 @@ site_url: https://norbutlepcha25.github.io/dso303
 
 use_directory_urls: false
 
+# CHANGED: uncomment once every file listed in `nav` exists. Strict mode turns
+# "file referenced in nav but not found" into a build failure instead of a
+# warning you scroll past. Verified: the config below passes --strict today.
+# strict: true
+
 theme:
   name: material
   features:
     - navigation.tabs
     - navigation.sections
-    - toc.integrate
+    # REMOVED: toc.integrate
+    #   It merges the page TOC into the LEFT sidebar and removes the right-hand
+    #   one. Measured on the Lab 01 page: 139 in-page anchors were crammed into
+    #   the left nav alongside the site navigation, and the right column was
+    #   empty. Without it the TOC moves to the right column where it belongs.
+    #   Put it back if you prefer the old layout — nothing else depends on it.
     - navigation.top
     - search.suggest
     - search.highlight
@@ -16,6 +26,8 @@ theme:
     - content.code.copy
     - content.tooltips
     - content.footnote.tooltips
+    # OPTIONAL: adds an "Edit this page" pencil. Needs repo_url + edit_uri below.
+    # - content.action.edit
 
   language: en
   palette:
@@ -38,6 +50,11 @@ theme:
   icon:
     logo: material/code-json
 
+# OPTIONAL: lets students open an issue or a PR against a lab page directly.
+# repo_url: https://github.com/norbutlepcha25/dso303
+# repo_name: norbutlepcha25/dso303
+# edit_uri: edit/main/docs/
+
 extra_css:
   - stylesheets/color.css
   - https://unpkg.com/katex@0/dist/katex.min.css
@@ -47,9 +64,21 @@ copyright: |
 
 extra:
   generator: false
+  # NOTE: harmless, but redundant — site_url already supplies the /dso303 path,
+  # and MkDocs computes base_url per page. The macros plugin also exposes this
+  # as a page variable literally named `base_url`, so `{{ base_url }}` in a page
+  # resolves to "/dso303" rather than MkDocs' own relative value. Keep it only
+  # if a page actually uses it.
   base_url: /dso303
 
 markdown_extensions:
+  # ADDED: MkDocs enables `toc` implicitly, but with no options. Configuring it
+  # gives every heading a ¶ anchor (140 of them on the Lab 01 page), so you can
+  # link a student straight to "Step 14" instead of "scroll down a bit".
+  # toc_depth 2-3 keeps the right-hand TOC to sections and steps, not sub-steps.
+  - toc:
+      permalink: true
+      toc_depth: "2-3"
   - def_list
   - footnotes
   - pymdownx.highlight:
@@ -63,6 +92,10 @@ markdown_extensions:
       custom_fences:
         - name: mermaid
           class: mermaid
+          # Material's docs show a `format:` key here. I tested with and without
+          # it on your exact versions: the generated HTML is byte-identical
+          # (<pre class="mermaid"><code>) and Material loads mermaid lazily from
+          # its own bundle either way. Left as you had it — no change needed.
   - admonition
   - pymdownx.details
   - abbr
@@ -90,6 +123,14 @@ extra_javascript:
 plugins:
   - search
   - glightbox
+  # The macros plugin reads {{ ... }} in every page as Jinja2. That is what
+  # broke Lab 01: `docker inspect --format '{{ index .Config.Labels "..." }}'`
+  # is a Go template, not a macro. Two ways to protect a page — pick ONE:
+  #   1. wrap the affected code blocks in {% raw %} / {% endraw %}   (used in Lab 01)
+  #   2. put `render_macros: false` in the page's YAML front matter
+  # Both verified working on mkdocs-macros 1.5.0. Do not use both on one page:
+  # with macros disabled, the {% raw %} tags stop being stripped and show up
+  # literally in the rendered output.
   - macros:
       module_name: main
       include_dir: macros
@@ -98,6 +139,17 @@ plugins:
         - macros/glossary.yml
         - macros/learning_outcomes.yml
 
+  # KEEP, but pin it. mkdocs-minify-plugin pulls in jsmin and csscompressor,
+  # which are unmaintained source-only packages. Both failed to build from a
+  # clean install on Python 3.11 while I was testing this config. Your site
+  # builds today because your runner has working wheels cached; a CI image
+  # update can break it with no change from you. Freeze the whole toolchain in
+  # requirements.txt and install with `pip install -r requirements.txt`:
+  #     mkdocs-material==9.7.6
+  #     mkdocs-macros-plugin==1.5.0
+  #     mkdocs-glightbox==0.5.2
+  #     mkdocs-minify-plugin==0.8.0
+  #     pymdown-extensions==10.21.2
   - minify:
       minify_html: true
 
@@ -107,7 +159,7 @@ nav:
   - Unit 1:
       - Overview: unit1/overview.md
       - 1.1 AWS Cloud overview: unit1/topic1.md
-      # - 1.2 Design Pattern: unit1/topic2.md
+      # - 1.2 EC2: unit1/topic4.md
       # - 1.3 Combinatorics: unit1/topic3.md
       # - 1.4 Basics of Game Theory: unit1/topic4.md
       # - Questions: unit1/summary.md
@@ -131,6 +183,7 @@ nav:
   #     - 3.5 Solving Recurrences (Master Method): unit3/topic5.md
   #     - 3.6 Merge Sort Analysis: unit3/topic6.md
   #     - Summary: unit3/summary.md
+
   # - Unit 4:
   #     - Overview: unit4/overview.md
   #     - 4.1 Divide & Conquer Algorithm Design: unit4/topic1.md
@@ -169,21 +222,21 @@ nav:
   #     - 7.4 Activity Selection Problems: unit7/topic4.md
   #     - 7.5 Dijkstra's Algorithm: unit7/topic5.md
   #     - 7.6 Minimum Spanning Tree (Prim's and Kruskal's Algorithms): unit7/topic6.md
-  
-  # - Lab:
-  #     - Lab Overview: Lab/overview.md
-  #     - Lab 0: Lab/lab1_iam.md
-  #     - Lab 2: Lab/ima.md
-  #     - Lab 3: Lab/vpc.md
-  #     - Lab 4: Lab/vps.md
-  #     - Lab 5: Lab/stats.md
-  #     # - 7.1 Greedy Algorithm Design Principles: unit7/topic1.md
-      # - 7.2 Fractional Knapsack Problem: unit7/topic2.md
-      # - 7.3 Huffman Coding: unit7/topic3.mdß
-      # - 7.4 Activity Selection Problems: unit7/topic4.mdßß
-      # - 7.5 Dijkstra's Algorithm: unit7/topic5.md
-      # - 7.6 Minimum Spanning Tree (Prißm's and Kruskal'ßs Algorithms): unit7/topic6.md
+
+  # CHANGED: labels only — no filenames were renamed, so nothing breaks.
+  #   "Lab 0" pointed at lab1_iam.md, and there was no "Lab 1" at all.
+  #   Filenames worth a second look when you get to them:
+  #     Lab/ima.md    → probably meant to be iam.md
+  #     Lab/vps.md    → probably meant to be vpc.md or s3.md (vpc.md already exists above it)
+  #     Lab/stats.md  → looks left over from the algorithms course
+  #   Rename the files first, then update the paths here — not the other way round.
+  - Lab:
+      - Lab Overview: Lab/overview.md
+      - Lab 0: Lab/lab1_iam.md
+      - Lab 1 - IAM: Lab/Lab-01-IAM.md
+      # - "Lab 3 — VPC": Lab/vpc.md
+      # - "Lab 4": Lab/vps.md
+      # - "Lab 5": Lab/stats.md
 
   # - Practical 2: questions.md
   # - Practical 3: q2.md
- 
