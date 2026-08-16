@@ -1,30 +1,12 @@
-# Compute Services on AWS — EC2, ECS, EKS, Lambda and Fargate
+# Compute Services on AWS  EC2, ECS, EKS, Lambda and Fargate
 
 !!! info "Where this topic sits in DSO303"
-    Compute is the first of the four foundational resource classes in any cloud architecture — compute, storage, networking, and identity. Every later topic in this module (microservices, CI/CD pipelines, observability, event-driven design, security hardening) ultimately runs on one of the compute models introduced here. Choosing the compute model is one of the highest-leverage architectural decisions you will make, because it constrains your deployment pipeline, your scaling behaviour, your failure modes, your operational burden, and your monthly bill for years afterwards.
+    Compute is the first of the four foundational resource classes in any cloud architecture  compute, storage, networking, and identity. Every later topic in this module (microservices, CI/CD pipelines, observability, event-driven design, security hardening) ultimately runs on one of the compute models introduced here. Choosing the compute model is one of the highest-leverage architectural decisions you will make, because it constrains your deployment pipeline, your scaling behaviour, your failure modes, your operational burden, and your monthly bill for years afterwards.
 
----
-
-## Learning Objectives
-
-After studying this chapter you should be able to:
-
-- Explain the **AWS compute spectrum** — from virtual machines (IaaS) through container orchestration to functions (serverless) — and articulate what is traded away at each step along that spectrum.
-- Describe the **shared responsibility boundary** for EC2, ECS on EC2, ECS on Fargate, EKS, and Lambda, and explain why that boundary is the single most useful lens for comparing compute services.
-- Explain the **internal architecture** of each service, including the Nitro System for EC2, the ECS control plane and container agent, the Kubernetes control plane as managed by EKS, and Firecracker microVMs and execution environments for Lambda.
-- Distinguish rigorously between **control plane** and **data plane** in each service, and explain why control-plane failure and data-plane failure have different blast radii.
-- Trace the **complete network path** of a user request from DNS resolution to application process for each compute model.
-- Reason about **scaling behaviour**: EC2 Auto Scaling groups and warm-up periods, ECS service auto scaling, Kubernetes HPA/Cluster Autoscaler/Karpenter, and Lambda concurrency scaling and cold starts.
-- Apply a **structured decision framework** to select between EC2, ECS, EKS, and Lambda for a given workload, and defend that choice using scalability, cost, operational complexity, latency, and team-capability arguments.
-- Design compute layers that satisfy the **AWS Well-Architected Framework** pillars, with specific attention to Multi-AZ availability, least-privilege IAM, encryption, and cost efficiency.
-- Implement compute infrastructure using **Infrastructure as Code** (CloudFormation and Terraform) rather than console clicks, and explain why this is non-negotiable in production.
-- Instrument compute workloads with **CloudWatch metrics, logs, alarms, Container Insights, and X-Ray tracing**.
-
----
 
 ## Definition
 
-**Compute** in AWS is the family of services that execute your application code — that provide CPU cycles, memory, and an execution context in which a process runs. Storage services hold bytes at rest, networking services move bytes between endpoints, and compute services transform bytes.
+**Compute** in AWS is the family of services that execute your application code  that provide CPU cycles, memory, and an execution context in which a process runs. Storage services hold bytes at rest, networking services move bytes between endpoints, and compute services transform bytes.
 
 AWS offers compute at several different **levels of abstraction**. The higher the abstraction, the more of the operational stack AWS manages on your behalf, and the less control and flexibility you retain.
 
@@ -71,7 +53,7 @@ Consider how a university or a mid-sized company provisioned an application serv
 2. A purchase order was raised for physical servers. Lead time: 6 to 12 weeks.
 3. Servers were racked, cabled, powered, and connected to a switch in a data centre or server room.
 4. An operating system was installed, hardened, and patched.
-5. Middleware, runtimes, and the application were installed — usually by hand, following a runbook that drifted out of date.
+5. Middleware, runtimes, and the application were installed  usually by hand, following a runbook that drifted out of date.
 6. If demand exceeded the estimate, the entire cycle repeated. If demand fell below the estimate, the capital was simply wasted.
 
 The structural problems were:
@@ -87,17 +69,17 @@ The structural problems were:
 
 ### What AWS Compute Changed
 
-**Amazon EC2 (2006)** was the founding answer: virtual machines available through an API in minutes, billed by the hour and later by the second, disposable by design. This converted capital expenditure into operating expenditure and provisioning time from weeks into minutes. Crucially, it made *elasticity* possible — the ability to grow and, just as importantly, shrink capacity in response to real demand.
+**Amazon EC2 (2006)** was the founding answer: virtual machines available through an API in minutes, billed by the hour and later by the second, disposable by design. This converted capital expenditure into operating expenditure and provisioning time from weeks into minutes. Crucially, it made *elasticity* possible  the ability to grow and, just as importantly, shrink capacity in response to real demand.
 
-But EC2 left a large problem unsolved. A virtual machine still has an operating system that must be patched, a filesystem that accumulates state, and a deployment process that must place application artefacts onto it. Teams building dozens of microservices discovered that managing hundreds of EC2 instances is not fundamentally easier than managing hundreds of physical servers — it is merely faster to provision them.
+But EC2 left a large problem unsolved. A virtual machine still has an operating system that must be patched, a filesystem that accumulates state, and a deployment process that must place application artefacts onto it. Teams building dozens of microservices discovered that managing hundreds of EC2 instances is not fundamentally easier than managing hundreds of physical servers  it is merely faster to provision them.
 
-**Containers** solved the packaging problem: an immutable image bundling application code, runtime, libraries, and configuration, guaranteed to behave identically wherever it runs. But containers created a new problem — *placement*. If you have 300 containers and 40 hosts, which container runs where? What happens when a host dies? How do containers find each other? These are **orchestration** problems.
+**Containers** solved the packaging problem: an immutable image bundling application code, runtime, libraries, and configuration, guaranteed to behave identically wherever it runs. But containers created a new problem  *placement*. If you have 300 containers and 40 hosts, which container runs where? What happens when a host dies? How do containers find each other? These are **orchestration** problems.
 
 **Amazon ECS (2014)** provided AWS-native orchestration: a control plane that schedules containers onto a fleet, restarts them on failure, integrates with ELB, and authenticates through IAM. It is deliberately opinionated and deeply integrated with AWS.
 
 **Amazon EKS (2018)** provided the same orchestration through **Kubernetes**, the open-source de facto standard, for organisations that wanted a portable, extensible, community-driven control plane, or that already had Kubernetes expertise and tooling.
 
-**AWS Fargate (2017)** removed the last piece of server management from containers. With Fargate you do not run EC2 instances at all — you declare CPU and memory per task or pod, and AWS provisions the underlying compute invisibly.
+**AWS Fargate (2017)** removed the last piece of server management from containers. With Fargate you do not run EC2 instances at all  you declare CPU and memory per task or pod, and AWS provisions the underlying compute invisibly.
 
 **AWS Lambda (2014)** went furthest: you upload a function, you configure an event source, and AWS runs the function on demand, scaling from zero to thousands of concurrent executions and back to zero, charging only for the milliseconds consumed. There is no host to see, no capacity to plan, no idle cost.
 
@@ -113,46 +95,10 @@ But EC2 left a large problem unsolved. A virtual machine still has an operating 
 | Capacity planning | Forecast peak 1–2 years ahead | Scale reactively or predictively |
 | Failure recovery | Manual hardware replacement | Instance replacement via API or automatically by an Auto Scaling group |
 | Utilisation | Typically 10–20 percent | 40–70 percent with autoscaling; effectively 100 percent with Lambda |
-| Experimentation cost | High — hardware must be purchased | Near zero — terminate when finished |
+| Experimentation cost | High  hardware must be purchased | Near zero  terminate when finished |
 | Geographic expansion | Build or lease a new data centre | Deploy into another Region via API |
 
----
 
-## Real-World Motivation
-
-### Netflix — Elastic Capacity at Global Scale
-
-Netflix serves a strongly diurnal load: European evening traffic peaks are several times the overnight trough. Under a fixed-capacity model, Netflix would have to own peak capacity permanently and leave most of it idle for most of the day. Netflix instead runs very large EC2 Auto Scaling groups that expand and contract with traffic, spread across multiple Availability Zones and Regions. The architectural lesson is that **elasticity converts a capacity problem into a cost-optimisation problem**, and the deeper lesson is that a system designed to add and remove instances continuously must also be designed to tolerate instances disappearing — which is precisely why Netflix built Chaos Monkey.
-
-### Amazon Retail — Event-Driven Spikes
-
-Prime Day and Black Friday produce traffic several multiples above baseline for a short window. Provisioning permanently for that peak would be economically absurd. Amazon uses a combination of predictive scaling ahead of a known event, reactive scaling during the event, and asynchronous decoupling — orders are accepted into SQS queues and processed by consumers that scale independently of the web tier. The lesson is that **asynchronous architectures absorb spikes that synchronous architectures cannot**.
-
-### Uber and Lyft — Microservices on Container Orchestration
-
-Ride-hailing platforms decompose into hundreds of services: matching, pricing, routing, payments, notifications, fraud. Each has a different scaling profile and release cadence. Deploying hundreds of independently versioned services onto raw EC2 instances is operationally impractical. Container orchestration provides a uniform deployment contract, bin-packing of heterogeneous services onto shared hosts, health-based restarts, and rolling deployments. The lesson is that **orchestration becomes necessary at the point where service count exceeds what a human can place by hand**.
-
-### Spotify — Kubernetes for Platform Engineering
-
-Spotify runs a large internal developer platform on Kubernetes, providing hundreds of autonomous squads with a self-service deployment interface. Kubernetes' extensibility — Custom Resource Definitions, operators, admission controllers — allows a platform team to encode organisational policy as software. The lesson is that **EKS is chosen not because it is a better scheduler than ECS, but because Kubernetes is an extensible platform on which you can build your own abstractions**.
-
-### Financial Services — Compliance-Constrained Compute
-
-A bank running a core ledger may be required to demonstrate the exact patch level of every host, to pin workloads to dedicated hardware for tenancy isolation, and to retain immutable audit logs. EC2 with Dedicated Hosts, AWS Systems Manager Patch Manager, and CloudTrail satisfies these requirements in a way that a fully abstracted platform cannot, because the bank must be able to *evidence* control it does not have on Lambda. The lesson is that **regulatory requirements can pull you back down the abstraction spectrum**, and that this is a legitimate architectural driver.
-
-### Healthcare and Genomics — Bursty Batch Compute
-
-A genomics pipeline may need 5,000 vCPUs for four hours per week and nothing at all the rest of the time. AWS Batch on EC2 Spot capacity, or Fargate Spot, or massively parallel Lambda fan-out, all allow this workload to exist at a cost that would be impossible with owned hardware. The lesson is that **the cloud makes certain workloads economically feasible that were previously impossible**, not merely cheaper.
-
-### Government and Public Sector — Sovereign and Predictable
-
-Government workloads often have steady, predictable load and long procurement cycles, with strict data-residency requirements. Reserved Instances or Compute Savings Plans on EC2 in a specific Region, inside a private VPC with no internet gateway, is frequently the correct answer. The lesson is that **predictable load favours committed pricing, and serverless is not automatically cheaper**.
-
-### IoT Telemetry — Serverless Event Processing
-
-A fleet of a million sensors emitting a reading every minute produces a very high-volume, very small-payload, highly parallel event stream. Lambda triggered from IoT Core or Kinesis, scaling automatically with shard or event volume, with no idle cost overnight, is close to an ideal fit. The lesson is that **Lambda excels where work is event-shaped, short-lived, stateless, and spiky**.
-
----
 
 ## Core Concepts
 
@@ -160,7 +106,13 @@ A fleet of a million sensors emitting a reading every minute produces a very hig
 
 A **hypervisor** is software (or, on modern AWS hardware, largely dedicated silicon) that partitions one physical server into multiple isolated virtual machines. Each VM believes it has its own CPU, memory, disks, and network interfaces. The hypervisor enforces isolation so that one tenant cannot read another tenant's memory or saturate another tenant's I/O.
 
-**Multi-tenancy** is the practice of running multiple customers' workloads on shared physical hardware. It is what makes cloud economics work — utilisation of the physical fleet is high because peaks and troughs of different customers do not coincide. AWS offers tenancy options that trade this economy for isolation: shared (default), Dedicated Instances (hardware not shared with other AWS accounts), and Dedicated Hosts (you get a specific physical server, with visibility of sockets and cores, which matters for per-socket software licensing).
+<figure markdown="span">
+    ![hypervisor](../img/U1/hypervisor.webp){width="80%"}
+    <figcaption>Types of Hypervisor</figcaption>
+</figure>
+
+
+**Multi-tenancy** is the practice of running multiple customers' workloads on shared physical hardware. It is what makes cloud economics work  utilisation of the physical fleet is high because peaks and troughs of different customers do not coincide. AWS offers tenancy options that trade this economy for isolation: shared (default), Dedicated Instances (hardware not shared with other AWS accounts), and Dedicated Hosts (you get a specific physical server, with visibility of sockets and cores, which matters for per-socket software licensing).
 
 ### Containers Versus Virtual Machines
 
@@ -183,7 +135,7 @@ graph TD
     end
 ```
 
-A **container** is an operating-system-level isolation construct. It does not carry its own kernel. It uses Linux kernel primitives — **namespaces** (to give the process its own view of the process tree, network stack, mount table, users, and hostname) and **cgroups** (to constrain CPU, memory, and I/O consumption) — plus a layered filesystem.
+A **container** is an operating-system-level isolation construct. It does not carry its own kernel. It uses Linux kernel primitives  **namespaces** (to give the process its own view of the process tree, network stack, mount table, users, and hostname) and **cgroups** (to constrain CPU, memory, and I/O consumption)  plus a layered filesystem.
 
 | Property | Virtual machine | Container |
 |---|---|---|
@@ -195,11 +147,11 @@ A **container** is an operating-system-level isolation construct. It does not ca
 | Typical use | Full OS environments, legacy software | Microservices, stateless application processes |
 
 !!! warning "Containers are not a security boundary equivalent to a VM"
-    Because containers share the host kernel, a kernel vulnerability can in principle allow container escape. This is exactly why AWS Fargate and AWS Lambda do **not** simply run customer containers side by side on a shared kernel — they place each task or execution environment inside its own lightweight virtual machine. Never assume that "it is in a container" means "it is isolated from other tenants".
+    Because containers share the host kernel, a kernel vulnerability can in principle allow container escape. This is exactly why AWS Fargate and AWS Lambda do **not** simply run customer containers side by side on a shared kernel  they place each task or execution environment inside its own lightweight virtual machine. Never assume that "it is in a container" means "it is isolated from other tenants".
 
 ### Container Images, Registries, and Immutability
 
-A **container image** is an immutable, layered, content-addressed filesystem plus metadata (entrypoint, environment variables, exposed ports). Images are built from a **Dockerfile**, stored in a **registry** — on AWS, **Amazon Elastic Container Registry (ECR)** — and pulled by hosts at launch.
+A **container image** is an immutable, layered, content-addressed filesystem plus metadata (entrypoint, environment variables, exposed ports). Images are built from a **Dockerfile**, stored in a **registry**  on AWS, **Amazon Elastic Container Registry (ECR)**  and pulled by hosts at launch.
 
 Immutability is an architectural principle, not merely an implementation detail. It means:
 
@@ -208,7 +160,7 @@ Immutability is an architectural principle, not merely an implementation detail.
 - Configuration that varies by environment must be injected at runtime (environment variables, Secrets Manager, Parameter Store) rather than baked into the image.
 
 !!! danger "Never use the `latest` tag in production"
-    `latest` is a mutable pointer. Two tasks launched five minutes apart can run different code with the same tag, and you lose the ability to roll back deterministically. Tag images with an immutable identifier — a Git commit SHA or a semantic version — and enable ECR **tag immutability** so a tag cannot be overwritten.
+    `latest` is a mutable pointer. Two tasks launched five minutes apart can run different code with the same tag, and you lose the ability to roll back deterministically. Tag images with an immutable identifier  a Git commit SHA or a semantic version  and enable ECR **tag immutability** so a tag cannot be overwritten.
 
 ### Orchestration
 
@@ -243,14 +195,14 @@ stateDiagram-v2
 
 1. **No server provisioning or management** by you.
 2. **Automatic, demand-driven scaling**, including scaling to zero.
-3. **Pay for value consumed**, not for allocated capacity — no charge when idle.
+3. **Pay for value consumed**, not for allocated capacity  no charge when idle.
 4. **Built-in availability and fault tolerance** across Availability Zones by default.
 
-Lambda satisfies all four. Fargate satisfies the first, second (partially — a running task costs money even when idle), and fourth, but a Fargate task that sits idle still bills; that is why Fargate is called "serverless containers" rather than fully serverless.
+Lambda satisfies all four. Fargate satisfies the first, second (partially  a running task costs money even when idle), and fourth, but a Fargate task that sits idle still bills; that is why Fargate is called "serverless containers" rather than fully serverless.
 
 ### Statelessness
 
-A **stateless** compute node holds no data that cannot be lost without consequence. Session state, uploaded files, and caches must live in external services — DynamoDB, ElastiCache, S3, RDS.
+A **stateless** compute node holds no data that cannot be lost without consequence. Session state, uploaded files, and caches must live in external services  DynamoDB, ElastiCache, S3, RDS.
 
 Statelessness is what makes elasticity possible. If any instance can be terminated at any moment without data loss, then the platform is free to replace instances for scaling, patching, Spot reclamation, or failure recovery. Every compute service in this chapter assumes statelessness by default; every design that violates it (writing user uploads to a container's local filesystem, holding sessions in process memory behind a round-robin load balancer) creates a correctness bug that only appears under scaling or failure.
 
@@ -306,7 +258,7 @@ graph TD
 
 Understanding what happens behind the API call is what separates an architect from a console user. In every case below, keep two questions in mind: **where is the control plane, and where is the data plane?**
 
-- The **control plane** is the management layer — the APIs, schedulers, and state stores that decide what should exist and where.
+- The **control plane** is the management layer  the APIs, schedulers, and state stores that decide what should exist and where.
 - The **data plane** is the layer that actually serves traffic and runs your code.
 
 The distinction matters because their failure modes differ. If the ECS control plane were unavailable, existing tasks would continue serving traffic; you simply could not deploy or scale. If the data plane fails, your users see errors immediately. **Well-architected systems degrade gracefully when the control plane is impaired.**
@@ -352,20 +304,20 @@ sequenceDiagram
     API-->>U: "Instance ID and private IP returned"
 ```
 
-Two details matter architecturally. First, the **Elastic Network Interface (ENI)** is a first-class VPC object with its own private IP, MAC address, and security groups — instance networking is a VPC construct, not an OS construct. Second, **user data** runs once at first boot by default and is the standard bootstrap hook, though for anything beyond trivial bootstrapping you should bake configuration into the AMI (with EC2 Image Builder) or use a configuration-management tool.
+Two details matter architecturally. First, the **Elastic Network Interface (ENI)** is a first-class VPC object with its own private IP, MAC address, and security groups  instance networking is a VPC construct, not an OS construct. Second, **user data** runs once at first boot by default and is the standard bootstrap hook, though for anything beyond trivial bootstrapping you should bake configuration into the AMI (with EC2 Image Builder) or use a configuration-management tool.
 
 ### Amazon ECS Internals
 
 ECS separates cleanly into a fully AWS-managed control plane and a customer-visible (or Fargate-hidden) data plane.
 
-**Control plane.** The ECS control plane is a regional, AWS-operated service. It stores cluster state, accepts API calls (`RunTask`, `CreateService`, `UpdateService`), runs the **scheduler** that decides placement, and runs the **service scheduler** reconciliation loop that maintains desired count. You never see, patch, or pay for it — ECS itself has no control-plane charge.
+**Control plane.** The ECS control plane is a regional, AWS-operated service. It stores cluster state, accepts API calls (`RunTask`, `CreateService`, `UpdateService`), runs the **scheduler** that decides placement, and runs the **service scheduler** reconciliation loop that maintains desired count. You never see, patch, or pay for it  ECS itself has no control-plane charge.
 
 **Data plane.** On the EC2 launch type, the data plane is EC2 instances you own, each running the **ECS container agent** (a Go binary, usually pre-installed on the ECS-Optimized AMI) plus a container runtime. On Fargate, the data plane is AWS-managed microVMs and you never see a host.
 
 **The agent is a poller, not a listener.** This is a frequently misunderstood point. The container agent establishes an **outbound** connection to the ECS service endpoint and receives instructions over it. There is no inbound connection from AWS to your instance. Consequently:
 
 - ECS instances in private subnets need outbound internet access via a NAT Gateway, or VPC endpoints for `ecs`, `ecs-agent`, `ecs-telemetry`, `ecr.api`, `ecr.dkr`, `logs`, and S3 (for image layers).
-- If the agent cannot reach the endpoint, the instance eventually shows as disconnected and the scheduler stops placing tasks on it — but already-running containers keep running.
+- If the agent cannot reach the endpoint, the instance eventually shows as disconnected and the scheduler stops placing tasks on it  but already-running containers keep running.
 
 ```mermaid
 sequenceDiagram
@@ -391,7 +343,7 @@ sequenceDiagram
     ALB-->>CP: "Target healthy"
 ```
 
-**Task definitions and tasks.** A **task definition** is an immutable, versioned JSON document — the blueprint. Each update creates a new **revision**. A **task** is a running instantiation of a revision: one or more containers scheduled together onto the same host, sharing a network namespace under `awsvpc` mode. A **service** maintains a desired number of tasks and integrates with load balancing and deployment strategies.
+**Task definitions and tasks.** A **task definition** is an immutable, versioned JSON document  the blueprint. Each update creates a new **revision**. A **task** is a running instantiation of a revision: one or more containers scheduled together onto the same host, sharing a network namespace under `awsvpc` mode. A **service** maintains a desired number of tasks and integrates with load balancing and deployment strategies.
 
 **Networking modes** on the EC2 launch type determine the network path:
 
@@ -406,12 +358,12 @@ Fargate always uses `awsvpc`.
 
 ### AWS Fargate Internals
 
-Fargate is not a separate orchestrator; it is a **capacity provider** — a way of obtaining data-plane capacity for ECS tasks or EKS pods without managing instances.
+Fargate is not a separate orchestrator; it is a **capacity provider**  a way of obtaining data-plane capacity for ECS tasks or EKS pods without managing instances.
 
-When a task is launched on Fargate, AWS provisions a **dedicated, right-sized microVM** for that task on AWS-managed hardware, attaches an ENI **in your VPC** (this is the key point — the ENI is in your subnet, consumes an IP from your CIDR, and is governed by your security groups), pulls the image, and starts the container. When the task stops, the microVM is destroyed.
+When a task is launched on Fargate, AWS provisions a **dedicated, right-sized microVM** for that task on AWS-managed hardware, attaches an ENI **in your VPC** (this is the key point  the ENI is in your subnet, consumes an IP from your CIDR, and is governed by your security groups), pulls the image, and starts the container. When the task stops, the microVM is destroyed.
 
 !!! info "Why Fargate gives each task its own microVM"
-    If Fargate packed multiple customers' containers onto a shared kernel, a container-escape vulnerability would be a cross-tenant breach. By giving each task a dedicated microVM, Fargate obtains VM-grade isolation with container-grade start times. This is also why you cannot run privileged containers, mount host paths, or use a container as a DaemonSet-style host agent on Fargate — there is no host to reach.
+    If Fargate packed multiple customers' containers onto a shared kernel, a container-escape vulnerability would be a cross-tenant breach. By giving each task a dedicated microVM, Fargate obtains VM-grade isolation with container-grade start times. This is also why you cannot run privileged containers, mount host paths, or use a container as a DaemonSet-style host agent on Fargate  there is no host to reach.
 
 ### Amazon EKS Internals
 
@@ -424,7 +376,7 @@ Kubernetes has a well-defined control-plane architecture. EKS runs that control 
 | **kube-apiserver** | The single front door. All reads and writes go through it. Performs authentication, authorisation, admission control, and validation. |
 | **etcd** | A strongly consistent, distributed key-value store holding all cluster state. The source of truth. |
 | **kube-scheduler** | Watches for unscheduled pods and binds each to a node based on resource requests, affinity, taints and tolerations, and topology constraints. |
-| **kube-controller-manager** | Runs reconciliation loops — the Deployment controller, ReplicaSet controller, node controller, and so on. |
+| **kube-controller-manager** | Runs reconciliation loops  the Deployment controller, ReplicaSet controller, node controller, and so on. |
 | **cloud-controller-manager** | Integrates with AWS to provision load balancers, EBS volumes, and route tables. |
 
 **Worker node components:**
@@ -436,12 +388,12 @@ Kubernetes has a well-defined control-plane architecture. EKS runs that control 
 | **kube-proxy** | Programs iptables or IPVS rules so that Service virtual IPs route to healthy pod endpoints. |
 | **VPC CNI plugin** | The AWS-specific networking plugin that assigns each pod a **real VPC IP address** from the subnet, via secondary IPs on the node's ENIs. |
 
-**What EKS manages.** EKS runs the API server, etcd, scheduler, and controller manager across **at least three Availability Zones**, with automated backups of etcd, automatic replacement of unhealthy control-plane instances, and a managed upgrade path. The control plane runs in an AWS-owned VPC and is exposed to your VPC through cross-account ENIs. You are charged an hourly fee per cluster for this control plane — a genuine difference from ECS, which is free.
+**What EKS manages.** EKS runs the API server, etcd, scheduler, and controller manager across **at least three Availability Zones**, with automated backups of etcd, automatic replacement of unhealthy control-plane instances, and a managed upgrade path. The control plane runs in an AWS-owned VPC and is exposed to your VPC through cross-account ENIs. You are charged an hourly fee per cluster for this control plane  a genuine difference from ECS, which is free.
 
 !!! warning "The EKS control plane is per cluster and always on"
-    Because EKS bills an hourly control-plane fee per cluster regardless of workload, running many small clusters is expensive. This is a real architectural pressure toward fewer, larger, multi-tenant clusters with namespace-level isolation — which in turn creates a need for network policies, resource quotas, and RBAC discipline.
+    Because EKS bills an hourly control-plane fee per cluster regardless of workload, running many small clusters is expensive. This is a real architectural pressure toward fewer, larger, multi-tenant clusters with namespace-level isolation  which in turn creates a need for network policies, resource quotas, and RBAC discipline.
 
-**The VPC CNI is architecturally significant.** Unlike overlay-network CNIs, the AWS VPC CNI gives each pod a routable VPC IP. This means pods are first-class network citizens: security groups can be applied to pods, VPC Flow Logs capture pod traffic, and there is no encapsulation overhead. The cost is **IP address consumption** — a large cluster can exhaust a subnet's CIDR. Architects must size subnets generously, or enable prefix delegation, or use custom networking with a secondary CIDR.
+**The VPC CNI is architecturally significant.** Unlike overlay-network CNIs, the AWS VPC CNI gives each pod a routable VPC IP. This means pods are first-class network citizens: security groups can be applied to pods, VPC Flow Logs capture pod traffic, and there is no encapsulation overhead. The cost is **IP address consumption**  a large cluster can exhaust a subnet's CIDR. Architects must size subnets generously, or enable prefix delegation, or use custom networking with a secondary CIDR.
 
 ```mermaid
 graph TD
@@ -470,7 +422,7 @@ graph TD
     ENI --- N3
 ```
 
-**Identity mapping.** EKS authenticates users through IAM, translating IAM identities into Kubernetes RBAC subjects — historically via the `aws-auth` ConfigMap, and now preferably via **EKS access entries**, an API-driven mechanism that is auditable and does not risk locking you out by ConfigMap corruption. For workload identity, **IAM Roles for Service Accounts (IRSA)** — and more recently **EKS Pod Identity** — allow a pod to assume an IAM role via an OIDC-federated token projected into the pod, so a pod gets exactly the AWS permissions it needs without sharing the node role.
+**Identity mapping.** EKS authenticates users through IAM, translating IAM identities into Kubernetes RBAC subjects  historically via the `aws-auth` ConfigMap, and now preferably via **EKS access entries**, an API-driven mechanism that is auditable and does not risk locking you out by ConfigMap corruption. For workload identity, **IAM Roles for Service Accounts (IRSA)**  and more recently **EKS Pod Identity**  allow a pod to assume an IAM role via an OIDC-federated token projected into the pod, so a pod gets exactly the AWS permissions it needs without sharing the node role.
 
 ### AWS Lambda Internals
 
@@ -486,7 +438,7 @@ Lambda's internals are the most abstracted and the most interesting.
 | **Invoke** | The handler function runs for this event | Billed per millisecond of duration multiplied by configured memory |
 | **Shutdown** | After a period of inactivity the environment is frozen and eventually destroyed | Not billed |
 
-Between invocations the environment is **frozen**, not destroyed. If another invocation arrives soon, the same environment is **thawed** and reused — this is a **warm start**, and the Init phase is skipped entirely.
+Between invocations the environment is **frozen**, not destroyed. If another invocation arrives soon, the same environment is **thawed** and reused  this is a **warm start**, and the Init phase is skipped entirely.
 
 ```mermaid
 stateDiagram-v2
@@ -502,7 +454,7 @@ stateDiagram-v2
 !!! danger "One environment serves exactly one request at a time"
     This is the most important mental model for Lambda. Concurrency is achieved by creating **more environments**, never by threading within one. Therefore ten concurrent requests means ten environments, and any in-memory cache you populate is per-environment, not shared. Never assume anything about which environment serves a request.
 
-**Cold starts.** A **cold start** is an invocation that must pay the Init phase. It occurs on the first invocation of a function version, when concurrency increases beyond the number of warm environments, and after environments are recycled. Typical additional latency ranges from tens of milliseconds for a small Python or Node.js function to several seconds for a large JVM or .NET function loading a heavy dependency-injection framework. Deploying a function into a VPC no longer causes multi-second cold starts — since the Hyperplane ENI redesign, VPC-attached ENIs are created and shared ahead of time rather than per environment.
+**Cold starts.** A **cold start** is an invocation that must pay the Init phase. It occurs on the first invocation of a function version, when concurrency increases beyond the number of warm environments, and after environments are recycled. Typical additional latency ranges from tens of milliseconds for a small Python or Node.js function to several seconds for a large JVM or .NET function loading a heavy dependency-injection framework. Deploying a function into a VPC no longer causes multi-second cold starts  since the Hyperplane ENI redesign, VPC-attached ENIs are created and shared ahead of time rather than per environment.
 
 Mitigations, in order of preference:
 
@@ -511,7 +463,7 @@ Mitigations, in order of preference:
 3. Choose a lighter runtime or use ahead-of-time compilation (for example, native images for Java, or `Lambda SnapStart` for Java, which snapshots an initialised environment and restores it).
 4. Use **provisioned concurrency** to keep a declared number of environments initialised and warm, at additional cost.
 
-**Worker fleet and placement.** Lambda runs on a large fleet of EC2 **Worker** hosts. Each Worker hosts many Firecracker microVMs. A per-function **Assignment Service** (a Lambda-internal control plane component) tracks which environments are warm for which function version and routes an incoming invocation either to a warm environment or to a placement request for a new one. The critical isolation property is that a given microVM is only ever used for **one function version of one account** for its entire lifetime — it is never recycled across tenants.
+**Worker fleet and placement.** Lambda runs on a large fleet of EC2 **Worker** hosts. Each Worker hosts many Firecracker microVMs. A per-function **Assignment Service** (a Lambda-internal control plane component) tracks which environments are warm for which function version and routes an incoming invocation either to a warm environment or to a placement request for a new one. The critical isolation property is that a given microVM is only ever used for **one function version of one account** for its entire lifetime  it is never recycled across tenants.
 
 **Synchronous versus asynchronous invocation paths.** These follow genuinely different internal routes:
 
@@ -541,7 +493,7 @@ sequenceDiagram
     P->>DLQ: "Send after retries exhausted"
 ```
 
-For **event source mappings** (SQS, Kinesis, DynamoDB Streams, MSK), the model is different again: a Lambda-managed **poller fleet** reads from the source and invokes your function synchronously with a batch. Failure semantics are therefore determined by the source — for SQS, a failed batch returns messages to the queue after the visibility timeout; for Kinesis and DynamoDB Streams, a failed batch blocks the shard until it succeeds or the retry policy expires, which is a classic cause of stalled stream processing.
+For **event source mappings** (SQS, Kinesis, DynamoDB Streams, MSK), the model is different again: a Lambda-managed **poller fleet** reads from the source and invokes your function synchronously with a batch. Failure semantics are therefore determined by the source  for SQS, a failed batch returns messages to the queue after the visibility timeout; for Kinesis and DynamoDB Streams, a failed batch blocks the shard until it succeeds or the retry policy expires, which is a classic cause of stalled stream processing.
 
 ---
 
@@ -579,7 +531,7 @@ A production compute architecture is never just compute. The following component
 | **Amazon CloudWatch** | Observability | Metrics, logs, alarms, dashboards, Container Insights, Lambda Insights |
 | **AWS X-Ray** | Observability | Distributed tracing across service boundaries |
 | **AWS CloudTrail** | Audit | Records every control-plane API call for security and compliance investigation |
-| **AWS CloudFormation, CDK, Terraform** | Automation | Infrastructure as Code — declarative, version-controlled, reviewable infrastructure |
+| **AWS CloudFormation, CDK, Terraform** | Automation | Infrastructure as Code  declarative, version-controlled, reviewable infrastructure |
 | **AWS Systems Manager** | Operations | Patch Manager, Session Manager (SSH-free shell access), Parameter Store for configuration |
 
 !!! tip "Architectural reading of this table"
@@ -627,10 +579,10 @@ sequenceDiagram
 1. **DNS resolution.** Route 53 returns an alias record for the CloudFront distribution. Using an alias rather than a CNAME allows the apex domain to be used and incurs no additional lookup charge.
 2. **Edge termination.** TLS terminates at the nearest CloudFront point of presence, so the expensive handshake happens close to the user. This alone can remove 100 ms or more of latency for distant users.
 3. **Security filtering.** WAF evaluates managed and custom rules at the edge, so malicious requests never consume application compute. **Filtering at the edge is cheaper than filtering at the origin.**
-4. **Cache evaluation.** A cache hit ends the request here. Every cache hit is a request your compute layer never sees — CloudFront is, in effect, a compute-cost optimisation.
+4. **Cache evaluation.** A cache hit ends the request here. Every cache hit is a request your compute layer never sees  CloudFront is, in effect, a compute-cost optimisation.
 5. **Origin request.** CloudFront forwards to the ALB. The ALB's security group should permit inbound traffic only from CloudFront's managed prefix list, not from the whole internet.
 6. **Load balancer routing.** The ALB evaluates listener rules and selects a healthy target from the target group using round-robin or least-outstanding-requests. Unhealthy targets are excluded automatically.
-7. **Task ingress.** With `awsvpc` networking, the ALB sends traffic directly to the task's own ENI private IP. The task's security group should allow inbound only from the ALB's security group — **security group referencing**, not CIDR ranges, is the correct pattern.
+7. **Task ingress.** With `awsvpc` networking, the ALB sends traffic directly to the task's own ENI private IP. The task's security group should allow inbound only from the ALB's security group  **security group referencing**, not CIDR ranges, is the correct pattern.
 8. **Data access.** The container obtains temporary credentials from the **task IAM role** via the container credentials endpoint (`169.254.170.2`). No long-lived access keys exist anywhere in the system.
 9. **Logging.** The `awslogs` log driver streams stdout/stderr to CloudWatch Logs. Logs should be structured JSON including a correlation ID.
 10. **Response and caching.** The response propagates back, and CloudFront caches it according to `Cache-Control` headers.
@@ -666,7 +618,7 @@ sequenceDiagram
 The critical differences from the container path:
 
 - **There is no load balancer and no VPC hop** unless the function is explicitly attached to a VPC. Lambda's own service infrastructure handles ingress.
-- **The scaling decision is made per request**, not per aggregated metric. There is no scaling delay in the Auto Scaling sense — but there is cold-start latency.
+- **The scaling decision is made per request**, not per aggregated metric. There is no scaling delay in the Auto Scaling sense  but there is cold-start latency.
 - **Throttling is a first-class concept.** API Gateway throttles, and Lambda enforces account and per-function concurrency limits. Exceeding them yields `429 TooManyRequestsException`, and the client must retry.
 
 ### Asynchronous, Event-Driven Lifecycle
@@ -688,7 +640,7 @@ flowchart TD
 ```
 
 !!! note "Synchronous versus asynchronous is an availability decision"
-    In the synchronous path, if the compute layer is unavailable the user sees an error. In the asynchronous path, if the compute layer is unavailable the queue simply grows, and processing catches up when capacity returns. **Introducing a queue converts an availability problem into a latency problem** — which is almost always the better problem to have. This is the single most valuable pattern in event-driven architecture.
+    In the synchronous path, if the compute layer is unavailable the user sees an error. In the asynchronous path, if the compute layer is unavailable the queue simply grows, and processing catches up when capacity returns. **Introducing a queue converts an availability problem into a latency problem**  which is almost always the better problem to have. This is the single most valuable pattern in event-driven architecture.
 
 ---
 
@@ -699,12 +651,12 @@ flowchart TD
 
 ### Amazon EC2
 
-**Purpose.** To provide resizable virtual machines with full control over the operating system, so that arbitrary software — including legacy applications, licensed software, custom kernels, GPU workloads, and stateful systems — can run in the cloud with the same freedom as on physical hardware.
+**Purpose.** To provide resizable virtual machines with full control over the operating system, so that arbitrary software  including legacy applications, licensed software, custom kernels, GPU workloads, and stateful systems  can run in the cloud with the same freedom as on physical hardware.
 
 **Architecture.** An EC2 instance is a guest OS running on a Nitro host within a specific Availability Zone. It is composed of:
 
-- An **AMI (Amazon Machine Image)** — the template containing the root volume snapshot, kernel configuration, and launch permissions.
-- An **instance type** — a fixed combination of vCPU, memory, network bandwidth, and storage characteristics.
+- An **AMI (Amazon Machine Image)**  the template containing the root volume snapshot, kernel configuration, and launch permissions.
+- An **instance type**  a fixed combination of vCPU, memory, network bandwidth, and storage characteristics.
 - One or more **ENIs**, each in a subnet, each with security groups.
 - **EBS volumes** (network-attached, persistent, independently durable) and/or **instance store** volumes (physically attached NVMe, extremely fast, ephemeral, lost on stop or termination).
 - An **IAM instance profile** granting the instance an IAM role.
@@ -721,14 +673,14 @@ flowchart TD
 | Placement groups | Cluster (low latency, same rack), Spread (distinct hardware, for HA), Partition (fault-domain-aware, for HDFS-style systems) |
 | Elastic IP and ENI attach/detach | Network identity that can survive instance replacement |
 | Nitro Enclaves | Isolated, attestable compute environments for processing highly sensitive data with no persistent storage or interactive access |
-| EC2 Image Builder | Automated, versioned, tested AMI pipelines — the correct answer to "golden image" management |
+| EC2 Image Builder | Automated, versioned, tested AMI pipelines  the correct answer to "golden image" management |
 | Hibernation | Preserves RAM to EBS so an instance resumes with its memory state intact |
 
 **Limitations.**
 
 - You are responsible for the guest OS: patching, hardening, agent installation, log shipping, and vulnerability management.
 - Boot time is measured in tens of seconds to minutes, so reactive scaling always lags demand.
-- Idle instances cost the same as busy instances — utilisation discipline is entirely on you.
+- Idle instances cost the same as busy instances  utilisation discipline is entirely on you.
 - An instance is bound to one AZ; instance-store data and the instance itself do not survive AZ loss.
 
 **Pricing model (dimensions).**
@@ -769,7 +721,7 @@ Additional dimensions that surprise beginners: **EBS volume storage and provisio
 
 ### Amazon ECS
 
-**Purpose.** To run and scale Docker containers on AWS with a control plane that is fully managed, has no additional charge, and integrates natively with IAM, VPC networking, ELB, CloudWatch, and Auto Scaling — without requiring the team to learn Kubernetes.
+**Purpose.** To run and scale Docker containers on AWS with a control plane that is fully managed, has no additional charge, and integrates natively with IAM, VPC networking, ELB, CloudWatch, and Auto Scaling  without requiring the team to learn Kubernetes.
 
 **Architecture.**
 
@@ -788,14 +740,14 @@ Additional dimensions that surprise beginners: **EBS volume storage and provisio
 - **Capacity provider strategies** allowing a service to be split across, for example, 1 base task on Fargate plus a 1:4 weight ratio between Fargate and Fargate Spot.
 - **Service Connect** and **ECS Service Discovery (Cloud Map)** for service-to-service communication by name.
 - **Deployment circuit breaker** that automatically rolls back a deployment whose tasks repeatedly fail to reach a healthy state.
-- **Task roles separate from execution roles** — a genuinely important security feature discussed below.
+- **Task roles separate from execution roles**  a genuinely important security feature discussed below.
 - **ECS Exec** for interactive shell access into a running container via Systems Manager, without SSH.
 - **ECS Anywhere** for running the ECS agent on on-premises or edge hardware managed by the same control plane.
 
 **Limitations.**
 
 - ECS is AWS-specific. Task definitions and service definitions do not port to another cloud, though the container images do.
-- Its extensibility model is far narrower than Kubernetes — there are no CRDs, operators, or admission controllers.
+- Its extensibility model is far narrower than Kubernetes  there are no CRDs, operators, or admission controllers.
 - The ecosystem of third-party tooling (service meshes, policy engines, GitOps controllers) is smaller than Kubernetes'.
 
 **Pricing model.** The ECS control plane is **free**. You pay for the underlying capacity:
@@ -807,12 +759,12 @@ Additional dimensions that surprise beginners: **EBS volume storage and provisio
 
 **Scaling behaviour.** Two independent layers must scale, and confusing them is a classic error:
 
-1. **Service auto scaling** — Application Auto Scaling adjusts the desired task count using target tracking (on `ECSServiceAverageCPUUtilization`, `ECSServiceAverageMemoryUtilization`, `ALBRequestCountPerTarget`) or step scaling or scheduled scaling.
-2. **Cluster capacity scaling** — on the EC2 launch type, **managed scaling via capacity providers** adjusts the Auto Scaling group so that there is room for tasks. It computes a `CapacityProviderReservation` metric and scales instances to keep a configured target (for example, 100 means "exactly enough capacity", below 100 leaves headroom for faster task starts).
+1. **Service auto scaling**  Application Auto Scaling adjusts the desired task count using target tracking (on `ECSServiceAverageCPUUtilization`, `ECSServiceAverageMemoryUtilization`, `ALBRequestCountPerTarget`) or step scaling or scheduled scaling.
+2. **Cluster capacity scaling**  on the EC2 launch type, **managed scaling via capacity providers** adjusts the Auto Scaling group so that there is room for tasks. It computes a `CapacityProviderReservation` metric and scales instances to keep a configured target (for example, 100 means "exactly enough capacity", below 100 leaves headroom for faster task starts).
 
 On Fargate, layer 2 does not exist. This is the primary operational simplification Fargate buys you.
 
-**Availability.** The ECS control plane is regional and multi-AZ. Your availability comes from placing tasks across multiple AZs — use the `spread` placement strategy across `attribute:ecs.availability-zone`, run at least two tasks per service, and ensure subnets in the service's network configuration span AZs.
+**Availability.** The ECS control plane is regional and multi-AZ. Your availability comes from placing tasks across multiple AZs  use the `spread` placement strategy across `attribute:ecs.availability-zone`, run at least two tasks per service, and ensure subnets in the service's network configuration span AZs.
 
 **Security features.** Three distinct IAM roles, and understanding their separation is examinable and operationally important:
 
@@ -873,7 +825,7 @@ Additional controls: `awsvpc` per-task security groups, secrets injected from Se
 - Fargate on EKS cannot run DaemonSets, privileged containers, GPU workloads, or host-network pods, which breaks many common observability and networking agents.
 - The VPC CNI consumes real VPC IP addresses per pod, which can exhaust subnets.
 
-**Pricing model.** An hourly charge per cluster for the control plane (on the order of ten cents per hour per cluster for standard support, higher for extended support — check the current EKS pricing page), plus the data plane: EC2 instances, or Fargate vCPU-seconds and GB-seconds, plus EBS, load balancers, NAT Gateways, and data transfer. EKS Auto Mode adds a management surcharge on top of EC2 cost.
+**Pricing model.** An hourly charge per cluster for the control plane (on the order of ten cents per hour per cluster for standard support, higher for extended support  check the current EKS pricing page), plus the data plane: EC2 instances, or Fargate vCPU-seconds and GB-seconds, plus EBS, load balancers, NAT Gateways, and data transfer. EKS Auto Mode adds a management surcharge on top of EC2 cost.
 
 **Performance characteristics.** The API server's throughput and etcd's write latency become relevant at large scale (thousands of nodes, tens of thousands of objects); EKS scales the control plane automatically but very chatty controllers can still stress it. Pod start latency is dominated by image pull and any init containers; node provisioning latency is minutes with Cluster Autoscaler and typically much faster with Karpenter, which launches instances directly.
 
@@ -885,7 +837,7 @@ Additional controls: `awsvpc` per-task security groups, secrets injected from Se
 | **Pod vertical** | Vertical Pod Autoscaler (VPA) | The CPU/memory requests of pods, based on observed usage |
 | **Node** | Cluster Autoscaler or Karpenter | Number and type of worker nodes, in response to unschedulable pods |
 
-KEDA extends HPA with event-driven triggers, for example scaling on SQS queue depth or Kafka consumer lag — the Kubernetes analogue of Lambda's event-driven model.
+KEDA extends HPA with event-driven triggers, for example scaling on SQS queue depth or Kafka consumer lag  the Kubernetes analogue of Lambda's event-driven model.
 
 **Availability.** The control plane is multi-AZ and managed. Your responsibility is to spread node groups across AZs, use `topologySpreadConstraints` or pod anti-affinity so replicas of the same Deployment do not land on one node or in one AZ, configure **PodDisruptionBudgets** so that voluntary disruptions (node drains during upgrades) cannot take all replicas down at once, and set readiness probes correctly so traffic is not sent to pods that are not ready.
 
@@ -943,12 +895,12 @@ KEDA extends HPA with event-driven triggers, for example scaling on SQS queue de
 | Layers per function | 5 | Composition constraint |
 | Statelessness | No guaranteed environment reuse | Never rely on in-memory state persisting between invocations |
 
-**Pricing model.** Three principal dimensions: **number of requests**, **GB-seconds of duration** (configured memory multiplied by billed duration in milliseconds), and, where used, **provisioned concurrency** (billed for the time environments are kept warm plus a lower duration rate). A perpetual free tier covers a substantial monthly allowance of requests and GB-seconds. `arm64` is cheaper per GB-second than `x86_64`. Additional charges arise from the services Lambda talks to — API Gateway requests, CloudWatch Logs ingestion (frequently a larger bill than the Lambda itself for chatty functions), NAT Gateway processing for VPC-attached functions, and data transfer.
+**Pricing model.** Three principal dimensions: **number of requests**, **GB-seconds of duration** (configured memory multiplied by billed duration in milliseconds), and, where used, **provisioned concurrency** (billed for the time environments are kept warm plus a lower duration rate). A perpetual free tier covers a substantial monthly allowance of requests and GB-seconds. `arm64` is cheaper per GB-second than `x86_64`. Additional charges arise from the services Lambda talks to  API Gateway requests, CloudWatch Logs ingestion (frequently a larger bill than the Lambda itself for chatty functions), NAT Gateway processing for VPC-attached functions, and data transfer.
 
 !!! tip "The counter-intuitive memory optimisation"
     Because CPU is allocated proportionally to memory, increasing memory often **reduces total cost**: a function that takes 2,000 ms at 512 MB may take 400 ms at 1,536 MB. The GB-seconds consumed fall even though the per-millisecond rate rises. Use **AWS Lambda Power Tuning** (a Step Functions state machine) to find the cost-optimal memory setting empirically rather than guessing.
 
-**Performance characteristics.** Warm invocation overhead is a few milliseconds. Cold-start Init cost ranges from roughly 100–300 ms for a small interpreted function to several seconds for large JVM or .NET applications. Provisioned concurrency and SnapStart address the tail. Because each environment handles one request at a time, **per-invocation latency does not degrade under load** the way a saturated server does — instead concurrency rises, which is a fundamentally different and generally more predictable performance profile.
+**Performance characteristics.** Warm invocation overhead is a few milliseconds. Cold-start Init cost ranges from roughly 100–300 ms for a small interpreted function to several seconds for large JVM or .NET applications. Provisioned concurrency and SnapStart address the tail. Because each environment handles one request at a time, **per-invocation latency does not degrade under load** the way a saturated server does  instead concurrency rises, which is a fundamentally different and generally more predictable performance profile.
 
 **Scaling behaviour.** Concurrency equals the number of simultaneously executing environments. Lambda scales concurrency in **bursts**, adding a substantial number of environments per function per short interval (per-function burst scaling, on the order of a thousand additional concurrent executions every ten seconds, up to the account limit), which is far faster than any Auto Scaling group. Two controls shape it:
 
@@ -988,7 +940,7 @@ Fargate deserves separate treatment because students frequently misclassify it a
 | Typical cost position | Cheaper at high, steady utilisation | Cheaper at low or spiky utilisation and always cheaper in engineer-hours | Cheaper at scale | Convenient for isolated or bursty pods |
 
 !!! note "The Fargate cost heuristic"
-    Fargate's per-vCPU-hour rate is higher than the equivalent EC2 rate, but you pay only for what tasks request rather than for whole instances. Fargate therefore wins when your instances would sit below roughly 60–70 percent utilisation, and EC2 with Savings Plans or Spot wins when you can genuinely keep instances well packed. Always include the cost of the engineering time spent patching, scaling, and troubleshooting the node fleet in the comparison — for most teams it dominates the raw compute difference.
+    Fargate's per-vCPU-hour rate is higher than the equivalent EC2 rate, but you pay only for what tasks request rather than for whole instances. Fargate therefore wins when your instances would sit below roughly 60–70 percent utilisation, and EC2 with Savings Plans or Spot wins when you can genuinely keep instances well packed. Always include the cost of the engineering time spent patching, scaling, and troubleshooting the node fleet in the comparison  for most teams it dominates the raw compute difference.
 
 ---
 
@@ -1113,7 +1065,7 @@ Fargate deserves separate treatment because students frequently misclassify it a
 |---|---|---|
 | **Memory** | 128 MB to 10,240 MB | Tune empirically with Power Tuning; higher memory often lowers total cost |
 | **Architecture** | x86_64, arm64 | arm64 for lower price per GB-second where dependencies allow |
-| **Timeout** | 1 s to 900 s | Set slightly above observed p99, not at the maximum — a long timeout turns a hang into an expensive hang |
+| **Timeout** | 1 s to 900 s | Set slightly above observed p99, not at the maximum  a long timeout turns a hang into an expensive hang |
 | **Packaging** | ZIP or container image | Container image for large dependencies or existing container pipelines |
 | **Concurrency** | Unreserved, reserved, provisioned | Reserved to protect downstream databases; provisioned for latency-critical paths |
 | **VPC** | None, or subnets plus security groups | Attach only when you must reach private resources; it adds NAT cost and complexity |
@@ -1149,7 +1101,7 @@ flowchart TD
 ```
 
 !!! question "Apply the framework"
-    A team is building a nightly report generator that reads 40 GB from S3, performs a join, and writes a CSV. Peak runtime is 40 minutes. Lambda is eliminated at the 15-minute constraint. The work is containerisable and stateless, runs once per day, and needs no host control — an **ECS task on Fargate, triggered by EventBridge Scheduler**, is the natural answer. If the same job needed GPUs, it would move to **AWS Batch on EC2 Spot**.
+    A team is building a nightly report generator that reads 40 GB from S3, performs a join, and writes a CSV. Peak runtime is 40 minutes. Lambda is eliminated at the 15-minute constraint. The work is containerisable and stateless, runs once per day, and needs no host control  an **ECS task on Fargate, triggered by EventBridge Scheduler**, is the natural answer. If the same job needed GPUs, it would move to **AWS Batch on EC2 Spot**.
 
 ### Comparative Matrix
 
@@ -1169,7 +1121,7 @@ flowchart TD
 
 ### Scalability
 
-Design for **horizontal scaling** at every tier, and know your bottleneck. Adding compute nodes is useless if the relational database connection pool is exhausted — which is exactly what happens when a Lambda function with 1,000 concurrency talks directly to RDS. Use **RDS Proxy** for Lambda-to-relational access, or place a queue between the scalable tier and the constrained tier.
+Design for **horizontal scaling** at every tier, and know your bottleneck. Adding compute nodes is useless if the relational database connection pool is exhausted  which is exactly what happens when a Lambda function with 1,000 concurrency talks directly to RDS. Use **RDS Proxy** for Lambda-to-relational access, or place a queue between the scalable tier and the constrained tier.
 
 Understand the **scaling latency** of each service, because it determines how much headroom you must carry:
 
@@ -1184,17 +1136,17 @@ Understand the **scaling latency** of each service, because it determines how mu
 ### Availability and Fault Tolerance
 
 - Deploy across at least two, preferably three, AZs. This is the single highest-value availability decision.
-- Set health checks that test the application, not merely the process. An HTTP endpoint that verifies downstream dependencies is more useful than a TCP port check — but beware of cascading failure, where a dependency outage marks every instance unhealthy and the platform terminates your entire fleet. A common compromise is a shallow liveness check and a deeper readiness check.
+- Set health checks that test the application, not merely the process. An HTTP endpoint that verifies downstream dependencies is more useful than a TCP port check  but beware of cascading failure, where a dependency outage marks every instance unhealthy and the platform terminates your entire fleet. A common compromise is a shallow liveness check and a deeper readiness check.
 - Assume every compute node is disposable. Design graceful shutdown: handle `SIGTERM`, stop accepting new work, drain in-flight requests, and deregister from the load balancer within the configured deregistration delay.
 - Use **at least two replicas** of everything. A single-replica Deployment has no availability at all during a rolling update or node drain.
 
 ### Reliability
 
-Reliability is about behaviour under partial failure. Implement retries with **exponential backoff and jitter**, set client timeouts shorter than server timeouts, apply **circuit breakers** so a failing dependency does not consume all your threads, and make every operation reachable by a retry **idempotent**. In event-driven systems, delivery is at-least-once, so duplicate processing is not an exception case — it is normal traffic.
+Reliability is about behaviour under partial failure. Implement retries with **exponential backoff and jitter**, set client timeouts shorter than server timeouts, apply **circuit breakers** so a failing dependency does not consume all your threads, and make every operation reachable by a retry **idempotent**. In event-driven systems, delivery is at-least-once, so duplicate processing is not an exception case  it is normal traffic.
 
 ### Latency
 
-Latency budgets should be allocated explicitly across hops. Edge caching removes hops entirely. Keep chatty services in the same AZ where possible (cross-AZ traffic adds sub-millisecond latency but does incur data transfer charges). Reuse connections — creating a new TLS connection per request is often the dominant latency cost in a microservice call chain, and connection reuse is a major reason to initialise SDK clients outside a Lambda handler.
+Latency budgets should be allocated explicitly across hops. Edge caching removes hops entirely. Keep chatty services in the same AZ where possible (cross-AZ traffic adds sub-millisecond latency but does incur data transfer charges). Reuse connections  creating a new TLS connection per request is often the dominant latency cost in a microservice call chain, and connection reuse is a major reason to initialise SDK clients outside a Lambda handler.
 
 ### Cost
 
@@ -1249,7 +1201,7 @@ The AWS Well-Architected Framework provides six pillars. Below, each is expresse
 
 ### Cost Optimization
 
-- Turn off non-production environments outside working hours — often a 60–70 percent saving on those environments.
+- Turn off non-production environments outside working hours  often a 60–70 percent saving on those environments.
 - Apply Savings Plans to the steady baseline only, and leave the variable portion On-Demand or Spot.
 - Use Fargate Spot and EC2 Spot for anything interruptible.
 - Set ECR lifecycle policies and CloudWatch Logs retention policies; both accumulate cost silently.
@@ -1303,7 +1255,7 @@ Key rules:
 - **Security groups reference other security groups**, not CIDR blocks, for internal traffic. This makes the rule self-maintaining as IP addresses change.
 - **Compute lives in private subnets.** If a resource has a public IP address and does not need one, that is a finding.
 - **VPC endpoints** (interface endpoints for ECR, ECS, Secrets Manager, CloudWatch Logs, STS; a gateway endpoint for S3) keep traffic on the AWS network, remove the NAT Gateway dependency, and allow endpoint policies to restrict which resources can be reached.
-- **NACLs** are a coarse, stateless second layer — useful for blanket denials such as blocking a known-malicious CIDR, not for application-level segmentation.
+- **NACLs** are a coarse, stateless second layer  useful for blanket denials such as blocking a known-malicious CIDR, not for application-level segmentation.
 - In EKS, add **NetworkPolicy** for east-west control; the default is fully open.
 
 ### Data Protection
@@ -1342,7 +1294,7 @@ Caching is the highest-leverage performance technique because a cache hit consum
 | API | API Gateway caching | Responses keyed by request parameters |
 | Application data | ElastiCache (Redis or Valkey, Memcached) | Query results, session state, computed aggregates |
 | Database read scaling | RDS read replicas, DynamoDB DAX | Read-heavy access patterns |
-| In-process | Lambda global scope, container process memory | Configuration, secrets, compiled artefacts — per environment, not shared |
+| In-process | Lambda global scope, container process memory | Configuration, secrets, compiled artefacts  per environment, not shared |
 
 ### Connection Reuse
 
@@ -1366,11 +1318,11 @@ The commonest performance failure is not the absence of autoscaling but its misc
 
 ### Parallelism and Asynchrony
 
-Decompose work so it can run in parallel: Lambda fan-out from SNS or EventBridge, Step Functions **Map** state for distributed iteration, Kinesis shards for parallel stream processing, and multiple ECS tasks consuming a shared SQS queue. Move anything that need not be in the request path out of it — email sending, thumbnail generation, analytics writes.
+Decompose work so it can run in parallel: Lambda fan-out from SNS or EventBridge, Step Functions **Map** state for distributed iteration, Kinesis shards for parallel stream processing, and multiple ECS tasks consuming a shared SQS queue. Move anything that need not be in the request path out of it  email sending, thumbnail generation, analytics writes.
 
 ### Storage Optimization
 
-Choose gp3 over gp2 (IOPS and throughput are configurable independently of size, and it is usually cheaper). Use instance store for scratch data that can be regenerated. For containers, keep images small — a multi-stage Dockerfile producing a distroless or Alpine-based final image reduces pull time, attack surface, and Fargate task start latency. Enable **SOCI** lazy loading for large images on Fargate.
+Choose gp3 over gp2 (IOPS and throughput are configurable independently of size, and it is usually cheaper). Use instance store for scratch data that can be regenerated. For containers, keep images small  a multi-stage Dockerfile producing a distroless or Alpine-based final image reduces pull time, attack surface, and Fargate task start latency. Enable **SOCI** lazy loading for large images on Fargate.
 
 ### Measurement Discipline
 
@@ -1407,7 +1359,7 @@ graph TD
     E --> I["Spot or Fargate Spot"]
 ```
 
-**Compute Savings Plans** are the most flexible commitment: they apply across EC2 instance families, Regions, ECS Fargate, and Lambda duration. **EC2 Instance Savings Plans** give a deeper discount but lock you to a family in a Region. **Reserved Instances** are the least flexible. Commit only to the portion of demand you are confident will persist — typically the trailing minimum of the last several months.
+**Compute Savings Plans** are the most flexible commitment: they apply across EC2 instance families, Regions, ECS Fargate, and Lambda duration. **EC2 Instance Savings Plans** give a deeper discount but lock you to a family in a Region. **Reserved Instances** are the least flexible. Commit only to the portion of demand you are confident will persist  typically the trailing minimum of the last several months.
 
 ### Spot Strategy
 
@@ -1429,7 +1381,7 @@ Spot capacity is reclaimed with a two-minute warning delivered through instance 
 
 ## Monitoring and Observability
 
-Observability rests on three signals — **metrics** (aggregated numbers over time), **logs** (discrete events), and **traces** (the path of one request across services) — plus, increasingly, **profiles**.
+Observability rests on three signals  **metrics** (aggregated numbers over time), **logs** (discrete events), and **traces** (the path of one request across services)  plus, increasingly, **profiles**.
 
 ### CloudWatch Metrics
 
@@ -1463,7 +1415,7 @@ Log in **structured JSON** with a consistent schema including timestamp, level, 
 
 ### Dashboards and Synthetic Monitoring
 
-Build a dashboard per service showing the RED metrics — **Rate, Errors, Duration** — alongside saturation. Add **CloudWatch Synthetics canaries** that exercise critical user journeys continuously from outside the system, because a canary detects an outage that internal metrics can miss (for example, a DNS or certificate failure). Use **CloudWatch ServiceLens** to join traces, metrics, and logs in one view.
+Build a dashboard per service showing the RED metrics  **Rate, Errors, Duration**  alongside saturation. Add **CloudWatch Synthetics canaries** that exercise critical user journeys continuously from outside the system, because a canary detects an outage that internal metrics can miss (for example, a DNS or certificate failure). Use **CloudWatch ServiceLens** to join traces, metrics, and logs in one view.
 
 ```mermaid
 flowchart LR
@@ -1540,7 +1492,7 @@ flowchart TD
 ```
 
 !!! info "Reading this diagram architecturally"
-    Note that the synchronous path (user to ALB to service to database) is deliberately short. Everything that does not need to complete before responding to the user — fulfilment, notifications, shipping — is pushed behind EventBridge and SQS. This keeps user-facing latency low and makes the system resilient to failures in the downstream components. This is the essence of cloud-native design.
+    Note that the synchronous path (user to ALB to service to database) is deliberately short. Everything that does not need to complete before responding to the user  fulfilment, notifications, shipping  is pushed behind EventBridge and SQS. This keeps user-facing latency low and makes the system resilient to failures in the downstream components. This is the essence of cloud-native design.
 
 ---
 
@@ -1585,13 +1537,13 @@ Place a routing layer (ALB listener rules or API Gateway) in front of a monolith
 
 ### Sidecar
 
-A helper container deployed alongside the application container in the same task or pod, sharing its network namespace — used for log shipping (Fluent Bit), tracing (ADOT collector), or service mesh proxying (Envoy). It keeps cross-cutting concerns out of application code. Not available on EKS Fargate for DaemonSet-style agents, which is a common reason to choose EC2 nodes.
+A helper container deployed alongside the application container in the same task or pod, sharing its network namespace  used for log shipping (Fluent Bit), tracing (ADOT collector), or service mesh proxying (Envoy). It keeps cross-cutting concerns out of application code. Not available on EKS Fargate for DaemonSet-style agents, which is a common reason to choose EC2 nodes.
 
 ### Circuit Breaker, Retry with Backoff, and Bulkhead
 
 - **Retry with exponential backoff and jitter** prevents a thundering herd from converting a brief blip into a sustained outage.
 - **Circuit breaker** stops calling a failing dependency after a threshold, failing fast and allowing recovery.
-- **Bulkhead** partitions resources — separate connection pools, separate thread pools, separate ECS services, or reserved Lambda concurrency per function — so that one saturated component cannot consume all capacity. Lambda's reserved concurrency is a bulkhead implemented by the platform.
+- **Bulkhead** partitions resources  separate connection pools, separate thread pools, separate ECS services, or reserved Lambda concurrency per function  so that one saturated component cannot consume all capacity. Lambda's reserved concurrency is a bulkhead implemented by the platform.
 
 ### Saga
 
@@ -1603,7 +1555,7 @@ Separate the write model from the read model. Writes go to DynamoDB; DynamoDB St
 
 ### Blue/Green and Canary Deployment
 
-**Blue/green** stands up an entire parallel environment and shifts traffic atomically, giving near-instant rollback — implemented with CodeDeploy for ECS and Lambda, or two target groups on an ALB. **Canary** shifts a small percentage of traffic to the new version, monitors alarms, and rolls forward or back automatically — implemented with Lambda alias weights or ALB weighted target groups. Both depend on having good alarms; automated rollback is only as good as the signal that triggers it.
+**Blue/green** stands up an entire parallel environment and shifts traffic atomically, giving near-instant rollback  implemented with CodeDeploy for ECS and Lambda, or two target groups on an ALB. **Canary** shifts a small percentage of traffic to the new version, monitors alarms, and rolls forward or back automatically  implemented with Lambda alias weights or ALB weighted target groups. Both depend on having good alarms; automated rollback is only as good as the signal that triggers it.
 
 ---
 
@@ -1635,15 +1587,15 @@ Separate the write model from the read model. Writes go to DynamoDB; DynamoDB St
 
 ### Amazon EC2
 
-Complete control over the operating system means any software can run, including legacy applications, custom kernels, and commercial software with host-based licensing. The breadth of instance types — hundreds of combinations including GPU, FPGA, high-memory, and bare metal — means hardware can be matched precisely to workload shape. The purchase-option flexibility (Spot, Savings Plans, Reserved) enables the deepest cost optimisation of any compute service for steady workloads. It is also the most predictable performance model, since you own the entire instance.
+Complete control over the operating system means any software can run, including legacy applications, custom kernels, and commercial software with host-based licensing. The breadth of instance types  hundreds of combinations including GPU, FPGA, high-memory, and bare metal  means hardware can be matched precisely to workload shape. The purchase-option flexibility (Spot, Savings Plans, Reserved) enables the deepest cost optimisation of any compute service for steady workloads. It is also the most predictable performance model, since you own the entire instance.
 
 ### Amazon ECS
 
-The control plane is free and requires no operational effort at all — there is no version to upgrade, no etcd to worry about, and no cluster fee. Integration with IAM, VPC, ELB, CloudWatch, and Auto Scaling is native and requires no controllers or add-ons. Task-level IAM roles provide fine-grained security with a very simple mental model. The conceptual surface area is small enough that a team can be productive in days, and combined with Fargate it removes host management entirely. For a team whose objective is to ship an application rather than to build a platform, ECS delivers the best ratio of capability to complexity.
+The control plane is free and requires no operational effort at all  there is no version to upgrade, no etcd to worry about, and no cluster fee. Integration with IAM, VPC, ELB, CloudWatch, and Auto Scaling is native and requires no controllers or add-ons. Task-level IAM roles provide fine-grained security with a very simple mental model. The conceptual surface area is small enough that a team can be productive in days, and combined with Fargate it removes host management entirely. For a team whose objective is to ship an application rather than to build a platform, ECS delivers the best ratio of capability to complexity.
 
 ### Amazon EKS
 
-You get the upstream Kubernetes API, which means the entire cloud-native ecosystem — Helm, Argo CD, Istio, Prometheus, Kyverno, thousands of operators — works without modification. Workloads and manifests are portable across clouds and on-premises, which matters for genuine multi-cloud or hybrid strategies. Kubernetes is extensible through CRDs and controllers, so a platform team can encode organisational policy as software and offer self-service abstractions to product teams. Kubernetes skills are widely available in the labour market. AWS operates the hardest part — a highly available, backed-up control plane.
+You get the upstream Kubernetes API, which means the entire cloud-native ecosystem  Helm, Argo CD, Istio, Prometheus, Kyverno, thousands of operators  works without modification. Workloads and manifests are portable across clouds and on-premises, which matters for genuine multi-cloud or hybrid strategies. Kubernetes is extensible through CRDs and controllers, so a platform team can encode organisational policy as software and offer self-service abstractions to product teams. Kubernetes skills are widely available in the labour market. AWS operates the hardest part  a highly available, backed-up control plane.
 
 ### AWS Lambda
 
@@ -1651,7 +1603,7 @@ There is no infrastructure to manage at all, and scaling is automatic, immediate
 
 ### Fargate
 
-Removes an entire class of operational work — AMI management, patching, node scaling, capacity providers, cluster autoscaler tuning — while retaining the container packaging model. Each task runs in its own microVM, giving stronger isolation than shared-kernel container hosting. Billing matches the resources tasks actually request, which is far more honest than paying for partly empty instances.
+Removes an entire class of operational work  AMI management, patching, node scaling, capacity providers, cluster autoscaler tuning  while retaining the container packaging model. Each task runs in its own microVM, giving stronger isolation than shared-kernel container hosting. Billing matches the resources tasks actually request, which is far more honest than paying for partly empty instances.
 
 ---
 
@@ -1659,15 +1611,15 @@ Removes an entire class of operational work — AMI management, patching, node s
 
 ### Amazon EC2
 
-You own the operating system, and therefore patching, hardening, agent management, and vulnerability response — a continuing cost measured in engineer-hours. Boot time is minutes, so reactive scaling always lags demand and you must carry headroom. Idle instances cost full price. Capacity planning does not disappear; it merely becomes faster to act on. Instances are AZ-bound, so multi-AZ design is entirely your responsibility. Configuration drift is a constant risk unless you enforce immutable AMIs.
+You own the operating system, and therefore patching, hardening, agent management, and vulnerability response  a continuing cost measured in engineer-hours. Boot time is minutes, so reactive scaling always lags demand and you must carry headroom. Idle instances cost full price. Capacity planning does not disappear; it merely becomes faster to act on. Instances are AZ-bound, so multi-AZ design is entirely your responsibility. Configuration drift is a constant risk unless you enforce immutable AMIs.
 
 ### Amazon ECS
 
-It is AWS-proprietary; task and service definitions do not transfer to another platform, though container images do. The extensibility model is limited — there is no equivalent of CRDs, operators, or admission webhooks, so you cannot easily encode custom platform behaviour. The third-party ecosystem is much smaller than Kubernetes'. For very large, multi-team platform engineering efforts, the abstractions ECS offers may prove too thin.
+It is AWS-proprietary; task and service definitions do not transfer to another platform, though container images do. The extensibility model is limited  there is no equivalent of CRDs, operators, or admission webhooks, so you cannot easily encode custom platform behaviour. The third-party ecosystem is much smaller than Kubernetes'. For very large, multi-team platform engineering efforts, the abstractions ECS offers may prove too thin.
 
 ### Amazon EKS
 
-Kubernetes is genuinely complex and its failure modes are numerous and subtle — CrashLoopBackOff, ImagePullBackOff, pending pods due to insufficient resources or taints, DNS failures under load, misconfigured probes causing rolling restarts. The control plane has a per-cluster hourly cost that penalises many-small-cluster designs. **Version upgrades are mandatory, recurring work**, requiring validation of deprecated APIs and coordination with add-on versions. The VPC CNI consumes real VPC IPs, so subnet sizing becomes an architectural constraint. EKS Fargate cannot run DaemonSets, privileged containers, or GPU workloads. The total cost of ownership, including the platform team required to run it well, is the highest of the four services.
+Kubernetes is genuinely complex and its failure modes are numerous and subtle  CrashLoopBackOff, ImagePullBackOff, pending pods due to insufficient resources or taints, DNS failures under load, misconfigured probes causing rolling restarts. The control plane has a per-cluster hourly cost that penalises many-small-cluster designs. **Version upgrades are mandatory, recurring work**, requiring validation of deprecated APIs and coordination with add-on versions. The VPC CNI consumes real VPC IPs, so subnet sizing becomes an architectural constraint. EKS Fargate cannot run DaemonSets, privileged containers, or GPU workloads. The total cost of ownership, including the platform team required to run it well, is the highest of the four services.
 
 ### AWS Lambda
 
@@ -1741,7 +1693,7 @@ Vertical scaling increases the capacity of a single instance (a larger instance 
 
 **2. What is the difference between an ECS task, a task definition, and a service?**
 
-A task definition is an immutable, versioned blueprint: container images, CPU and memory reservations, port mappings, environment variables, logging configuration, and the task and execution IAM roles. A task is a running instantiation of one revision of that blueprint — one or more containers scheduled together on the same host and sharing a network namespace. A service is a controller that maintains a desired count of tasks, replaces unhealthy ones, registers them with a load balancer target group, and orchestrates rolling or blue/green deployments. The mental model is class, object, and supervisor.
+A task definition is an immutable, versioned blueprint: container images, CPU and memory reservations, port mappings, environment variables, logging configuration, and the task and execution IAM roles. A task is a running instantiation of one revision of that blueprint  one or more containers scheduled together on the same host and sharing a network namespace. A service is a controller that maintains a desired count of tasks, replaces unhealthy ones, registers them with a load balancer target group, and orchestrates rolling or blue/green deployments. The mental model is class, object, and supervisor.
 
 **3. Why does AWS Lambda have a cold start, and what determines its duration?**
 
@@ -1753,7 +1705,7 @@ The execution role is assumed by the ECS agent and Fargate infrastructure, not b
 
 **5. What does AWS Fargate actually remove from the operational burden, and what does it not?**
 
-Fargate removes the EC2 layer: no AMI patching, no instance right-sizing, no cluster capacity management, no bin-packing, no SSH access, and per-task rather than per-instance billing granularity. It does not remove container image hygiene, application-level patching, IAM design, networking design (tasks still occupy subnets and ENIs), observability, or cost governance. It also does not remove the need to understand orchestration semantics — deployment strategies, health checks, and draining still apply.
+Fargate removes the EC2 layer: no AMI patching, no instance right-sizing, no cluster capacity management, no bin-packing, no SSH access, and per-task rather than per-instance billing granularity. It does not remove container image hygiene, application-level patching, IAM design, networking design (tasks still occupy subnets and ENIs), observability, or cost governance. It also does not remove the need to understand orchestration semantics  deployment strategies, health checks, and draining still apply.
 
 **6. Explain the concept of a control plane and a data plane using ECS and EKS as examples.**
 
@@ -1761,13 +1713,13 @@ The control plane holds desired state, makes scheduling and placement decisions,
 
 **7. Why is an Auto Scaling group with `ELB` health check type materially different from one with `EC2` health check type?**
 
-The `EC2` health check reports only on hypervisor-level instance status — whether the instance is running and passing system and instance status checks. An instance whose application process has crashed, deadlocked, or is returning HTTP 500 still passes. The `ELB` health check type delegates the decision to the load balancer's target group health check, which probes an application endpoint. Only the latter detects application-level failure and triggers replacement. This is a very common production defect and a recurring certification trap.
+The `EC2` health check reports only on hypervisor-level instance status  whether the instance is running and passing system and instance status checks. An instance whose application process has crashed, deadlocked, or is returning HTTP 500 still passes. The `ELB` health check type delegates the decision to the load balancer's target group health check, which probes an application endpoint. Only the latter detects application-level failure and triggers replacement. This is a very common production defect and a recurring certification trap.
 
 ### Scenario Questions
 
 **1. A team runs a nightly report that takes 45 minutes and reads several gigabytes from S3. They propose AWS Lambda. Evaluate.**
 
-Lambda is unsuitable as a single invocation: the maximum execution duration is 15 minutes, which is a hard limit, and ephemeral storage is bounded. Three viable redesigns exist. First, decompose the job into a map-reduce shape — a Step Functions Distributed Map fanning out many short Lambda invocations over S3 key ranges, then a reduce step. Second, run it as an ECS or EKS task on Fargate, invoked on a schedule by EventBridge Scheduler, which has no duration limit and generous memory. Third, if the work is fundamentally an analytical query over S3 data, replace the compute entirely with Athena or an EMR Serverless job. The architectural lesson is that a duration limit is a signal to reconsider the decomposition, not merely to pick a bigger runtime.
+Lambda is unsuitable as a single invocation: the maximum execution duration is 15 minutes, which is a hard limit, and ephemeral storage is bounded. Three viable redesigns exist. First, decompose the job into a map-reduce shape  a Step Functions Distributed Map fanning out many short Lambda invocations over S3 key ranges, then a reduce step. Second, run it as an ECS or EKS task on Fargate, invoked on a schedule by EventBridge Scheduler, which has no duration limit and generous memory. Third, if the work is fundamentally an analytical query over S3 data, replace the compute entirely with Athena or an EMR Serverless job. The architectural lesson is that a duration limit is a signal to reconsider the decomposition, not merely to pick a bigger runtime.
 
 **2. A microservice receives steady traffic of roughly 200 requests per second with brief 10x spikes at lunchtime. Cost is a first-class concern. Which compute model?**
 
@@ -1793,11 +1745,11 @@ Place an Application Load Balancer across at least two, preferably three, Availa
 
 **2. When would you choose EKS over ECS, given that ECS is simpler?**
 
-Choose EKS when the organisation needs the Kubernetes API and ecosystem — Helm charts, operators, custom resource definitions, service meshes such as Istio, GitOps tooling such as Argo CD or Flux — or when workload portability across clouds and on-premises is a genuine requirement, or when the engineering organisation already has Kubernetes expertise and multi-cluster tooling. Choose ECS when the priority is minimal operational surface, deep and native AWS integration, no control-plane charge, and a smaller learning curve. The decision is fundamentally about ecosystem leverage and existing skills, not about technical capability, because both can run the same containers with comparable reliability.
+Choose EKS when the organisation needs the Kubernetes API and ecosystem  Helm charts, operators, custom resource definitions, service meshes such as Istio, GitOps tooling such as Argo CD or Flux  or when workload portability across clouds and on-premises is a genuine requirement, or when the engineering organisation already has Kubernetes expertise and multi-cluster tooling. Choose ECS when the priority is minimal operational surface, deep and native AWS integration, no control-plane charge, and a smaller learning curve. The decision is fundamentally about ecosystem leverage and existing skills, not about technical capability, because both can run the same containers with comparable reliability.
 
 **3. Design an event-driven image-processing pipeline and justify the compute choice at each stage.**
 
-An upload lands in S3, which emits an event to EventBridge or directly to SQS. A Lambda function consumes the queue, generates thumbnails, and writes results back to S3 and metadata to DynamoDB — Lambda is correct here because the work is short, stateless, embarrassingly parallel, and bursty, and the cost at low duty cycle is negligible. If a stage requires heavy machine-learning inference exceeding 15 minutes or requiring GPUs, that stage moves to an ECS Fargate task or an EC2 GPU instance triggered by Step Functions, because Lambda does not offer GPUs. A dead-letter queue captures poison messages, and Step Functions orchestrates multi-stage workflows so that retries, timeouts, and error paths are declarative rather than embedded in application code.
+An upload lands in S3, which emits an event to EventBridge or directly to SQS. A Lambda function consumes the queue, generates thumbnails, and writes results back to S3 and metadata to DynamoDB  Lambda is correct here because the work is short, stateless, embarrassingly parallel, and bursty, and the cost at low duty cycle is negligible. If a stage requires heavy machine-learning inference exceeding 15 minutes or requiring GPUs, that stage moves to an ECS Fargate task or an EC2 GPU instance triggered by Step Functions, because Lambda does not offer GPUs. A dead-letter queue captures poison messages, and Step Functions orchestrates multi-stage workflows so that retries, timeouts, and error paths are declarative rather than embedded in application code.
 
 **4. How would you achieve zero-downtime deployment for a containerised service, and what are the trade-offs of each strategy?**
 
@@ -1811,7 +1763,7 @@ The task cannot reach ECR. In a private subnet without a NAT Gateway, create int
 
 **2. An EC2 instance in a private subnet cannot install packages from the internet.**
 
-Confirm a NAT Gateway exists in a public subnet in the same Availability Zone, that the private subnet's route table has a `0.0.0.0/0` route to that NAT Gateway, that the public subnet's route table has a `0.0.0.0/0` route to an Internet Gateway, that the NAT Gateway subnet is genuinely public, and that the outbound security group and the network ACLs on both subnets permit the traffic — remembering that NACLs are stateless and therefore need an inbound ephemeral-port rule for return traffic.
+Confirm a NAT Gateway exists in a public subnet in the same Availability Zone, that the private subnet's route table has a `0.0.0.0/0` route to that NAT Gateway, that the public subnet's route table has a `0.0.0.0/0` route to an Internet Gateway, that the NAT Gateway subnet is genuinely public, and that the outbound security group and the network ACLs on both subnets permit the traffic  remembering that NACLs are stateless and therefore need an inbound ephemeral-port rule for return traffic.
 
 **3. A Lambda function reports `Task timed out after 3.00 seconds` only in production.**
 
@@ -1935,7 +1887,7 @@ graph TD
 
 ### Implementation Steps
 
-**Step 1 — Prepare the container image.**
+**Step 1  Prepare the container image.**
 
 Create a minimal application and Dockerfile locally, then build and push it to Amazon ECR.
 
@@ -1989,7 +1941,7 @@ docker tag "$REPO":v1 "$ACCOUNT_ID.dkr.ecr.$REGION.amazonaws.com/$REPO:v1"
 docker push "$ACCOUNT_ID.dkr.ecr.$REGION.amazonaws.com/$REPO:v1"
 ```
 
-**Step 2 — Create the ECS cluster.**
+**Step 2  Create the ECS cluster.**
 
 ```bash
 aws ecs create-cluster --cluster-name dso303-cluster \
@@ -1997,13 +1949,13 @@ aws ecs create-cluster --cluster-name dso303-cluster \
   --default-capacity-provider-strategy capacityProvider=FARGATE,weight=1
 ```
 
-**Step 3 — Register the task definition.** Save the JSON from the Code Examples section as `taskdef.json`, then register it.
+**Step 3  Register the task definition.** Save the JSON from the Code Examples section as `taskdef.json`, then register it.
 
 ```bash
 aws ecs register-task-definition --cli-input-json file://taskdef.json
 ```
 
-**Step 4 — Create the load balancer and target group.** The target group type must be `ip` because `awsvpc` tasks receive their own ENI and are not registered by instance ID.
+**Step 4  Create the load balancer and target group.** The target group type must be `ip` because `awsvpc` tasks receive their own ENI and are not registered by instance ID.
 
 ```bash
 aws elbv2 create-target-group \
@@ -2016,7 +1968,7 @@ aws elbv2 create-target-group \
 
 Create the Application Load Balancer in the two public subnets, then create a listener on port 80 forwarding to the target group.
 
-**Step 5 — Create the ECS service.** Place tasks in the private subnets, attach them to the target group, and spread them across Availability Zones.
+**Step 5  Create the ECS service.** Place tasks in the private subnets, attach them to the target group, and spread them across Availability Zones.
 
 ```bash
 aws ecs create-service \
@@ -2035,7 +1987,7 @@ aws ecs create-service \
 !!! warning "Private subnets require egress for image pull"
     Because `assignPublicIp` is `DISABLED`, the tasks have no route to the public internet unless the private subnets route through a NAT Gateway, or unless interface VPC endpoints exist for `ecr.api`, `ecr.dkr`, and `logs`, plus a Gateway endpoint for S3. Omitting this is the single most common cause of `CannotPullContainerError` in this lab.
 
-**Step 6 — Configure target-tracking auto scaling.**
+**Step 6  Configure target-tracking auto scaling.**
 
 ```bash
 aws application-autoscaling register-scalable-target \
@@ -2058,7 +2010,7 @@ aws application-autoscaling put-scaling-policy \
   }'
 ```
 
-**Step 7 — Generate load and observe scaling.**
+**Step 7  Generate load and observe scaling.**
 
 ```bash
 ALB_DNS=$(aws elbv2 describe-load-balancers --names dso303-alb \
@@ -2070,7 +2022,7 @@ watch -n 10 "aws ecs describe-services --cluster dso303-cluster \
   --services dso303-svc --query 'services[0].[desiredCount,runningCount]'"
 ```
 
-**Step 8 — Deploy the Lambda equivalent and compare.** Deploy the handler from the Code Examples section, create a Function URL, and measure latency for the first request after a period of inactivity versus subsequent requests.
+**Step 8  Deploy the Lambda equivalent and compare.** Deploy the handler from the Code Examples section, create a Function URL, and measure latency for the first request after a period of inactivity versus subsequent requests.
 
 ```bash
 for i in 1 2 3 4 5; do
@@ -2078,7 +2030,7 @@ for i in 1 2 3 4 5; do
 done
 ```
 
-**Step 9 — Record observations and clean up.** Delete the ECS service, the load balancer, the target group, the Lambda function, and the ECR repository. In a Learner Lab, leaving a NAT Gateway or an Application Load Balancer running will exhaust the budget quickly, because both bill per hour regardless of traffic.
+**Step 9  Record observations and clean up.** Delete the ECS service, the load balancer, the target group, the Lambda function, and the ECR repository. In a Learner Lab, leaving a NAT Gateway or an Application Load Balancer running will exhaust the budget quickly, because both bill per hour regardless of traffic.
 
 ### Expected Output
 
@@ -2097,7 +2049,7 @@ done
 
 ## Code Examples
 
-### AWS CLI — launching an EC2 instance with a launch template
+### AWS CLI  launching an EC2 instance with a launch template
 
 ```bash
 # Launch templates are versioned and are required for mixed-instances policies.
@@ -2127,7 +2079,7 @@ UD
 !!! note "Why `HttpTokens: required`"
     This enforces IMDSv2, which requires a session token obtained by a `PUT` request. IMDSv1 is vulnerable to server-side request forgery, where a compromised application is tricked into fetching instance credentials. Enforcing IMDSv2 is a baseline security control and is checked by AWS Config and Security Hub.
 
-### AWS CLI — Auto Scaling group with a mixed-instances policy
+### AWS CLI  Auto Scaling group with a mixed-instances policy
 
 ```bash
 # Combines On-Demand baseline with Spot for cost efficiency, across three AZs.
@@ -2254,7 +2206,7 @@ metadata:
 ```
 
 !!! note "Requests versus limits"
-    `requests` drive scheduling — the scheduler places a pod only on a node with that much unreserved capacity. `limits` drive enforcement — exceeding a memory limit terminates the container with `OOMKilled`, while exceeding a CPU limit throttles it. Setting requests too high wastes cluster capacity; setting them too low causes noisy-neighbour contention.
+    `requests` drive scheduling  the scheduler places a pod only on a node with that much unreserved capacity. `limits` drive enforcement  exceeding a memory limit terminates the container with `OOMKilled`, while exceeding a CPU limit throttles it. Setting requests too high wastes cluster capacity; setting them too low causes noisy-neighbour contention.
 
 ### AWS Lambda handler (Python)
 
@@ -2292,7 +2244,7 @@ def handler(event, context):
     }
 ```
 
-### Python (boto3) — driving ECS and inspecting scaling
+### Python (boto3)  driving ECS and inspecting scaling
 
 ```python
 import boto3
@@ -2322,7 +2274,7 @@ def deploy_new_revision(cluster: str, service: str, image: str) -> str:
     return new_arn
 ```
 
-### CloudFormation — ECS service on Fargate behind an ALB (abridged)
+### CloudFormation  ECS service on Fargate behind an ALB (abridged)
 
 ```yaml
 AWSTemplateFormatVersion: '2010-09-09'
@@ -2419,7 +2371,7 @@ Resources:
 !!! tip "Deployment circuit breaker"
     `DeploymentCircuitBreaker` with `Rollback: true` instructs ECS to detect a deployment whose tasks repeatedly fail to become healthy and automatically revert to the last known-good task definition. Without it, a bad image can leave a service stuck in a failing deployment loop indefinitely.
 
-### Terraform — Lambda function with an alias and weighted deployment
+### Terraform  Lambda function with an alias and weighted deployment
 
 ```hcl
 resource "aws_lambda_function" "api" {
@@ -2465,7 +2417,7 @@ resource "aws_lambda_provisioned_concurrency_config" "warm" {
 }
 ```
 
-### Shell — EC2 user data for a resilient bootstrap
+### Shell  EC2 user data for a resilient bootstrap
 
 ```bash
 #!/bin/bash
@@ -2535,7 +2487,7 @@ systemctl enable --now amazon-cloudwatch-agent
 
 ## Summary
 
-AWS compute is best understood not as four unrelated products but as a single spectrum of abstraction. At one end, Amazon EC2 hands over a virtual machine and, with it, complete control and complete responsibility for the operating system, patching, capacity, and scaling. At the other end, AWS Lambda hands over nothing but a function and takes responsibility for everything beneath it, in exchange for accepting a constrained execution model: short duration, no persistent local state, and a cold-start penalty. Amazon ECS and Amazon EKS occupy the middle, standardising the unit of deployment as a container image and delegating placement, health, and reconciliation to a control plane — with AWS Fargate available in both to remove the node layer entirely.
+AWS compute is best understood not as four unrelated products but as a single spectrum of abstraction. At one end, Amazon EC2 hands over a virtual machine and, with it, complete control and complete responsibility for the operating system, patching, capacity, and scaling. At the other end, AWS Lambda hands over nothing but a function and takes responsibility for everything beneath it, in exchange for accepting a constrained execution model: short duration, no persistent local state, and a cold-start penalty. Amazon ECS and Amazon EKS occupy the middle, standardising the unit of deployment as a container image and delegating placement, health, and reconciliation to a control plane  with AWS Fargate available in both to remove the node layer entirely.
 
 The architectural lessons generalise well beyond these four services.
 
@@ -2564,7 +2516,7 @@ Finally, **compute choices should be reversible where possible**. Containerising
 1. A service currently runs on three EC2 instances behind an Application Load Balancer with a fixed desired count. Describe how you would convert it to an elastic architecture, naming the specific components, the health-check configuration, and the scaling policy you would select, and justify each choice.
 2. Compare ECS on Fargate with ECS on EC2 across cost, security isolation, operational overhead, task density, and support for GPU and DaemonSet-style workloads. State the conditions under which each becomes the correct choice.
 3. Explain the full sequence of events, including control-plane and data-plane actions, that occurs between an `UpdateService` API call with a new task definition and the point at which all traffic reaches the new version under a rolling deployment with `minimumHealthyPercent` 100 and `maximumPercent` 200.
-4. An EKS cluster's pods must call Amazon S3. Describe the IRSA mechanism end to end — the OIDC provider, the IAM trust policy, the ServiceAccount annotation, and the token projection — and explain why this is superior to attaching permissions to the node instance role.
+4. An EKS cluster's pods must call Amazon S3. Describe the IRSA mechanism end to end  the OIDC provider, the IAM trust policy, the ServiceAccount annotation, and the token projection  and explain why this is superior to attaching permissions to the node instance role.
 5. A team reports that their Lambda function occasionally returns duplicate results to downstream systems. Explain the delivery semantics involved for asynchronous invocation and for an SQS event source, and describe how you would make the function idempotent.
 
 ### Advanced Questions

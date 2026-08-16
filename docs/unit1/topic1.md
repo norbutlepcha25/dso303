@@ -586,21 +586,10 @@ The global infrastructure is the substrate for everything; the most instructive 
 - **S3 Cross-Region Replication, DynamoDB Global Tables, Aurora Global Database:** the data layer of multi-Region designs; each embodies a different consistency/RPO trade-off.
 - **Global Accelerator:** anycast static IPs on the same edge network, for TCP/UDP and non-cacheable workloads — the frequently confused sibling of CloudFront (Accelerator = routing/no cache; CloudFront = HTTP cache).
 
-```mermaid
-graph TD
-    R53[Route 53] -->|alias| CF[CloudFront]
-    CF -->|OAC| S3[(Private S3 bucket)]
-    CF --> WAF[WAF + Shield]
-    CF -->|/api/*| ALB1[ALB eu-west-1]
-    CF -.->|origin failover| ALB2[ALB us-east-1]
-    ALB1 --> ECS1[ECS across 3 AZs]
-    ALB2 --> ECS2[ECS across 3 AZs]
-    ECS1 --> AUR[(Aurora Global Database)]
-    ECS2 --> AUR
-    ACM[ACM cert us-east-1] --> CF
-```
-
----
+<figure markdown="span">
+    ![3layerglobalinfra](../img/U1/integration.png){width="80%"}
+    <figcaption>Example: Integrating Different Services</figcaption>
+</figure>
 
 ## Common Architecture Patterns
 
@@ -684,7 +673,7 @@ graph TD
 - Forgetting that S3 bucket _names_ are global but buckets _live_ in one Region.
 - Mixing up durability (11 nines, data loss) with availability (99.9x%, reachability).
 
----
+<!-- ---
 
 ## Interview Questions
 
@@ -713,8 +702,8 @@ graph TD
 
 10. A company needs static IP addresses for a global TCP (non-HTTP) application with fast regional failover. CloudFront or Global Accelerator? Why?
 
----
-
+--- -->
+<!-- 
 ## Hands-on Lab
 
 **Objective.** Deploy a globally accelerated static website with a private origin, and empirically observe edge caching.
@@ -889,85 +878,44 @@ spec:
 !!! note "The same idea at every layer"
 Notice that the CloudFormation subnets, the Terraform `count = 3`, and the Kubernetes `topologySpreadConstraints` all encode the _same architectural decision_ — spread across AZ fault domains — at different layers of the stack. Infrastructure as Code makes the decision explicit, reviewable, and repeatable.
 
----
+--- -->
 
 ## Architecture Diagrams
 
 **The three layers of the global infrastructure**
 
-```mermaid
-graph TD
-    subgraph Edge["Edge network (700+ PoPs)"]
-        E1[Edge Location - Johannesburg]
-        E2[Edge Location - London]
-        E3[Edge Location - Tokyo]
-        REC1[Regional Edge Cache]
-    end
-    subgraph RegionA["Region eu-west-1"]
-        A1[AZ a] --- A2[AZ b] --- A3[AZ c] --- A1
-    end
-    subgraph RegionB["Region us-east-1"]
-        B1[AZ a] --- B2[AZ b] --- B3[AZ c] --- B1
-    end
-    E1 & E2 & E3 --> REC1
-    REC1 -->|AWS private backbone| RegionA
-    RegionA <-->|backbone, async replication only| RegionB
-```
+<figure markdown="span">
+    ![3layerglobalinfra](../img/U1/3layerGlobalinfra.png){width="80%"}
+    <figcaption>3 layers of Global Infrastructure</figcaption>
+    <p align='right' style="font-size:0.8em"><i>Image Source: AI Generaed (Google Gemini)</i></p>
+</figure>
+
 
 **Fault domains and blast radius**
 
-```mermaid
-graph TD
-    A[Rack failure] -->|contained by| B[Multiple racks per data centre]
-    C[Data centre failure] -->|contained by| D[Multiple DCs per AZ / multiple AZs]
-    E[AZ failure] -->|contained by| F[Multi-AZ deployment]
-    G[Region failure] -->|contained by| H[Multi-Region DR]
-    style F fill:#2e7d32,color:#fff
-    style H fill:#1565c0,color:#fff
-```
+<figure markdown="span">
+    ![3layerglobalinfra](../img/U1/faultRadius.png){width="80%"}
+    <figcaption>Fault domain and Blast Radius</figcaption>
+    <p align='right' style="font-size:0.8em"><i>Image Source: AI Generaed (Google Gemini)</i></p>
+</figure>
+
 
 **Region selection decision flow**
 
-```mermaid
-flowchart TD
-    S[New workload] --> C{Legal data-residency constraint?}
-    C -->|Yes| C1[Shortlist = compliant Regions only]
-    C -->|No| C2[Shortlist = all Regions]
-    C1 --> L{Which shortlisted Region minimizes user latency?}
-    C2 --> L
-    L --> SV{Are all required services and instance types available?}
-    SV -->|No| L2[Next-best Region] --> SV
-    SV -->|Yes| P{Cost acceptable vs alternatives?}
-    P -->|Yes| R[Select Region - encode in IaC variable]
-    P -->|No| L2
-```
+<figure markdown="span">
+    ![3layerglobalinfra](../img/U1/regionselection.png){width="80%"}
+    <figcaption>Region Selectio Work Flow</figcaption>
+    <p align='right' style="font-size:0.8em"><i>Image Source: AI Generaed (Google Gemini)</i></p>
+</figure>
+
 
 **CloudFront cache decision (per request)**
 
-```mermaid
-stateDiagram-v2
-    [*] --> EdgeLookup: request arrives at PoP
-    EdgeLookup --> ServeFromEdge: hit and fresh
-    EdgeLookup --> RECLookup: miss or stale
-    RECLookup --> ServeViaEdge: hit at Regional Edge Cache
-    RECLookup --> OriginFetch: miss
-    OriginFetch --> Populate: origin responds
-    Populate --> ServeViaEdge: cache per Cache-Control/TTL
-    ServeFromEdge --> [*]
-    ServeViaEdge --> [*]
-```
-
----
-
-## AWS Certification Tips
-
-- **Counts change; relationships do not.** Exams no longer reward memorizing "36 Regions"; they reward knowing _a Region contains multiple AZs; an AZ is one or more data centres; Edge Locations outnumber both and run no EC2._
-- **Keyword mapping.** "Low latency to global users / static content" → CloudFront. "Static IPs / TCP-UDP / non-HTTP / instant regional failover" → Global Accelerator. "Data must stay in country X" → Region selection (+ SCP). "Survive AZ failure with no data loss" → Multi-AZ synchronous (RDS Multi-AZ). "Survive Region failure" → cross-Region replication + Route 53 failover. "Single-digit ms in a specific city" → Local Zone. "5G mobile latency" → Wavelength. "Must run in our own data centre" → Outposts.
-- **Memory trick — R.A.E.:** _Regions are for Residency and Reach; AZs are for Availability; Edges are for Experience (latency)._
-- **Classic traps:** ACM certificate for CloudFront must be in **us-east-1**; CloudFront metrics live in **us-east-1**; RDS Multi-AZ standby is not readable; AZ names are per-account shuffled (AZ ID is canonical); data never leaves a Region automatically; S3 is Regional despite the global namespace; Shield Standard is free and automatic on CloudFront.
-- **Scenario discipline.** Associate-level questions usually hide the answer in one requirement word: _residency_ (Region), _zero data loss_ (synchronous/Multi-AZ), _minutes of RTO_ (warm standby), _global users_ (edge), _static IP_ (Global Accelerator/NLB). Underline the constraint, then map it to the layer.
-
----
+<figure markdown="span">
+    ![3layerglobalinfra](../img/U1/cloudfrontcache.png){width="80%"}
+    <figcaption>CloudFront cache decision (per request)</figcaption>
+    <p align='right' style="font-size:0.8em"><i>Image Source: AI Generaed (Google Gemini)</i></p>
+</figure>
 
 ## Summary
 
@@ -983,7 +931,7 @@ The architectural lessons to carry into every subsequent DSO303 topic:
 6. **Encode placement in code.** Regions, AZ spreads, and CloudFront behaviours belong in version-controlled IaC, not in console memory.
 
 ---
-
+<!-- 
 ## Practice Questions
 
 **Beginner**
@@ -1008,4 +956,4 @@ The architectural lessons to carry into every subsequent DSO303 topic:
 12. Explain _static stability_ and redesign the following to satisfy it: "On AZ failure, a Lambda triggered by a CloudWatch alarm updates the Auto Scaling group to launch replacements and calls the Route 53 API to change weights."
 13. A microservices platform on EKS shows large inter-AZ data-transfer charges and elevated p99 latency. Discuss the tension between AZ-spread for resilience and AZ-affinity for cost/latency, and describe a topology-aware routing approach that balances them.
 14. Your global user base is 60% in regions where you have no AWS Region within 150 ms. Compare three remedies — additional Regions (active-active), CloudFront with an aggressive caching strategy, and Global Accelerator — for a workload that is 80% cacheable reads and 20% authenticated writes. Recommend and justify a combination.
-15. During a partial edge-network event, some users receive errors while all Regional metrics are green and synthetic canaries in-Region pass. Construct the observability strategy (metrics locations, log types, external vantage points, AWS Health integration) that would have detected this class of failure, and the automated mitigation you would attach to it.
+15. During a partial edge-network event, some users receive errors while all Regional metrics are green and synthetic canaries in-Region pass. Construct the observability strategy (metrics locations, log types, external vantage points, AWS Health integration) that would have detected this class of failure, and the automated mitigation you would attach to it. -->
