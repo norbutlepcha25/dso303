@@ -23,17 +23,11 @@ AWS offers compute at several different **levels of abstraction**. The higher th
 
 ### The Compute Spectrum
 
-```mermaid
-graph LR
-    A["Physical Servers On Premises"] --> B["Amazon EC2 Virtual Machines"]
-    B --> C["ECS or EKS on EC2 Nodes"]
-    C --> D["ECS or EKS on AWS Fargate"]
-    D --> E["AWS Lambda Functions"]
-
-    A -.->|"Maximum control"| F["Control Axis"]
-    E -.->|"Maximum abstraction"| F
-```
-
+<figure markdown="span">
+    ![3layerglobalinfra](../img/U1/computeEvolution.png){width="80%"}
+    <figcaption>Level of Control in AWS</figcaption>
+    <p align='right' style="font-size:0.8em"><i>Image Source: AI Generaed (Google Gemini)</i></p>
+</figure>
 Moving left to right along this spectrum:
 
 - **Operational burden decreases.** You stop patching kernels, then you stop managing hosts, then you stop thinking about servers at all.
@@ -46,15 +40,6 @@ Moving left to right along this spectrum:
 ## Why This Service or Concept Exists
 
 ### The Problem Before Cloud Compute
-
-Consider how a university or a mid-sized company provisioned an application server in 2005:
-
-1. A capacity planning exercise estimated peak load, typically 12 to 24 months into the future.
-2. A purchase order was raised for physical servers. Lead time: 6 to 12 weeks.
-3. Servers were racked, cabled, powered, and connected to a switch in a data centre or server room.
-4. An operating system was installed, hardened, and patched.
-5. Middleware, runtimes, and the application were installed  usually by hand, following a runbook that drifted out of date.
-6. If demand exceeded the estimate, the entire cycle repeated. If demand fell below the estimate, the capital was simply wasted.
 
 The structural problems were:
 
@@ -116,24 +101,11 @@ A **hypervisor** is software (or, on modern AWS hardware, largely dedicated sili
 
 ### Containers Versus Virtual Machines
 
-```mermaid
-graph TD
-    subgraph VM["Virtual Machine Model"]
-        H1["Physical Hardware"] --> HY["Hypervisor"]
-        HY --> G1["Guest OS 1"]
-        HY --> G2["Guest OS 2"]
-        G1 --> A1["Application A"]
-        G2 --> A2["Application B"]
-    end
+<figure markdown="span">
+    ![hypervisor](../img/U1/virtualizationVScontainer.png){width="80%"}
+    <figcaption>Virtual machine model VS Container Model</figcaption>
+</figure>
 
-    subgraph CT["Container Model"]
-        H2["Physical or Virtual Host"] --> OS["Single Host OS Kernel"]
-        OS --> CR["Container Runtime"]
-        CR --> C1["Container A"]
-        CR --> C2["Container B"]
-        CR --> C3["Container C"]
-    end
-```
 
 A **container** is an operating-system-level isolation construct. It does not carry its own kernel. It uses Linux kernel primitives  **namespaces** (to give the process its own view of the process tree, network stack, mount table, users, and hostname) and **cgroups** (to constrain CPU, memory, and I/O consumption)  plus a layered filesystem.
 
@@ -178,16 +150,11 @@ Immutability is an architectural principle, not merely an implementation detail.
 
 The **declarative model** is central. You do not command "start three containers"; you declare "the desired count of this service is three", and a reconciliation loop makes reality match that declaration, indefinitely, including after failures you never observe.
 
-```mermaid
-stateDiagram-v2
-    [*] --> DesiredStateDeclared
-    DesiredStateDeclared --> Reconciling: "Controller observes drift"
-    Reconciling --> Scheduling: "Placement decision"
-    Scheduling --> Running: "Container started and healthy"
-    Running --> Reconciling: "Container fails or host lost"
-    Running --> Draining: "New deployment or scale in"
-    Draining --> [*]
-```
+
+<figure markdown="span">
+    ![hypervisor](../img/U1/containerOrchestration.png){width="80%"}
+    <figcaption>Modern Container Orchestration</figcaption>
+</figure>
 
 ### Serverless
 
@@ -222,15 +189,6 @@ These three words are frequently confused and mean different things.
 | **Durability** | Data survives failure | Handled by storage services, not compute |
 
 **Vertical scaling** (a larger instance) has a hard ceiling and requires downtime or replacement. **Horizontal scaling** (more instances) is unbounded in principle and is the cloud-native default. Design for horizontal scaling; use vertical scaling only where the workload genuinely cannot be partitioned, such as a single-writer relational database.
-
-### Availability Zones and Regions
-
-An **Availability Zone (AZ)** is one or more discrete data centres with independent power, cooling, and physical security, connected to other AZs in the Region by high-bandwidth, low-latency private fibre. A **Region** is a geographic area containing multiple AZs.
-
-The architectural rule for compute is simple and absolute: **spread compute across at least two, preferably three, Availability Zones**. An Auto Scaling group across three AZs, an ECS service with subnets in three AZs, or an EKS node group across three AZs converts an AZ failure from an outage into a capacity reduction.
-
-!!! note "Why three AZs rather than two"
-    With two AZs, losing one removes 50 percent of your capacity, so you must run at 200 percent of steady-state capacity to survive an AZ loss without degradation. With three AZs, losing one removes 33 percent, so 150 percent suffices. Three AZs is meaningfully cheaper for the same resilience target.
 
 ### The Shared Responsibility Model for Compute
 
@@ -275,6 +233,8 @@ The **AWS Nitro System** re-architected this. Nitro moves virtualisation functio
 | **Nitro Security Chip** | Integrates into the motherboard; controls access to hardware resources and firmware, making persistent firmware compromise infeasible. |
 | **Nitro Hypervisor** | A very thin, KVM-based hypervisor that primarily allocates CPU and memory. Because I/O is offloaded, it does almost nothing on the data path. |
 
+![
+](image.png)
 The architectural consequences are significant:
 
 - Nearly all host CPU and memory is available to customer instances, so bare-metal-class performance is achievable in a virtualised instance.
