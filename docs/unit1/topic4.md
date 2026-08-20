@@ -233,8 +233,6 @@ The **AWS Nitro System** re-architected this. Nitro moves virtualisation functio
 | **Nitro Security Chip** | Integrates into the motherboard; controls access to hardware resources and firmware, making persistent firmware compromise infeasible. |
 | **Nitro Hypervisor** | A very thin, KVM-based hypervisor that primarily allocates CPU and memory. Because I/O is offloaded, it does almost nothing on the data path. |
 
-![
-](image.png)
 The architectural consequences are significant:
 
 - Nearly all host CPU and memory is available to customer instances, so bare-metal-class performance is achievable in a virtualised instance.
@@ -265,6 +263,72 @@ sequenceDiagram
 ```
 
 Two details matter architecturally. First, the **Elastic Network Interface (ENI)** is a first-class VPC object with its own private IP, MAC address, and security groups  instance networking is a VPC construct, not an OS construct. Second, **user data** runs once at first boot by default and is the standard bootstrap hook, though for anything beyond trivial bootstrapping you should bake configuration into the AMI (with EC2 Image Builder) or use a configuration-management tool.
+
+### Instance Families (Exam Must-Know)
+
+- **General Purpose (T, M)** — Balanced CPU/memory. Use: web servers, small DBs. T-series has **burstable** CPU with credits.
+- **Compute Optimized (C)** — High-performance CPUs. Use: batch processing, ML inference, gaming servers, HPC.
+- **Memory Optimized (R, X, z)** — Large RAM. Use: in-memory caches (Redis, Memcached), real-time big data analytics.
+- **Storage Optimized (I, D, H)** — High sequential read/write. Use: data warehousing, distributed file systems, HDFS.
+- **Accelerated Computing (P, G, Inf, Trn)** — GPUs/custom chips. Use: ML training, video encoding, 3D rendering.
+
+> **Exam shortcut**: C = Compute, R = RAM, I = I/O, T = Turbo (burstable), G = Graphics.
+> 
+
+# EC2 Instance Families Comparison Table
+
+| Family | Naming Convention | Key Benefit | Drawbacks | Ideal Use Cases | Notes / Memory Trick |
+| --- | --- | --- | --- | --- | --- |
+| **General Purpose** | `T`, `M` (e.g., t3, m6i) | Balanced CPU, memory, and networking | Not optimized for extremes | Web servers, small DBs, dev/test | “Default choice” |
+| **Compute Optimized** | `C` (e.g., c6g, c5) | High CPU performance | Lower memory per vCPU | Batch processing, HPC, gaming servers | “C = CPU” |
+| **Memory Optimized** | `R`, `X`, `Z` (e.g., r6g, x2idn) | High RAM capacity | Expensive | In-memory DBs, caching, SAP HANA | “R = RAM” |
+| **Storage Optimized** | `I`, `D`, `H` (e.g., i4i, d3, h1) | High disk throughput and low latency | Limited flexibility | Data warehousing, NoSQL DBs | “I = IOPS” |
+| **Accelerated Computing** | `P`, `G`, `F`, `Inf`, `Trn` | GPU / hardware acceleration | Costly, specialized | ML, AI, video rendering | “P = Powerful GPUs” |
+| **Burstable Performance** | `T` (e.g., t2, t3, t4g) | Cheap, burst CPU when needed | CPU credit limits | Low-traffic apps, dev environments | “Bursty workloads” |
+| **High Performance Computing (HPC)** | `Hpc` | Ultra-low-latency networking | Niche usage | Scientific simulations | Exam rarely goes deep |
+
+!image.png
+
+# Naming Convention Breakdown (VERY IMPORTANT FOR EXAM)
+
+Example: **m5.xlarge**
+
+| Part | Meaning |
+| --- | --- |
+| **m** | Instance family (General Purpose) |
+| **5** | Generation (newer = better) |
+| **xlarge** | Size (CPU, RAM scaling) |
+
+### Additional Suffixes You Might See
+
+| Suffix | Meaning |
+| --- | --- |
+| **g** | ARM-based (AWS Graviton – cheaper, efficient) |
+| **i** | Intel processor |
+| **a** | AMD processor (lower cost) |
+| **d** | Instance store (local SSD) |
+| **n** | High network performance |
+| **z** | High-frequency CPU |
+
+# Quick Decision Guide (Exam Gold)
+
+Use this mental shortcut during the exam:
+
+- ❓ Need **balanced** → **M**
+- ❓ Need **cheap burstable** → **T**
+- ❓ Need **CPU heavy** → **C**
+- ❓ Need **RAM heavy** → **R / X**
+- ❓ Need **fast disk** → **I / D**
+- ❓ Need **GPU / ML** → **P / G**
+- ❓ Need **ARM cost savings** → choose **Graviton (g)**
+
+# Common Exam Traps
+
+- **T instances** → Don’t use them for sustained high CPU (credit exhaustion).
+- **Instance store (d)** → Data is **ephemeral** and is lost on stop..
+- **Graviton (g)** → Must support ARM architecture..
+- **Memory optimized** → Often best for databases, not compute..
+- **Compute optimized** → Not ideal for memory-heavy apps..
 
 ### Amazon ECS Internals
 
