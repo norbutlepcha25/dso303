@@ -159,7 +159,7 @@ nav:
   - Unit 1:
       - Overview: unit1/overview.md
       - 1.1 AWS Cloud overview: unit1/topic1.md
-      # - 1.2 Compute Services: unit1/topic4.md
+      - 1.2 Compute Services: unit1/topic4.md
       # - 1.3 Combinatorics: unit1/topic3.md
       # - 1.4 Basics of Game Theory: unit1/topic4.md
       # - Questions: unit1/summary.md
@@ -234,7 +234,7 @@ nav:
       - Lab Overview: Lab/overview.md
       - Lab 0: Lab/lab1_iam.md
       - Lab 1 - IAM: Lab/Lab-01-IAM.md
-      # - Lab 2 - VPC: Lab/Lab-02_VPC.md
+      - Lab 2 - VPC: Lab/Lab-02_VPC.md
       # - Lab 3 - EC2+VPC: Lab/Lab-03_VPC2.md
       # - "Lab 3 — VPC": Lab/vpc.md
       # - "Lab 4": Lab/vps.md
