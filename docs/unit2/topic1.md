@@ -41,8 +41,6 @@ Within an AWS architecture these sit at the boundary between build time and run 
 
     A virtual machine runs its own kernel on virtualised hardware provided by a hypervisor. A container shares the host's kernel. That single fact explains every difference that follows: containers start in milliseconds because there is no kernel to boot; they are dense because there is no duplicated operating system per workload; and their isolation is weaker, because a kernel vulnerability is a shared vulnerability. AWS Fargate exists precisely to close that last gap, by giving each task its own lightweight virtual machine while preserving the container developer experience.
 
----
-
 ## Why This Service or Concept Exists
 
 ### The problem containers solve
@@ -126,7 +124,7 @@ Every one of these is a control-loop problem: something must continuously compar
 
 ### What the Linux kernel actually provides
 
-Three kernel mechanisms, none invented by Docker, combine to produce a container.
+Three kernel mechanisms, combine to produce a container.
 
 **Namespaces** partition kernel resources so that a process sees only its own partition. There are several, and they are independent:
 
@@ -140,7 +138,7 @@ Three kernel mechanisms, none invented by Docker, combine to produce a container
 | **User** | UID and GID mappings | Root inside the container can map to an unprivileged UID outside it |
 | **Cgroup** | The cgroup hierarchy view | The container cannot see the host's full cgroup tree |
 
-**Control groups (cgroups)** account for and limit resource consumption: CPU shares and quotas, memory limits, block-I/O weights, and process counts. Two properties matter architecturally. Memory limits are enforced by **killing** — a container that exceeds its memory limit is terminated by the kernel OOM killer, surfacing as `OOMKilled` and exit code 137. CPU limits are enforced by **throttling** — a container that exceeds its CPU quota is paused until the next scheduling period, which produces latency spikes while average utilisation graphs look calm. This asymmetry is the reason for the standard advice in 1.3.2: set memory limits, and be cautious with CPU limits on latency-sensitive services.
+**Control groups (cgroups)** account for and limit resource consumption: CPU shares and quotas, memory limits, block-I/O weights, and process cµounts. Two properties matter architecturally. Memory limits are enforced by **killing** — a container that exceeds its memory limit is terminated by the kernel OOM killer, surfacing as `OOMKilled` and exit code 137. CPU limits are enforced by **throttling** — a container that exceeds its CPU quota is paused until the next scheduling period, which produces latency spikes while average utilisation graphs look calm. This asymmetry is the reason for the standard advice in 1.3.2: set memory limits, and be cautious with CPU limits on latency-sensitive services.
 
 **Union filesystems** (OverlayFS on modern Linux) stack read-only layers with a thin writable layer on top. Reads fall through the stack to the first layer containing the file; writes are copied up into the writable layer. This is what makes images shareable: fifty containers from the same image share one copy of the read-only layers on disk and in the page cache.
 
@@ -283,22 +281,11 @@ And within each container definition:
 | `user`, `readonlyRootFilesystem`, `linuxParameters` | Runtime hardening | Free security wins that most tutorials omit |
 | `ulimits` | Per-container resource limits, notably `nofile` | The cause of "too many open files" under load |
 
-```mermaid
-graph TD
-    F["Task definition family dso303-orders"] --> R5["Revision 5"]
-    F --> R6["Revision 6"]
-    F --> R7["Revision 7, current"]
-    R7 --> CD1["containerDefinition: orders app, essential true"]
-    R7 --> CD2["containerDefinition: adot collector sidecar, essential false"]
-    R7 --> EXE["executionRoleArn: pull image, write logs, decrypt secrets"]
-    R7 --> TSK["taskRoleArn: application AWS API calls"]
-    R7 --> NET["networkMode awsvpc"]
-    CD1 --> IMG["image pinned by sha256 digest"]
-    CD1 --> SEC["secrets from AWS Secrets Manager"]
-    CD1 --> LOG["logConfiguration awslogs"]
-```
-Generate a professional with proper symbol in whie background image 
-
+<figure markdown="span">
+    ![3layerglobalinfra](../img/U2/t1/TaskdefinationUpdate.png){width="80%"}
+    <figcaption>AWS Task Defination</figcaption>
+    <p align='right' style="font-size:0.8em"><i>Image Source: AI Generaed (Chatgpt)</i></p>
+</figure>
 
 ### Tasks, services, and the reconciliation loop
 
@@ -313,23 +300,11 @@ A **task** is one running instantiation of a task-definition revision. A **servi
 
 Use a **standalone task** (`RunTask`) for work that finishes: a database migration, a batch job, a scheduled report. Use a **service** for work that should always be running: an API, a queue consumer, a web front end.
 
-```mermaid
-stateDiagram-v2
-    [*] --> PROVISIONING : "RunTask or service scheduler"
-    PROVISIONING --> PENDING : "ENI attached, resources reserved"
-    PENDING --> ACTIVATING : "image pulled, containers created"
-    ACTIVATING --> RUNNING : "containers started, health check passing"
-    RUNNING --> DEACTIVATING : "stop requested or deployment replacing"
-    DEACTIVATING --> STOPPING : "deregistered from target group, drained"
-    STOPPING --> DEPROVISIONING : "SIGTERM then SIGKILL after stopTimeout"
-    DEPROVISIONING --> STOPPED : "ENI detached, resources released"
-    STOPPED --> [*]
-    PROVISIONING --> STOPPED : "no capacity, no free IP address"
-    PENDING --> STOPPED : "CannotPullContainerError"
-    ACTIVATING --> STOPPED : "container exited immediately"
-```
-Generate a professional with proper symbol in whie background image 
-
+<figure markdown="span">
+    ![3layerglobalinfra](../img/U2/t1/TaskReconciliationLoop.png){width="80%"}
+    <figcaption>AWS Task Reconciliation Loop</figcaption>
+    <p align='right' style="font-size:0.8em"><i>Image Source: AI Generaed (Google Gemini)</i></p>
+</figure>
 
 !!! tip "Read the state a task is stuck in — it names the cause"
 
@@ -347,61 +322,21 @@ Two consequences follow directly. First, **a file deleted in a later layer still
 
 ### The push protocol and the ECR authorisation flow
 
-```mermaid
-sequenceDiagram
-    participant CLI as "Docker CLI or CodeBuild"
-    participant STS as "AWS STS and IAM"
-    participant API as "ECR API endpoint (ecr.api)"
-    participant REG as "ECR registry endpoint (ecr.dkr)"
-    participant S3 as "ECR-managed Amazon S3 storage"
-    participant CT as "AWS CloudTrail"
-    CLI->>STS: "resolve credentials from role or profile"
-    CLI->>API: "GetAuthorizationToken"
-    API-->>CLI: "base64 token, valid 12 hours"
-    CLI->>REG: "docker login with the token"
-    CLI->>REG: "HEAD blob sha256:111 — does this layer exist?"
-    REG-->>CLI: "404 for layer 111, 200 for layer 222"
-    CLI->>REG: "POST initiate upload for missing layers only"
-    CLI->>S3: "PUT layer blob bytes"
-    S3-->>REG: "blob stored and verified against its digest"
-    CLI->>REG: "PUT image manifest with tag v1.4.2"
-    REG->>REG: "reject if tag exists and immutability is enabled"
-    REG-->>CLI: "201 Created, returns the manifest digest"
-    REG->>CT: "record PutImage event with principal and digest"
-    REG->>REG: "trigger scan on push if configured"
-```
-Generate a professional with proper symbol in whie background image 
-
+<figure markdown="span">
+    ![3layerglobalinfra](../img/U2/t1/ECRauthorizationflow.png){width="80%"}
+    <figcaptiona>Push protocol and the authorization loop</figcaption>
+    <p align='right' style="font-size:0.8em"><i>Image Source: AI Generaed (Google Gemini)</i></p>
+</figure>
 
 Two details repay attention. The registry asks for layers it does not already hold, so pushing a new version of an image whose base layers are unchanged transfers only the application layer — usually a few megabytes rather than the full image. And the authorisation token is short-lived and derived from IAM: there is no long-lived registry password to leak, which is a meaningful improvement over the shared credentials common with self-hosted registries.
 
 ### The pull path at task launch
 
-```mermaid
-sequenceDiagram
-    participant SCHED as "ECS scheduler"
-    participant AGENT as "ECS agent or Fargate agent"
-    participant ENI as "VPC ENI service"
-    participant STS as "AWS STS"
-    participant ECR as "ECR via interface endpoint"
-    participant S3 as "S3 via gateway endpoint"
-    participant RT as "containerd and runc"
-    participant CW as "CloudWatch Logs"
-    SCHED->>AGENT: "start task definition revision N"
-    AGENT->>ENI: "attach ENI in the configured private subnet"
-    ENI-->>AGENT: "private IP assigned, security groups applied"
-    AGENT->>STS: "assume the task EXECUTION role"
-    AGENT->>ECR: "GetAuthorizationToken, then fetch manifest"
-    ECR-->>AGENT: "manifest and layer digests"
-    AGENT->>S3: "fetch layer blobs not already cached"
-    AGENT->>AGENT: "verify digests, unpack into the overlay store"
-    AGENT->>ECR: "resolve secrets via Secrets Manager and KMS (execution role)"
-    RT->>RT: "create namespaces, write cgroup limits, exec entrypoint"
-    RT->>CW: "stream stdout and stderr via the awslogs driver"
-    AGENT->>AGENT: "run container healthCheck until healthy"
-    AGENT-->>SCHED: "task RUNNING and healthy"
-```
-Generate a professional with proper symbol in whie background image 
+<figure markdown="span">
+    ![3layerglobalinfra](../img/U2/t1/pushpullattask.png){width="80%"}
+    <figcaptiona>Push Pull Path at Task Launch</figcaption>
+    <p align='right' style="font-size:0.8em"><i>Image Source: AI Generaed (Google Gemini)</i></p>
+</figure>
 
 
 The **execution role** does all of this: pull, log-stream creation, secret decryption. Your application code has not started yet. Once it does, it obtains credentials for the **task role** from the task metadata endpoint at `169.254.170.2` (or the v4 endpoint whose URI is injected as `ECS_CONTAINER_METADATA_URI_V4`), which the AWS SDKs discover automatically. This is why a correctly configured task never contains an access key.

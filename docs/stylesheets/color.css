@@ -20,6 +20,11 @@ blockquote {
   text-align: justify;
 }
 
+.md-grid {
+  max-width: 1800px;
+}
+
+
 .center-mermaid {
   display: flex;
   justify-content: center;
