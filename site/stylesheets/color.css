@@ -214,3 +214,94 @@ figure figcaption {
 [data-md-color-scheme="slate"] figure figcaption {
   color: var(--md-default-fg-color--lighter);
 }
+
+/* =========================================================
+   Embedded External Websites
+   ========================================================= */
+
+.external-site-container {
+    width: 100%;
+    margin: 1.5rem 0;
+    overflow: hidden;
+    border: 1px solid var(--md-default-fg-color--lightest);
+    border-radius: 8px;
+    background: var(--md-default-bg-color);
+}
+
+.external-site-container iframe {
+    display: block;
+    width: 100%;
+    min-height: 700px;
+    border: 0;
+}
+
+
+/* =========================================================
+   H5P / Lumi Embedded Content
+   ========================================================= */
+
+.embedded-content {
+    width: 100%;
+    margin: 1.5rem 0;
+    overflow: hidden;
+}
+
+.embedded-content iframe {
+    display: block;
+    width: 100%;
+    border: 0;
+}
+
+
+/* =========================================================
+   YouTube
+   ========================================================= */
+
+.youtube-container {
+    width: 100%;
+    margin: 1.5rem 0;
+}
+
+.youtube-wrapper {
+    position: relative;
+    width: 100%;
+    max-width: 100%;
+    aspect-ratio: 16 / 9;
+    overflow: hidden;
+    border-radius: 8px;
+}
+
+.youtube-wrapper iframe {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    border: 0;
+}
+
+
+/* =========================================================
+   Images
+   ========================================================= */
+
+.image-block {
+    margin: 2rem auto;
+}
+
+.image-block img {
+    display: block;
+    margin: 0 auto;
+}
+
+.image-block figcaption {
+    margin-top: 0.5rem;
+    text-align: center;
+    font-size: 0.9rem;
+}
+
+.image-source {
+    margin-top: 0.4rem;
+    text-align: center;
+    font-size: 0.8rem;
+}

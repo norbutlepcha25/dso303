@@ -58,6 +58,7 @@ theme:
 extra_css:
   - stylesheets/color.css
   - https://unpkg.com/katex@0/dist/katex.min.css
+  - stylesheets/aws-icons.css
 
 copyright: |
   &copy; 2026 <a href="https://github.com/cslivenote" target="_blank" rel="noopener">Norbu Tshering Lepcha</a>
@@ -119,6 +120,8 @@ extra_javascript:
   - javascripts/katex.js
   - https://unpkg.com/katex@0/dist/katex.min.js
   - https://unpkg.com/katex@0/dist/contrib/auto-render.min.js
+  - javascripts/filter.js
+  - javascripts/preview.js
 
 plugins:
   - search
@@ -156,23 +159,23 @@ plugins:
 nav:
   - Home: index.md
 
-  - Unit 1:
-      - Overview: unit1/overview.md
-      - 1.1 AWS Cloud overview: unit1/topic1.md
-      - 1.2 Compute Services: unit1/topic4.md
-      # - 1.3 Combinatorics: unit1/topic3.md
-      # - 1.4 Basics of Game Theory: unit1/topic4.md
-      # - Questions: unit1/summary.md
+  # - Unit 1:
+  #     - Overview: unit1/overview.md
+  #     - 1.1 AWS Cloud overview: unit1/topic1.md
+  #     - 1.2 AWS IAM: unit1/topic2.md
+  #     - 1.3 AWS Compute Services: unit1/topic3.md
+  #     - 1.4 AWS Storage Services: unit1/topic4.md
+  #     - 1.5 AWS Datebase Services: unit1/topic5.md
+  #     - 1.6 AWS Network Services: unit1/topic6.md
+  #     - 1.7 Cloud Native Design Patterns: unit1/topic7.md
+      
 
-  # - Unit 2:
-  #     - Overview: unit2/overview.md
-  #     - 2.1 Asymptotic Analysis: unit2/topic1.md
-  #     - 2.2 Model of Computation (Word-RAM): unit2/topic2.md
-  #     - 2.3 Role of Algorithms in Computing: unit2/topic3.md
-  #     - 2.4 Analysing and Designing Algorithms: unit2/topic4.md
-  #     - 2.5 O-notation, Ω-notation, and Θ-notation: unit2/topic5.md
-  #     - 2.6 Standard Notation & Common Functions: unit2/topic6.md
-  #     - Summary: unit2/summary.md
+  - Unit 2:
+      - Overview: unit2/overview.md
+      - 2.1 Docker Fundamentals: unit2/topic1.md
+      # - 2.2 AWS ECS: unit2/topic2.md
+      # - 2.3 Container Orchestration with Amazon ECS: unit2/topic3.md
+
 
   # - Unit 3:
   #     - Overview: unit3/overview.md
@@ -223,22 +226,28 @@ nav:
   #     - 7.5 Dijkstra's Algorithm: unit7/topic5.md
   #     - 7.6 Minimum Spanning Tree (Prim's and Kruskal's Algorithms): unit7/topic6.md
 
-  # CHANGED: labels only — no filenames were renamed, so nothing breaks.
-  #   "Lab 0" pointed at lab1_iam.md, and there was no "Lab 1" at all.
-  #   Filenames worth a second look when you get to them:
-  #     Lab/ima.md    → probably meant to be iam.md
-  #     Lab/vps.md    → probably meant to be vpc.md or s3.md (vpc.md already exists above it)
-  #     Lab/stats.md  → looks left over from the algorithms course
-  #   Rename the files first, then update the paths here — not the other way round.
+  - Services:
+      - Overview: Services/overview.md 
+      - Services: Services/services.md 
+      - Groups: Services/groups.md 
+
+  # - Questions:
+  #     - Unit 1 : Questions/unit1.md
+  #     - Unit 2 : Questions/unit2.md
+      # - Unit 3 : unit9_misc/unit3.md
+      # - Unit 4 : unit9_misc/unit4.md
+      # - Unit 5 : unit9_misc/unit5.md
+      # - Unit 6 : unit9_misc/unit6.md
+
+  # - Sample Answers:
+  #     - unit 2: Answers/unit2.md
+
   - Lab:
       - Lab Overview: Lab/overview.md
       - Lab 0: Lab/lab1_iam.md
       - Lab 1 - IAM: Lab/Lab-01-IAM.md
       - Lab 2 - VPC: Lab/Lab-02_VPC.md
-      # - Lab 3 - EC2+VPC: Lab/Lab-03_VPC2.md
+      - Lab 3 - EC2+VPC: Lab/Lab-03_VPC2.md
       # - "Lab 3 — VPC": Lab/vpc.md
       # - "Lab 4": Lab/vps.md
       # - "Lab 5": Lab/stats.md
-
-  # - Practical 2: questions.md
-  # - Practical 3: q2.md~

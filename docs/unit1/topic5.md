@@ -1,8 +1,9 @@
-# Storage Services — Amazon S3, Amazon EBS, and Amazon EFS
+# Database Services on AWS — Amazon RDS and Aurora, Amazon DynamoDB, and Amazon ElastiCache
 
-*DSO303 — Cloud Native Solution Design (AWS) — Unit 1.2.2*
+!!! info "Module Context"
+    This chapter belongs to DSO303 *Cloud Native Solution Design (AWS)*, Unit 1.2.3. It assumes you understand relational databases, SQL, indexing, transactions, and the ACID properties from your Database Systems module, and TCP/IP, DNS, and latency from Computer Networks. It does **not** assume any prior cloud experience.
 
-Storage is the part of a cloud architecture that outlives everything else. Compute instances are ephemeral, containers are replaced on every deployment, and functions live for milliseconds. Data persists. Consequently, the storage decisions an architect makes are the most expensive to reverse and the most consequential for durability, cost, and compliance. This chapter teaches storage as an architectural discipline rather than as a catalogue of AWS services.
+    The purpose of this chapter is not to make you fluent in the AWS Console. It is to make you capable of *choosing* a data store, *justifying* that choice against measurable engineering criteria, and *defending* it in a design review, an examination, or a job interview.
 
 ---
 
@@ -10,2683 +11,3248 @@ Storage is the part of a cloud architecture that outlives everything else. Compu
 
 After studying this chapter, you should be able to:
 
-- Explain the fundamental distinction between **object storage**, **block storage**, and **file storage**, and articulate why each abstraction exists rather than merely memorising which AWS service belongs to which category.
-- Describe the internal architecture of Amazon S3, including its flat keyspace, partitioned index, erasure coding, multi-Availability-Zone replication, and strong read-after-write consistency model.
-- Explain how Amazon EBS delivers network-attached block storage that behaves like a local disk, how the AWS Nitro system participates in the data path, and how snapshots achieve incremental, cross-AZ durability through S3.
-- Explain how Amazon EFS provides a POSIX-compliant, elastically scaling NFSv4.1 file system with mount targets in each Availability Zone.
-- Distinguish **control plane** operations from **data plane** operations for each storage service and explain why that distinction matters for availability design.
-- Select the correct S3 storage class and the correct EBS volume type for a given workload, justifying the choice with access-pattern, latency, throughput, and cost reasoning.
-- Design storage layers that satisfy explicit **durability**, **availability**, **latency**, **throughput**, and **cost** targets, and articulate the trade-offs sacrificed to meet them.
-- Apply security-by-design to storage: encryption at rest and in transit, KMS key strategy, least-privilege IAM, resource policies, Block Public Access, and VPC endpoints.
-- Externalise application state into managed storage so that compute tiers become stateless, cloud-native, and horizontally scalable — a core DSO303 outcome.
-- Provision storage reproducibly using Infrastructure as Code with CloudFormation and Terraform.
-- Choose correctly between S3, EBS, EFS, FSx, and instance store using a defensible decision framework.
-
-!!! info "How to read this chapter"
-    Every section answers three questions in order: **why** does this exist, **how** does it work internally, and **when** should an architect choose it. If you can only remember one thing per service, remember the *shape of the problem it solves*, not the list of its features.
+- Explain **why the data layer is the hardest part of any distributed system to scale**, and why cloud providers offer managed database services rather than leaving databases to the customer.
+- Articulate the **shared responsibility model** as it applies to databases, and explain precisely which operational duties AWS assumes and which remain yours.
+- Describe AWS's **purpose-built database philosophy** and argue for or against the "one database to rule them all" approach in a given scenario.
+- Compare **relational and NoSQL data models** in terms of schema, query flexibility, scaling axis, consistency, and cost, and select between them with justification.
+- State the **CAP theorem** precisely, explain why it is frequently misapplied, and extend it with **PACELC** to reason about latency in the absence of partitions.
+- Explain the **internal architecture of Amazon RDS**: Multi-AZ synchronous replication, DNS-based failover, read replicas with asynchronous replication and replica lag, automated backups, and point-in-time recovery mechanics.
+- Explain **Amazon Aurora's** decoupled compute-and-storage architecture, its six-way replication across three Availability Zones, quorum-based reads and writes, and the "the log is the database" design that eliminates full-page writes.
+- Explain **Amazon DynamoDB's** partitioning by hash of the partition key, request routing, replicated storage nodes with Paxos-based leader election, adaptive capacity, and DynamoDB Streams.
+- Perform **DynamoDB data modelling** at a professional level: partition key and sort key selection, single-table design, LSI versus GSI, avoidance of hot partitions, and correct **RCU/WCU capacity calculations**.
+- Explain **Amazon ElastiCache** for Redis and Memcached: replication groups, cluster mode enabled versus disabled, hash slots and sharding, and the correct application of the **cache-aside**, **write-through**, and **write-behind** patterns.
+- Distinguish the **control plane from the data plane** for each service and trace the **networking path** a query takes inside a VPC.
+- Apply the **AWS Well-Architected Framework** to database design decisions across all six pillars.
+- Design **secure** data layers using IAM, KMS encryption at rest, TLS in transit, Secrets Manager, security groups, and private subnets.
+- Reason about **cost** in terms of the actual pricing dimensions of each service, and identify the most common sources of unexpected database spend.
+- Connect the data layer to broader cloud-native concerns: **database-per-service** in microservices, **connection pooling and RDS Proxy** for Lambda and ECS/EKS workloads, **event-driven architecture** via DynamoDB Streams, **schema migration in CI/CD**, and **observability**.
 
 ---
 
 ## Definition
 
-AWS storage services are managed, API-driven, durable data-persistence systems that decouple data from the lifetime of any individual compute resource. They sit in the **data layer** of an AWS architecture, beneath the compute layer (EC2, ECS, EKS, Lambda) and alongside the database layer (RDS, DynamoDB, Aurora).
+A **database service** on AWS is a managed data persistence and retrieval capability in which AWS operates the underlying infrastructure — hardware provisioning, operating system installation and patching, database engine installation and patching, backup orchestration, failure detection, and failover — while the customer retains responsibility for data modelling, schema design, query performance, access control policy, and capacity or cost decisions.
 
-Three services form the foundation of the AWS storage portfolio, and each implements a fundamentally different storage abstraction.
+The three services in scope for this chapter occupy distinct positions in the AWS data layer:
 
-### Amazon S3 — Simple Storage Service
+| Service | Category | Data Model | Primary Purpose |
+|---|---|---|---|
+| **Amazon RDS** | Managed relational database | Relational, SQL, ACID | Structured transactional data with complex relationships and joins |
+| **Amazon Aurora** | Cloud-native relational database (an RDS engine option) | Relational, MySQL- and PostgreSQL-compatible | Relational workloads requiring higher throughput, faster recovery, and storage elasticity than standard RDS |
+| **Amazon DynamoDB** | Managed NoSQL key-value and document database | Key-value and document | Predictable single-digit millisecond access at effectively unbounded scale for known access patterns |
+| **Amazon ElastiCache** | Managed in-memory data store and cache | Key-value in memory, Redis rich data structures | Microsecond-latency reads, reduction of load on the primary database, session and leaderboard state |
 
-Amazon S3 is a **regional, fully managed object storage service**. Data is stored as immutable **objects** — an opaque blob of bytes plus user-defined metadata — inside flat containers called **buckets**, and accessed over HTTPS through a REST API. S3 has no file system, no directories, no partial in-place writes, and no notion of a mounted device. It is designed for effectively unlimited capacity, eleven nines of durability, and internet-scale concurrency.
-
-### Amazon EBS — Elastic Block Store
-
-Amazon EBS is an **Availability-Zone-scoped, network-attached block storage service**. It presents a raw block device to an EC2 instance, which the guest operating system formats with a file system (ext4, XFS, NTFS) exactly as it would a physical disk. EBS volumes are attached to instances over a purpose-built network path, replicated within a single Availability Zone, and support point-in-time snapshots stored in S3.
-
-### Amazon EFS — Elastic File System
-
-Amazon EFS is a **regional, fully managed, elastic network file system** implementing the **NFSv4.1** protocol. It provides shared POSIX semantics — directories, file permissions, hard links, byte-range locking — to thousands of concurrent clients across multiple Availability Zones. Capacity grows and shrinks automatically as files are written and deleted, with no provisioning step.
-
-### Where they fit in AWS architecture
+### Where These Services Sit in AWS Architecture
 
 ```mermaid
 graph TD
-    subgraph Compute
-        A["EC2 Instances"]
-        B["ECS and EKS Tasks"]
-        C["Lambda Functions"]
-    end
-    subgraph Storage
-        D["Amazon S3 - Object"]
-        E["Amazon EBS - Block"]
-        F["Amazon EFS - File"]
-        G["Instance Store - Ephemeral Block"]
-    end
-    subgraph Database
-        H["Amazon RDS"]
-        I["Amazon DynamoDB"]
-    end
-    A --> E
-    A --> G
-    A --> F
-    B --> F
-    B --> D
-    C --> D
-    C --> F
-    A --> D
-    H --> E
-    D --> I
+    A["Client Browser or Mobile App"] --> B["Amazon Route 53"]
+    B --> C["Amazon CloudFront"]
+    C --> D["Application Load Balancer"]
+    D --> E["Compute Tier - ECS, EKS, EC2 or Lambda"]
+    E --> F["Amazon ElastiCache"]
+    E --> G["Amazon RDS or Aurora"]
+    E --> H["Amazon DynamoDB"]
+    F -.->|"Cache Miss"| G
+    G --> I["Amazon S3 - Backups and Snapshots"]
+    H --> J["DynamoDB Streams"]
+    J --> K["AWS Lambda - Event Processing"]
+    E --> L["AWS Secrets Manager"]
+    G --> M["Amazon CloudWatch"]
+    H --> M
+    F --> M
 ```
 
-!!! note "Storage is not the same as a database"
-    A database imposes structure, query semantics, transactions, and indexing on top of storage. A storage service stores bytes and returns bytes. RDS internally uses EBS volumes; DynamoDB internally uses its own distributed storage layer. The architectural rule is straightforward: if you need to *query* the data by content, you want a database; if you need to *retrieve* the data by identity, you want storage.
+!!! note "The Data Tier Is the Stateful Tier"
+    Everything above the database in this diagram is, in a well-designed cloud-native system, **stateless** — it can be destroyed and recreated freely. The database tier is where state lives, and state is what makes distributed systems difficult. Scaling stateless compute is a solved problem: add more instances behind a load balancer. Scaling state requires you to make explicit, irreversible decisions about consistency, partitioning, and replication. This is why the data layer, not the application layer, determines the ceiling on your architecture.
+
+### Architectural Position
+
+- **RDS and Aurora** sit in private subnets inside your VPC, reachable only from the compute tier. They serve the **system of record** for transactional business data.
+- **DynamoDB** is a *regional* service that lives outside your VPC and is accessed over the AWS network via a public service endpoint or, preferably, a **VPC Gateway Endpoint**. It serves workloads whose access patterns are known in advance and whose scale requirements exceed what a single relational writer can absorb.
+- **ElastiCache** sits inside your VPC, in front of the database, absorbing repetitive read traffic and holding ephemeral state that does not justify durable storage.
 
 ---
 
 ## Why This Service or Concept Exists
 
-### The problem before cloud storage
+### The Problem: Databases Are Operationally Brutal
 
-In a traditional on-premises data centre, storage is a capital purchase. An organisation forecasts capacity for three to five years, buys a Storage Area Network or Network Attached Storage appliance, racks it, cables it, configures RAID groups, and hires storage administrators. This model has structural defects that no amount of operational discipline can remove.
+Consider what an organisation must do to run a production PostgreSQL database on its own hardware, or even on a bare EC2 instance:
 
-| Problem in the traditional model | Consequence | How AWS storage addresses it |
-|---|---|---|
-| Capacity must be forecast years in advance | Either over-provisioning and wasted capital, or emergency procurement with weeks of lead time | Elastic capacity provisioned by API in seconds |
-| Durability depends on RAID and local redundancy | A data-centre fire, flood, or power event destroys all copies | S3 and EFS replicate across multiple Availability Zones automatically |
-| Scaling throughput requires buying more spindles or controllers | Performance is bounded by hardware already purchased | Performance is a configurable dimension decoupled from capacity, notably in gp3 and io2 |
-| Backups are batch jobs to tape with long restore times | Recovery Time Objective measured in days | Snapshots are incremental, API-driven, and restorable in minutes |
-| Storage is a shared, contended appliance | Noisy-neighbour effects across unrelated applications | Per-volume and per-file-system performance isolation |
-| Geographic redundancy requires a second data centre | Prohibitive cost for most organisations | Cross-Region Replication is a configuration setting |
-| Access control is network-based and coarse | Anyone on the correct VLAN can reach the data | Identity-based IAM policies, resource policies, and encryption context |
+| Responsibility | What It Actually Involves |
+|---|---|
+| Provisioning | Sizing CPU, memory, IOPS and storage; procuring hardware with a lead time of weeks |
+| Installation | Installing and configuring the OS, tuning kernel parameters, installing the engine |
+| Patching | Tracking CVEs for both OS and engine; scheduling maintenance windows; testing patches |
+| Backups | Writing and testing backup scripts; verifying restores; managing offsite retention |
+| High Availability | Configuring streaming replication, a witness or arbiter, and automated failover tooling |
+| Failure Detection | Building health checks that distinguish a hung database from a slow one |
+| Failover | Promoting a standby, repointing clients, fencing the old primary to prevent split-brain |
+| Monitoring | Instrumenting slow queries, replication lag, connection saturation, disk pressure |
+| Scaling | Planning capacity months ahead; downtime for vertical resize; sharding for horizontal growth |
+| Security | Encryption at rest and in transit, credential rotation, network isolation, audit logging |
 
-### Why AWS introduced three distinct services
+None of this activity differentiates the business. A retail company does not win customers by being excellent at PostgreSQL minor-version upgrades. This is what AWS calls **undifferentiated heavy lifting**, and eliminating it is the core value proposition of managed database services.
 
-A frequent beginner question is why AWS did not build one universal storage service. The answer is that the three storage abstractions make **mutually incompatible trade-offs**, and no single design can satisfy all of them simultaneously.
-
-Object storage achieves near-infinite scale and extreme durability precisely because it gives up in-place mutation, POSIX semantics, and low-latency small random writes. Every object is written whole, distributed across many devices with erasure coding, and identified by a key in a flat namespace. That design is what makes eleven nines of durability and unlimited capacity achievable — but it also means you cannot open an object, seek to byte 4,096, and overwrite four bytes.
-
-Block storage achieves single-digit-millisecond latency and true random-access semantics precisely because it presents a narrow, low-level interface — read block N, write block N — to exactly one host at a time in the common case. That design is what makes it suitable for database engines and boot volumes. But it cannot span Availability Zones, because synchronous block replication across tens of kilometres would destroy the latency guarantee.
-
-File storage achieves shared, concurrent, POSIX-correct access from many hosts precisely because it maintains a distributed metadata service that coordinates directory structure, locking, and permissions. That coordination cost is what makes EFS more expensive per gigabyte and higher-latency than EBS — but it is also what allows a hundred containers to write into the same directory safely.
+### The Shared Responsibility Model for Databases
 
 ```mermaid
-graph LR
-    A["Storage Design Trade-off Triangle"] --> B["Object - Unlimited scale and durability"]
-    A --> C["Block - Lowest latency and random write"]
-    A --> D["File - Shared POSIX access"]
-    B --> E["Sacrifices in-place mutation"]
-    C --> F["Sacrifices sharing and cross-AZ reach"]
-    D --> G["Sacrifices cost per gigabyte and raw latency"]
+graph TD
+    subgraph AWS["AWS Responsibility - Security OF the Cloud"]
+        A1["Physical Data Centres"]
+        A2["Host Hardware and Hypervisor"]
+        A3["Network Infrastructure"]
+        A4["Guest OS Installation and Patching"]
+        A5["Database Engine Installation and Patching"]
+        A6["Automated Backup Execution"]
+        A7["Failure Detection and Failover Automation"]
+        A8["Storage Replication and Durability"]
+    end
+    subgraph CUST["Customer Responsibility - Security IN the Cloud"]
+        B1["Schema and Data Model Design"]
+        B2["Query Design and Index Strategy"]
+        B3["IAM Policies and Database Users"]
+        B4["Security Group and Subnet Placement"]
+        B5["Encryption Configuration and Key Policy"]
+        B6["Capacity Mode and Instance Sizing"]
+        B7["Backup Retention Policy"]
+        B8["Application-Level Data Validation"]
+    end
+    AWS --> C["Managed Database Service"]
+    CUST --> C
 ```
 
-!!! tip "The architect's framing"
-    Do not ask "which AWS storage service should I use". Ask "what access pattern does my data have". Access pattern determines abstraction; abstraction determines service. This sequencing is what separates an architect from a console operator.
+!!! warning "A Managed Service Is Not an Unmanaged Responsibility"
+    A common and expensive misconception among students and junior engineers is that "managed" means "AWS handles everything." AWS will faithfully replicate a badly designed schema and diligently back up a table with no indexes. AWS will not tell you that your query does a full table scan, that your partition key is causing a hot partition, or that you have granted `AdministratorAccess` to your application role. Poor design is *your* failure mode, and it is the failure mode that actually causes production outages.
 
-### Benefits over older methods
+### Traditional Approach Versus AWS Approach
 
-- **Consumption-based economics.** You pay for what is stored and what is requested, not for what might be needed in 2029.
-- **Durability as an engineered property.** Eleven nines of durability is achieved through erasure coding and multi-AZ placement, not through hoping the RAID controller holds.
-- **Separation of capacity from performance.** With gp3 volumes, IOPS and throughput are provisioned independently of size — an option that has no clean on-premises analogue.
-- **Security integrated with identity.** Access is granted to IAM principals, not to network segments.
-- **Programmability.** Every operation is an API call, which makes storage automatable, testable, and expressible as Infrastructure as Code.
+| Dimension | Traditional On-Premises | AWS Managed |
+|---|---|---|
+| Time to first database | Weeks to months | Minutes |
+| HA setup | Manual replication plus custom failover scripts, weeks of engineering | One checkbox for Multi-AZ |
+| Failover time | Minutes to hours, often manual, error-prone | Typically 60–120 seconds for RDS Multi-AZ, often under 35 seconds for Aurora |
+| Backups | Custom cron scripts, untested restores | Automated daily snapshots plus continuous transaction log capture |
+| Point-in-time recovery | Requires disciplined log shipping and manual replay | Built in, to any second within the retention window |
+| Vertical scaling | Buy hardware, schedule outage, migrate | Modify instance class, brief failover |
+| Read scaling | Manual replica configuration | Add a read replica with a few API calls |
+| Patching | Manual, risky, often deferred indefinitely | Applied in a customer-defined maintenance window |
+| Capital expenditure | Large upfront CAPEX | Operational expenditure, pay for what you run |
+| Encryption at rest | Requires disk-level or engine-level configuration | Enable at creation, integrated with KMS |
+
+### The Deeper Reason: Purpose-Built Databases
+
+The second, more architectural reason these services exist is that **the relational model is not universally optimal**. For roughly thirty years the industry defaulted to a relational database for every problem, because a relational database was the only mature option and because a single database server was the natural unit of deployment.
+
+Cloud-scale workloads broke this assumption. A social graph, a time-series stream of IoT telemetry, a full-text search index, a shopping cart, and a financial ledger have genuinely different access patterns, consistency requirements, and scaling characteristics. Forcing all of them into one relational engine means every workload is served by a compromise.
+
+AWS's response is the **purpose-built database strategy**: offer a family of databases, each optimised for a category of workload, and expect architects to select deliberately.
+
+```mermaid
+graph TD
+    A["Workload Characteristics"] --> B{"What Shape Is the Data and Access Pattern"}
+    B -->|"Rows, joins, transactions"| C["Relational - RDS or Aurora"]
+    B -->|"Key-value at massive scale"| D["Key-Value - DynamoDB"]
+    B -->|"Microsecond latency, ephemeral"| E["In-Memory - ElastiCache or MemoryDB"]
+    B -->|"Highly connected relationships"| F["Graph - Amazon Neptune"]
+    B -->|"Time-stamped measurements"| G["Time Series - Amazon Timestream"]
+    B -->|"Documents with flexible schema"| H["Document - DocumentDB"]
+    B -->|"Wide column, high write volume"| I["Wide Column - Amazon Keyspaces"]
+    B -->|"Immutable cryptographic ledger"| J["Ledger - QLDB"]
+    B -->|"Analytical scans over columns"| K["Data Warehouse - Amazon Redshift"]
+    B -->|"Full text and relevance ranking"| L["Search - Amazon OpenSearch Service"]
+```
+
+!!! tip "The Architect's Rule"
+    Choose the database that matches the **access pattern**, not the one you already know. The cost of an incorrect data store choice is not a slow query — it is a rewrite, because data models are the hardest thing in a system to change once production data exists in them.
+
+!!! warning "But Do Not Over-Fragment"
+    The purpose-built philosophy is frequently taken too far. Every additional data store adds an operational surface: another backup policy, another monitoring dashboard, another failure mode, another set of credentials, another consistency boundary that your application must reconcile. A three-person startup running six database technologies has made an architectural error, not a sophisticated choice. Introduce a new data store when the workload *demonstrably* does not fit the ones you have, and not before.
 
 ---
 
 ## Real-World Motivation
 
-Abstract benefits become convincing only when tied to concrete engineering pressures. The following scenarios illustrate why organisations reach for each abstraction.
+### Amazon.com and the Origin of DynamoDB
 
-### Media streaming at global scale
+The most instructive story in this chapter is Amazon's own. In the early 2000s, Amazon's retail site ran on large relational databases. During peak events, the shopping cart service — arguably the most availability-critical component in the entire business — experienced outages when the relational tier was saturated or when a failover occurred.
 
-A video streaming platform of the kind operated by Netflix ingests master video files, transcodes them into dozens of bitrate ladders, and serves the resulting segments to hundreds of millions of devices. The transcoded segments are written once and read billions of times. They are immutable, individually addressable, and vary enormously in access frequency — a new release is hot for two weeks and cold forever after.
+Amazon's engineers observed something important: the shopping cart did not need joins, did not need complex transactions across many entities, and did not need ad hoc queries. It needed to read and write a cart by customer ID, with extremely high availability, at any scale. They were paying the full cost of a relational database for none of its benefits.
 
-This is the canonical object storage workload. S3 stores the segments; CloudFront caches them at the edge; S3 Intelligent-Tiering moves aged content to cheaper tiers automatically. Attempting this on block storage would require a file system large enough to hold petabytes, which does not exist as a single EBS volume, and would provide no HTTP-native access path.
+The 2007 **Dynamo paper** described the resulting system: a partitioned, replicated key-value store that prioritised availability and partition tolerance over strict consistency, using consistent hashing for partitioning and quorum techniques for replication. Amazon DynamoDB, launched in 2012, is the managed evolution of those ideas — it retains the partitioning and replication approach while adding strongly consistent read options and a managed control plane.
 
-### Transactional financial systems
+!!! example "The Business Framing"
+    Amazon's internal calculation was that a shopping cart which is *available but occasionally shows a slightly stale item* is vastly more valuable than a cart which is *perfectly consistent but unavailable*. An unavailable cart is a lost sale, immediately and measurably. This is a **business decision expressed as a consistency model** — precisely the kind of reasoning this module exists to teach.
 
-A core banking ledger running PostgreSQL on EC2 demands single-digit-millisecond write latency, strict ordering, crash-consistent recovery, and predictable IOPS under load. The database engine writes 8 KiB pages and a write-ahead log with fsync barriers.
+### Netflix
 
-This is the canonical block storage workload. Only EBS io2 Block Express provides the sub-millisecond latency, the provisioned IOPS guarantee, and the durability that a transactional engine requires. S3 cannot serve this because it has no partial-write semantics; EFS cannot serve it because NFS network round-trips and metadata coordination add latency that the log writer cannot absorb.
+Netflix serves viewing history, playback position, and personalisation state to hundreds of millions of profiles. A user resuming a film on a different device expects their position within seconds. The access pattern is: read by profile ID and title ID; write on every playback heartbeat. This is enormous write volume with a trivially simple access pattern — a textbook key-value workload. Netflix uses Cassandra-family and DynamoDB-style stores for this, with caching layers in front to absorb the read amplification of the homepage.
 
-### Shared content management for a legacy application
+Meanwhile, Netflix's **billing** system — subscriptions, invoices, payment reconciliation — is relational and transactional. The same company runs both models, in the same product, for different subsystems. This is the purpose-built philosophy in practice.
 
-A government agency migrates a document management system in which a fleet of application servers all mount `/var/www/documents` and read and write the same directory tree. The application uses POSIX file locking and expects `rename` to be atomic. Rewriting it to use an object API would take eighteen months and is not funded.
+### Uber
 
-This is the canonical file storage workload. EFS lets the fleet mount the same file system from every Availability Zone with no application change, preserving POSIX semantics while removing the single-server bottleneck. This "lift and shift with shared state" pattern is one of the most common real migrations an architect will encounter.
+A ride request involves several distinct workloads simultaneously:
 
-### Analytics and the data lake
+| Subsystem | Requirement | Appropriate Store |
+|---|---|---|
+| Driver location updates | Extremely high write rate, ephemeral, geospatial | In-memory store with geospatial indexing, such as Redis |
+| Trip record | Transactional, must never be lost, financially significant | Relational with ACID guarantees |
+| Surge pricing lookups | Read-heavy, tolerant of seconds of staleness | Cache |
+| Trip history | Append-only, large volume, queried by user | Key-value or wide-column |
+| Fraud analytics | Large scans, aggregations | Data warehouse |
 
-An e-commerce company such as Amazon or a ride-hailing platform such as Uber lands raw clickstream events, transaction logs, and telemetry into a central repository, then runs Athena, EMR, Glue, and Redshift Spectrum over it. The data is append-only, queried by columnar scan, and retained for years for regulatory reasons.
+No single database serves all five well. Attempting to do so means the geospatial write firehose competes for resources with the financial ledger — an unacceptable coupling.
 
-S3 is the storage substrate for essentially every data lake on AWS, because compute engines can be attached and detached independently of the data, and because storage classes let seven-year-old data cost a fraction of last week's data.
+### Financial Services
 
-### Container platforms and stateful workloads
+A core banking ledger has non-negotiable requirements: every transaction must be atomic, balances must never be observed in an inconsistent intermediate state, and every change must be auditable. These are the exact guarantees ACID transactions provide. A bank running its ledger on an eventually consistent store would be unable to answer the question "what is this account's balance?" with confidence — a regulatory impossibility.
 
-A microservices platform running on EKS deploys pods that are rescheduled across nodes at any moment. A pod that writes to its container file system loses that data on restart. A pod that needs shared configuration or user uploads across replicas needs storage that is not tied to a node.
+But the *same bank* will run its mobile app's session state in ElastiCache, its transaction search in OpenSearch, and its fraud-detection feature store in DynamoDB. Regulatory rigour applies to the ledger, not to every byte the institution stores.
 
-EFS provides `ReadWriteMany` persistent volumes for shared state; EBS provides `ReadWriteOnce` persistent volumes for per-pod state such as a Prometheus time-series database; S3 provides the artefact and object store the application talks to over the API. This triad appears in nearly every production Kubernetes architecture and is a direct DSO303 outcome.
+!!! info "Sovereignty and Compliance"
+    Regulated industries frequently face data residency requirements — data about citizens of a country must remain within that country's borders. AWS Regions map directly to this requirement: choosing a Region is choosing a jurisdiction. RDS, DynamoDB and ElastiCache are all Regional or AZ-scoped resources, so residency is enforced by architecture rather than by policy documentation. This is a significant reason government and healthcare systems adopt managed databases in specific Regions.
 
-!!! example "Healthcare and regulated data"
-    A hospital system storing medical imaging must retain studies for decades, encrypt them with customer-managed keys, produce an immutable audit trail of every access, and prevent deletion before a retention period expires. S3 with SSE-KMS, CloudTrail data events, and S3 Object Lock in Compliance mode satisfies all four requirements as configuration rather than as custom code. This is a clear illustration of why managed storage beats self-managed storage in regulated environments.
+### Healthcare
+
+An electronic health record system stores patient demographics and clinical encounters relationally, because clinical data is deeply relational — a patient has encounters, an encounter has observations, an observation references a coded terminology. Losing referential integrity in that graph is a patient-safety issue.
+
+At the same time, ingesting a continuous stream of vital-sign telemetry from bedside monitors at thousands of writes per second is not a relational workload. It is a time-series or key-value workload. Both live in the same architecture, separated by their access characteristics.
+
+### E-Commerce at Scale
+
+Consider a national e-commerce platform during a flash sale:
+
+```mermaid
+sequenceDiagram
+    participant U as "User"
+    participant CF as "CloudFront"
+    participant ALB as "Load Balancer"
+    participant APP as "Application on ECS"
+    participant EC as "ElastiCache"
+    participant DDB as "DynamoDB"
+    participant RDS as "Aurora"
+    U->>CF: "Request product page"
+    CF->>ALB: "Cache miss for dynamic content"
+    ALB->>APP: "Forward request"
+    APP->>EC: "GET product 12345"
+    EC-->>APP: "Cache hit - 0.3 ms"
+    APP-->>U: "Render page"
+    U->>APP: "Add to cart"
+    APP->>DDB: "PutItem cart record"
+    DDB-->>APP: "Success - 6 ms"
+    U->>APP: "Place order"
+    APP->>RDS: "BEGIN TRANSACTION"
+    APP->>RDS: "Insert order, decrement stock, write payment"
+    RDS-->>APP: "COMMIT"
+    APP-->>U: "Order confirmed"
+```
+
+Notice the deliberate allocation: the product catalogue read path is served from cache at microsecond latency; the cart, which must never fail and has a simple access pattern, is on DynamoDB; the order placement, which requires a multi-row atomic transaction, is on Aurora. Each store is used for what it is good at.
 
 ---
 
 ## Core Concepts
 
-### The three storage abstractions
+### Relational Databases and the ACID Guarantees
 
-Understanding the taxonomy is the single highest-leverage concept in this chapter. Everything else follows from it.
+A **relational database** organises data into tables of rows and columns, with a fixed schema, relationships expressed through foreign keys, and a declarative query language (SQL) that permits arbitrary joins, filters and aggregations decided at query time rather than at design time.
 
-| Dimension | Object storage | Block storage | File storage |
-|---|---|---|---|
-| Unit of storage | Object — bytes plus metadata | Fixed-size block, typically 512 B or 4 KiB | File within a directory hierarchy |
-| Namespace | Flat keyspace within a bucket | Linear array of numbered blocks | Hierarchical tree of directories |
-| Access protocol | HTTPS REST API | Block protocol over a network path, presented as a device | NFS or SMB |
-| Mutation model | Replace whole object; no partial overwrite | Overwrite any block in place | Read, write, seek, truncate, append |
-| Metadata | Rich, user-defined, stored with the object | None beyond the block address | POSIX attributes — owner, mode, timestamps |
-| Concurrent writers | Many, last write wins per key | Normally one host; Multi-Attach is a special case | Many, coordinated by the file system |
-| Typical latency | Tens of milliseconds first byte | Sub-millisecond to low single-digit milliseconds | Low single-digit milliseconds |
-| Scale ceiling | Effectively unlimited | Per-volume ceiling, currently 64 TiB for most types | Petabyte-scale, elastic |
-| AWS service | Amazon S3 | Amazon EBS, instance store | Amazon EFS, Amazon FSx |
+Its defining contract is **ACID**:
+
+| Property | Meaning | Why It Matters Architecturally |
+|---|---|---|
+| **Atomicity** | A transaction executes completely or not at all | A funds transfer cannot debit one account without crediting the other |
+| **Consistency** | A transaction moves the database from one valid state to another, respecting all constraints | Foreign keys, check constraints and uniqueness are never violated, even under concurrency |
+| **Isolation** | Concurrent transactions do not observe each other's intermediate state | Two simultaneous stock decrements cannot both read the same starting value and oversell |
+| **Durability** | Once committed, data survives crashes | An acknowledged order is not lost when the instance dies |
+
+!!! note "Isolation Levels Are a Trade-off Dial"
+    Isolation is not binary. SQL defines levels — Read Uncommitted, Read Committed, Repeatable Read, Serializable — that trade correctness guarantees against concurrency. PostgreSQL defaults to Read Committed; MySQL InnoDB defaults to Repeatable Read. Stronger isolation costs throughput because it holds locks longer or forces more transaction retries. Knowing your engine's default isolation level is a genuine production concern, not academic trivia.
+
+### NoSQL and the BASE Model
+
+**NoSQL** is a family of databases that relax one or more relational constraints — usually the fixed schema, the join capability, or the strict consistency guarantee — in exchange for horizontal scalability and predictable latency.
+
+The counterpart to ACID is **BASE**:
+
+- **Basically Available** — the system responds to every request, even if the response is not the most current data.
+- **Soft state** — the system's state may change over time without new input, as replicas converge.
+- **Eventually consistent** — given no new writes, all replicas will converge to the same value.
+
+!!! warning "NoSQL Does Not Mean "No Consistency""
+    DynamoDB offers *strongly consistent reads* as a per-request option, and *ACID transactions* across up to 100 items. The BASE model describes a default behaviour and a design philosophy, not an absolute limitation. Conversely, a relational database with asynchronous read replicas is *eventually consistent when read through a replica*. The line between the two families is far blurrier than introductory material suggests, and examination questions exploit this.
+
+### The Fundamental Scaling Distinction
 
 ```mermaid
 graph TD
-    A["Application Data"] --> B{"What is the access pattern"}
-    B -->|"Whole-item read and write over HTTP"| C["Object Storage - S3"]
-    B -->|"Random block-level read and write from one host"| D["Block Storage - EBS"]
-    B -->|"Shared POSIX access from many hosts"| E["File Storage - EFS"]
-    C --> F["Data lake, backups, static assets, artefacts"]
-    D --> G["Boot volumes, databases, transactional logs"]
-    E --> H["Shared content, CMS, home directories, ML datasets"]
+    subgraph V["Vertical Scaling - Scale Up"]
+        V1["Small Instance"] --> V2["Medium Instance"]
+        V2 --> V3["Large Instance"]
+        V3 --> V4["Ceiling - Largest Instance Available"]
+    end
+    subgraph H["Horizontal Scaling - Scale Out"]
+        H1["Node 1"] --- H2["Node 2"]
+        H2 --- H3["Node 3"]
+        H3 --- H4["Node N - Add More Indefinitely"]
+    end
 ```
 
-### Amazon S3 core vocabulary
+| Aspect | Vertical Scaling | Horizontal Scaling |
+|---|---|---|
+| Method | Bigger machine | More machines |
+| Applies naturally to | Relational writers | Key-value stores, stateless compute |
+| Ceiling | Hard — the largest instance type in the Region | Effectively none |
+| Downtime | Usually requires restart or failover | None if designed for it |
+| Cost curve | Superlinear — the largest instances cost disproportionately more | Roughly linear |
+| Complexity | Low | High — requires partitioning strategy |
+| Failure blast radius | Entire database | One shard or partition |
 
-**Bucket.** A container for objects, created in a specific AWS Region. Bucket names in the general-purpose namespace are globally unique across all AWS accounts because they must be resolvable as DNS names. A bucket is a *regional* resource — its data never leaves the Region unless you explicitly replicate it.
+The critical insight is that **a relational database's write path scales vertically by default**. You can add read replicas to scale reads horizontally, but there is one writer, and that writer is a single machine. This is the ceiling that motivated the entire NoSQL movement. DynamoDB, by contrast, scales writes horizontally by adding partitions, which is why it can absorb workloads no single relational instance could.
 
-**Object.** The stored entity: a key, a value (the byte payload, from zero bytes up to 5 TiB), a version identifier, metadata, and access-control information.
+### The CAP Theorem, Stated Correctly
 
-**Key.** The full, unique name of an object within a bucket, for example `logs/2026/08/10/app-server-01.log.gz`. The key is a single flat string. S3 has **no directories**.
+Eric Brewer's CAP theorem states that a distributed data store can provide **at most two** of the following three guarantees:
 
-**Prefix.** Any leading substring of a key, conventionally delimited by `/`. Prefixes are the mechanism by which S3 emulates a folder hierarchy in the console and by which request-rate scaling is partitioned. Prefixes are also the unit at which many IAM policies and lifecycle rules are scoped.
+| Guarantee | Precise Meaning |
+|---|---|
+| **Consistency (C)** | Every read receives the most recent write or an error. This is *linearizability*, not the "C" in ACID. |
+| **Availability (A)** | Every request receives a non-error response, without a guarantee that it contains the most recent write. |
+| **Partition Tolerance (P)** | The system continues to operate despite arbitrary loss of messages between nodes. |
 
-**Delimiter.** A character supplied to `ListObjectsV2` that causes S3 to roll up keys sharing a common prefix into `CommonPrefixes`, producing the appearance of a folder listing.
+!!! danger "The Most Common CAP Misconception"
+    Students routinely say "DynamoDB is AP and RDS is CA." **CA is not an achievable option for a distributed system.** Network partitions are not a design choice — they are a fact of physical networks. Cables are cut, switches fail, an Availability Zone loses connectivity. Any system distributed across machines *must* tolerate partitions, so **P is mandatory**. The real theorem, in practice, is: *when a partition occurs, you must choose between C and A.* A single-node database is technically CA only because it is not distributed at all — and a single-node database has no availability story worth having.
 
-**Versioning.** A bucket-level setting that, once enabled, causes every `PUT` and `DELETE` to create a new version rather than replacing or removing data. A `DELETE` inserts a **delete marker**; the prior versions remain and are billed.
+```mermaid
+stateDiagram-v2
+    [*] --> Normal
+    Normal --> Partitioned: "Network partition occurs"
+    Partitioned --> ChooseC: "Prioritise Consistency"
+    Partitioned --> ChooseA: "Prioritise Availability"
+    ChooseC --> Rejecting: "Refuse writes on minority side"
+    ChooseA --> Diverging: "Accept writes on both sides"
+    Rejecting --> Normal: "Partition heals"
+    Diverging --> Reconciling: "Partition heals"
+    Reconciling --> Normal: "Conflicts resolved"
+```
 
-**Storage class.** A per-object attribute selecting the durability, availability, latency, and cost profile — Standard, Intelligent-Tiering, Standard-IA, One Zone-IA, Glacier Instant Retrieval, Glacier Flexible Retrieval, Glacier Deep Archive, and Express One Zone.
+Applied to our three services:
 
-**Lifecycle policy.** Bucket-level rules that transition objects between storage classes or expire them after a defined age, evaluated asynchronously once per day.
+| Service | Behaviour Under Partition | Classification |
+|---|---|---|
+| RDS Multi-AZ | Standby is synchronous; if the primary is isolated, failover occurs and the old primary is fenced. Writes are unavailable during failover. | CP-leaning |
+| Aurora | Quorum-based storage; tolerates loss of an entire AZ plus one additional node for reads, and an entire AZ for writes | CP-leaning with high availability |
+| DynamoDB (eventually consistent reads) | Serves reads from any replica, always available | AP-leaning |
+| DynamoDB (strongly consistent reads) | Reads from the leader; unavailable if the leader partition is unreachable | CP for those requests |
+| ElastiCache Redis with replicas | Failover promotes a replica; recently written data not yet replicated may be lost | AP-leaning, and not durable by design |
 
-**Multipart upload.** A protocol for uploading a large object as independent parts that can be sent in parallel and retried individually, then assembled server-side.
+### PACELC — The Extension That Matters More in Practice
 
-**Presigned URL.** A time-limited URL that embeds a signature granting a specific operation on a specific object to an anonymous holder, without granting them IAM credentials.
+CAP only describes behaviour *during* a partition, which is rare. **PACELC** (Daniel Abadi) extends it:
 
-!!! warning "There are no folders in S3"
-    The console displays folders, and the CLI accepts paths that look like folders, but the underlying data model is a flat map from key strings to objects. Creating a "folder" in the console creates a zero-byte object whose key ends in `/`. Believing in folders leads directly to two classic errors: assuming that renaming a prefix is cheap (it is a copy of every object followed by a delete of every object), and assuming that listing is free (it is a paginated API call billed per request that scans the index).
+> **If** there is a **P**artition, choose between **A**vailability and **C**onsistency; **E**lse (in normal operation), choose between **L**atency and **C**onsistency.
 
-### Amazon EBS core vocabulary
+The "else" branch is what you actually experience daily. A strongly consistent DynamoDB read costs twice the RCUs of an eventually consistent read and has higher latency, because it must be served by the partition leader rather than any replica. Reading from an RDS read replica is faster and cheaper for the primary but may return stale data. **You trade latency for consistency on almost every request you design.**
 
-**Volume.** A block device of a chosen type and size, created within one Availability Zone, attachable to EC2 instances in that same Availability Zone.
+!!! tip "How to Use PACELC in a Design Review"
+    For each read path in your system, ask: *what is the business cost of returning data that is 500 milliseconds stale?* For a product description: zero. For a user's own profile immediately after they edited it: high, because it looks like a bug. For an account balance before a withdrawal: unacceptable. Different read paths in the same application legitimately warrant different consistency choices. This is called **read-your-own-writes** consistency and is often solved by routing a user's reads to the primary for a short window after their write.
 
-**Volume type.** The performance and cost family: `gp3` and `gp2` for general-purpose SSD, `io2 Block Express` and `io1` for provisioned-IOPS SSD, `st1` for throughput-optimised HDD, and `sc1` for cold HDD.
+### OLTP Versus OLAP
 
-**IOPS.** Input/output operations per second, measured against a base I/O size — 16 KiB for SSD-backed types. A single 128 KiB request counts as multiple IOPS on SSD types.
+| Characteristic | OLTP — Online Transaction Processing | OLAP — Online Analytical Processing |
+|---|---|---|
+| Typical operation | Read or write a few rows by key | Scan and aggregate millions of rows |
+| Query latency target | Milliseconds | Seconds to minutes |
+| Concurrency | Thousands of short transactions | Few long-running queries |
+| Storage layout | Row-oriented | Column-oriented |
+| Example | "Insert this order" | "Total revenue by region by month for three years" |
+| AWS service | RDS, Aurora, DynamoDB | Redshift, Athena, EMR |
 
-**Throughput.** Bytes per second transferred, the product of IOPS and I/O size up to the volume and instance ceilings.
+!!! danger "Do Not Run Analytics on Your Production OLTP Database"
+    This is the single most common cause of self-inflicted production outages in early-stage systems. A business analyst runs a report that scans the orders table, the query holds locks or saturates I/O, connection pools exhaust, and the checkout path times out. The correct architecture separates these: replicate to a read replica dedicated to reporting, or export to S3 and query with Athena, or load into Redshift. Aurora's **zero-ETL integration with Amazon Redshift** exists precisely to make this separation cheap.
 
-**Burst bucket.** The credit mechanism that allows `gp2`, `st1`, and `sc1` volumes to exceed their baseline performance for limited periods. `gp3` has no burst bucket; its performance is provisioned and constant.
+### Consistency Models Summarised
 
-**Snapshot.** A point-in-time, incremental, block-level copy of a volume stored durably in S3 in a service-managed bucket you cannot browse. Snapshots are *Regional* resources and are the mechanism by which EBS data crosses Availability Zone and Region boundaries.
+| Model | Guarantee | Where You See It |
+|---|---|---|
+| **Strong / Linearizable** | A read always reflects all prior writes | RDS primary, DynamoDB strongly consistent read, Aurora writer |
+| **Eventual** | Replicas converge given no new writes; a read may be stale | DynamoDB default read, RDS read replica, Aurora reader (with small lag) |
+| **Read-your-own-writes** | A client always sees its own prior writes | Achieved by routing that client's reads to the primary |
+| **Monotonic reads** | A client never sees data go backwards in time | Achieved by pinning a client session to one replica |
+| **Causal** | Causally related operations are seen in order by all observers | Application-level design, or specialised stores |
 
-**EBS-optimised instance.** An instance whose network capacity for EBS traffic is dedicated and separate from general network traffic. All current-generation instances are EBS-optimised by default.
+### Durability Versus Availability
 
-**Multi-Attach.** A capability of `io1` and `io2` volumes allowing a single volume to be attached to up to sixteen Nitro-based instances in the same Availability Zone concurrently. It provides no coordination; a cluster-aware file system is mandatory.
+These are routinely confused and are entirely different properties.
 
-**Elastic Volumes.** The capability to change a volume's size, type, and provisioned performance while it remains attached and in use, without detaching or stopping the instance.
+- **Durability** is the probability that committed data will *not be lost*. It concerns permanence.
+- **Availability** is the proportion of time the system can *serve requests*. It concerns reachability.
 
-### Amazon EFS core vocabulary
+A database can be highly durable and unavailable: your data is safely stored across three AZs but the instance is failing over, so you cannot read it. It can be highly available and non-durable: ElastiCache serves every request but loses everything on restart.
 
-**File system.** The regional EFS resource, identified by an `fs-` identifier, which contains the directory tree.
+| Concept | Metric | Example Target |
+|---|---|---|
+| Durability | Annual probability of data loss | Aurora and S3-class storage designs target extremely low loss probability |
+| Availability | Percentage uptime, expressed in "nines" | 99.99 percent equals roughly 52 minutes of downtime per year |
+| **RPO** — Recovery Point Objective | Maximum acceptable *data loss*, in time | "We can lose at most 5 minutes of transactions" |
+| **RTO** — Recovery Time Objective | Maximum acceptable *downtime* | "We must be serving within 15 minutes" |
 
-**Mount target.** An elastic network interface with an IP address placed in a subnet within one Availability Zone, through which NFS clients in that Availability Zone reach the file system. You create one mount target per Availability Zone you intend to serve.
+!!! example "Translating Business Requirements into Architecture"
+    A requirement of "RPO of 5 minutes, RTO of 1 hour" can be met by automated backups with point-in-time recovery. A requirement of "RPO near zero, RTO under 2 minutes" demands Multi-AZ synchronous replication with automatic failover. A requirement of "survive the loss of an entire Region with RPO under 1 second" demands Aurora Global Database or DynamoDB Global Tables. **RPO and RTO are the two numbers that determine your entire data-tier architecture and its cost.** Always extract them from stakeholders before designing.
 
-**Access point.** An application-specific entry point into a file system that enforces a root directory and can override the POSIX user and group identity of all requests through it. Access points are the mechanism for safe multi-tenant sharing of a single file system.
+### Caching Fundamentals
 
-**Throughput mode.** `Elastic` scales throughput automatically with demand and is the recommended default; `Provisioned` fixes a throughput level independent of stored size; `Bursting` scales baseline throughput with the amount of data stored and uses a credit bucket.
+A **cache** is a high-speed store holding a subset of data so that future requests are served faster than from the origin. Caching works because real workloads exhibit **locality of reference** — a small fraction of items receives a large fraction of requests (the Pareto or power-law distribution).
 
-**Performance mode.** `General Purpose` minimises per-operation latency and is correct for nearly all workloads; `Max I/O` raises the aggregate parallel throughput ceiling at the cost of higher latency and is legacy for most designs.
+| Term | Meaning |
+|---|---|
+| **Cache hit** | The requested item was found in the cache |
+| **Cache miss** | The item was absent; the origin must be consulted |
+| **Hit ratio** | Hits divided by total requests — the primary measure of cache effectiveness |
+| **TTL — Time To Live** | Duration after which an entry expires automatically |
+| **Eviction policy** | Rule for discarding entries when memory is full, for example LRU or LFU |
+| **Cache stampede** | Many concurrent requests miss simultaneously and all hit the origin at once |
+| **Cache invalidation** | Removing or updating an entry when the underlying data changes |
 
-**Storage class.** `Standard` for multi-AZ frequently accessed data, `Infrequent Access` and `Archive` for cooler data, plus One Zone variants that store data in a single Availability Zone at a lower price and lower availability.
-
-**Lifecycle management.** Policies that move files between EFS storage classes based on the time since last access, and optionally move them back on first read.
-
-### Instance store
-
-**Instance store** is physically attached NVMe or SSD storage on the host serving an EC2 instance. It offers the highest possible I/O performance because there is no network in the path, but the data is **ephemeral**: it is lost when the instance stops, hibernates, or is terminated, and when the underlying hardware fails. It is not a durable storage service, and no snapshot mechanism exists for it.
-
-!!! danger "Instance store data loss is a design property, not a failure"
-    Instance store volumes lose all data on instance stop or termination. Architects use them deliberately — for scratch space, caches, temporary shuffle data in Spark, or replicated distributed databases such as Cassandra that maintain their own redundancy across nodes. Placing a single-copy production database on instance store is a design error, not bad luck.
-
-### Durability and availability are different properties
-
-Students frequently conflate these two figures. They measure different failure modes and are engineered by different mechanisms.
-
-- **Durability** is the probability that stored data is not lost. S3 Standard is designed for 99.999999999 percent (eleven nines) annual durability, achieved by erasure-coding each object across devices in at least three Availability Zones.
-- **Availability** is the probability that stored data can be *accessed* at a given moment. S3 Standard offers a 99.99 percent availability design target with a 99.9 percent Service Level Agreement.
-
-Data can be perfectly durable and temporarily unavailable — for instance, during a control plane disruption. The architectural implication is that a design requiring high availability may need a second Region or a cached copy, even though the durability of a single Region is already extraordinary.
-
-| Service or class | Design durability | Design availability | AZ scope |
-|---|---|---|---|
-| S3 Standard | 99.999999999 percent | 99.99 percent | Three or more AZs |
-| S3 Standard-IA | 99.999999999 percent | 99.9 percent | Three or more AZs |
-| S3 One Zone-IA | 99.999999999 percent within the AZ | 99.5 percent | One AZ |
-| S3 Glacier Deep Archive | 99.999999999 percent | 99.99 percent after restore | Three or more AZs |
-| S3 Express One Zone | High within the AZ | 99.95 percent | One AZ |
-| EBS gp3 and io2 volume | Annual failure rate between 0.1 and 0.2 percent for gp3; io2 is designed for 99.999 percent durability | 99.8 to 99.999 percent depending on type | One AZ |
-| EBS snapshot | Same multi-AZ durability as S3 | Regional | Regional |
-| EFS Standard | Designed for eleven nines | 99.99 percent | Three or more AZs |
-| EFS One Zone | Designed for eleven nines within the AZ | 99.9 percent | One AZ |
-| Instance store | None — ephemeral | Tied to the instance | One host |
-
-!!! note "Interpreting eleven nines"
-    Eleven nines of annual durability means that if you store ten million objects, you should statistically expect to lose one object every ten thousand years. This figure describes AWS device and facility failure. It does **not** protect against a user or an application deleting the data, an IAM policy being misconfigured, or ransomware encrypting the bucket. Those risks are addressed by versioning, MFA Delete, Object Lock, replication to a separate account, and Backup vaults — not by the durability figure.
-
-### Consistency model
-
-Since December 2020, Amazon S3 provides **strong read-after-write consistency** for all `PUT` and `DELETE` operations on all objects, in all Regions, with no performance penalty and no opt-in. A successful `PUT` is immediately visible to any subsequent `GET`, `LIST`, or `HEAD`. Overwrites and deletes are also strongly consistent.
-
-This removed an entire class of workaround code that older systems carried, such as retry loops after writing a manifest file. However, two caveats remain relevant to architects:
-
-- Bucket **configuration** changes — policies, ACLs, lifecycle rules, replication rules — remain **eventually consistent** and may take time to propagate.
-- Cross-Region Replication is asynchronous by design and provides no consistency guarantee at the destination; S3 Replication Time Control provides a Service Level Agreement of fifteen minutes for the vast majority of objects but is still asynchronous.
-
-EBS provides the consistency semantics of a block device: a write acknowledged to the operating system is durable within the Availability Zone. EFS provides NFSv4.1 close-to-open consistency by default, with strong consistency for operations within a single mount when the client cache is respected.
+!!! note "Why Hit Ratio Dominates Everything"
+    If a cache read takes 0.5 ms and a database read takes 10 ms, a 95 percent hit ratio gives an average latency of `0.95 × 0.5 + 0.05 × 10 = 0.975 ms`. Dropping to an 80 percent hit ratio gives `0.8 × 0.5 + 0.2 × 10 = 2.4 ms` — nearly 2.5 times worse. Cache effectiveness is highly nonlinear in hit ratio. Monitoring `CacheHitRate` is therefore not optional.
 
 ---
 
 ## Internal Working
 
-This section explains what actually happens inside AWS when you issue a storage request. Understanding these mechanisms is what allows you to predict performance, explain failures, and design around limits rather than being surprised by them.
+Understanding what happens beneath the API is what separates an architect from a console operator. This section describes the actual mechanisms.
 
-### Control plane versus data plane
+### Control Plane Versus Data Plane
 
-Every AWS storage service separates two distinct subsystems, and conflating them is a common source of architectural error.
+Every AWS service is internally split into two planes with radically different characteristics.
 
-The **control plane** handles resource lifecycle: creating buckets, creating and attaching volumes, creating mount targets, modifying configuration. Control plane operations are relatively low-volume, are often Regional in scope, involve consensus and metadata updates, and take seconds to minutes.
+| Plane | Purpose | Example Operations | Design Properties |
+|---|---|---|---|
+| **Control plane** | Manage the lifecycle of resources | `CreateDBInstance`, `ModifyDBInstance`, `CreateTable`, `CreateReplicationGroup` | Lower request volume, higher latency, more complex, changes configuration |
+| **Data plane** | Serve actual application requests | SQL queries, `GetItem`, `PutItem`, Redis `GET` and `SET` | Extremely high volume, low latency, simple, must be maximally available |
 
-The **data plane** handles the actual movement of bytes: `GetObject`, `PutObject`, block reads and writes, NFS operations. Data plane operations are extremely high-volume, are designed for minimal dependencies, and take microseconds to milliseconds.
-
-AWS deliberately engineers data planes to have **static stability** — the ability to continue operating correctly even when the control plane is impaired. This is why a running EC2 instance keeps reading and writing its EBS volume during a Regional control plane event even though you cannot launch new instances.
-
-| Aspect | Control plane | Data plane |
-|---|---|---|
-| S3 examples | `CreateBucket`, `PutBucketPolicy`, `PutLifecycleConfiguration` | `GetObject`, `PutObject`, `ListObjectsV2` |
-| EBS examples | `CreateVolume`, `AttachVolume`, `CreateSnapshot`, `ModifyVolume` | Block read and write from the attached instance |
-| EFS examples | `CreateFileSystem`, `CreateMountTarget`, `CreateAccessPoint` | NFS read, write, and metadata operations |
-| Failure impact | Cannot provision or reconfigure | Cannot access data — far more severe |
-| Design implication | Pre-provision capacity; do not create resources on the critical path | Design retries, timeouts, and multi-AZ redundancy here |
-
-!!! tip "A design rule that follows directly"
-    Never place a control plane call on a user request's critical path. An application that calls `CreateBucket` or `AttachVolume` during a customer transaction has coupled its availability to the least-available subsystem. Provision in advance, ideally through Infrastructure as Code, and let the request path touch only the data plane.
-
-### Inside Amazon S3
-
-#### The flat keyspace and the partitioned index
-
-S3 maintains a distributed **index** that maps a bucket-and-key string to the physical location of the object's data fragments. Because the keyspace is a flat, lexicographically ordered string space, S3 partitions this index by key range. When a particular key range receives sustained high request rates, S3 automatically splits that partition into smaller ranges spread across more index servers. This process is called **partition splitting** and it happens continuously and transparently.
-
-The published request-rate targets are **at least 3,500 `PUT`, `COPY`, `POST`, and `DELETE` requests per second, and at least 5,500 `GET` and `HEAD` requests per second, per partitioned prefix**. Crucially, there is no limit on the number of prefixes, so aggregate throughput scales horizontally as you spread keys across prefixes.
+!!! info "Why This Distinction Is Architecturally Important"
+    AWS deliberately engineers the data plane to have **static stability** — it continues to function correctly even if the control plane is entirely unavailable. If the RDS control plane were degraded, you might be unable to create a new instance, but your existing instance would continue serving queries. This is why the guidance "do not put control plane calls in your request path" matters: never have your application call `DescribeDBInstances` or `DescribeTable` on every user request. Cache configuration at startup. Depending on the control plane at request time imports its lower availability into your critical path.
 
 ```mermaid
 graph TD
-    A["Client request for a key"] --> B["S3 Front End Fleet"]
-    B --> C["Authentication and Authorization"]
-    C --> D["Index Lookup by Key Range"]
-    D --> E["Partition 1 - keys a to f"]
-    D --> F["Partition 2 - keys g to m"]
-    D --> G["Partition 3 - keys n to z"]
-    E --> H["Storage Node Fleet"]
-    F --> H
-    G --> H
-    H --> I["Erasure-coded fragments across AZs"]
+    subgraph CP["Control Plane"]
+        C1["AWS Management Console"]
+        C2["AWS CLI and SDK"]
+        C3["CloudFormation and Terraform"]
+        C1 --> C4["Service Control API"]
+        C2 --> C4
+        C3 --> C4
+        C4 --> C5["Provisioning Workflows"]
+        C5 --> C6["Metadata Store"]
+    end
+    subgraph DP["Data Plane"]
+        D1["Application on ECS or Lambda"]
+        D1 --> D2["Request Router"]
+        D2 --> D3["Storage Nodes"]
+    end
+    C5 -.->|"Configures"| D3
 ```
 
-!!! info "The historical hashed-prefix advice is obsolete"
-    Before 2018, S3 required a random hash at the start of keys to distribute load. That requirement was removed when S3 introduced automatic prefix-level scaling. Modern guidance is the opposite: use meaningful, hierarchical prefixes such as `year/month/day/`, and if a single prefix genuinely saturates, introduce parallel prefixes deliberately. Certification questions still occasionally test the modern behaviour, so know that the rate limits are per prefix and that adding prefixes multiplies capacity.
+### Amazon RDS Internal Working
 
-#### Erasure coding and multi-AZ placement
+#### Single-AZ Instance
 
-When S3 accepts a `PUT`, it does not simply write three copies. It applies **erasure coding**: the object's data is split into *k* data fragments and *m* parity fragments, such that the original can be reconstructed from any *k* of the *k + m* total fragments. These fragments are then distributed across storage devices located in a minimum of three Availability Zones within the Region.
+A single-AZ RDS instance is an EC2 instance running the database engine, with its data on **Amazon EBS** volumes attached over the network. The separation of compute from storage is significant: if the EC2 host fails, AWS can start a replacement instance and reattach the same EBS volumes, preserving data.
 
-This design is more space-efficient than triple replication while tolerating more simultaneous failures. S3 continuously runs background **integrity checking**, computing checksums on stored fragments, detecting silent data corruption or bit rot, and regenerating any degraded fragment from the surviving ones. The eleven-nines figure is the output of a reliability model over these mechanisms — device annual failure rates, fragment counts, and the speed of automatic repair.
+```mermaid
+graph TD
+    A["Application in Private Subnet"] --> B["RDS Endpoint - DNS Name"]
+    B --> C["EC2 Host running Database Engine"]
+    C --> D["EBS Volume - Data Files"]
+    C --> E["EBS Volume - Transaction Logs"]
+    D --> F["Automated Snapshot to S3"]
+    E --> F
+```
 
-The write is not acknowledged to the client until enough fragments are durably persisted across multiple Availability Zones to satisfy the durability design. This is why S3 `PUT` latency is measured in tens of milliseconds rather than microseconds, and why S3 is inappropriate as a database write path.
+#### Multi-AZ Deployment — Synchronous Replication
+
+Multi-AZ is the mechanism by which RDS achieves high availability. Two distinct architectures exist:
+
+**Multi-AZ instance deployment (one standby):**
+
+- AWS provisions a **standby replica** in a different Availability Zone.
+- Every write to the primary is **synchronously replicated** to the standby at the storage or engine level before the commit is acknowledged to the client.
+- The standby is **not readable**. It exists solely for failover. Students very frequently get this wrong.
+- Failure detection is continuous. On primary failure, AZ failure, storage failure, network partition, or a customer-initiated reboot with failover, RDS promotes the standby.
+
+**Multi-AZ DB cluster deployment (two readable standbys):**
+
+- Available for MySQL and PostgreSQL. Provisions a writer and **two readable standby instances** across three AZs.
+- Uses semi-synchronous replication: a commit is acknowledged once at least one standby confirms.
+- Typically offers faster failover than the single-standby model and adds read capacity.
 
 ```mermaid
 sequenceDiagram
-    participant C as "Client"
-    participant FE as "S3 Front End"
-    participant EC as "Erasure Coder"
-    participant AZ1 as "Storage in AZ A"
-    participant AZ2 as "Storage in AZ B"
-    participant AZ3 as "Storage in AZ C"
-    C->>FE: "PUT object with checksum"
-    FE->>FE: "Authenticate and authorize"
-    FE->>EC: "Split into data and parity fragments"
-    EC->>AZ1: "Write fragment set 1"
-    EC->>AZ2: "Write fragment set 2"
-    EC->>AZ3: "Write fragment set 3"
-    AZ1-->>EC: "Durably persisted"
-    AZ2-->>EC: "Durably persisted"
-    AZ3-->>EC: "Durably persisted"
-    EC->>FE: "Quorum satisfied, index updated"
-    FE-->>C: "200 OK with ETag"
+    participant APP as "Application"
+    participant P as "Primary in AZ-a"
+    participant S as "Standby in AZ-b"
+    APP->>P: "INSERT INTO orders"
+    P->>P: "Write to transaction log"
+    P->>S: "Synchronously replicate log record"
+    S->>S: "Persist log record"
+    S-->>P: "Acknowledge"
+    P-->>APP: "COMMIT successful"
+    Note over P,S: "Commit latency includes the cross-AZ round trip"
 ```
 
-#### How strong consistency is achieved
+!!! warning "Multi-AZ Costs You Write Latency"
+    Because the commit waits for the standby to acknowledge, every write pays a cross-AZ network round trip — typically one to two milliseconds. For a write-heavy OLTP workload this is a real, measurable cost. It is almost always worth paying, but you must *know* you are paying it. This is the durability-versus-latency trade-off from PACELC, made concrete.
 
-Strong read-after-write consistency requires that the index update and the data write become visible atomically from the perspective of any reader. S3 achieves this without sacrificing throughput by making the index itself a strongly consistent, replicated store, and by ensuring that a `GET` resolves through that index rather than through any cached or eventually replicated view. The practical consequence for architects is that no application-level workaround is needed, and any code you inherit that sleeps or retries after a write to "wait for consistency" can be deleted.
+#### The Failover Mechanism — DNS CNAME Switching
 
-#### The networking path and VPC endpoints
+This mechanism is examined constantly, so understand it precisely.
 
-By default, S3 is reached over its public Regional endpoint, for example `s3.ap-south-1.amazonaws.com`. A request from an EC2 instance in a private subnet would therefore need a NAT Gateway and an Internet Gateway to reach it — which incurs NAT data-processing charges, adds a bandwidth bottleneck, and routes internal traffic through a public endpoint.
-
-AWS provides two endpoint types that keep the traffic on the AWS network.
-
-| Endpoint type | Mechanism | Cost | Cross-account and on-premises reach | Typical use |
-|---|---|---|---|---|
-| Gateway VPC endpoint for S3 | Adds a prefix-list route to the VPC route table; traffic to S3 leaves via the endpoint | No hourly or data charge | Not reachable from on-premises over VPN or Direct Connect | Default choice for in-VPC access to S3 |
-| Interface VPC endpoint powered by PrivateLink | Places an ENI with a private IP inside your subnet; resolved by private DNS | Hourly charge per endpoint plus data processing | Reachable from on-premises and from peered VPCs | Hybrid architectures and stricter network isolation |
+Your application does **not** connect to an IP address. It connects to an RDS **endpoint**, a DNS name such as `orders-db.abc123xyz.eu-west-1.rds.amazonaws.com`. This DNS record is a **CNAME** that resolves to the address of the current primary.
 
 ```mermaid
-graph LR
-    A["EC2 in Private Subnet"] --> B{"Route to S3"}
-    B -->|"No endpoint"| C["NAT Gateway"]
-    C --> D["Internet Gateway"]
-    D --> E["S3 Public Endpoint"]
-    B -->|"Gateway endpoint"| F["Gateway VPC Endpoint"]
-    F --> E
-    B -->|"Interface endpoint"| G["PrivateLink ENI"]
+sequenceDiagram
+    participant APP as "Application"
+    participant DNS as "Route 53 DNS"
+    participant P as "Primary in AZ-a"
+    participant S as "Standby in AZ-b"
+    participant RDS as "RDS Control Plane"
+    APP->>DNS: "Resolve db endpoint"
+    DNS-->>APP: "Address of primary in AZ-a"
+    APP->>P: "Queries flowing normally"
+    Note over P: "Primary fails"
+    RDS->>RDS: "Health check detects failure"
+    RDS->>S: "Promote standby to primary"
+    RDS->>DNS: "Update CNAME to AZ-b address"
+    APP->>P: "Connection error"
+    APP->>DNS: "Re-resolve endpoint"
+    DNS-->>APP: "Address of new primary in AZ-b"
+    APP->>S: "Reconnect and resume"
+```
+
+Key consequences that architects must design around:
+
+1. **Existing connections are severed.** The application *will* see errors during failover. Your code must implement retry with exponential backoff and jitter.
+2. **DNS caching can delay recovery.** The RDS endpoint has a short TTL, but JVM applications historically cache DNS resolutions indefinitely by default. Setting `networkaddress.cache.ttl` to a low value such as 5 seconds is a mandatory step for Java applications on RDS. This single misconfiguration causes more prolonged post-failover outages than any other.
+3. **Failover typically completes in roughly 60 to 120 seconds** for the classic Multi-AZ instance deployment, and faster for Multi-AZ DB clusters and Aurora. Treat these as typical observed ranges, not contractual guarantees.
+4. **The endpoint name never changes.** Do not hard-code IP addresses; never resolve once at startup and cache forever.
+
+!!! danger "The Retry Requirement Is Not Optional"
+    A cloud-native application must assume its database connection can be terminated at any moment — by failover, by maintenance, by scaling, or by a transient network event. Applications that treat a dropped connection as a fatal error will experience an outage every time AWS performs routine maintenance. Retry logic with exponential backoff and jitter, plus a connection pool that validates connections before handing them out, is a baseline requirement.
+
+#### Read Replicas — Asynchronous Replication
+
+Read replicas serve a different purpose from Multi-AZ standbys, and confusing them is a classic examination trap.
+
+```mermaid
+graph TD
+    A["Application Write Path"] --> B["Primary Instance - Writer Endpoint"]
+    B -->|"Synchronous"| C["Multi-AZ Standby - Not Readable"]
+    B -->|"Asynchronous"| D["Read Replica 1 - Same Region"]
+    B -->|"Asynchronous"| E["Read Replica 2 - Same Region"]
+    B -->|"Asynchronous"| F["Read Replica 3 - Cross Region"]
+    G["Application Read Path"] --> D
     G --> E
+    H["Reporting and Analytics"] --> F
 ```
 
-!!! warning "A common and expensive mistake"
-    Routing terabytes of S3 traffic through a NAT Gateway is one of the most frequent avoidable costs in AWS bills. NAT Gateway charges an hourly fee plus a per-gigabyte data-processing fee on top of the data transfer. A Gateway VPC endpoint for S3 eliminates that per-gigabyte charge entirely and costs nothing. Adding one is often the single highest-return cost optimisation in an account.
+| Dimension | Multi-AZ Standby | Read Replica |
+|---|---|---|
+| Purpose | High availability and disaster recovery | Read scaling and offloading |
+| Replication | Synchronous | Asynchronous |
+| Readable | No (in the single-standby model) | Yes |
+| Automatic failover | Yes | No — manual promotion |
+| Placement | Different AZ, same Region | Same AZ, different AZ, or different Region |
+| Data currency | Identical to primary | Lagging by milliseconds to seconds |
+| Effect on write latency | Increases it | Negligible |
+| Can be promoted to standalone | No | Yes |
 
-### Inside Amazon EBS
+The replication mechanism is engine-specific: MySQL and MariaDB use binary log replication; PostgreSQL uses its native streaming replication protocol. In both cases the primary does not wait for the replica, so the primary's write path is unaffected — but the replica may fall behind.
 
-#### Network-attached storage that behaves like a disk
+**Replica lag** is the delay between a commit on the primary and its visibility on the replica. It is exposed as the CloudWatch metric `ReplicaLag`. Lag grows when:
 
-An EBS volume is not a disk inside the EC2 host. It is storage residing on a separate fleet of EBS servers, reached over a dedicated, high-bandwidth network fabric. The illusion of a local disk is created at the hardware level.
+- The write rate on the primary exceeds the replica's ability to apply changes (single-threaded apply in some engines).
+- The replica instance class is smaller than the primary's.
+- A long-running query on the replica blocks the apply process.
+- A large batch operation such as a bulk `DELETE` generates a burst of replication traffic.
 
-On Nitro-based instances — which is to say all current-generation instances — the **Nitro card for EBS** is a dedicated PCIe device on the host. The guest operating system sees a standard NVMe controller and issues ordinary NVMe commands to it. The Nitro card intercepts those commands, encrypts the data if the volume is encrypted, converts them into network operations against the EBS server fleet, and returns completions to the guest. The hypervisor and the guest CPU are not involved in the I/O path, which is why Nitro instances achieve near-bare-metal storage performance and why EBS encryption has no measurable performance cost.
+!!! warning "The Stale Read Bug"
+    A user updates their profile, the application writes to the primary and immediately redirects to a page that reads from a replica. The replica has not caught up, so the user sees their *old* profile and concludes the save failed. They save again. This produces duplicate writes and support tickets. Solutions: route reads to the primary for a short window after a write for that session; or return the written object from the write response rather than re-reading; or use a session-consistency token. Design for this explicitly — it is one of the most common real-world defects in read-replica architectures.
+
+#### Automated Backups and Point-in-Time Recovery
+
+RDS's backup mechanism has two components working together:
+
+1. **Daily automated snapshot** — a storage-level snapshot of the volumes, taken during the configured backup window and stored in Amazon S3 (in AWS-managed buckets you do not see).
+2. **Continuous transaction log capture** — the database's write-ahead log or binary log is uploaded to S3 continuously, typically at around five-minute granularity.
+
+Point-in-time recovery works by restoring the most recent snapshot **before** the target time and then replaying transaction logs forward to the exact requested second.
 
 ```mermaid
 graph TD
-    A["Guest OS File System"] --> B["NVMe Driver"]
-    B --> C["Nitro Card for EBS on the host"]
-    C --> D["Hardware Encryption Engine"]
-    D --> E["EBS Network Fabric"]
-    E --> F["Primary Replica in AZ"]
-    F --> G["Secondary Replica in same AZ"]
-    F --> H["Acknowledge write to Nitro"]
-    H --> C
+    A["Daily Snapshot at 03:00"] --> B["Restore Base Image"]
+    C["Transaction Logs 03:00 to 14:37"] --> D["Replay Forward"]
+    B --> D
+    D --> E["New DB Instance at Exactly 14:37:22"]
 ```
 
-#### Replication within a single Availability Zone
+!!! danger "Point-in-Time Recovery Creates a NEW Instance"
+    PITR does not roll back your existing database in place. It provisions a **new** instance restored to the target time, with a **new endpoint**. Recovering therefore involves: restore to a new instance, validate the data, then repoint the application — either by updating configuration or by renaming instances. Factor this into your RTO calculation, because restoring a large database takes real time proportional to its size.
 
-Each EBS volume's data is automatically replicated across multiple servers **within one Availability Zone**. A write is acknowledged only after it is durably recorded on more than one replica, which is what protects against the failure of any single storage server or drive.
+!!! note "Snapshot Lifecycle Semantics"
+    **Automated backups are deleted when you delete the DB instance** (unless you take a final snapshot). **Manual snapshots persist until you explicitly delete them.** This asymmetry has destroyed real companies' data. If a database matters, take manual snapshots on a schedule, or use AWS Backup with a retention policy, and consider copying snapshots to a second Region and a second account for ransomware and account-compromise resilience.
 
-The deliberate architectural decision is that this replication does **not** span Availability Zones. Synchronous replication over the tens of kilometres separating Availability Zones would add hundreds of microseconds to every write, destroying the latency profile that block storage exists to provide. Therefore:
+### Amazon Aurora Internal Working
 
-- An EBS volume can only be attached to an instance in **its own Availability Zone**.
-- An Availability Zone failure makes the volume unavailable, though the data is not lost.
-- Cross-AZ and cross-Region durability for EBS is achieved through **snapshots**, not through the volume itself.
+Aurora is not "RDS with a faster engine." It is a fundamentally re-architected database in which the storage layer was rewritten as a distributed, multi-tenant, log-structured service. Understanding this design is one of the highest-value pieces of knowledge in this chapter.
 
-!!! danger "Availability Zone scope is the defining constraint of EBS"
-    Any architecture that treats an EBS volume as a highly available store is wrong. If an application must survive the loss of an Availability Zone with its data intact and immediately accessible, the correct answers are database-level replication such as RDS Multi-AZ, a multi-AZ file system such as EFS, or object storage such as S3 — not a single EBS volume.
+#### The Core Insight: The Log Is the Database
 
-#### Snapshot mechanics
+In a traditional relational database, committing a transaction involves writing several things to disk: the write-ahead log, the data pages, a double-write buffer (in MySQL), and eventually more. When you replicate that database, you ship *all* of those writes across the network. This is enormous write amplification.
 
-An EBS snapshot is a **block-level, incremental, point-in-time copy** written to S3 in a service-managed location. The mechanics matter because they explain both the cost model and the restore behaviour.
-
-The first snapshot of a volume copies every block that has ever been written. Subsequent snapshots copy only the blocks that changed since the previous snapshot, and reference the unchanged blocks by pointer. This is why a daily snapshot of a 1 TiB volume with 10 GiB of daily change costs approximately the size of the full first copy plus 10 GiB per day, not 1 TiB per day.
-
-Deleting a snapshot does not break later snapshots. AWS removes only the blocks that no snapshot still references, so the chain remains restorable at every retained point. This reference-counted design is why you cannot compute a snapshot's "size" in isolation.
-
-When a volume is created from a snapshot, it is **available immediately** but is **lazily loaded**: blocks are fetched from S3 on first access, meaning the initial reads after a restore are slower than steady-state. Two mechanisms address this. **Fast Snapshot Restore** pre-warms a snapshot in specified Availability Zones so that restored volumes deliver full performance instantly, at an hourly charge per snapshot per Availability Zone. Alternatively, an operator can sequentially read the entire device to force hydration.
-
-```mermaid
-stateDiagram-v2
-    [*] --> VolumeInUse
-    VolumeInUse --> SnapshotPending : "CreateSnapshot called"
-    SnapshotPending --> SnapshotCompleted : "Changed blocks copied to S3"
-    SnapshotCompleted --> SnapshotCopied : "CopySnapshot to another Region"
-    SnapshotCompleted --> NewVolumeCreating : "CreateVolume from snapshot"
-    NewVolumeCreating --> NewVolumeLazyLoading : "Available but hydrating"
-    NewVolumeLazyLoading --> NewVolumeFullPerformance : "Blocks fetched or FSR enabled"
-    NewVolumeFullPerformance --> [*]
-```
-
-!!! note "Crash consistency versus application consistency"
-    A snapshot taken while a volume is in use is **crash consistent** — equivalent to pulling the power cable. A journalling file system such as ext4 or XFS will recover, but a database may need to replay its log. For **application-consistent** snapshots, the correct approach is to flush and freeze the file system before the snapshot, which AWS Systems Manager Run Command and AWS Backup can orchestrate, or to snapshot from a quiesced replica.
-
-### Inside Amazon EFS
-
-#### A managed NFSv4.1 service with distributed metadata
-
-EFS implements the NFSv4.1 protocol so that any standard Linux NFS client can mount it with no proprietary agent. Behind the protocol endpoint, EFS is a distributed system with two logically separate subsystems: a **metadata service** that maintains the directory tree, inodes, permissions, and lock state, and a **data service** that stores file contents redundantly across multiple Availability Zones in the Region.
-
-Every file's data and metadata are stored redundantly across Availability Zones, which is precisely why EFS survives an Availability Zone failure while EBS does not — and equally why EFS has higher per-operation latency than EBS, since a metadata mutation must be coordinated across zones.
-
-#### Mount targets and the network path
-
-An EFS file system is a Regional resource, but clients do not talk to a Regional endpoint. Instead you create a **mount target** in each Availability Zone. A mount target is an elastic network interface with a private IP address inside one of your subnets, protected by a security group.
-
-When an EC2 instance or a container mounts the file system using the DNS name `fs-0123456789abcdef0.efs.ap-south-1.amazonaws.com`, Route 53 resolves that name to the IP address of the mount target **in the client's own Availability Zone**. This zone-local resolution is deliberate: it keeps NFS traffic within the Availability Zone, minimising latency and avoiding cross-AZ data transfer charges.
+Aurora's designers observed that the **redo log is sufficient** — data pages can always be reconstructed from a prior page image plus the log records that apply to it. So Aurora's database node sends **only redo log records** to the storage layer. The storage nodes themselves materialise data pages in the background, asynchronously and continuously.
 
 ```mermaid
 graph TD
-    subgraph "Availability Zone A"
-        A1["EC2 or Pod"] --> M1["Mount Target ENI in AZ A"]
+    A["Aurora Writer Instance - Compute Only"] -->|"Redo log records only"| B["Distributed Storage Service"]
+    subgraph AZ1["Availability Zone A"]
+        S1["Storage Node 1"]
+        S2["Storage Node 2"]
     end
-    subgraph "Availability Zone B"
-        A2["EC2 or Pod"] --> M2["Mount Target ENI in AZ B"]
+    subgraph AZ2["Availability Zone B"]
+        S3["Storage Node 3"]
+        S4["Storage Node 4"]
     end
-    subgraph "Availability Zone C"
-        A3["EC2 or Pod"] --> M3["Mount Target ENI in AZ C"]
+    subgraph AZ3["Availability Zone C"]
+        S5["Storage Node 5"]
+        S6["Storage Node 6"]
     end
-    M1 --> E["EFS Distributed Storage across three AZs"]
-    M2 --> E
-    M3 --> E
+    B --> S1
+    B --> S2
+    B --> S3
+    B --> S4
+    B --> S5
+    B --> S6
+    S1 --> C["Continuous Backup to S3"]
+    S3 --> C
+    S5 --> C
 ```
 
-!!! warning "The most common EFS failure to diagnose"
-    A mount that hangs and eventually times out is almost always a security group problem or a missing mount target. The mount target's security group must allow inbound TCP port 2049 from the client's security group, and a mount target must exist in the client's Availability Zone. If either is absent, the NFS client will retry silently until it times out, producing no useful error message.
+#### Six-Way Replication and Quorum
 
-#### Elastic capacity and throughput
+Aurora maintains **six copies of every data segment across three Availability Zones — two copies per AZ**. It uses quorum protocols rather than requiring all copies to respond:
 
-EFS has no provisioned size. Metadata operations allocate space as files are written and release it as files are deleted, and billing is computed from measured storage consumption. This removes an entire class of operational work — no resizing, no monitoring free space, no emergency expansion at 03:00.
+| Operation | Quorum Required | Meaning |
+|---|---|---|
+| **Write** | 4 out of 6 | A commit is acknowledged when 4 of 6 storage nodes persist the log record |
+| **Read** | 3 out of 6 | A read is satisfied by 3 of 6 nodes (in practice Aurora tracks which segments are current and reads from one) |
 
-In **Elastic throughput** mode, EFS measures the workload's demand continuously and adjusts the available throughput automatically, billing for the data actually read and written. In **Bursting** mode, baseline throughput scales at roughly 50 KiB/s per GiB stored, with burst credits accumulating when the file system runs below baseline and depleting when it runs above. A small file system in Bursting mode can therefore exhaust its credits and become dramatically slower — a classic and confusing production incident.
+The arithmetic is deliberate: because write quorum (4) plus read quorum (3) exceeds the total number of copies (6), any read quorum necessarily intersects any write quorum, guaranteeing that a read observes the latest committed write.
+
+The failure tolerance that follows:
+
+| Failure Scenario | Effect on Writes | Effect on Reads |
+|---|---|---|
+| Loss of one storage node | None — 5 of 6 available, quorum of 4 met | None |
+| Loss of an entire AZ (2 nodes) | None — 4 of 6 available, quorum of 4 exactly met | None |
+| Loss of an AZ plus one more node | Writes unavailable until repair — only 3 of 6 | Reads still served — quorum of 3 met |
+
+!!! info "Why This Design Is Superior for Availability"
+    Aurora can lose **an entire Availability Zone and still accept writes**, and lose an AZ plus one additional node and still serve reads. A traditional Multi-AZ RDS deployment loses its primary and must fail over — a disruptive event. Aurora's storage layer absorbs the failure without any failover at all, because no single node is authoritative.
+
+#### Segments and Protection Groups
+
+Aurora's storage volume is divided into **10 GiB segments**. Each segment is replicated six ways. A large database is thousands of segments spread across hundreds of storage nodes. This granularity is what makes repair fast: if a node fails, Aurora only needs to re-replicate the 10 GiB segments it held, in parallel across many nodes, typically completing in seconds to minutes rather than the hours a full-volume rebuild would take.
+
+Aurora storage grows automatically in 10 GiB increments up to a documented maximum (128 TiB for recent versions — verify the current figure for your engine version, as AWS has raised it over time). **You never provision storage size for Aurora.** This eliminates an entire class of operational incident: running out of disk.
+
+#### Reader Instances and Replica Lag
+
+Aurora reader instances attach to the **same shared storage volume** as the writer. They do not replicate data by shipping and replaying logs in the traditional sense; they read the same pages and apply in-memory cache invalidation from the writer's log stream.
+
+This has two important consequences:
+
+1. **Replica lag is typically in the tens of milliseconds**, not seconds, because there is no data to copy — only cache coherence to maintain.
+2. **Adding a reader does not copy data**, so a new reader becomes available quickly regardless of database size.
+
+Aurora supports up to 15 Aurora Replicas per cluster, and provides two endpoints:
+
+| Endpoint | Behaviour |
+|---|---|
+| **Cluster (writer) endpoint** | Always points at the current writer; follows failover automatically |
+| **Reader endpoint** | Load-balances connections across available readers |
+| **Custom endpoint** | A user-defined subset of instances, for example "all r6g.4xlarge readers for reporting" |
+| **Instance endpoint** | A specific instance; used for diagnostics, rarely for application traffic |
+
+!!! warning "The Reader Endpoint Balances Connections, Not Queries"
+    The Aurora reader endpoint performs DNS round-robin at *connection* time. If your application uses long-lived pooled connections, they will be distributed once at pool creation and then remain pinned. A pool created when only one reader existed will never use readers added later, unless the pool recycles connections. Configure a maximum connection lifetime in your pool to allow periodic rebalancing.
+
+#### Aurora Failover
+
+Aurora failover promotes an existing reader to writer. Because storage is shared, there is no data to recover or synchronise — the new writer simply begins accepting writes against the same volume. Failover typically completes in around 30 seconds or less, and often faster with the **RDS Proxy** in front or with cluster-aware drivers.
+
+You assign a **failover priority tier** (0 through 15) to each reader; Aurora promotes the lowest-numbered tier, breaking ties by choosing the instance closest in size to the writer.
+
+#### Aurora Serverless v2
+
+Aurora Serverless v2 replaces provisioned instance classes with **Aurora Capacity Units (ACUs)**, where one ACU is approximately 2 GiB of memory with corresponding CPU and networking. You set a minimum and maximum ACU range and Aurora scales within it in fine-grained increments, in place, in seconds, without dropping connections.
+
+| Aspect | Provisioned Aurora | Aurora Serverless v2 |
+|---|---|---|
+| Capacity unit | Instance class | ACU |
+| Scaling granularity | Whole instance resize with failover | Fractional ACU steps, in place |
+| Scaling speed | Minutes | Seconds |
+| Best for | Steady, predictable load | Variable, spiky or unpredictable load |
+| Cost at steady high load | Lower | Higher per unit of capacity |
+| Cost at low or intermittent load | Higher — you pay for idle | Lower |
+
+!!! tip "When Serverless v2 Is the Right Call"
+    Development and test environments, workloads with pronounced daily or seasonal peaks, multi-tenant systems where each tenant's load is unpredictable, and new applications with unknown traffic. For a steady 24/7 production workload at high utilisation, provisioned instances with a Reserved Instance commitment are usually cheaper.
+
+#### Aurora Global Database
+
+An Aurora Global Database has one primary Region that handles writes and up to five secondary Regions that receive changes through a **dedicated storage-layer replication infrastructure**, not through the database engine. Typical cross-Region lag is under one second. A secondary Region can be promoted to primary — planned failover typically completes quickly, and unplanned promotion is measured in minutes with an RPO usually under one second.
+
+```mermaid
+graph TD
+    subgraph R1["Primary Region - eu-west-1"]
+        W["Writer Instance"] --> SV1["Aurora Storage Volume"]
+        RD1["Reader Instances"] --> SV1
+    end
+    subgraph R2["Secondary Region - ap-south-1"]
+        SV2["Aurora Storage Volume"] --> RD2["Reader Instances"]
+    end
+    subgraph R3["Secondary Region - us-east-1"]
+        SV3["Aurora Storage Volume"] --> RD3["Reader Instances"]
+    end
+    SV1 -->|"Storage-level replication, sub-second"| SV2
+    SV1 -->|"Storage-level replication, sub-second"| SV3
+```
+
+### Amazon DynamoDB Internal Working
+
+#### Partitioning by Hash of the Partition Key
+
+This is the single most important mechanism in DynamoDB, and almost every DynamoDB design mistake traces back to misunderstanding it.
+
+When you write an item, DynamoDB computes an **internal hash function over the partition key value**. The output of that hash determines which **partition** stores the item. A partition is a unit of storage and throughput, physically located on a set of storage nodes.
+
+```mermaid
+graph TD
+    A["PutItem with PartitionKey = user#4471"] --> B["Request Router"]
+    B --> C["Apply internal hash to partition key"]
+    C --> D["Hash output maps to a keyspace range"]
+    D --> E{"Which partition owns this range"}
+    E -->|"Range 1"| P1["Partition 1"]
+    E -->|"Range 2"| P2["Partition 2"]
+    E -->|"Range 3"| P3["Partition 3"]
+    E -->|"Range N"| PN["Partition N"]
+    P2 --> R1["Storage Node - Leader Replica in AZ-a"]
+    P2 --> R2["Storage Node - Replica in AZ-b"]
+    P2 --> R3["Storage Node - Replica in AZ-c"]
+```
+
+Consequences that follow directly from this design:
+
+1. **Every read or write that supplies the full partition key is routed to exactly one partition.** This is why `GetItem` is O(1) and why latency is predictable regardless of table size — a 10 KB table and a 100 TB table both take one hop.
+2. **A query without the partition key cannot be routed** and must therefore `Scan` every partition. This is why `Scan` is expensive and why access patterns must be designed up front.
+3. **Items sharing a partition key value are stored together**, physically adjacent and sorted by the sort key. This is why range queries on the sort key are efficient.
+4. **Throughput is distributed across partitions.** If all your traffic targets one partition key value, you are limited by what one partition can deliver, regardless of how much capacity the table has in total. This is the **hot partition** problem.
+
+#### Replication and Leader Election
+
+Each partition is replicated across three Availability Zones. One replica is the **leader**; the others are followers.
+
+| Operation | Path |
+|---|---|
+| Write | Routed to the leader; the leader appends to its log and replicates; acknowledged once a quorum of replicas has durably persisted it |
+| Strongly consistent read | Served by the leader, guaranteeing the latest committed value |
+| Eventually consistent read | Served by any replica, which may lag the leader by a very short interval |
+
+Leader election uses a **Paxos-based** consensus protocol. If the leader becomes unreachable, the remaining replicas elect a new leader. This happens automatically and is invisible to applications — there is no endpoint to update, because clients always talk to the DynamoDB request routing layer rather than directly to storage nodes.
+
+!!! info "Why DynamoDB Has No Endpoint to Fail Over"
+    Unlike RDS, DynamoDB has no per-customer host to connect to. Your application calls a **Regional service endpoint** such as `dynamodb.eu-west-1.amazonaws.com`, and a fleet of request routers determines which storage nodes hold the relevant partition. Failures of individual storage nodes are handled inside that fleet. This is the architectural reason DynamoDB's availability model is fundamentally stronger than a single-writer relational database's — there is no single point of failure to lose.
+
+#### Partition Splitting
+
+DynamoDB splits partitions automatically for two reasons:
+
+- **Size** — a partition holds up to approximately 10 GB of data. Exceeding this triggers a split.
+- **Throughput** — a partition can sustain approximately 3,000 RCU and 1,000 WCU. If provisioned throughput exceeds what current partitions can serve, DynamoDB splits.
+
+Splits are performed by dividing the partition's key-hash range in two and redistributing items. Splits happen in the background without downtime.
+
+!!! warning "Partitions Never Merge"
+    If you provision very high throughput temporarily — for example, 100,000 WCU for a bulk load — DynamoDB creates many partitions. When you reduce throughput afterwards, **those partitions remain**, and the reduced capacity is now divided among many more partitions. Each partition receives a smaller share, which can cause throttling on keys that were previously fine. This behaviour has been substantially mitigated by adaptive capacity in modern DynamoDB, but the underlying principle — that historical high provisioning shapes your partition layout — remains worth knowing and is a favourite examination topic.
+
+#### Adaptive Capacity
+
+Modern DynamoDB includes **adaptive capacity**, which addresses uneven access distribution in two ways:
+
+1. **Throughput reallocation** — DynamoDB shifts unused capacity from cold partitions to hot ones automatically, within seconds. This is now instantaneous rather than the slow reallocation of earlier generations.
+2. **Isolating frequently accessed items** — if a single item or a small set of items is extremely hot, DynamoDB can split the partition around them so the hot items get a dedicated partition.
+
+!!! danger "Adaptive Capacity Is a Safety Net, Not a Design Strategy"
+    Adaptive capacity mitigates moderate skew. It **cannot** rescue you from a genuinely pathological key design — for example, a partition key of `"ALL_ORDERS"` for every item, or a date-based partition key where all of today's traffic hits one value. A single partition still has a physical ceiling of roughly 3,000 RCU and 1,000 WCU. No amount of adaptive capacity exceeds a single partition's physical limits. **Design a high-cardinality partition key with an even access distribution. That is the requirement.**
+
+#### DynamoDB Streams
+
+DynamoDB Streams is an ordered, time-ordered change log of item-level modifications in a table, retained for 24 hours.
+
+```mermaid
+sequenceDiagram
+    participant APP as "Application"
+    participant DDB as "DynamoDB Table"
+    participant STR as "DynamoDB Stream"
+    participant L as "AWS Lambda"
+    participant SNS as "Amazon SNS"
+    APP->>DDB: "PutItem - new order"
+    DDB-->>APP: "200 OK"
+    DDB->>STR: "Append INSERT record to shard"
+    STR->>L: "Lambda poller invokes with batch"
+    L->>SNS: "Publish OrderCreated event"
+    L-->>STR: "Checkpoint successful batch"
+```
+
+Stream view types determine what each record contains:
+
+| View Type | Record Contains |
+|---|---|
+| `KEYS_ONLY` | Only the key attributes of the modified item |
+| `NEW_IMAGE` | The entire item as it appears after the modification |
+| `OLD_IMAGE` | The entire item as it appeared before the modification |
+| `NEW_AND_OLD_IMAGES` | Both before and after images |
+
+Ordering guarantee: **records for a given partition key are delivered in the exact order the modifications occurred**. There is no global ordering across different partition keys — this mirrors the partitioning model and is exactly the guarantee an event-driven system usually needs.
+
+!!! example "Streams as the Foundation of Event-Driven Architecture"
+    Streams make DynamoDB writes into events without any application-level publishing code. This directly implements the **transactional outbox** pattern: because the stream record is produced by the database itself, there is no possibility of the write succeeding but the event publication failing. Common uses include maintaining a materialised view, replicating to OpenSearch for full-text search, triggering notifications, updating aggregate counters, and auditing. This is a DSO303 module outcome — event-driven architecture with AWS service integration — expressed as a single configuration setting.
+
+#### DynamoDB Accelerator (DAX)
+
+DAX is a fully managed, write-through caching layer that sits in front of DynamoDB and is API-compatible with it, reducing read latency from single-digit milliseconds to **microseconds**. It runs as a cluster of nodes inside your VPC.
+
+DAX maintains two caches: an **item cache** for `GetItem` and `BatchGetItem` results, and a **query cache** for `Query` and `Scan` results. Writes go through DAX to DynamoDB, and DAX updates its item cache — but the query cache is invalidated by TTL rather than by write, so query results can be stale.
+
+!!! warning "DAX Is Only Consistent for Eventually Consistent Reads"
+    Strongly consistent reads bypass the DAX cache entirely and go directly to DynamoDB. If your workload requires strong consistency, DAX provides no benefit for those requests. Additionally, writes made directly to DynamoDB while bypassing DAX will not invalidate the DAX cache, producing stale reads. **All access must route through DAX** for it to be coherent.
+
+### Amazon ElastiCache Internal Working
+
+#### Memcached Architecture
+
+Memcached is deliberately simple: a set of independent nodes, each holding a distinct slice of the keyspace, with **no replication and no persistence**.
+
+```mermaid
+graph TD
+    A["Application with Memcached Client"] --> B["Client-Side Consistent Hashing"]
+    B --> C["Node 1 - Keys hashing to range 1"]
+    B --> D["Node 2 - Keys hashing to range 2"]
+    B --> E["Node 3 - Keys hashing to range 3"]
+    F["Configuration Endpoint - Auto Discovery"] -.->|"Provides node list"| A
+```
+
+Critically, **the partitioning logic lives in the client library**, not in the server. Each node is unaware of the others. ElastiCache provides **Auto Discovery** through a configuration endpoint so clients can learn the current node list without redeployment.
+
+The consequence: **if a node fails, the data on it is simply gone**, and clients rehash to the remaining nodes. This is acceptable only because Memcached is a pure cache — every miss can be satisfied from the origin.
+
+#### Redis Architecture — Replication Groups
+
+Redis in ElastiCache is organised into **replication groups**. A replication group contains one or more **shards** (called node groups); each shard has one primary node and up to five read replicas.
+
+**Cluster mode disabled** — a single shard:
+
+```mermaid
+graph TD
+    A["Application"] --> B["Primary Endpoint - Writes"]
+    A --> C["Reader Endpoint - Reads"]
+    B --> D["Primary Node in AZ-a"]
+    C --> E["Replica 1 in AZ-b"]
+    C --> F["Replica 2 in AZ-c"]
+    D -->|"Asynchronous Replication"| E
+    D -->|"Asynchronous Replication"| F
+```
+
+- The entire dataset lives on one primary and is fully replicated to each replica.
+- Scaling writes or dataset size requires a **larger node type** — vertical scaling only.
+- Simpler to operate; supports multi-key operations and transactions freely, because all keys are on one node.
+
+**Cluster mode enabled** — multiple shards:
+
+```mermaid
+graph TD
+    A["Application with Cluster-Aware Client"] --> B["Configuration Endpoint"]
+    B --> C["Shard 1 - Slots 0 to 5460"]
+    B --> D["Shard 2 - Slots 5461 to 10922"]
+    B --> E["Shard 3 - Slots 10923 to 16383"]
+    C --> C1["Primary"]
+    C --> C2["Replica"]
+    D --> D1["Primary"]
+    D --> D2["Replica"]
+    E --> E1["Primary"]
+    E --> E2["Replica"]
+```
+
+- The keyspace is divided into **16,384 hash slots**. Each key maps to a slot via `CRC16(key) mod 16384`, and each shard owns a contiguous range of slots.
+- Data and write throughput scale **horizontally** by adding shards.
+- Requires a cluster-aware client that understands `MOVED` and `ASK` redirections.
+- **Multi-key operations only work if all keys are in the same slot.** You force this with **hash tags**: keys written as `user:{4471}:profile` and `user:{4471}:cart` both hash only the portion inside the braces, so both land in the same slot and can participate in the same transaction.
+
+| Aspect | Cluster Mode Disabled | Cluster Mode Enabled |
+|---|---|---|
+| Shards | Exactly 1 | Up to 500 (a soft, adjustable quota) |
+| Scaling | Vertical only | Horizontal by adding shards |
+| Max dataset | Limited by one node's memory | Sum across all shards |
+| Multi-key operations | Unrestricted | Only within a hash slot |
+| Client requirement | Standard Redis client | Cluster-aware client |
+| Failure blast radius | Whole dataset | One shard |
+
+#### Redis Failover
+
+With **Multi-AZ with automatic failover** enabled, ElastiCache monitors the primary. On failure it promotes the replica with the least replication lag and updates the **primary endpoint DNS** to point at the new primary. Failover typically completes within tens of seconds.
+
+!!! danger "Redis Replication Is Asynchronous — Writes Can Be Lost"
+    Because replication to Redis replicas is asynchronous, a primary that fails immediately after acknowledging a write may lose that write if it had not yet reached a replica. **Never treat ElastiCache Redis as your system of record.** If you need durable, ACID-compliant in-memory storage, the correct service is **Amazon MemoryDB for Redis**, which writes to a distributed multi-AZ transaction log before acknowledging — trading a small amount of write latency for durability.
+
+#### Redis Persistence Options
+
+Redis in ElastiCache supports snapshots (RDB) written to S3, and append-only file (AOF) behaviour on some configurations. Snapshots are useful for seeding a new cluster or for recovering a warm cache after a planned change, but should not be relied upon as a primary durability mechanism.
+
+### The Networking Path Inside a VPC
+
+Understanding the actual network path is essential for debugging connectivity, which is the most common practical problem students encounter in labs.
+
+```mermaid
+graph TD
+    A["ECS Task or Lambda ENI in Private Subnet"] --> B{"Security Group Egress Rule"}
+    B -->|"Allow TCP 5432 to DB SG"| C["Subnet Route Table"]
+    C --> D{"Destination Type"}
+    D -->|"RDS or ElastiCache - VPC internal"| E["Local VPC Route"]
+    D -->|"DynamoDB - AWS service"| F["VPC Gateway Endpoint"]
+    E --> G{"Database Security Group Ingress"}
+    G -->|"Allow TCP 5432 from App SG"| H["RDS Instance ENI"]
+    G -->|"Deny"| I["Connection Timeout"]
+    F --> J["DynamoDB Regional Endpoint"]
+```
+
+Three checks resolve almost every connectivity failure:
+
+| Check | Question | Symptom If Wrong |
+|---|---|---|
+| Security group | Does the DB security group allow inbound on the engine port **from the application's security group**? | Connection times out (no response at all) |
+| Subnet and route | Is the DB in a subnet reachable from the application's subnet, and is there a route? | Connection times out |
+| DNS and credentials | Does the endpoint resolve, and are the credentials valid? | DNS failure or authentication error |
+
+!!! tip "Diagnosing a Timeout Versus a Refusal"
+    A **timeout** almost always means a network or security group problem — the packet never reached the database, or the reply never returned. A **connection refused** means the network path worked but nothing was listening on that port. An **authentication error** means the network path *and* the listener worked, and the problem is credentials or database-level permissions. Learning to read these three symptoms correctly will save you hours in every lab and every production incident.
+
+!!! note "Reference Security Groups, Not CIDR Blocks"
+    The professional pattern is to allow inbound traffic to the database security group *from the application's security group ID*, rather than from an IP range. This is self-maintaining: as tasks and instances are created and destroyed with changing IP addresses, the rule remains correct. Using CIDR blocks such as `10.0.0.0/16` grants access to everything in the VPC and is a real security weakness.
 
 ---
 
 ## Architecture Components
 
-A production storage architecture involves more than the storage service itself. The following components typically appear together, and an architect must be able to state the responsibility of each.
+A production data tier is never a database in isolation. The following components each carry a distinct responsibility.
 
-| Component | Responsibility in a storage architecture |
+### Network and Edge Components
+
+| Component | Responsibility in the Data Tier Context |
 |---|---|
-| Client — browser, mobile app, service | Originates read and write requests; may upload directly to S3 using presigned URLs to bypass the application tier |
-| Amazon Route 53 | Resolves service and bucket endpoints; resolves EFS mount target DNS to the zone-local IP |
-| Amazon CloudFront | Caches S3 objects at edge locations, reducing latency, origin load, and data transfer cost; enforces access through Origin Access Control |
-| Application Load Balancer | Distributes requests across a stateless application tier that has externalised its state into S3 or EFS; can log access records directly to S3 |
-| Amazon API Gateway | Fronts APIs that issue presigned URLs or proxy directly to S3 for small payloads |
-| Amazon VPC, subnets, route tables | Define the network path from compute to storage; carry the Gateway or Interface endpoint for S3 and the mount target ENIs for EFS |
-| Security groups | Stateful instance-level firewall; controls TCP 2049 to EFS mount targets; irrelevant to S3 unless an Interface endpoint is used |
-| Network ACLs | Stateless subnet-level firewall; must permit both request and ephemeral response ports for NFS |
-| Amazon EC2 | Attaches EBS volumes and instance store; mounts EFS; reads and writes S3 over the API |
-| Amazon ECS and Amazon EKS | Mount EFS as shared volumes and EBS as per-task or per-pod volumes through the CSI drivers |
-| AWS Lambda | Reads and writes S3 as an event source and a data store; can mount EFS through an access point for shared state or large dependencies |
-| AWS IAM | Authorises every storage API call; defines roles for instances, tasks, and functions |
-| AWS KMS | Provides and controls the customer-managed keys used to encrypt S3 objects, EBS volumes, EFS file systems, and snapshots |
-| Amazon S3 | Object store for artefacts, backups, data lake, static assets, and logs |
-| Amazon EBS | Block store for boot volumes, databases, and per-instance persistent state |
-| Amazon EFS | Shared file store for content, home directories, and shared container volumes |
-| Amazon CloudWatch | Collects storage metrics and logs; hosts alarms and dashboards |
-| AWS CloudTrail | Records management events always, and S3 or Lambda data events when explicitly enabled |
-| Amazon EventBridge and Amazon SNS and Amazon SQS | Carry S3 event notifications to downstream consumers, enabling event-driven processing |
-| AWS Backup | Centralises backup policy, retention, and cross-Region and cross-account copy for EBS, EFS, and other resources |
-| AWS CloudFormation and Terraform | Define storage resources declaratively so environments are reproducible and reviewable |
+| **Amazon Route 53** | Resolves service and database endpoint names; provides health-check-driven DNS failover for multi-Region designs |
+| **Amazon CloudFront** | Caches static and cacheable dynamic responses at the edge, removing load from the origin and therefore from the database |
+| **Application Load Balancer** | Distributes HTTP traffic to the compute tier; keeps the compute tier stateless so that database connections are managed per task, not per user |
+| **Amazon VPC** | Provides the isolated network in which RDS, Aurora and ElastiCache reside |
+| **Public subnets** | Host internet-facing components only — NAT gateways and load balancers. **Databases never belong here.** |
+| **Private subnets** | Host the compute tier and the database tier; have no direct route to an internet gateway |
+| **DB Subnet Group** | An RDS construct listing the subnets (in at least two AZs) in which RDS may place instances; a prerequisite for Multi-AZ |
+| **Cache Subnet Group** | The equivalent construct for ElastiCache |
+| **Security Groups** | Stateful virtual firewalls attached to ENIs; the primary access control at the network layer |
+| **Network ACLs** | Stateless subnet-level filters; a secondary, coarse defence-in-depth layer |
+| **VPC Gateway Endpoint** | Routes DynamoDB and S3 traffic over the AWS network without traversing a NAT gateway or the internet; no additional charge |
+| **VPC Interface Endpoint (PrivateLink)** | Provides private ENIs for services such as Secrets Manager and KMS; hourly and data-processing charges apply |
+
+### Compute Tier Components
+
+| Component | Data Tier Concern |
+|---|---|
+| **Amazon EC2** | Long-lived instances; can hold long-lived connection pools efficiently |
+| **Amazon ECS on Fargate** | Tasks are ephemeral; each task holds its own pool, so total connections scale with task count |
+| **Amazon EKS** | Same connection multiplication concern as ECS, amplified by pod autoscaling |
+| **AWS Lambda** | The most severe connection problem: each concurrent execution environment opens its own connection, and thousands of concurrent invocations can exhaust an RDS instance's connection limit |
+| **Amazon RDS Proxy** | Sits between the compute tier and RDS or Aurora, multiplexing many client connections onto a small pool of database connections; also handles failover transparently and integrates with Secrets Manager and IAM authentication |
+
+!!! danger "The Lambda and RDS Connection Problem — A Core DSO303 Concern"
+    A `db.t3.medium` PostgreSQL instance supports a few hundred connections. A Lambda function scaled to 1,000 concurrent executions, each opening one connection, will exhaust that limit and every subsequent invocation will fail with a connection error — including invocations from other, healthy services sharing the database. This is not a hypothetical: it is one of the most common serverless production incidents.
+
+    The remedies, in order of preference:
+
+    1. **Use RDS Proxy** — the purpose-built solution. It pools and multiplexes connections and holds them across Lambda invocations.
+    2. **Reuse the connection across invocations** by declaring the client outside the handler so it persists in the warm execution environment.
+    3. **Set reserved concurrency** on the function to cap the maximum number of connections it can create.
+    4. **Reconsider the data store** — DynamoDB uses stateless HTTPS requests and has no connection concept at all, which is precisely why it pairs naturally with Lambda.
+
+### Data Tier Components
+
+| Component | Responsibility |
+|---|---|
+| **RDS DB instance** | Runs the database engine; the unit of compute and memory sizing |
+| **RDS Multi-AZ standby** | Synchronous replica for failover; not readable in the single-standby model |
+| **RDS read replica** | Asynchronous readable copy for read scaling and reporting isolation |
+| **Aurora cluster** | The logical container comprising the shared storage volume plus its instances |
+| **Aurora writer instance** | The single instance accepting writes for a cluster (in the default single-master configuration) |
+| **Aurora reader instance** | Serves reads from the shared volume; a failover candidate |
+| **Aurora shared storage volume** | The distributed, six-way-replicated, auto-growing storage service |
+| **DynamoDB table** | The top-level container; scoped to a Region |
+| **DynamoDB partition** | The physical unit of storage and throughput |
+| **Global Secondary Index (GSI)** | An alternative-key index with its own partitions and its own capacity |
+| **Local Secondary Index (LSI)** | An alternative sort key sharing the base table's partition key and partitions |
+| **DynamoDB Streams** | The ordered change log enabling event-driven integration |
+| **DAX cluster** | In-VPC microsecond read cache in front of DynamoDB |
+| **ElastiCache node** | A single cache instance |
+| **ElastiCache shard / node group** | A primary plus its replicas, owning a slice of the keyspace |
+| **ElastiCache replication group** | The full set of shards forming a Redis deployment |
+
+### Supporting Services
+
+| Component | Responsibility |
+|---|---|
+| **AWS IAM** | Controls which principals may call which database APIs, and enables IAM database authentication |
+| **AWS KMS** | Manages the customer master keys used for encryption at rest |
+| **AWS Secrets Manager** | Stores database credentials and rotates them automatically using a Lambda rotation function |
+| **AWS Systems Manager Parameter Store** | A lower-cost alternative for non-rotating configuration values |
+| **Amazon S3** | Destination for RDS snapshots, Aurora continuous backup, DynamoDB exports, and Redis snapshots |
+| **Amazon CloudWatch** | Metrics, logs, alarms and dashboards for every service in the data tier |
+| **AWS CloudTrail** | Audit record of every control plane API call; optionally, DynamoDB data plane events |
+| **AWS X-Ray** | Distributed tracing, including database call subsegments, to locate latency |
+| **AWS Backup** | Centralised, policy-driven backup across RDS, Aurora, DynamoDB and other services |
+| **AWS Database Migration Service (DMS)** | Migrates data between engines and into AWS, with optional continuous replication |
+| **AWS Schema Conversion Tool (SCT)** | Converts schema and procedural code between heterogeneous engines |
+
+### A Complete Reference Architecture
 
 ```mermaid
 graph TD
-    U["User"] --> R53["Route 53"]
+    U["Users"] --> R53["Route 53"]
     R53 --> CF["CloudFront"]
-    CF --> S3["S3 Bucket with OAC"]
-    R53 --> ALB["Application Load Balancer"]
-    ALB --> ECS["ECS or EKS Service"]
-    ECS --> EFSV["EFS Shared Volume"]
-    ECS --> S3
-    ECS --> RDS["RDS on EBS"]
-    S3 --> EVB["EventBridge"]
-    EVB --> LMB["Lambda Processor"]
-    LMB --> S3
-    S3 --> CT["CloudTrail Data Events"]
-    ECS --> CW["CloudWatch Metrics and Logs"]
+    CF --> ALB["Application Load Balancer in Public Subnets"]
+    subgraph VPC["VPC"]
+        subgraph PUB["Public Subnets - AZ a and b"]
+            ALB
+            NAT["NAT Gateway"]
+        end
+        subgraph APPSUB["Private App Subnets - AZ a and b"]
+            ECS["ECS Fargate Tasks"]
+            PROXY["RDS Proxy"]
+        end
+        subgraph DATASUB["Private Data Subnets - AZ a, b and c"]
+            CACHE["ElastiCache Redis Replication Group"]
+            AUR["Aurora Cluster - Writer and Readers"]
+        end
+        GWEP["VPC Gateway Endpoint for DynamoDB"]
+        IFEP["Interface Endpoint for Secrets Manager"]
+    end
+    ALB --> ECS
+    ECS --> CACHE
+    ECS --> PROXY
+    PROXY --> AUR
+    ECS --> GWEP
+    GWEP --> DDB["DynamoDB Regional Endpoint"]
+    ECS --> IFEP
+    IFEP --> SM["Secrets Manager"]
+    DDB --> STR["DynamoDB Streams"]
+    STR --> LAM["Lambda Consumer"]
+    AUR --> S3["S3 - Backups"]
+    ECS --> CW["CloudWatch"]
+    AUR --> CW
+    CACHE --> CW
 ```
 
 ---
 
 ## Request Lifecycle
 
-Tracing a request end to end is the fastest way to build an accurate mental model of latency, failure points, and cost.
-
-### Lifecycle of an S3 GET request
-
-1. The client resolves the bucket endpoint through DNS. For virtual-hosted-style addressing, the name is `bucket-name.s3.region.amazonaws.com`.
-2. If the client is inside a VPC with a Gateway endpoint for S3, the route table directs the traffic to the endpoint and it never traverses the internet. Otherwise it exits through a NAT Gateway and Internet Gateway.
-3. TLS is negotiated with the S3 front-end fleet.
-4. The client presents an AWS Signature Version 4 signature derived from its credentials. S3 verifies the signature and identifies the principal.
-5. S3 evaluates authorisation as the union of the identity-based IAM policy, the bucket policy, any Service Control Policy, any VPC endpoint policy, Block Public Access settings, and — if enabled — object ownership and ACL rules. An explicit `Deny` anywhere wins.
-6. S3 consults the index partition owning that key range and locates the object's fragments.
-7. If the object is encrypted with SSE-KMS, S3 calls KMS to decrypt the data key. This adds latency and consumes a KMS request quota, which is why S3 Bucket Keys exist.
-8. S3 reads sufficient fragments, reconstructs the object, and streams the bytes back with a `200 OK` and an `ETag`.
-9. Metrics are emitted to CloudWatch; if data events are enabled, a record is written to CloudTrail.
+### Synchronous Read Path with Cache-Aside
 
 ```mermaid
 sequenceDiagram
-    participant App as "Application"
-    participant VPCE as "Gateway VPC Endpoint"
-    participant S3 as "S3 Front End"
-    participant IAM as "Authorization Engine"
-    participant KMS as "AWS KMS"
-    participant ST as "Storage Fleet"
-    App->>VPCE: "GET object over TLS"
-    VPCE->>S3: "Routed on the AWS network"
-    S3->>IAM: "Evaluate SigV4 and all policies"
-    IAM-->>S3: "Allow"
-    S3->>S3: "Resolve key in index partition"
-    S3->>KMS: "Decrypt data key if SSE-KMS"
-    KMS-->>S3: "Plaintext data key"
-    S3->>ST: "Read erasure-coded fragments"
-    ST-->>S3: "Fragments"
-    S3-->>App: "200 OK with object bytes"
+    participant C as "Client"
+    participant A as "Application"
+    participant R as "ElastiCache Redis"
+    participant D as "Aurora Writer or Reader"
+    C->>A: "GET /products/12345"
+    A->>R: "GET product:12345"
+    alt Cache Hit
+        R-->>A: "Serialized product JSON"
+        A-->>C: "200 OK - latency around 2 ms"
+    else Cache Miss
+        R-->>A: "nil"
+        A->>D: "SELECT * FROM products WHERE id = 12345"
+        D-->>A: "Row"
+        A->>R: "SETEX product:12345 300 payload"
+        A-->>C: "200 OK - latency around 12 ms"
+    end
 ```
 
-### Lifecycle of an EBS write
+Step by step:
 
-1. The application issues a `write` system call.
-2. The operating system's page cache may buffer the write. Durability is only guaranteed after `fsync` or when the write is issued with a barrier.
-3. The file system translates the file offset into logical block addresses and issues NVMe commands.
-4. The Nitro card for EBS receives the NVMe command, encrypts the payload in hardware if the volume is encrypted, and packages it for the EBS network fabric.
-5. The EBS server fleet writes the block to the primary replica and synchronously to at least one additional replica within the same Availability Zone.
-6. Once the required replicas acknowledge, the Nitro card signals completion to the guest.
-7. The application's `fsync` returns and the data is durable within that Availability Zone.
+1. The client's request reaches the compute tier through Route 53, CloudFront and the ALB.
+2. The application constructs a deterministic cache key. Key design matters: it must incorporate every parameter that changes the result, including tenant identity and locale, or you will serve one tenant's data to another.
+3. The application issues a `GET` to Redis. Network latency inside a VPC is on the order of hundreds of microseconds.
+4. On a hit, the value is deserialised and returned. The database is never consulted.
+5. On a miss, the application queries the database, writes the result into the cache with a TTL, and returns it.
+6. The TTL bounds staleness. A short TTL means fresher data and a lower hit ratio; a long TTL means the opposite. This is a business decision per data type, not a global setting.
+
+### Synchronous Write Path with Transaction
 
 ```mermaid
 sequenceDiagram
-    participant P as "Process"
-    participant OS as "Guest Kernel and File System"
-    participant N as "Nitro EBS Card"
-    participant E1 as "EBS Primary Replica"
-    participant E2 as "EBS Secondary Replica"
-    P->>OS: "write then fsync"
-    OS->>N: "NVMe write command"
-    N->>N: "Encrypt block in hardware"
-    N->>E1: "Write over EBS fabric"
-    E1->>E2: "Replicate within the AZ"
-    E2-->>E1: "Acknowledged"
-    E1-->>N: "Durable"
-    N-->>OS: "Completion"
-    OS-->>P: "fsync returns"
+    participant C as "Client"
+    participant A as "Application"
+    participant P as "RDS Proxy"
+    participant W as "Aurora Writer"
+    participant S as "Storage Quorum"
+    participant R as "ElastiCache"
+    C->>A: "POST /orders"
+    A->>P: "Acquire pooled connection"
+    P->>W: "BEGIN"
+    A->>W: "INSERT INTO orders"
+    A->>W: "UPDATE inventory SET qty = qty - 1 WHERE id = 55 AND qty > 0"
+    A->>W: "INSERT INTO payments"
+    A->>W: "COMMIT"
+    W->>S: "Write redo log records"
+    S-->>W: "Quorum of 4 of 6 acknowledged"
+    W-->>A: "Commit successful"
+    A->>R: "DEL product:55"
+    A-->>C: "201 Created"
 ```
 
-### Lifecycle of an EFS read
+Points worth noting:
 
-1. The client resolves the file system DNS name; Route 53 returns the mount target IP in the client's own Availability Zone.
-2. The NFS client establishes a TCP session on port 2049 to that mount target ENI. The mount target's security group must permit the traffic.
-3. If IAM authorisation or TLS is in use, the `efs-utils` helper establishes a stunnel-based encrypted channel and signs requests.
-4. The client issues NFS `LOOKUP` operations to walk the path, then `OPEN` and `READ`.
-5. The metadata service resolves the inode and permissions, applying any access point enforcement of root directory and POSIX identity.
-6. The data service returns the requested byte ranges, read from redundant copies across Availability Zones.
-7. The client caches attributes and data according to NFS close-to-open semantics.
+- The three statements form one atomic transaction. If the inventory update matches zero rows because stock ran out, the application rolls back and no order or payment record persists. This is atomicity doing real work.
+- The `qty > 0` predicate in the `UPDATE` is an **optimistic concurrency** technique: it prevents overselling without holding a lock across the whole request.
+- The commit is not acknowledged until the storage quorum confirms. **Durability is established before the client is told the order succeeded.**
+- The cache entry is **deleted rather than updated**. Deleting is safer than writing a new value, because two concurrent writers updating a cache entry can interleave and leave the cache permanently inconsistent with the database. Deleting forces the next reader to repopulate from the source of truth.
+
+### Asynchronous Event-Driven Path via DynamoDB Streams
 
 ```mermaid
 sequenceDiagram
-    participant C as "Container or EC2 Client"
-    participant DNS as "Route 53 Resolver"
-    participant MT as "Mount Target ENI in same AZ"
-    participant MD as "EFS Metadata Service"
-    participant DS as "EFS Data Service"
-    C->>DNS: "Resolve file system DNS name"
-    DNS-->>C: "Zone-local mount target IP"
-    C->>MT: "NFS session on TCP 2049"
-    MT->>MD: "LOOKUP path components"
-    MD-->>MT: "Inode and permissions"
-    MT->>DS: "READ byte range"
-    DS-->>MT: "Data from multi-AZ replicas"
-    MT-->>C: "File data"
+    participant A as "Order Service"
+    participant D as "DynamoDB Orders Table"
+    participant S as "DynamoDB Stream"
+    participant L as "Lambda Processor"
+    participant E as "EventBridge"
+    participant N as "Notification Service"
+    participant O as "OpenSearch"
+    A->>D: "PutItem order#9001"
+    D-->>A: "200 OK"
+    Note over A: "Client response returns here - the rest is asynchronous"
+    D->>S: "Append INSERT record"
+    L->>S: "Poll shard iterator"
+    S-->>L: "Batch of stream records"
+    L->>E: "PutEvents OrderCreated"
+    E->>N: "Rule match - send confirmation email"
+    L->>O: "Index order document for search"
+    L-->>S: "Checkpoint"
 ```
 
-### Synchronous versus asynchronous paths
+The essential architectural distinction:
 
-Storage participates in both communication styles, and mixing them up produces incorrect designs.
+| Property | Synchronous | Asynchronous |
+|---|---|---|
+| Client waits | Yes | No |
+| Failure visible to client | Immediately | Not at all — needs separate alerting |
+| Coupling | Tight — caller depends on callee availability | Loose — callee can be down temporarily |
+| Latency perceived by user | Sum of all steps | Only the first write |
+| Retry responsibility | Caller | Platform, with a dead letter queue |
+| Ordering | Natural | Guaranteed only per partition key |
 
-| Path | Style | Latency expectation | Design implication |
-|---|---|---|---|
-| `GetObject` and `PutObject` | Synchronous | Tens of milliseconds | Set timeouts and retries; never call on a tight loop without concurrency |
-| EBS block I/O | Synchronous | Sub-millisecond to low milliseconds | Provision IOPS to match the peak, not the average |
-| EFS NFS operations | Synchronous | Low milliseconds, higher for metadata | Avoid workloads dominated by small metadata operations |
-| S3 event notification to Lambda, SQS, SNS, or EventBridge | Asynchronous | Typically seconds, no ordering guarantee | Consumers must be idempotent and tolerate duplicates and reordering |
-| S3 lifecycle transitions | Asynchronous batch | Evaluated approximately daily | Do not depend on a transition happening at an exact hour |
-| S3 Cross-Region Replication | Asynchronous | Minutes; fifteen-minute SLA with Replication Time Control | Destination is not a consistent read replica |
-| EBS snapshot creation | Asynchronous after the point-in-time is captured | The point in time is immediate; the copy completes later | The volume can be used immediately after the API returns |
+!!! warning "Asynchronous Failures Are Silent"
+    When the Lambda stream processor fails, the user sees nothing wrong — their order was accepted. But the confirmation email never sends and the order never appears in search. You **must** configure a destination for failed records (an `OnFailure` destination or a dead letter queue), set `BisectBatchOnFunctionError` so one poison record does not block a whole batch, bound `MaximumRetryAttempts` and `MaximumRecordAgeInSeconds`, and alarm on `IteratorAge`. A rising `IteratorAge` means your consumer is falling behind, and since stream data expires after 24 hours, sustained lag results in permanent data loss.
 
-!!! warning "S3 event notifications are at-least-once"
-    S3 event notifications guarantee delivery at least once, not exactly once, and provide no ordering guarantee across keys. Any Lambda function or SQS consumer triggered by S3 must be idempotent — typically by making the output key deterministic from the input key, or by recording processed object versions in DynamoDB with a conditional write.
+### DynamoDB Request Lifecycle in Detail
+
+```mermaid
+graph TD
+    A["Application calls GetItem"] --> B["SDK signs request with SigV4 using IAM credentials"]
+    B --> C["HTTPS request to Regional endpoint"]
+    C --> D["Request Router fleet"]
+    D --> E["IAM authorization check including condition keys"]
+    E -->|"Denied"| F["AccessDeniedException"]
+    E -->|"Allowed"| G["Compute hash of partition key"]
+    G --> H["Locate owning partition"]
+    H --> I{"Consistency requested"}
+    I -->|"Strong"| J["Route to leader replica"]
+    I -->|"Eventual"| K["Route to any replica"]
+    J --> L["Read item"]
+    K --> L
+    L --> M["Meter consumed capacity"]
+    M --> N{"Capacity available"}
+    N -->|"No"| O["ProvisionedThroughputExceededException"]
+    N -->|"Yes"| P["Return item and ConsumedCapacity"]
+```
+
+Three details of practical importance:
+
+1. **Authorization happens per request**, using the IAM policy attached to the calling principal. Because IAM condition keys such as `dynamodb:LeadingKeys` can restrict access to items whose partition key matches the caller's identity, DynamoDB supports genuine row-level authorization without application code.
+2. **Throttling is a normal, expected condition**, not necessarily a bug. The AWS SDKs retry `ProvisionedThroughputExceededException` automatically with exponential backoff. Your responsibility is to monitor `ThrottledRequests` and decide whether the correct response is more capacity, a better key design, or accepting the backoff.
+3. **Every response carries `ConsumedCapacity`** if you request it. This is the single most useful diagnostic in DynamoDB, because it tells you the true cost of a query — frequently revealing that a `Query` is reading far more data than it returns because a filter expression is applied *after* the read.
+
+!!! danger "Filter Expressions Do Not Reduce Cost"
+    A `FilterExpression` is applied **after** items are read from storage and **after** capacity is consumed. Filtering 10,000 items down to 3 costs the RCUs for all 10,000. Filters reduce network transfer and application-side work, nothing more. If you find yourself relying on filters for selectivity, your key or index design is wrong.
 
 ---
 
 ## AWS Service Deep Dive
 
-### Amazon S3 Deep Dive
+### Amazon RDS and Amazon Aurora
 
 #### Purpose
 
-S3 exists to store an unbounded number of immutable objects with extreme durability, accessible over HTTP from anywhere with appropriate credentials, at a cost per gigabyte low enough to make retaining data cheaper than deciding whether to delete it. It is the default destination for backups, logs, media, data lakes, static websites, build artefacts, and machine learning training sets.
+To provide a managed relational database that preserves full SQL compatibility, ACID transactions, referential integrity and the mature tooling ecosystem of established engines, while removing the operational burden of running them.
+
+#### Supported Engines
+
+| Engine | Notes |
+|---|---|
+| **Amazon Aurora (MySQL-compatible)** | Cloud-native, wire-compatible with MySQL |
+| **Amazon Aurora (PostgreSQL-compatible)** | Cloud-native, wire-compatible with PostgreSQL |
+| **MySQL** | Community MySQL |
+| **PostgreSQL** | Community PostgreSQL, with a wide extension catalogue |
+| **MariaDB** | MySQL fork |
+| **Oracle** | Bring Your Own Licence or Licence Included |
+| **Microsoft SQL Server** | Multiple editions; Licence Included or BYOL under specific terms |
+| **IBM Db2** | Available in RDS with BYOL |
+
+!!! tip "Choosing an Engine"
+    For a greenfield cloud-native application with no licence constraints, **Aurora PostgreSQL** is the strong default: PostgreSQL's extension ecosystem (including `pgvector` for embeddings, `PostGIS` for geospatial and `pg_stat_statements` for query analysis) combined with Aurora's storage architecture is difficult to beat. Choose Oracle or SQL Server only when an existing application genuinely requires them; the licence cost frequently exceeds the infrastructure cost.
 
 #### Architecture
 
-S3 is a Regional service composed of a horizontally scaled front-end fleet, a strongly consistent partitioned index, and a storage fleet that holds erasure-coded fragments across at least three Availability Zones. Buckets are containers with Regional affinity; objects are addressed by key within a bucket. There is no server for you to size, no capacity to provision, and no maintenance window.
+Standard RDS: an EC2-based instance with EBS storage, optionally with a synchronous standby and asynchronous read replicas.
 
-Two bucket types now exist. **General purpose buckets** are the standard, multi-AZ, globally named buckets used for nearly all workloads. **Directory buckets** support the S3 Express One Zone storage class, use a hierarchical namespace optimised for single-digit-millisecond latency, and reside in a single Availability Zone chosen by the customer.
+Aurora: a fleet of compute instances sharing a distributed, log-structured, six-way-replicated storage service, as described in *Internal Working*.
 
-#### Important features
+#### Important Features
 
-- **Versioning** preserves every version of every object and inserts delete markers instead of destroying data.
-- **Object Lock** provides write-once-read-many retention in Governance mode, which privileged users can override, and Compliance mode, which nobody including the root user can override until the retention period expires.
-- **Lifecycle policies** transition objects between storage classes and expire them, including expiring noncurrent versions and aborting incomplete multipart uploads.
-- **Replication**, both Cross-Region and Same-Region, copies objects asynchronously to another bucket, optionally in another account, with optional Replication Time Control.
-- **Event notifications** to Lambda, SQS, SNS, and EventBridge make S3 an event source for event-driven architectures.
-- **Multipart upload** enables parallel, resumable uploads of large objects.
-- **Presigned URLs** delegate a single operation to an anonymous holder for a bounded time.
-- **S3 Select** and **Athena** allow SQL-style querying of object contents without moving the data.
-- **Requester Pays** shifts request and transfer charges to the caller.
-- **Transfer Acceleration** routes uploads through CloudFront edge locations for geographically distant clients.
-- **Storage Lens** provides organisation-wide analytics on usage and activity.
-- **Access Points** and **Object Lambda Access Points** provide per-application entry points and on-the-fly transformation of retrieved objects.
-- **Mountpoint for Amazon S3** presents a bucket as a file system for read-heavy analytics, without providing full POSIX semantics.
+| Feature | Available In | Description |
+|---|---|---|
+| Multi-AZ deployment | RDS and Aurora | Automatic failover to another AZ |
+| Read replicas | RDS and Aurora | Up to 15 Aurora Replicas; RDS engine limits are lower (commonly 5 or 15 depending on engine) |
+| Automated backups with PITR | Both | Retention configurable from 1 to 35 days |
+| Manual snapshots | Both | Retained until explicitly deleted; copyable across Regions and accounts |
+| Encryption at rest with KMS | Both | Must be enabled at creation for RDS; cannot be added in place |
+| IAM database authentication | Both (MySQL and PostgreSQL) | Short-lived token instead of a password |
+| Performance Insights | Both | Database load visualised by wait event and by SQL statement |
+| Enhanced Monitoring | Both | OS-level metrics at up to 1-second granularity |
+| RDS Proxy | Both | Connection pooling and multiplexing |
+| Blue/Green Deployments | RDS and Aurora (MySQL and PostgreSQL) | A synchronised staging environment for low-risk upgrades and schema changes |
+| Aurora Serverless v2 | Aurora only | Fine-grained automatic capacity scaling |
+| Aurora Global Database | Aurora only | Cross-Region replication with sub-second typical lag |
+| Aurora Backtrack | Aurora MySQL only | Rewind the cluster in place to a prior point without a restore |
+| Aurora fast database cloning | Aurora only | Copy-on-write clone created in minutes regardless of size |
+| Zero-ETL integration with Redshift | Aurora | Near-real-time analytics without building a pipeline |
+| Aurora I/O-Optimized | Aurora | A pricing configuration that removes per-I/O charges in exchange for higher instance and storage rates |
 
-#### Storage classes
+!!! tip "Aurora Fast Cloning Is Underused and Extremely Valuable"
+    An Aurora clone shares the source's storage using copy-on-write, so creating a full-size copy of a 10 TB production database takes minutes and initially costs almost nothing in storage — you pay only for the pages that subsequently diverge. This makes it practical to test a destructive schema migration against a genuine copy of production data before running it for real. In a CI/CD context, this is the correct way to validate migrations, and it directly addresses the DSO303 outcome on CI/CD and database change management.
 
-| Storage class | Designed for | Minimum storage duration | Minimum billable object size | Retrieval fee | Availability Zones | First-byte latency |
-|---|---|---|---|---|---|---|
-| S3 Standard | Frequently accessed, general purpose | None | None | None | Three or more | Milliseconds |
-| S3 Intelligent-Tiering | Unknown or changing access patterns | None | 128 KiB for auto-tiering eligibility | None; small monitoring fee per object | Three or more | Milliseconds |
-| S3 Standard-IA | Infrequent access, rapid retrieval needed | 30 days | 128 KiB | Per GiB retrieved | Three or more | Milliseconds |
-| S3 One Zone-IA | Infrequent access, recreatable data | 30 days | 128 KiB | Per GiB retrieved | One | Milliseconds |
-| S3 Glacier Instant Retrieval | Archive needing millisecond access | 90 days | 128 KiB | Per GiB retrieved, higher than IA | Three or more | Milliseconds |
-| S3 Glacier Flexible Retrieval | Archive, minutes to hours acceptable | 90 days | 40 KiB | Per GiB and per request, varies by retrieval tier | Three or more | Expedited in one to five minutes, Standard in three to five hours, Bulk in five to twelve hours |
-| S3 Glacier Deep Archive | Long-term retention, rarely accessed | 180 days | 40 KiB | Per GiB retrieved | Three or more | Standard in around twelve hours, Bulk in up to forty-eight hours |
-| S3 Express One Zone | Latency-sensitive, very high request rate | One hour | 512 KiB | None, but higher request charges | One, in a directory bucket | Single-digit milliseconds |
+#### Limitations
 
-!!! danger "Minimum duration charges are a real budget trap"
-    An object stored in Standard-IA and deleted after five days is billed for thirty days. An object in Glacier Deep Archive deleted after a week is billed for one hundred and eighty days. Lifecycle rules that transition short-lived data to colder classes can therefore *increase* cost substantially. Always compare the expected object lifetime against the minimum storage duration before writing a transition rule.
+| Limitation | Consequence |
+|---|---|
+| Single writer (standard configuration) | Write throughput ultimately bounded by one instance |
+| No OS access | Cannot install arbitrary agents or modify the OS |
+| Restricted superuser | Some engine features requiring true superuser are unavailable |
+| Encryption cannot be enabled in place | Requires snapshot, encrypted copy, restore |
+| Major version upgrades require care | Potential downtime and application incompatibility |
+| Aurora is not available on all engines | Only MySQL and PostgreSQL compatibility |
+| Storage cannot be reduced | RDS storage can be increased but never decreased |
+| Cross-Region read replica lag | Subject to inter-Region network latency |
 
-#### Storage class decision flow
+#### Pricing Model
+
+Charges accrue along these dimensions. Always verify current rates on the AWS pricing pages, as they vary by Region and change over time.
+
+| Dimension | Description |
+|---|---|
+| Instance hours | Per second, with a 10-minute minimum, by instance class |
+| Storage | Per GB-month provisioned (RDS) or consumed (Aurora) |
+| Provisioned IOPS | Charged separately for `io1` and `io2` volume types |
+| I/O requests | Aurora Standard charges per million requests; Aurora I/O-Optimized does not |
+| Backup storage | Free up to the size of the database; charged beyond that |
+| Snapshot export to S3 | Per GB exported |
+| Data transfer | Cross-AZ and cross-Region transfer charges apply |
+| RDS Proxy | Per vCPU-hour of the underlying database instance |
+| Aurora Serverless v2 | Per ACU-hour |
+| Backtrack | Per million change records stored |
+| Licence | Included in the hourly rate for Licence Included Oracle and SQL Server |
+
+!!! warning "Aurora I/O Charges Surprise People"
+    With Aurora Standard, every read that misses the buffer pool and every write to storage is a billable I/O. A poorly indexed, scan-heavy workload can accumulate an I/O bill exceeding the instance cost. **Aurora I/O-Optimized** eliminates per-I/O charges for a higher instance and storage rate; AWS guidance is that it becomes economical when I/O exceeds roughly 25 percent of your total Aurora spend. Check the `VolumeReadIOPs` and `VolumeWriteIOPs` metrics and compute the crossover for your workload.
+
+#### Performance Characteristics
+
+| Metric | Typical Behaviour |
+|---|---|
+| Point read latency | Sub-millisecond from buffer pool; low single-digit milliseconds from storage |
+| Commit latency (single-AZ) | Around 1 ms |
+| Commit latency (Multi-AZ) | Around 2 to 5 ms due to the cross-AZ round trip |
+| Aurora commit latency | Low, because only redo log records are written and only a 4-of-6 quorum is required |
+| Aurora replica lag | Typically tens of milliseconds |
+| RDS read replica lag | Milliseconds to seconds, workload-dependent |
+| Throughput claim | AWS states Aurora MySQL can deliver up to roughly five times standard MySQL throughput and Aurora PostgreSQL up to roughly three times standard PostgreSQL, on equivalent hardware — treat these as vendor benchmark figures, not guarantees for your workload |
+
+#### Scaling Behaviour
+
+| Axis | RDS | Aurora |
+|---|---|---|
+| Compute vertical | Modify instance class; brief downtime or failover | Same, plus Serverless v2 in-place scaling |
+| Storage | Increase manually, or enable storage autoscaling; cannot decrease | Automatic in 10 GiB increments; no action required |
+| Read horizontal | Add read replicas | Add Aurora Replicas, up to 15 |
+| Write horizontal | Not supported natively — requires application-level sharding | Aurora Limitless Database addresses this for supported configurations; otherwise the same constraint applies |
+| Cross-Region | Cross-Region read replica | Aurora Global Database |
+
+#### Availability and Durability
+
+| Configuration | Availability Characteristics | Durability Characteristics |
+|---|---|---|
+| Single-AZ RDS | No automatic failover; an AZ failure is an outage | EBS-backed, plus automated backups to S3 |
+| Multi-AZ RDS instance | Automatic failover, typically 60–120 seconds | Synchronous standby means near-zero RPO for AZ failure |
+| Multi-AZ DB cluster | Faster failover, plus two readable standbys | Semi-synchronous commit |
+| Aurora | Survives an AZ loss without failover of storage; instance failover typically under 30 seconds | Six copies across three AZs; continuous backup to S3 |
+| Aurora Global Database | Regional failure survivable; promotion in minutes | Typical cross-Region RPO under one second |
+
+#### Security Features
+
+IAM for control plane authorization; IAM database authentication for the data plane; KMS encryption at rest including automated backups, snapshots and replicas; TLS in transit with certificate verification; security groups; private subnet placement; Secrets Manager integration with automatic rotation; database activity streams for Aurora providing a near-real-time audit stream; and engine-native audit logging exported to CloudWatch Logs.
+
+#### Service Limits
+
+Most RDS limits are **soft quotas** adjustable through AWS Support, and several vary by Region and engine version. Verify current values in the Service Quotas console rather than memorising them.
+
+| Limit | Typical Default | Adjustable |
+|---|---|---|
+| DB instances per Region | 40 | Yes |
+| Manual snapshots per Region | 100 | Yes |
+| Read replicas per source (engine-dependent) | 5 or 15 | Sometimes |
+| Aurora Replicas per cluster | 15 | No |
+| Aurora cluster storage maximum | 128 TiB for recent engine versions | No |
+| Backup retention | 1 to 35 days | No — use manual snapshots or AWS Backup for longer |
+| Maximum database connections | Determined by a formula based on instance memory | Configurable via parameter group |
+| Security groups per DB instance | Small, engine-independent limit | Yes |
+
+#### Common Configurations
+
+| Scenario | Recommended Configuration |
+|---|---|
+| Production OLTP | Aurora PostgreSQL, Multi-AZ with at least one reader, encryption on, 14–35 day backup retention, RDS Proxy, Performance Insights enabled |
+| Development and test | Aurora Serverless v2 with a low minimum ACU, or a small single-AZ RDS instance, 1-day backups |
+| Read-heavy public content | Aurora with several readers behind the reader endpoint, plus ElastiCache in front |
+| Reporting isolation | A dedicated read replica or a custom endpoint targeting reporting-sized readers |
+| Regulated multi-Region | Aurora Global Database with a customer-managed KMS key in each Region |
+| Legacy commercial engine | RDS for Oracle or SQL Server, Multi-AZ, with licence model chosen deliberately |
+
+### Amazon DynamoDB
+
+#### Purpose
+
+To provide a fully managed, serverless, horizontally scalable key-value and document database delivering consistent single-digit millisecond latency at any scale, with no servers to manage, no connection management, and no capacity ceiling that requires re-architecture.
+
+#### Architecture
+
+A Regional service composed of a request routing fleet, a metadata service, and a storage fleet organised into partitions, each replicated across three Availability Zones with Paxos-based leader election, as described in *Internal Working*. There is no instance, no endpoint to fail over, and no VPC placement.
+
+#### The Data Model
+
+| Concept | Definition |
+|---|---|
+| **Table** | A collection of items. Regional. No fixed schema beyond the primary key. |
+| **Item** | A single record, analogous to a row. Maximum size **400 KB** including attribute names. |
+| **Attribute** | A name-value pair, analogous to a column. Items in the same table need not have the same attributes. |
+| **Primary key** | Either a **simple** key (partition key only) or a **composite** key (partition key plus sort key) |
+| **Partition key (HASH)** | Determines the physical partition. Required. |
+| **Sort key (RANGE)** | Orders items within a partition key. Optional. Enables range queries. |
+| **Item collection** | All items sharing the same partition key value |
+
+Supported attribute types: `S` (string), `N` (number), `B` (binary), `BOOL`, `NULL`, `L` (list), `M` (map), `SS`/`NS`/`BS` (sets). Only scalar types (`S`, `N`, `B`) may be used as key attributes.
+
+!!! warning "The 400 KB Item Limit Shapes Your Design"
+    An item cannot exceed 400 KB. This rules out storing images, documents or large blobs in DynamoDB. The correct pattern is to store the object in **S3** and keep the S3 key, size, content type and metadata in DynamoDB. It also constrains unbounded lists: an item containing a growing list of comments will eventually hit the limit and start failing writes. Model one-to-many relationships as **multiple items in an item collection**, not as a nested list inside one item.
+
+#### Partition Key Design — The Central Skill
+
+A good partition key has two properties:
+
+1. **High cardinality** — many distinct values, so data spreads across many partitions.
+2. **Uniform access distribution** — no single value receives disproportionate traffic.
+
+| Candidate Partition Key | Cardinality | Distribution | Verdict |
+|---|---|---|---|
+| `user_id` for a per-user workload | Very high | Even, assuming no dominant user | Excellent |
+| `order_id` (UUID) | Very high | Even | Excellent |
+| `device_id` for IoT telemetry | High | Even | Good |
+| `status` with values PENDING, SHIPPED, DELIVERED | 3 | Extremely skewed | Unusable |
+| `order_date` for daily ingest | High overall | All of today's traffic hits one value | Poor for writes |
+| `country` for a national app | Low, and heavily skewed | One country dominates | Poor |
+| `tenant_id` in multi-tenant SaaS | Medium | Skewed if one tenant is very large | Requires care |
+
+##### Write Sharding for Unavoidably Hot Keys
+
+When the natural key is inherently hot — for example, all events for the current day — you distribute writes artificially by appending a shard suffix.
+
+```
+Natural key:  2026-08-10                     -> one partition, throttled
+Sharded key:  2026-08-10#0 ... 2026-08-10#9  -> ten partitions, ten times the throughput
+```
+
+On write, choose the suffix by a random number or by a deterministic hash of another attribute. On read, issue ten parallel `Query` calls (a scatter-gather) and merge the results.
+
+| Suffix Strategy | Write Behaviour | Read Behaviour |
+|---|---|---|
+| Random suffix | Perfectly even | Must query all shards for a complete result |
+| Calculated suffix, for example `hash(order_id) mod 10` | Even | Can target the exact shard when you know `order_id` |
+
+!!! tip "The Trade-off Is Explicit"
+    Write sharding trades read simplicity for write throughput. Use a **calculated** suffix when you will frequently look up individual items, because it lets you compute the exact shard. Use a **random** suffix when reads are always full-collection scans anyway. The number of shards should reflect your required throughput divided by roughly 1,000 WCU per partition, with headroom.
+
+##### Sort Key Design and Composite Sort Keys
+
+The sort key is the mechanism for expressing hierarchy and enabling range queries. A composite sort key encodes multiple dimensions in one string, ordered from most to least significant.
+
+```
+PK: USER#4471
+SK: ORDER#2026-08-10#9001
+SK: ORDER#2026-08-11#9014
+SK: ADDRESS#HOME
+SK: ADDRESS#WORK
+```
+
+With this design, a single `Query` on `PK = USER#4471 AND begins_with(SK, "ORDER#2026-08")` retrieves every order placed by that user in August 2026, sorted chronologically, in one request. This is the essence of DynamoDB modelling: **the key structure encodes the query**.
+
+!!! danger "Model the Access Patterns Before the Data"
+    Relational design begins with entities and normalisation, and queries come later because SQL can express anything. DynamoDB design begins with an exhaustive written list of access patterns, and the key schema is derived from that list. If you design a DynamoDB table without first enumerating every query your application will make, you will get it wrong, and correcting it after production data exists requires a data migration. **Access patterns first. Always.**
+
+#### Single-Table Design
+
+Single-table design places multiple entity types in one table, using generic key attribute names (`PK`, `SK`) and a type discriminator, so that related entities of different types share a partition and can be retrieved together in one request.
+
+```mermaid
+erDiagram
+    CUSTOMER ||--o{ ORDER : "places"
+    ORDER ||--o{ ORDER_ITEM : "contains"
+    PRODUCT ||--o{ ORDER_ITEM : "referenced by"
+    CUSTOMER {
+        string partition_key "CUST#4471"
+        string sort_key "PROFILE"
+        string email
+        string name
+    }
+    ORDER {
+        string partition_key "CUST#4471"
+        string sort_key "ORDER#9001"
+        string status
+        number total
+    }
+    ORDER_ITEM {
+        string partition_key "ORDER#9001"
+        string sort_key "ITEM#SKU-55"
+        number quantity
+        number unit_price
+    }
+    PRODUCT {
+        string partition_key "PROD#SKU-55"
+        string sort_key "METADATA"
+        string title
+        number price
+    }
+```
+
+An example table layout:
+
+| PK | SK | entity_type | Other Attributes |
+|---|---|---|---|
+| `CUST#4471` | `PROFILE` | Customer | `email`, `name`, `created_at` |
+| `CUST#4471` | `ORDER#2026-08-10#9001` | Order | `status`, `total`, `GSI1PK=STATUS#PENDING` |
+| `CUST#4471` | `ORDER#2026-08-11#9014` | Order | `status`, `total` |
+| `CUST#4471` | `ADDRESS#HOME` | Address | `line1`, `city`, `postcode` |
+| `ORDER#9001` | `ITEM#SKU-55` | OrderItem | `qty`, `unit_price` |
+| `ORDER#9001` | `ITEM#SKU-72` | OrderItem | `qty`, `unit_price` |
+| `PROD#SKU-55` | `METADATA` | Product | `title`, `price`, `stock` |
+
+| Access Pattern | Implementation |
+|---|---|
+| Get a customer's profile | `GetItem PK=CUST#4471, SK=PROFILE` |
+| Get a customer's profile and all orders and addresses in one call | `Query PK=CUST#4471` |
+| Get a customer's August 2026 orders | `Query PK=CUST#4471 AND begins_with(SK,"ORDER#2026-08")` |
+| Get all line items for an order | `Query PK=ORDER#9001 AND begins_with(SK,"ITEM#")` |
+| Get all pending orders across customers | `Query` on GSI1 where `GSI1PK=STATUS#PENDING` |
+| Get product details | `GetItem PK=PROD#SKU-55, SK=METADATA` |
+
+| Aspect | Single-Table | Multi-Table |
+|---|---|---|
+| Requests per page render | Often one | One per entity type |
+| Latency | Lower | Higher, and variable |
+| Cost | Lower — fewer requests | Higher |
+| Readability of data | Poor — the table looks opaque | Good |
+| Onboarding difficulty | High | Low |
+| Adding a new access pattern | May require a new GSI or a migration | Easier |
+| Per-entity capacity and monitoring | Not separable | Separable |
+
+!!! note "A Balanced Professional View"
+    Single-table design is the canonical DynamoDB pattern and is genuinely optimal for latency and cost in high-scale systems with well-understood access patterns. It is also difficult to reason about, hard to hand over, and unforgiving of requirement changes. For a microservice owning a small number of tightly related entities with stable access patterns, single-table design is correct. For an exploratory application whose requirements are still moving, a small number of purpose-specific tables is a defensible and pragmatic choice. State the trade-off explicitly in a design review rather than asserting a dogma.
+
+#### Secondary Indexes — LSI Versus GSI
+
+| Property | Local Secondary Index (LSI) | Global Secondary Index (GSI) |
+|---|---|---|
+| Partition key | **Must** be the same as the base table's | **Any** attribute |
+| Sort key | A different attribute | Any attribute, optional |
+| When it can be created | **Only at table creation** | Any time, and deletable any time |
+| Maximum per table | 5 | 20 by default (a soft quota) |
+| Consistency | Supports **strongly consistent** reads | **Eventually consistent only** |
+| Capacity | Shares the base table's throughput | Has its **own** provisioned throughput |
+| Storage location | Same partitions as the base table | Separate partitions |
+| Constraint imposed | Item collection (all items with one partition key, across table and LSIs) limited to **10 GB** | None |
+| Key uniqueness required | No | No |
 
 ```mermaid
 graph TD
-    A["New object"] --> B{"Access pattern known"}
-    B -->|"No"| C["S3 Intelligent-Tiering"]
-    B -->|"Yes"| D{"Accessed frequently"}
-    D -->|"Yes"| E{"Needs single-digit ms and very high request rate"}
-    E -->|"Yes"| F["S3 Express One Zone"]
-    E -->|"No"| G["S3 Standard"]
-    D -->|"No"| H{"Must be retrievable in milliseconds"}
-    H -->|"Yes"| I{"Is the data recreatable"}
-    I -->|"Yes"| J["S3 One Zone-IA"]
-    I -->|"No"| K["S3 Standard-IA or Glacier Instant Retrieval"]
-    H -->|"No"| L{"Acceptable retrieval delay"}
-    L -->|"Minutes to hours"| M["Glacier Flexible Retrieval"]
-    L -->|"Twelve hours or more"| N["Glacier Deep Archive"]
+    A["Base Table - PK = user_id, SK = order_date"] --> B["LSI - PK = user_id, SK = order_total"]
+    A --> C["GSI1 - PK = status, SK = order_date"]
+    A --> D["GSI2 - PK = product_id, SK = order_date"]
+    A -.->|"Same partitions, shared capacity"| B
+    A -.->|"Separate partitions, own capacity, async replication"| C
+    A -.->|"Separate partitions, own capacity, async replication"| D
 ```
 
-#### The life of an object under versioning and lifecycle rules
+!!! danger "The Two Most Dangerous GSI Behaviours"
+    **First: a throttled GSI can throttle your base table.** GSI updates are applied asynchronously, but if a GSI's write capacity is insufficient, the backlog eventually causes writes to the *base table* to be throttled, because DynamoDB will not allow the index to fall arbitrarily far behind. Always provision GSI write capacity at least as generously as the base table's for attributes that change on every write.
 
-The following state machine shows why versioning without lifecycle expiry causes unbounded cost growth, and why a delete in a versioned bucket is recoverable.
+    **Second: a GSI with a low-cardinality partition key is a hot partition you built on purpose.** A GSI on `status` with three possible values creates three partitions receiving all traffic. If you need to query by status, use a **sparse index** — only write the GSI key attribute for items in the state you care about (for example, only set `GSI1PK` while an order is `PENDING`, and remove the attribute when it ships). The index then contains only the active working set, which is both small and cheap.
 
-```mermaid
-stateDiagram-v2
-    [*] --> CurrentStandard : "PUT object"
-    CurrentStandard --> NoncurrentVersion : "PUT same key again"
-    NoncurrentVersion --> CurrentStandard : "Restore an older version"
-    CurrentStandard --> CurrentInfrequentAccess : "Lifecycle transition after 30 days"
-    CurrentInfrequentAccess --> CurrentGlacier : "Lifecycle transition after 90 days"
-    CurrentStandard --> DeleteMarkerCurrent : "DELETE without version id"
-    DeleteMarkerCurrent --> CurrentStandard : "Remove the delete marker"
-    NoncurrentVersion --> PermanentlyDeleted : "NoncurrentVersionExpiration"
-    CurrentGlacier --> PermanentlyDeleted : "Expiration rule"
-    PermanentlyDeleted --> [*]
-```
+!!! tip "Sparse Indexes Are One of the Most Elegant DynamoDB Techniques"
+    An item appears in a GSI **only if it has the GSI's key attributes**. Deliberately omitting those attributes gives you an index containing only the subset of items you need — a work queue of unprocessed records, for instance. The index stays small no matter how large the table grows, so scanning it is cheap and predictable. Use this instead of scanning the table with a filter.
 
-!!! danger "The delete that is not a delete"
-    In a versioned bucket, a `DELETE` without a version identifier does not remove data; it inserts a delete marker and hides the object. The prior versions remain and continue to be billed. To actually free storage you must delete specific version identifiers, which is exactly what a `NoncurrentVersionExpiration` lifecycle rule automates. This mechanism is simultaneously the strongest protection against accidental deletion and the most common cause of unexplained storage growth.
+##### Index Projections
+
+| Projection Type | Attributes Copied Into the Index | Trade-off |
+|---|---|---|
+| `KEYS_ONLY` | Table and index keys only | Smallest and cheapest; usually requires a second read to fetch the full item |
+| `INCLUDE` | Keys plus a specified list | Balanced; the usual correct choice |
+| `ALL` | Every attribute | Fastest reads, highest storage and write cost |
+
+A read from an index that must then fetch the full item from the base table is a **fetch**, and it consumes additional capacity. Choose `INCLUDE` with exactly the attributes your query needs to avoid fetches without paying for `ALL`.
+
+#### Capacity Modes
+
+| Aspect | Provisioned | On-Demand |
+|---|---|---|
+| You specify | RCU and WCU per second | Nothing |
+| Billing | Per provisioned capacity-hour | Per request |
+| Cost per request | Lower at steady, high utilisation | Higher per request |
+| Cost at low or spiky use | Higher — you pay for idle | Lower |
+| Auto scaling | Available, target-utilisation based | Inherent |
+| Instant scale-up | No — auto scaling reacts over minutes | Yes, up to double the previous peak instantly |
+| Throttling risk | Yes, if under-provisioned or during a scaling lag | Much lower, but not zero for extreme, sudden spikes |
+| Best for | Predictable, sustained traffic | New applications, spiky, unpredictable, or development |
+
+!!! tip "The Standard Practical Approach"
+    Launch a new table in **on-demand** mode. You do not know the traffic pattern yet, and on-demand removes the risk of throttling during launch. After a few weeks, examine the `ConsumedReadCapacityUnits` and `ConsumedWriteCapacityUnits` metrics. If utilisation is steady and high, switch to provisioned with auto scaling and consider a **reserved capacity** commitment — the saving can be substantial. If traffic is spiky, remain on demand. You may switch modes, subject to a cooldown period between switches.
+
+!!! info "On-Demand Scaling Headroom"
+    On-demand tables instantly accommodate up to double the previous observed peak. Beyond that, DynamoDB scales further but may throttle briefly while it does. If you know a very large spike is coming — a ticket sale opening, a marketing campaign — you can either **pre-warm** by driving controlled traffic in advance, or set a **maximum throughput** limit on the on-demand table to bound runaway cost. Do not assume on-demand is infinitely elastic at zero notice.
+
+#### Read Consistency Options
+
+| Option | Behaviour | Cost |
+|---|---|---|
+| **Eventually consistent read** | Served from any replica; may not reflect a very recent write | **0.5 RCU** per 4 KB |
+| **Strongly consistent read** | Served from the leader; always reflects all prior successful writes | **1 RCU** per 4 KB |
+| **Transactional read** | Part of a `TransactGetItems` serializable snapshot | **2 RCU** per 4 KB |
+
+#### RCU and WCU Calculation
+
+These formulas are examinable and are genuinely used in capacity planning.
+
+**Read Capacity Unit (RCU)**
+
+- 1 RCU = one **strongly consistent** read per second of an item up to **4 KB**.
+- 1 RCU = **two** eventually consistent reads per second of an item up to 4 KB.
+- Item size is **rounded up** to the next 4 KB boundary.
+
+**Write Capacity Unit (WCU)**
+
+- 1 WCU = one standard write per second of an item up to **1 KB**.
+- Item size is **rounded up** to the next 1 KB boundary.
+- A transactional write costs **2 WCU** per 1 KB.
+
+!!! example "Worked Example 1 — Basic Reads"
+    **Requirement:** 100 strongly consistent reads per second of 6 KB items.
+
+    1. Round item size up: 6 KB rounds up to 8 KB, which is 2 units of 4 KB.
+    2. RCUs per read: 2.
+    3. Total: `100 × 2 =` **200 RCU**.
+
+    Now the same workload with **eventually consistent** reads:
+
+    - Eventually consistent reads cost half: `200 / 2 =` **100 RCU**.
+
+    The lesson: simply choosing eventual consistency where the business permits it halves your read cost.
+
+!!! example "Worked Example 2 — Writes"
+    **Requirement:** 250 writes per second of 3.2 KB items.
+
+    1. Round up: 3.2 KB rounds up to 4 KB, which is 4 units of 1 KB.
+    2. WCUs per write: 4.
+    3. Total: `250 × 4 =` **1,000 WCU**.
+
+    Note that 1,000 WCU is approximately the throughput ceiling of a single partition, so this workload requires a partition key that distributes across multiple partitions.
+
+!!! example "Worked Example 3 — Mixed Workload with a GSI"
+    **Requirement:** An orders table.
+
+    - Writes: 500 new orders per second, item size 2.5 KB.
+    - Reads: 2,000 eventually consistent reads per second, item size 2.5 KB.
+    - One GSI on `status` with `ALL` projection, receiving every write.
+
+    **Base table writes:** 2.5 KB rounds up to 3 KB = 3 WCU per write. `500 × 3 =` **1,500 WCU**.
+
+    **Base table reads:** 2.5 KB rounds up to 4 KB = 1 unit. Strong would be 1 RCU; eventual is 0.5 RCU. `2,000 × 0.5 =` **1,000 RCU**.
+
+    **GSI writes:** With `ALL` projection the index item is also about 2.5 KB, rounding to 3 WCU. Every base write produces an index write, so **1,500 WCU** on the GSI.
+
+    **Total write capacity to provision: 3,000 WCU** across the table and its index. This is the calculation people forget, and it is why an unnecessary `ALL`-projection GSI **doubles your write bill**.
+
+!!! example "Worked Example 4 — Transactions"
+    **Requirement:** 50 transactions per second, each writing 3 items of 0.8 KB.
+
+    1. Each item rounds up to 1 KB = 1 unit.
+    2. Transactional writes cost 2 WCU per unit: 2 WCU per item.
+    3. Per transaction: `3 × 2 = 6` WCU.
+    4. Total: `50 × 6 =` **300 WCU**.
+
+    A transaction costs twice a standard write because DynamoDB executes a two-phase commit across partitions. Use transactions where atomicity is genuinely required, not by default.
+
+!!! example "Worked Example 5 — Query Cost and the Filter Trap"
+    **Scenario:** `Query PK=CUST#4471` returns an item collection of 300 items averaging 1.5 KB, and a `FilterExpression` reduces the result to 12 items.
+
+    1. Total data read: `300 × 1.5 KB = 450 KB`.
+    2. A `Query` aggregates the size of all items read and rounds the **total** up to a 4 KB boundary: `450 / 4 = 112.5`, rounding to 113 units.
+    3. Eventually consistent: `113 × 0.5 =` **56.5 RCU**, billed as 57.
+
+    You paid for 450 KB to receive 18 KB. Had the sort key encoded the filter condition, the same result would have cost around 3 RCU. **This single misunderstanding accounts for a large share of unexpected DynamoDB bills.**
+
+#### Transactions
+
+DynamoDB supports ACID transactions via `TransactWriteItems` and `TransactGetItems`.
+
+| Property | Detail |
+|---|---|
+| Maximum items per transaction | 100 |
+| Maximum total size | 4 MB |
+| Scope | Multiple items, multiple tables, **same Region and same account** |
+| Supported actions in a write transaction | `Put`, `Update`, `Delete`, `ConditionCheck` |
+| Constraint | The same item may not appear twice in one transaction |
+| Cost | Twice a non-transactional operation |
+| Isolation | Serializable |
+
+!!! tip "Condition Expressions Handle Most Cases More Cheaply"
+    Before reaching for a transaction, ask whether a **conditional write** suffices. `PutItem` with `ConditionExpression: attribute_not_exists(PK)` gives you atomic create-if-absent at standard cost. `UpdateItem` with `ConditionExpression: version = :expected` gives you optimistic locking. These single-item conditional operations are atomic, cost half what a transaction costs, and cover a large majority of real requirements. Reserve transactions for genuinely multi-item invariants such as debit-and-credit.
+
+#### Other Important Features
+
+| Feature | Description |
+|---|---|
+| **Time To Live (TTL)** | Designate a numeric attribute holding a Unix epoch timestamp; DynamoDB deletes expired items automatically in the background at **no write cost**. Deletions typically occur within 48 hours of expiry, so TTL is not a precise scheduler. |
+| **Global Tables** | Multi-Region, multi-active replication with last-writer-wins conflict resolution based on timestamps |
+| **Point-in-Time Recovery (PITR)** | Continuous backups allowing restore to any second within the last 35 days; restores to a **new table** |
+| **On-demand backup** | Full backups retained indefinitely, with no performance impact |
+| **Export to S3** | Export table data to S3 in DynamoDB JSON or Ion format without consuming RCUs, for querying with Athena |
+| **Import from S3** | Populate a new table directly from S3 without consuming WCUs |
+| **PartiQL** | A SQL-compatible query language over DynamoDB. Convenient, but it does not change the underlying cost model — a PartiQL statement that cannot use a key still performs a scan. |
+| **DAX** | Microsecond read caching |
+| **Contributor Insights** | Identifies the most frequently accessed keys — the definitive tool for diagnosing hot partitions |
+| **Streams and Kinesis Data Streams integration** | Change data capture for event-driven and analytics pipelines |
+
+!!! warning "Global Tables Conflict Resolution Is Last-Writer-Wins"
+    In a multi-active Global Table, concurrent writes to the same item in two Regions are resolved by choosing the write with the later timestamp; **the other write is silently discarded**. This is acceptable for user-partitioned data where a given user writes in one Region. It is **not** acceptable for a counter, a shared inventory quantity, or a financial balance, where losing a write is a correctness failure. If your data has genuine cross-Region write contention, either partition writes by Region at the application layer or use a single-writer design.
 
 #### Limitations
 
-- Objects are immutable; there is no partial in-place update and no append. Modifying one byte requires re-uploading the whole object.
-- Maximum object size is 5 TiB, and a single `PUT` without multipart is limited to 5 GiB.
-- Listing is a paginated, eventually complete operation over a very large keyspace; listing millions of keys is slow and costly. Use S3 Inventory instead.
-- Renaming an object or a prefix is a copy plus a delete, with full data transfer and request cost.
-- No POSIX semantics: no file locking, no hard links, no atomic rename of a tree.
-- Strong consistency applies to object data, not to bucket configuration.
-- Bucket names are globally unique, which constrains naming conventions across organisations.
+| Limitation | Consequence |
+|---|---|
+| No joins | Relationships must be denormalised or resolved with multiple requests |
+| No ad hoc queries | Every query must be served by the primary key or an index |
+| 400 KB item limit | Large objects must live in S3 |
+| Query requires the full partition key | No equivalent of an arbitrary `WHERE` clause |
+| No native aggregations | Counts and sums must be maintained by the application, often via Streams |
+| GSIs are eventually consistent | Read-after-write against a GSI is unreliable |
+| LSIs only at creation | An access pattern discovered later cannot use an LSI |
+| Sorting only on the sort key | Cannot order results by an arbitrary attribute |
+| Cross-Region transactions unsupported | Transactions are Region- and account-scoped |
+| Vendor-specific | The API is proprietary; portability is limited |
 
-#### Pricing model
+#### Pricing Model
 
-S3 charges across several independent dimensions. Architects must reason about all of them, because request charges frequently exceed storage charges for small-object workloads.
+| Dimension | Notes |
+|---|---|
+| Provisioned RCU and WCU | Per capacity-unit-hour; reserved capacity available for a one- or three-year commitment |
+| On-demand read and write request units | Per million requests |
+| Data storage | Per GB-month; a small monthly allowance is included in the Free Tier |
+| Global Tables | Replicated write request units, charged per Region |
+| Streams | Read request units for `GetRecords` beyond the free allowance; Lambda triggers consume no stream read charges of their own beyond Lambda invocation cost |
+| PITR | Per GB-month of table size |
+| On-demand backup and restore | Per GB stored and per GB restored |
+| Export and import via S3 | Per GB processed |
+| DAX | Per node-hour |
+| Data transfer | Out of the Region |
 
-| Dimension | Basis | Architectural implication |
-|---|---|---|
-| Storage | Per GiB-month, varying by storage class | Lifecycle policies are the main lever |
-| Requests | Per thousand `PUT`, `COPY`, `POST`, `LIST` and per thousand `GET` and `SELECT`, priced differently per class | Batching small objects can cut cost by an order of magnitude |
-| Data transfer out to the internet | Per GiB, tiered | Serve through CloudFront to reduce it |
-| Data transfer within a Region to services | Generally free to services in the same Region | Use a Gateway VPC endpoint to avoid NAT charges |
-| Retrieval | Per GiB for IA and Glacier classes | A cold class accessed often costs more than Standard |
-| Management features | Per object for Intelligent-Tiering monitoring, Inventory, Storage Lens advanced metrics, Object Lock, replication | Small-object-heavy buckets pay a high per-object overhead |
-| Replication | Storage in the destination plus inter-Region transfer plus requests | Cross-Region Replication roughly doubles storage cost |
+!!! info "Storage and Index Cost Compound"
+    A GSI with `ALL` projection roughly **doubles** your storage cost as well as your write cost for the projected attributes. With PITR enabled, backup cost also scales with total table size including indexes. Three `ALL`-projection GSIs on a 1 TB table means roughly 4 TB of storage plus 4 TB of PITR coverage. Project only what you query.
 
-!!! info "Verify pricing before quoting figures"
-    Prices differ by Region and change over time. Treat published figures as orders of magnitude — Standard storage on the order of low tens of United States cents per GiB-month, Deep Archive roughly an order of magnitude cheaper, and internet egress on the order of several cents per GiB. Always confirm against the current AWS pricing pages and model your workload with the AWS Pricing Calculator before committing to a design.
+#### Performance Characteristics and Scaling
 
-#### Performance characteristics and scaling behaviour
+| Metric | Behaviour |
+|---|---|
+| `GetItem` latency | Consistently single-digit milliseconds, independent of table size |
+| `GetItem` through DAX on a cache hit | Microseconds |
+| Table size | Effectively unlimited |
+| Throughput | Effectively unlimited, subject to per-partition limits and account quotas |
+| Per-partition ceiling | Approximately 3,000 RCU and 1,000 WCU |
+| Scaling mechanism | Automatic partition splitting; no downtime |
+| Latency at scale | Flat — this is the defining property |
 
-- At least 3,500 write and 5,500 read requests per second **per partitioned prefix**, with unlimited prefixes and automatic partition splitting.
-- Throughput scales horizontally with parallelism; a single connection is limited by TCP behaviour, so large transfers should use multipart with many concurrent parts.
-- Byte-range `GET` requests allow parallel reads of a single large object.
-- First-byte latency in the tens of milliseconds for Standard; single-digit milliseconds for Express One Zone.
-- No provisioning, no warm-up, and no capacity planning: S3 scales elastically as load arrives.
+#### Availability, Durability and Service Limits
 
-#### Availability, durability, and security features
-
-S3 Standard is designed for eleven nines of durability and 99.99 percent availability, backed by a 99.9 percent Service Level Agreement. Security features include Block Public Access at both account and bucket level, bucket policies, IAM identity policies, Access Points, VPC endpoint policies, default encryption with SSE-S3 or SSE-KMS or DSSE-KMS, Bucket Keys to reduce KMS calls, Object Lock, MFA Delete, Access Analyzer for S3, server access logging, and CloudTrail data events.
-
-Since 2023, **all new objects are encrypted at rest by default with SSE-S3**, and Block Public Access and object ownership defaults were tightened so that ACLs are disabled on new buckets.
-
-#### Service limits
+Data is synchronously replicated across three Availability Zones within a Region. AWS publishes a service level agreement of 99.99 percent for standard tables and 99.999 percent for Global Tables — verify current SLA terms, which are commitments about service credits rather than physical guarantees.
 
 | Limit | Value | Adjustable |
 |---|---|---|
-| Buckets per account | 10,000 by default in the general purpose namespace | Yes, through a quota increase |
-| Objects per bucket | Unlimited | Not applicable |
-| Maximum object size | 5 TiB | No |
-| Maximum single `PUT` without multipart | 5 GiB | No |
-| Parts per multipart upload | 10,000 | No |
-| Part size range | 5 MiB to 5 GiB, last part may be smaller | No |
-| Bucket policy document size | 20 KB | No |
-| Lifecycle rules per bucket | 1,000 | No |
-| Access points per Region per account | Several thousand | Yes |
-| Request rate per prefix | 3,500 write and 5,500 read per second minimum | Scales automatically |
+| Item size | 400 KB | No |
+| Partition key value length | 1 to 2048 bytes | No |
+| Sort key value length | 1 to 1024 bytes | No |
+| LSIs per table | 5 | No |
+| GSIs per table | 20 | Yes — a soft quota |
+| Items per transaction | 100 | No |
+| Transaction payload | 4 MB | No |
+| `Query` or `Scan` result page | 1 MB before pagination | No |
+| `BatchGetItem` | 100 items or 16 MB | No |
+| `BatchWriteItem` | 25 put or delete requests or 16 MB | No |
+| Tables per Region | 2,500 | Yes |
+| Account-level provisioned throughput | Region-dependent default | Yes |
+| Stream retention | 24 hours | No |
+| PITR window | 35 days | No |
 
-#### Common configurations
+!!! note "Pagination Is Not Optional"
+    Both `Query` and `Scan` return at most 1 MB of data per call and include a `LastEvaluatedKey` when more results remain. Application code that ignores `LastEvaluatedKey` will silently process only the first page — a defect that passes every test with small data volumes and fails in production. Always loop until `LastEvaluatedKey` is absent, or use the SDK's paginator.
 
-A production bucket typically has versioning enabled, Block Public Access fully on, default encryption with a customer-managed KMS key and Bucket Keys enabled, a bucket policy denying non-TLS requests, a lifecycle rule that expires noncurrent versions after a retention window and aborts incomplete multipart uploads after seven days, server access logging or CloudTrail data events directed to a separate logging bucket, and replication to a second Region or a separate account for critical data.
+#### Common Configurations
 
----
-
-### Amazon EBS Deep Dive
-
-#### Purpose
-
-EBS exists to give EC2 instances persistent, low-latency, random-access block storage that survives instance termination and can be snapshotted, resized, and re-attached. It is the storage substrate for boot volumes, self-managed databases, and any workload whose software expects a local disk.
-
-#### Architecture
-
-EBS volumes live on a dedicated storage fleet within a single Availability Zone, replicated across multiple servers in that zone, and reached from the EC2 host over a purpose-built network fabric mediated by the Nitro card. The volume is exposed to the guest as an NVMe block device. Snapshots are written incrementally to S3 as Regional resources, providing the cross-zone and cross-Region durability path.
-
-#### Volume types
-
-| Type | Media | Size range | Max IOPS per volume | Max throughput per volume | IOPS model | Best-suited workloads |
-|---|---|---|---|---|---|---|
-| gp3 | SSD | 1 GiB to 64 TiB | 16,000 | 1,000 MiB/s | 3,000 IOPS baseline included, provisioned independently of size | Default for boot volumes, most databases, application servers |
-| gp2 | SSD | 1 GiB to 64 TiB | 16,000 | 250 MiB/s | 3 IOPS per GiB, burst to 3,000 for small volumes | Legacy general purpose; superseded by gp3 |
-| io1 | SSD | 4 GiB to 16 TiB | 64,000 | 1,000 MiB/s | Provisioned, up to 50 IOPS per GiB | Legacy high-performance; superseded by io2 |
-| io2 Block Express | SSD | 4 GiB to 64 TiB | 256,000 | 4,000 MiB/s | Provisioned, up to 1,000 IOPS per GiB | Mission-critical relational databases, SAP HANA, Oracle |
-| st1 | HDD | 125 GiB to 16 TiB | 500 | 500 MiB/s | Throughput-oriented with burst credits | Big data, log processing, data warehouses, sequential reads |
-| sc1 | HDD | 125 GiB to 16 TiB | 250 | 250 MiB/s | Lowest cost, throughput-oriented | Cold data accessed a few times per month |
-
-!!! tip "gp3 is almost always better than gp2"
-    gp3 costs roughly twenty percent less per GiB than gp2, includes 3,000 IOPS and 125 MiB/s regardless of size, and lets you provision IOPS and throughput independently of capacity. Under gp2, obtaining 3,000 sustained IOPS required a 1,000 GiB volume. Migrating gp2 volumes to gp3 is an online `ModifyVolume` operation and is one of the most reliable cost optimisations available in a mature account.
-
-#### Important features
-
-- **Elastic Volumes** allow online changes to size, type, IOPS, and throughput without detaching or stopping the instance. Note that the file system must then be grown with `growpart` and `resize2fs` or `xfs_growfs`.
-- **Snapshots** are incremental, Regional, copyable across Regions and accounts, and shareable.
-- **Fast Snapshot Restore** eliminates lazy-loading latency for restored volumes at an hourly charge.
-- **Encryption** is at-rest and in-transit between the instance and the volume, performed in Nitro hardware, with negligible performance impact. Encryption by default can be enforced account-wide per Region.
-- **Multi-Attach** allows io1 and io2 volumes to attach to up to sixteen Nitro instances in the same Availability Zone; a cluster-aware file system is required.
-- **Data Lifecycle Manager** automates snapshot creation, retention, and cross-Region copy.
-- **EBS direct APIs** allow reading snapshot blocks and writing new snapshots programmatically, enabling efficient backup tooling.
-- **Recycle Bin** allows recovery of accidentally deleted snapshots and AMIs within a retention window.
-
-#### Limitations
-
-- A volume is bound to a single Availability Zone and can only attach to instances in that zone.
-- Except for Multi-Attach, a volume attaches to exactly one instance at a time.
-- Volume performance is also capped by the **instance's** EBS bandwidth and IOPS limits, which vary by instance type and size. A large volume attached to a small instance will not deliver its rated performance.
-- Volumes cannot be shrunk; they can only grow.
-- Snapshots are crash-consistent unless the file system is quiesced.
-- HDD types perform poorly for small random I/O; they are throughput devices, not IOPS devices.
-
-#### Pricing model
-
-| Dimension | gp3 | gp2 | io1 and io2 | st1 and sc1 |
-|---|---|---|---|---|
-| Provisioned capacity | Per GiB-month | Per GiB-month | Per GiB-month | Per GiB-month, lowest for sc1 |
-| Provisioned IOPS | Charged above the included 3,000 | Included in capacity price | Charged per provisioned IOPS-month, with tiering on io2 | Not applicable |
-| Provisioned throughput | Charged above the included 125 MiB/s | Not configurable | Not separately charged | Not applicable |
-| Snapshots | Per GiB-month of changed blocks stored, with a cheaper archive tier | Same | Same | Same |
-| Fast Snapshot Restore | Per hour per snapshot per Availability Zone | Same | Same | Same |
-
-Capacity is billed for what is **provisioned**, not for what is used. A 500 GiB volume containing 10 GiB of data costs the same as a full one — a fundamental difference from S3 and EFS and a recurring source of waste.
-
-#### Performance characteristics and scaling behaviour
-
-SSD types are optimised for IOPS and measure I/O in 16 KiB units; HDD types are optimised for megabytes per second and measure I/O in 1 MiB units. gp2, st1, and sc1 use burst-credit buckets, meaning sustained load can exhaust credits and drop performance to baseline abruptly. gp3, io1, and io2 deliver consistent provisioned performance with no credit mechanism.
-
-Scaling is **vertical and explicit**: you change the volume's size, type, or provisioned performance. There is no automatic scaling. Architects therefore monitor `VolumeQueueLength`, `BurstBalance`, and throughput metrics and adjust deliberately.
-
-#### Availability, durability, and security features
-
-An EBS volume is a single-Availability-Zone resource. gp3 and gp2 volumes are designed for an annual failure rate between 0.1 and 0.2 percent; io2 is designed for 99.999 percent durability. Availability design targets range from 99.8 to 99.999 percent depending on type. Security features include KMS encryption at rest with per-volume data keys, in-transit encryption on the fabric, IAM control over volume and snapshot APIs, snapshot sharing controls, and the ability to enforce encryption by default at the account level.
-
-#### Service limits
-
-| Limit | Typical default | Adjustable |
-|---|---|---|
-| Aggregate provisioned storage per Region | Tens of TiB per volume type family | Yes |
-| Snapshots per Region | 100,000 | Yes |
-| Volumes attachable per instance | Instance-type dependent, commonly 28 attachments on Nitro including network interfaces | No |
-| Maximum volume size | 64 TiB for gp3, gp2, io2 Block Express; 16 TiB for io1, st1, sc1 | No |
-| Multi-Attach instances per volume | 16 | No |
-| IOPS to size ratio | 500 to 1 for gp3, 1,000 to 1 for io2 | No |
-
-#### Common configurations
-
-A typical production configuration uses an encrypted gp3 root volume of modest size, a separate encrypted data volume sized and provisioned for the workload's measured IOPS, `DeleteOnTermination` set to false for data volumes, XFS or ext4 with an appropriate mount option set, an entry in `/etc/fstab` using the volume UUID rather than the device name, and a Data Lifecycle Manager policy taking tagged snapshots on a schedule with cross-Region copy for disaster recovery.
-
----
-
-### Amazon EFS Deep Dive
-
-#### Purpose
-
-EFS exists to provide a shared, elastic, POSIX-compliant file system that many compute resources across multiple Availability Zones can mount simultaneously, without any capacity planning and without the operational burden of running an NFS server cluster.
-
-#### Architecture
-
-EFS is a Regional service with data and metadata stored redundantly across multiple Availability Zones. Clients access it through mount targets — elastic network interfaces placed in your subnets, one per Availability Zone — using the standard NFSv4.1 protocol. Access points provide application-scoped views with enforced root directories and POSIX identities.
-
-#### Important features
-
-- **Elastic capacity** with no provisioning; you pay for stored bytes.
-- **Elastic throughput mode** that scales performance automatically to demand.
-- **Storage classes and lifecycle management** that move files to Infrequent Access and Archive based on last-access time, and optionally back to Standard on read.
-- **Access points** for multi-tenant isolation within one file system.
-- **IAM authorisation for NFS clients**, enabling policy-based control in addition to POSIX permissions.
-- **Encryption at rest with KMS and in transit with TLS** through the `efs-utils` mount helper.
-- **AWS Backup integration** for policy-driven backup and restore.
-- **Replication** to another Region for disaster recovery, with a Recovery Point Objective typically measured in minutes.
-- **Container-native integration** through the ECS volume configuration and the EFS CSI driver for Kubernetes, supporting `ReadWriteMany` persistent volumes.
-
-#### Storage classes
-
-| Class | Availability Zone scope | Relative storage price | Access charge | Intended use |
-|---|---|---|---|---|
-| EFS Standard | Multiple AZs | Highest | None | Active working set |
-| EFS Infrequent Access | Multiple AZs | Substantially lower | Per GiB read and written | Files not accessed for a configured period |
-| EFS Archive | Multiple AZs | Lowest of the multi-AZ classes | Higher per GiB access charge | Files accessed a few times per year |
-| EFS One Zone | Single AZ | Lower than the Standard equivalent | None | Development, test, and recreatable data |
-| EFS One Zone-IA | Single AZ | Lowest overall | Per GiB access charge | Cold, recreatable, single-zone data |
-
-#### Limitations
-
-- Higher per-operation latency than EBS, because operations traverse the network and coordinate distributed metadata.
-- Higher cost per GiB-month than both EBS and S3 for the Standard class.
-- Metadata-intensive workloads — for example compiling a large source tree or `ls` on a directory with hundreds of thousands of entries — perform poorly relative to a local disk.
-- Not suitable as a database data directory for latency-sensitive transactional engines.
-- `Max I/O` performance mode raises the throughput ceiling but increases per-operation latency and is unnecessary for most designs.
-- Linux NFSv4.1 only; Windows SMB workloads require Amazon FSx for Windows File Server instead.
-
-#### Pricing model
-
-| Dimension | Basis |
+| Scenario | Configuration |
 |---|---|
-| Storage | Per GiB-month, differing sharply by storage class |
-| Infrequent Access and Archive access | Per GiB read or written from those classes |
-| Elastic throughput | Per GiB of data read and written |
-| Provisioned throughput | Per MiB/s-month, in addition to storage |
-| Backup storage through AWS Backup | Per GiB-month of warm and cold backup |
-| Cross-Region replication | Storage in the destination plus inter-Region transfer |
+| Session store | Simple key on `session_id`, TTL attribute, on-demand capacity |
+| Shopping cart | PK `CUST#id`, SK `CART#item_id`, on-demand, Streams for abandoned-cart processing |
+| IoT telemetry | PK `device_id`, SK ISO-8601 timestamp, TTL for expiry, provisioned with auto scaling |
+| Event sourcing | PK `aggregate_id`, SK monotonically increasing sequence number, conditional write on `attribute_not_exists` for optimistic concurrency |
+| Multi-tenant SaaS | PK includes `tenant_id`; IAM policies use the `dynamodb:LeadingKeys` condition for tenant isolation |
+| Global user profiles | Global Tables in the Regions your users occupy, PITR enabled |
 
-Unlike EBS, EFS bills for **consumed** capacity rather than provisioned capacity, which makes it economical for sparse or unpredictable data volumes but expensive for large, dense, hot data sets relative to EBS.
 
-#### Performance characteristics and scaling behaviour
+### Amazon ElastiCache
 
-Throughput scales with the file system automatically in Elastic mode, reaching multiple gigabytes per second for reads in supported Regions. Bursting mode ties baseline throughput to stored capacity at approximately 50 KiB/s per GiB with a credit bucket, which is why small file systems in Bursting mode can stall. IOPS scale to hundreds of thousands of operations per second in General Purpose mode. Because throughput is aggregate across all clients, EFS is well suited to fan-out read patterns such as many containers reading the same model file.
+#### Purpose
 
-#### Availability, durability, and security features
+To provide managed, in-memory data stores — Redis (and the AWS-maintained Valkey-compatible engine) and Memcached — that sit in front of a primary database or act as a primary store for ephemeral data, so that read-heavy and latency-sensitive workloads are served from RAM in microseconds instead of from disk-backed storage in milliseconds.
 
-EFS Standard is designed for eleven nines of durability and 99.99 percent availability across multiple Availability Zones, which makes it fundamentally more available than a single EBS volume. Security is layered: security groups control network reachability to mount targets, IAM policies control who may mount and what actions they may perform, access points enforce a root directory and POSIX identity, POSIX permissions apply within the file system, and KMS provides encryption at rest with TLS in transit.
+The architectural motivation is that most application workloads exhibit strong locality: a small fraction of the data is responsible for the overwhelming majority of reads. Serving that hot fraction from memory removes load from the primary database, which in turn allows the primary database to be smaller, cheaper, and further from its saturation point.
 
-#### Service limits
+#### Architecture
 
-| Limit | Typical value | Adjustable |
+```mermaid
+graph TD
+    APP["Application Tier"] --> PE["Primary Endpoint for writes"]
+    APP --> RE["Reader Endpoint for reads"]
+    PE --> P1["Shard 1 Primary Node"]
+    RE --> R1A["Shard 1 Replica in AZ b"]
+    RE --> R1B["Shard 1 Replica in AZ c"]
+    P1 --> R1A
+    P1 --> R1B
+    PE --> P2["Shard 2 Primary Node"]
+    RE --> R2A["Shard 2 Replica in AZ b"]
+    P2 --> R2A
+    APP --> DB["Amazon RDS or DynamoDB"]
+    P1 --> SNAP["Backup to Amazon S3"]
+```
+
+An ElastiCache for Redis deployment is described by a **replication group**. With cluster mode disabled, a replication group is a single shard: one primary node accepting writes and up to five read replicas receiving asynchronous replication. With cluster mode enabled, the keyspace is divided into 16,384 hash slots distributed across up to 500 shards, each shard being an independent primary with its own replicas. Nodes are placed in a **cache subnet group**, which is a set of subnets inside a VPC, and are protected by security groups exactly like an RDS instance.
+
+ElastiCache for Memcached is architecturally simpler and deliberately so: a cluster is a set of independent nodes with no replication, no persistence, and no failover. Client libraries shard across nodes using consistent hashing, and node loss simply means the keys that hashed to that node are gone and will be recomputed on the next miss.
+
+#### Redis Versus Memcached
+
+| Dimension | Redis / Valkey | Memcached |
 |---|---|---|
-| File systems per account per Region | 1,000 | Yes |
-| Mount targets per Availability Zone per file system | 1 | No |
-| Connections per file system | Tens of thousands of NFS clients | Some aspects adjustable |
-| Access points per file system | 1,000 | Yes |
-| Maximum file size | 47.9 TiB | No |
-| Maximum file system size | Effectively unlimited, petabyte scale | Not applicable |
-| Security groups per mount target | 5 | No |
+| Data structures | Strings, lists, sets, sorted sets, hashes, bitmaps, HyperLogLog, streams, geospatial | Strings only |
+| Replication | Yes, asynchronous, with automatic failover | None |
+| Persistence | Yes, RDB snapshots and append-only file | None |
+| Multi-AZ and failover | Yes | No |
+| Backup and restore | Yes, to Amazon S3 | No |
+| Transactions | Yes, `MULTI`/`EXEC`, plus Lua scripting | No |
+| Pub/Sub and Streams | Yes | No |
+| Multi-threaded | Largely single-threaded for command execution | Multi-threaded |
+| Horizontal scaling | Sharding via cluster mode | Add nodes; client-side consistent hashing |
+| Encryption in transit and at rest | Yes | In-transit encryption supported on recent versions |
+| Typical use | Leaderboards, sessions, rate limiting, queues, caching, geospatial | Simple, very high-throughput object caching |
 
-#### Common configurations
+!!! tip "The selection heuristic"
+    Choose Memcached only when the requirement is genuinely a simple, ephemeral, multi-threaded object cache and losing the entire cache is acceptable. In every other case — and that is most cases — Redis is the correct default, because replication, persistence, failover, and richer data structures cost little and remove entire categories of failure.
 
-A production EFS deployment uses Elastic throughput, General Purpose performance mode, encryption at rest with a customer-managed KMS key, mount targets in every Availability Zone used by the compute tier, a dedicated security group allowing TCP 2049 only from the application security group, one access point per application enforcing a root directory and a non-root POSIX identity, lifecycle management transitioning to Infrequent Access after thirty days, TLS-enabled mounts via `efs-utils`, and an AWS Backup plan with a retention schedule.
+#### Caching Strategies
 
----
+```mermaid
+sequenceDiagram
+    participant A as "Application"
+    participant C as "ElastiCache"
+    participant D as "Primary Database"
+    A->>C: GET user 42
+    alt Cache hit
+        C-->>A: Value returned in microseconds
+    else Cache miss
+        C-->>A: Null
+        A->>D: SELECT from users where id equals 42
+        D-->>A: Row
+        A->>C: SETEX user 42 with TTL
+        A-->>A: Return value to caller
+    end
+```
 
-### Contextual Services
+**Cache-aside, also called lazy loading.** The application checks the cache, and on a miss reads the database and populates the cache. Only requested data is ever cached, so the cache stays small and relevant, and a cache failure degrades performance without breaking correctness. The costs are a three-trip penalty on every miss and the risk of serving stale data until the TTL expires.
 
-#### Amazon FSx
+**Write-through.** The application writes to the cache and the database together, so the cache is never stale. The costs are write latency on every write, and a cache filled with data that may never be read — which wastes memory. Write-through is usually combined with a TTL to evict cold entries.
 
-Amazon FSx is a family of managed file systems for workloads whose requirements exceed what EFS is designed to satisfy.
+**Write-behind, or write-back.** The application writes to the cache, which asynchronously flushes to the database. This gives the lowest write latency but risks data loss and is rarely appropriate with a cache as the intermediary unless durability is otherwise guaranteed.
 
-| FSx variant | Protocol | Primary use case |
-|---|---|---|
-| FSx for Windows File Server | SMB, with Active Directory integration | Windows applications, shared Windows home directories, .NET workloads |
-| FSx for Lustre | Lustre, POSIX | High-performance computing, machine learning training, seismic and genomics analysis; can link directly to an S3 bucket |
-| FSx for NetApp ONTAP | NFS, SMB, and iSCSI | Migrating existing NetApp estates; snapshots, cloning, and tiering features |
-| FSx for OpenZFS | NFS | Low-latency, ZFS-based workloads needing snapshots and cloning |
+**Time-to-live as a correctness tool.** Every cached entry should carry a TTL. The TTL is the maximum staleness the business will tolerate, expressed in seconds. Setting it is a product decision, not a technical one.
 
-The architectural rule is straightforward: choose EFS for Linux NFS shared storage, FSx for Windows File Server when SMB and Active Directory are required, and FSx for Lustre when the workload needs hundreds of gigabytes per second of throughput against data staged from S3.
+!!! warning "Thundering herd and cache stampede"
+    When a very popular key expires, thousands of concurrent requests miss simultaneously and all query the database at once, which can saturate it. Mitigations include adding jitter to TTLs so keys do not expire in lockstep, using a short-lived distributed lock so that only one request recomputes the value while others wait or serve a stale copy, and proactively refreshing hot keys before expiry.
 
-#### S3 Glacier storage classes
+#### Important Features
 
-The Glacier name now refers to storage classes within S3 rather than to a separate service for new designs. Glacier Instant Retrieval provides millisecond access for archives read a few times per year; Glacier Flexible Retrieval provides retrieval in minutes to hours; Glacier Deep Archive provides the lowest storage price in AWS in exchange for retrieval times measured in hours and a one-hundred-and-eighty-day minimum duration. Objects in the Flexible Retrieval and Deep Archive classes must be **restored** before they can be read, which creates a temporary copy in a readable class for a specified number of days.
+| Feature | Architectural value |
+|---|---|
+| Multi-AZ with automatic failover | A replica is promoted on primary failure, typically within tens of seconds, with the primary endpoint DNS updated |
+| Cluster mode | Horizontal write scaling and memory scaling beyond a single node |
+| Online resharding and scaling | Add or remove shards and replicas without downtime |
+| Data tiering | On specific node families, less-frequently accessed data is stored on local NVMe SSD rather than RAM, lowering cost per gigabyte |
+| Global Datastore | Cross-Region replication for Redis with sub-second typical replication latency, for low-latency global reads and Regional disaster recovery |
+| Backup and restore | Snapshots to Amazon S3, restorable into a new cluster |
+| Encryption | At rest with KMS, in transit with TLS, plus Redis AUTH and Role-Based Access Control |
+| ElastiCache Serverless | Capacity is managed automatically and billed by data stored and compute consumed, removing node sizing entirely |
+| Reserved nodes | Substantial discount for one-year or three-year commitments |
 
-#### AWS Storage Gateway
+#### Limitations
 
-AWS Storage Gateway is a hybrid service that runs as a virtual appliance or hardware appliance inside an on-premises data centre and presents familiar local protocols while storing data in AWS.
+- Redis command execution is largely single-threaded, so a single expensive command such as `KEYS *` or a large `LRANGE` blocks all other clients on that node. Command complexity is an operational concern, not merely a coding style preference.
+- Replication is asynchronous, so a failover can lose the most recent writes. ElastiCache is not a system of record.
+- Memcached offers no replication, persistence, failover, or backup at all.
+- A cluster is confined to one VPC and one Region unless Global Datastore is used.
+- Scaling operations, although online, involve slot migration and can cause brief elevated latency.
+- Memory is the binding constraint; exceeding it triggers eviction according to the configured `maxmemory-policy`, and an inappropriate policy such as `noeviction` will cause writes to fail rather than evict.
 
-| Gateway type | Local protocol presented | AWS storage used | Typical scenario |
-|---|---|---|---|
-| S3 File Gateway | NFS and SMB | S3 objects | Presenting a file share whose files become S3 objects for analytics |
-| FSx File Gateway | SMB | FSx for Windows File Server | Low-latency on-premises access to a managed Windows file system |
-| Volume Gateway | iSCSI block volumes | EBS snapshots in S3 | Backing up on-premises block volumes, or cached volumes with a local hot set |
-| Tape Gateway | Virtual Tape Library over iSCSI | S3 and Glacier classes | Replacing physical tape libraries without changing backup software |
+#### Pricing Model
 
-!!! note "Storage Gateway is a migration and hybrid tool"
-    Storage Gateway exists to let organisations adopt cloud storage without rewriting applications or replacing backup software. It is rarely the right answer for a greenfield cloud-native design, where the application should speak to S3 or EFS directly.
+Node-based clusters are billed per node-hour by node type, plus backup storage beyond the free allowance, plus data transfer between Availability Zones and Regions. ElastiCache Serverless is billed by gigabyte-hours of data stored and by ElastiCache Processing Units consumed. Reserved nodes provide a significant discount for a one-year or three-year commitment.
 
----
+!!! info "Verify current figures"
+    All pricing here is described in terms of dimensions and relative magnitude only. Consult the current AWS pricing pages and the AWS Pricing Calculator before committing to a design or a budget.
+
+#### Performance Characteristics and Scaling Behaviour
+
+In-memory access latency is typically in the range of tens to hundreds of microseconds at the server, with total round-trip latency dominated by the network path within the VPC. A single well-chosen Redis node can serve hundreds of thousands of simple operations per second, but this collapses if the workload contains large values, expensive commands, or very large pipelines.
+
+Scaling proceeds along three axes. **Vertical scaling** moves to a larger node type, increasing memory and network bandwidth. **Read scaling** adds replicas and directs reads to the reader endpoint, accepting replica lag. **Write and memory scaling** requires cluster mode and additional shards, which redistributes hash slots. ElastiCache Serverless removes the axis choice by scaling automatically.
+
+#### Availability, Durability and Service Limits
+
+Multi-AZ replication groups with automatic failover are the baseline for any production cache whose loss would cause a stampede against the primary database. Durability is explicitly weak by design: Redis persistence through snapshots and append-only file reduces but does not eliminate loss, and asynchronous replication means recent writes may not survive a failover.
+
+Limits worth knowing: up to 500 shards per Redis cluster in cluster mode, up to five read replicas per shard, and 16,384 hash slots. Node counts and cluster counts per Region are soft quotas adjustable through AWS Service Quotas, and several limits are Region-dependent.
+
+#### Security Features
+
+Deploy inside private subnets with a cache subnet group; use security groups to restrict the port (6379 for Redis, 11211 for Memcached) to the application tier's security group only. Enable encryption at rest with AWS KMS and encryption in transit with TLS. Use Redis Role-Based Access Control to create users with restricted command and key-pattern permissions rather than relying on a single shared AUTH token. Never place a cache in a public subnet or attach a security group permitting `0.0.0.0/0`; unauthenticated Redis instances exposed to the internet are a well-documented and frequently exploited attack surface.
+
+#### Common Configurations
+
+| Scenario | Configuration |
+|---|---|
+| Session store for a stateless web tier | Redis, cluster mode disabled, Multi-AZ enabled, TTL equal to session timeout, `volatile-lru` eviction |
+| Database read cache | Redis, cache-aside, TTL with jitter, `allkeys-lru` eviction, sized to hold the working set |
+| Leaderboard or ranking | Redis sorted sets, cluster mode enabled if the keyspace is large |
+| Rate limiting | Redis counters with `INCR` and `EXPIRE`, or a Lua script for atomic token-bucket logic |
+| Very high-throughput simple object cache | Memcached with client-side consistent hashing, accepting total loss on node failure |
+| Global low-latency reads | Redis Global Datastore with secondary clusters in reader Regions |
+| Unpredictable or spiky demand | ElastiCache Serverless |
 
 ## Important AWS Terminology
 
 | Term | Meaning |
 |---|---|
-| Object storage | Storage abstraction in which data is stored as whole immutable objects with metadata in a flat keyspace, accessed over an API |
-| Block storage | Storage abstraction presenting a linear array of fixed-size blocks that a file system formats and mutates in place |
-| File storage | Storage abstraction presenting a hierarchical directory tree with POSIX or SMB semantics, shareable across hosts |
-| Bucket | Regional container for S3 objects, with a globally unique name in the general purpose namespace |
-| Directory bucket | S3 bucket type supporting the Express One Zone class, with a hierarchical namespace in a single Availability Zone |
-| Key | The complete unique name of an object within a bucket |
-| Prefix | A leading substring of an object key, used for logical grouping, policy scoping, and request-rate partitioning |
-| Delimiter | A character passed to a list operation to group keys into common prefixes, emulating folders |
-| ETag | An identifier returned for an object, equal to the MD5 hash for simple uploads and a composite value for multipart uploads |
-| Versioning | Bucket setting that retains every version of an object and uses delete markers instead of destructive deletes |
-| Delete marker | The placeholder version created when an object is deleted in a versioned bucket |
-| Noncurrent version | Any object version that is not the latest; billed and expirable by lifecycle rules |
-| Storage class | Per-object attribute determining cost, latency, availability, and retrieval behaviour |
-| Lifecycle policy | Bucket rules that transition or expire objects based on age or version status |
-| Multipart upload | Protocol for uploading a large object in independently retryable parts assembled server-side |
-| Presigned URL | Time-limited signed URL granting a specific S3 operation without sharing credentials |
-| Block Public Access | Account and bucket level control that overrides policies and ACLs to prevent public exposure |
-| Object Lock | Write-once-read-many retention control in Governance or Compliance mode |
-| Object Ownership | Setting that disables ACLs and makes the bucket owner the owner of all objects |
-| Access Point | A named, policy-bearing entry point into a bucket for a specific application |
-| Object Lambda Access Point | Access point that invokes a Lambda function to transform objects as they are retrieved |
-| Cross-Region Replication | Asynchronous replication of objects to a bucket in another Region |
-| Replication Time Control | Feature adding a fifteen-minute replication Service Level Agreement and replication metrics |
-| S3 Inventory | Scheduled report listing objects and their metadata, avoiding expensive list operations |
-| S3 Storage Lens | Organisation-wide storage usage and activity analytics |
-| Requester Pays | Bucket setting that charges request and transfer costs to the requester |
-| Transfer Acceleration | Upload path through CloudFront edge locations for distant clients |
-| Mountpoint for Amazon S3 | Client that exposes an S3 bucket as a file system for read-heavy workloads without full POSIX semantics |
-| Volume | An EBS block device created in one Availability Zone and attachable to instances in that zone |
-| Volume type | The EBS performance family, such as gp3, io2 Block Express, st1, or sc1 |
-| IOPS | Input output operations per second, measured against a 16 KiB unit on SSD types |
-| Throughput | Bytes transferred per second, bounded by the volume and by the instance |
-| Burst balance | Credit pool allowing gp2, st1, and sc1 volumes to exceed baseline performance temporarily |
-| Snapshot | Incremental, block-level, point-in-time backup of an EBS volume stored in S3 as a Regional resource |
-| Fast Snapshot Restore | Feature that pre-warms a snapshot so restored volumes deliver full performance immediately |
-| Lazy loading | Behaviour whereby a volume restored from a snapshot fetches blocks from S3 on first access |
-| Elastic Volumes | Capability to change size, type, and performance of an attached volume without downtime |
-| Multi-Attach | EBS capability allowing one io1 or io2 volume to attach to up to sixteen Nitro instances in one Availability Zone |
-| EBS-optimised | Instance property providing dedicated network capacity for EBS traffic |
-| Nitro card for EBS | Dedicated hardware on the EC2 host that converts NVMe commands into EBS network operations and performs encryption |
-| Instance store | Ephemeral block storage physically attached to the host, lost on stop or termination |
-| Data Lifecycle Manager | Service automating EBS snapshot creation, retention, and cross-Region copy |
-| Mount target | Elastic network interface in a subnet through which NFS clients in that Availability Zone reach an EFS file system |
-| Access point | EFS entry point enforcing a root directory and POSIX identity for an application |
-| Throughput mode | EFS setting selecting Elastic, Provisioned, or Bursting throughput behaviour |
-| Performance mode | EFS setting selecting General Purpose or Max I/O |
-| efs-utils | AWS-provided mount helper enabling TLS encryption in transit and IAM authorisation for EFS |
-| Close-to-open consistency | NFS semantics guaranteeing that a file closed by one client is fully visible to a client that subsequently opens it |
-| Durability | The probability that stored data is not lost over a period |
-| Availability | The probability that stored data can be accessed at a given moment |
-| Control plane | Subsystem handling resource creation and configuration |
-| Data plane | Subsystem handling the movement of data, engineered for static stability |
-| Erasure coding | Technique splitting data into data and parity fragments so the original is recoverable from a subset |
-| Gateway VPC endpoint | Route-table-based private path from a VPC to S3 or DynamoDB with no additional charge |
-| Interface VPC endpoint | PrivateLink elastic network interface providing a private path to an AWS service, reachable from on-premises |
-| SSE-S3 | Server-side encryption using keys managed entirely by S3 |
-| SSE-KMS | Server-side encryption using an AWS KMS key, providing auditable and controllable key usage |
-| DSSE-KMS | Dual-layer server-side encryption applying two independent layers of KMS encryption |
-| S3 Bucket Keys | Feature that reduces KMS request volume and cost by deriving short-lived bucket-level keys |
-| SSE-C | Server-side encryption with a customer-provided key supplied on every request |
-| CSI driver | Container Storage Interface plugin allowing Kubernetes to provision and attach EBS or EFS volumes |
-
----
+| ACID | Atomicity, Consistency, Isolation, Durability — the transactional guarantees of a classical relational database |
+| Adaptive capacity | DynamoDB's automatic redistribution of throughput toward hot partitions, which mitigates but does not eliminate hot-key problems |
+| Aurora cluster volume | The distributed, self-healing storage layer shared by all instances in an Aurora cluster, replicated six ways across three Availability Zones |
+| Aurora Serverless v2 | An Aurora capacity mode that scales compute in fine-grained Aurora Capacity Units in response to load |
+| Availability Zone | One or more discrete data centres with independent power, cooling, and networking within an AWS Region |
+| BASE | Basically Available, Soft state, Eventual consistency — the design posture of many distributed NoSQL systems |
+| Cache-aside | A caching pattern in which the application reads from the cache and, on a miss, reads the database and populates the cache |
+| CAP theorem | In the presence of a network partition, a distributed system must sacrifice either consistency or availability |
+| Capacity mode | For DynamoDB, the choice between provisioned throughput with optional auto scaling and fully on-demand billing |
+| Cluster endpoint | The DNS name that always resolves to the current writer instance of an Aurora or RDS cluster |
+| Composite primary key | A DynamoDB primary key consisting of a partition key and a sort key, permitting many items under one partition |
+| Conditional write | A write that succeeds only if a stated condition holds, providing optimistic concurrency control |
+| DAX | DynamoDB Accelerator, a fully managed, write-through, in-memory cache purpose-built for DynamoDB with microsecond read latency |
+| Database engine | The software implementing the database, such as PostgreSQL, MySQL, MariaDB, Oracle, SQL Server, or Aurora |
+| DB parameter group | A named collection of engine configuration parameters applied to RDS instances |
+| DB subnet group | The set of subnets across Availability Zones in which RDS may place instances |
+| Eventual consistency | A read may return a value that does not reflect the most recent completed write, but will converge |
+| Failover | Promotion of a standby or replica to primary following failure of the current primary |
+| Global Secondary Index | A DynamoDB index with a partition key and optional sort key different from the base table, with its own throughput and eventual consistency |
+| Global Table | A DynamoDB multi-Region, multi-active replicated table using last-writer-wins conflict resolution |
+| Hash slot | One of the 16,384 logical partitions across which an ElastiCache Redis cluster distributes keys |
+| Hot partition | A DynamoDB partition receiving disproportionate traffic because of poor partition-key selection |
+| Item | A single record in a DynamoDB table, limited to 400 KB including attribute names |
+| Item collection | All items in a DynamoDB table sharing the same partition key value |
+| Local Secondary Index | A DynamoDB index sharing the base table's partition key with a different sort key, supporting strongly consistent reads, created only at table creation |
+| Multi-AZ deployment | An RDS configuration maintaining a synchronous standby in a second Availability Zone for automatic failover |
+| Optimistic concurrency | Concurrency control by detecting conflicting modification at write time rather than by locking |
+| Parameter group versus option group | Parameter groups tune engine configuration; option groups enable engine-specific features such as Oracle TDE or SQL Server auditing |
+| Partition key | The DynamoDB attribute whose hash determines the physical partition storing an item; also called the hash key |
+| Point-in-time recovery | Restoration of a database to any second within the retention window, using continuous backups and transaction logs |
+| Projection | The set of attributes copied into a DynamoDB secondary index, one of `KEYS_ONLY`, `INCLUDE`, or `ALL` |
+| Provisioned IOPS | An EBS or RDS storage configuration guaranteeing a specified rate of input and output operations per second |
+| Quorum | The minimum number of replica acknowledgements required for a read or a write to be considered complete |
+| RCU | Read Capacity Unit — one strongly consistent read per second of an item up to 4 KB, or two eventually consistent reads |
+| Read replica | An asynchronously replicated, read-only copy of a database used to scale reads or to serve as a promotion candidate |
+| Replica lag | The delay between a write committing on the primary and appearing on a replica |
+| Replication group | An ElastiCache for Redis construct comprising a primary node and its replicas, optionally sharded |
+| RDS Proxy | A managed connection pool that multiplexes application connections onto a smaller set of database connections |
+| Scan versus Query | `Scan` reads every item in a table or index; `Query` reads only items sharing a specified partition key value |
+| Single-table design | A DynamoDB modelling technique storing multiple entity types in one table using generic key attributes and overloaded indexes |
+| Sparse index | A DynamoDB global secondary index containing only items that possess the index key attribute, used to model filtered views efficiently |
+| Storage auto scaling | The RDS feature that increases allocated storage automatically when free space falls below a threshold |
+| Streams | An ordered, time-ordered change log of item-level modifications, available in DynamoDB Streams and Kinesis Data Streams for DynamoDB |
+| Strong consistency | A read that reflects all writes that completed successfully before it |
+| Thundering herd | A load spike on the origin database caused by simultaneous expiry of a popular cache entry |
+| Time to live | An attribute-driven DynamoDB mechanism, or a Redis expiry, that automatically removes items after a timestamp |
+| Transaction | A group of operations applied atomically, all succeeding or all failing |
+| WCU | Write Capacity Unit — one write per second of an item up to 1 KB |
+| Write-through | A caching pattern in which every write updates both the cache and the database |
+| Writer and reader endpoints | Aurora DNS endpoints directing traffic to the single writer instance and to the load-balanced set of readers respectively |
 
 ## Configuration Options
 
-### Amazon S3 configuration
+### Amazon RDS and Aurora
 
-| Setting | Options | Architectural guidance |
-|---|---|---|
-| Storage class | Standard, Intelligent-Tiering, Standard-IA, One Zone-IA, Glacier Instant, Glacier Flexible, Deep Archive, Express One Zone | Set at upload for known patterns; use Intelligent-Tiering when patterns are unknown |
-| Versioning | Disabled, Enabled, Suspended | Enable for any bucket holding non-reproducible data; pair with lifecycle expiry of noncurrent versions |
-| Default encryption | SSE-S3, SSE-KMS, DSSE-KMS | SSE-S3 for general data, SSE-KMS with Bucket Keys where audit and key control are required |
-| Block Public Access | Four independent toggles at account and bucket level | Enable all four unless a documented public-hosting requirement exists |
-| Object Ownership | ACLs disabled — bucket owner enforced, or ACLs enabled | Keep ACLs disabled; use bucket policies exclusively |
-| Lifecycle rules | Transition, expiration, noncurrent expiration, abort incomplete multipart uploads | Always include an abort-incomplete-multipart rule |
-| Replication | Cross-Region, Same-Region, with or without Replication Time Control | Replicate to a separate account for ransomware resilience |
-| Event notifications | Lambda, SQS, SNS, EventBridge | Prefer EventBridge for richer filtering and multiple targets |
-| Object Lock | Governance or Compliance mode, with retention period or legal hold | Compliance mode is irreversible; test in a sandbox first |
-| Transfer Acceleration | Enabled or disabled | Only worthwhile for geographically distant, large uploads |
-| Requester Pays | Enabled or disabled | Useful for publishing large public datasets |
-| Static website hosting | Enabled with index and error documents | Prefer CloudFront with Origin Access Control over public website endpoints |
+| Configuration | Options and guidance |
+|---|---|
+| Engine and version | PostgreSQL, MySQL, MariaDB, Oracle, SQL Server, Db2, Aurora PostgreSQL, Aurora MySQL. Prefer Aurora when the workload benefits from its storage architecture and read scaling; prefer community engines when portability or licence cost dominates |
+| Instance class | `db.t` burstable for development, `db.m` general purpose, `db.r` memory-optimised for large working sets, `db.x` for extreme memory. Graviton-based classes usually offer better price-performance |
+| Deployment option | Single-AZ for non-production only; Multi-AZ instance deployment for standard high availability; Multi-AZ DB cluster for faster failover and two readable standbys; Aurora cluster for the storage-decoupled architecture |
+| Storage type | `gp3` general purpose for most workloads, `io1` or `io2` Provisioned IOPS for sustained high I/O with low latency variance. Aurora manages storage automatically |
+| Storage auto scaling | Enable it, with a maximum threshold. Running out of storage takes a database offline |
+| Backup retention | Zero disables automated backups and point-in-time recovery entirely; production should use seven to thirty-five days |
+| Backup window and maintenance window | Set explicitly to low-traffic periods rather than accepting the default |
+| Parameter group | Custom groups allow tuning of `max_connections`, `work_mem`, `shared_buffers`, timeouts, and logging. Note that static parameters require a reboot |
+| Option group | Engine-specific features such as Oracle Transparent Data Encryption, SQL Server Audit, or MariaDB audit plugin |
+| Encryption at rest | Enable at creation with a KMS key. An unencrypted instance cannot be converted in place; it must be snapshotted, copied with encryption, and restored |
+| Performance Insights | Enable it. The retention period beyond the free tier is billable but the diagnostic value is high |
+| Deletion protection | Enable in production; it prevents accidental deletion through the API or console |
+| Aurora Serverless v2 capacity range | Minimum and maximum Aurora Capacity Units; the minimum determines both cost floor and cold-scaling behaviour |
 
-### Amazon EBS configuration
+### Amazon DynamoDB
 
-| Setting | Options | Architectural guidance |
-|---|---|---|
-| Volume type | gp3, gp2, io1, io2 Block Express, st1, sc1 | Default to gp3; escalate to io2 only with measured evidence |
-| Size | 1 GiB to 64 TiB depending on type | Size for capacity plus growth; remember volumes cannot shrink |
-| Provisioned IOPS | Up to 16,000 on gp3, 256,000 on io2 Block Express | Provision to the measured peak, not the average |
-| Provisioned throughput | Up to 1,000 MiB/s on gp3 | Increase for sequential workloads such as log ingestion |
-| Encryption | Enabled with an AWS managed or customer managed KMS key | Enable encryption by default at the account level |
-| Delete on termination | True or false | True for root volumes, false for data volumes |
-| Multi-Attach | Enabled on io1 and io2 | Only with a cluster-aware file system |
-| Snapshot schedule | Data Lifecycle Manager or AWS Backup policy | Tag-driven policies scale better than per-volume configuration |
+| Configuration | Options and guidance |
+|---|---|
+| Capacity mode | On-demand for unpredictable, spiky, or new workloads; provisioned with auto scaling for steady, forecastable traffic where the discount matters |
+| Table class | Standard for typical access patterns; Standard-Infrequent Access for large tables read rarely, trading higher request cost for lower storage cost |
+| Primary key | Simple partition key for pure key-value lookups; composite partition and sort key wherever a one-to-many relationship or range query exists |
+| Secondary indexes | GSIs for alternative access patterns, created at any time, eventually consistent, separately provisioned; LSIs only at table creation, sharing the partition key, strongly consistent, subject to a 10 GB item-collection limit |
+| Index projection | `KEYS_ONLY` is cheapest, `INCLUDE` is usually optimal, `ALL` avoids base-table fetches but duplicates storage and write cost |
+| Point-in-time recovery | Enable for any table holding business data; it provides second-granularity restore across the retention window |
+| Time to live | Specify an attribute holding a Unix epoch timestamp; expired items are removed asynchronously without consuming write capacity |
+| Streams | Enable with `NEW_AND_OLD_IMAGES` when downstream event-driven processing needs before-and-after state |
+| Encryption | Enabled by default with an AWS owned key; choose an AWS managed or customer managed KMS key where audit or key-control requirements exist |
+| Global Tables | Add replica Regions for multi-active global access; be explicit that conflict resolution is last-writer-wins |
+| DAX | Add when read latency must fall below single-digit milliseconds to microseconds and the workload is read-dominant |
 
-### Amazon EFS configuration
+### Amazon ElastiCache
 
-| Setting | Options | Architectural guidance |
-|---|---|---|
-| Throughput mode | Elastic, Provisioned, Bursting | Elastic is the correct default for variable workloads |
-| Performance mode | General Purpose, Max I/O | General Purpose unless a measured parallel-throughput ceiling is reached |
-| Storage class and lifecycle | Standard, IA, Archive, One Zone variants, with transition and return policies | Transition after thirty days of no access; enable return on first access for unpredictable reads |
-| Availability | Regional or One Zone | One Zone only for recreatable development and test data |
-| Encryption | At rest with KMS, in transit with TLS through efs-utils | Enable both; in-transit encryption is not the default for a raw NFS mount |
-| Access points | Root directory and enforced POSIX user and group | One per application for tenant isolation |
-| File system policy | Resource policy controlling mount and access actions | Use to deny non-TLS access and enforce access point usage |
-
-### Mount and attachment options
-
-Common Linux mount options for EFS include `nfsvers=4.1`, `rsize=1048576`, `wsize=1048576`, `hard`, `timeo=600`, and `retrans=2`. The `hard` option makes I/O retry indefinitely rather than returning errors, which preserves data integrity but can hang processes if the file system becomes unreachable — an important trade-off to state explicitly in a design review.
-
----
+| Configuration | Options and guidance |
+|---|---|
+| Engine | Redis or Valkey for almost all cases; Memcached only for simple, disposable, multi-threaded object caching |
+| Cluster mode | Disabled for a single shard up to the node's memory; enabled when memory or write throughput exceeds one node |
+| Node type | `cache.t` for development, `cache.m` general purpose, `cache.r` memory-optimised. Data-tiering node families reduce cost per gigabyte for large, partly cold datasets |
+| Multi-AZ and automatic failover | Enable for any cache whose loss would stampede the origin database |
+| `maxmemory-policy` | `allkeys-lru` for a pure cache; `volatile-lru` or `volatile-ttl` when some keys must never be evicted; avoid `noeviction` unless write failure is genuinely preferable to eviction |
+| Encryption | At rest with KMS and in transit with TLS; enable Redis RBAC users rather than a single shared AUTH token |
+| Snapshot retention | Useful for warm restart of a large cache, not as a durability mechanism |
+| Serverless | Choose when demand is unpredictable and node sizing is undesirable operational work |
 
 ## Design Considerations
 
-### The decision framework
-
-This is the section to internalise. Given a workload, walk the questions in order.
-
-```mermaid
-graph TD
-    A["What storage does this workload need"] --> B{"Is the data needed after the compute instance dies"}
-    B -->|"No, purely temporary"| C["Instance store or ephemeral container storage"]
-    B -->|"Yes"| D{"Do multiple hosts need concurrent read and write access"}
-    D -->|"Yes, POSIX required"| E{"Windows SMB or Active Directory"}
-    E -->|"Yes"| F["Amazon FSx for Windows File Server"]
-    E -->|"No"| G{"Extreme HPC throughput needed"}
-    G -->|"Yes"| H["Amazon FSx for Lustre"]
-    G -->|"No"| I["Amazon EFS"]
-    D -->|"No, single host"| J{"Does the application require a block device or a POSIX file path"}
-    J -->|"Yes"| K["Amazon EBS"]
-    J -->|"No, API access is acceptable"| L{"Whole-object read and write"}
-    L -->|"Yes"| M["Amazon S3"]
-    L -->|"No, random in-place updates"| K
-```
-
-### Comparative decision table
-
-| Criterion | Amazon S3 | Amazon EBS | Amazon EFS | Instance Store |
-|---|---|---|---|---|
-| Abstraction | Object | Block | File | Block |
-| Scope | Regional | Single Availability Zone | Regional, multi-AZ | Single host |
-| Concurrent access | Unlimited clients over HTTP | One instance, or up to sixteen with Multi-Attach | Thousands of clients | One instance |
-| Capacity model | Unlimited, pay for stored bytes | Provisioned, pay for provisioned bytes | Elastic, pay for stored bytes | Fixed by instance type, included in instance price |
-| Latency | Tens of milliseconds; single-digit for Express One Zone | Sub-millisecond to low milliseconds | Low milliseconds | Microseconds |
-| Throughput ceiling | Effectively unlimited with parallelism | Up to 4,000 MiB/s per volume | Multiple GiB/s aggregate | Highest available |
-| Durability | Eleven nines across three or more AZs | Replicated within one AZ; snapshots for cross-AZ | Eleven nines across three or more AZs | None |
-| Survives instance termination | Yes | Yes | Yes | No |
-| Survives AZ failure | Yes | No, data preserved but inaccessible | Yes | No |
-| In-place partial update | No | Yes | Yes | Yes |
-| POSIX semantics | No | Yes, via the guest file system | Yes | Yes, via the guest file system |
-| Typical relative cost per GiB-month | Lowest | Moderate | Highest | Included |
-| Best for | Data lakes, backups, media, artefacts, logs | Boot volumes, databases, single-host state | Shared content, CMS, ML datasets, container shared volumes | Cache, scratch, shuffle, replicated NoSQL |
-| Worst for | Transactional writes, POSIX applications | Multi-AZ shared state | Latency-critical databases | Anything that must survive |
-
-!!! question "Apply the framework"
-    A team asks you to store user-uploaded profile photographs for a web application running on ECS Fargate across three Availability Zones. Work through the questions. The data must outlive the task, so it is not instance store. Multiple tasks must read it, but only through the application over HTTP, and each photograph is written whole and never partially updated. Therefore the answer is S3, fronted by CloudFront, with uploads performed by presigned URL directly from the browser so that the application tier never handles the bytes. Choosing EFS here would be a common but incorrect answer — it works, but it costs more, scales worse, and provides no CDN integration.
-
 ### Scalability
 
-S3 scales without any action on your part; the design question is how to spread keys across prefixes and how to parallelise clients. EFS scales throughput automatically in Elastic mode; the design question is whether your workload is metadata-bound rather than throughput-bound. EBS does **not** scale automatically; the design question is whether you have measured the peak IOPS requirement and whether the instance type can deliver it.
+Relational databases scale writes vertically, which has a hard ceiling. Aurora pushes that ceiling higher by decoupling storage, and read scaling is straightforward with up to fifteen low-lag replicas sharing one storage volume. DynamoDB scales horizontally by partition and is, for practical purposes, unbounded — provided the partition key distributes traffic evenly. This is the single most consequential design decision in a DynamoDB table, and it cannot be changed after the fact without a migration.
 
-### Availability and fault tolerance
+!!! warning "Scalability is a property of the data model, not the service"
+    A DynamoDB table with `status` as the partition key does not scale, no matter how much capacity is provisioned, because all `ACTIVE` items land on one partition. The service is horizontally scalable; a badly keyed table is not.
 
-An architecture built on a single EBS volume has an availability ceiling set by one Availability Zone. Moving state to EFS or S3 raises that ceiling to the Region. Moving beyond a single Region requires S3 Cross-Region Replication, EFS replication, or snapshot copies, along with a documented Recovery Time Objective and Recovery Point Objective.
+### Availability
 
-| Failure scenario | S3 impact | EBS impact | EFS impact |
-|---|---|---|---|
-| Single storage device fails | None, transparent repair | None, replica serves | None, redundant copies |
-| Single Availability Zone fails | None for multi-AZ classes | Volume inaccessible until the zone recovers | None; other mount targets serve |
-| Region fails | Requires replication to another Region | Requires cross-Region snapshot copies | Requires EFS replication |
-| Accidental deletion | Versioning and Object Lock protect | Snapshots and Recycle Bin protect | AWS Backup protects |
-| Credential compromise | Replication to a separate account and Object Lock protect | Cross-account snapshot copies protect | Cross-account backup vault protects |
+RDS Multi-AZ provides automatic failover typically within one to two minutes for the instance deployment, and often under thirty-five seconds for a Multi-AZ DB cluster. Aurora typically fails over in under thirty seconds because the storage layer survives the compute failure. DynamoDB replicates synchronously across three Availability Zones as a service property, with no configuration and no failover event visible to the application. ElastiCache with Multi-AZ promotes a replica automatically, but the cache is a performance component, and the architecture must survive its absence.
 
-### Durability, latency, cost, and maintainability
+### Reliability and Durability
 
-Durability is a property you buy through redundancy and verify through restore testing — a backup that has never been restored is a hypothesis, not a control. Latency is determined primarily by the abstraction, secondarily by proximity, and only thirdly by configuration. Cost is dominated by different dimensions in each service: storage class for S3, provisioned capacity for EBS, and storage class plus throughput mode for EFS. Maintainability favours managed, elastic services, which is why EFS and S3 impose far less operational load than a self-managed NFS cluster on EC2 with EBS volumes.
+| Service | Durability mechanism | Recovery capability |
+|---|---|---|
+| RDS | Synchronous standby, automated backups, transaction logs | Point-in-time recovery within the retention window, up to thirty-five days |
+| Aurora | Six-way replication across three AZs, quorum writes, continuous backup to Amazon S3, self-healing storage | Point-in-time recovery, backtrack on Aurora MySQL, fast clone |
+| DynamoDB | Synchronous replication across three AZs | Point-in-time recovery to any second in the retention window, on-demand backups |
+| ElastiCache | Asynchronous replication, optional snapshots | Restore from snapshot; recent writes may be lost. Not a system of record |
 
-### Operational complexity
+### Latency
 
-Ranked from least to most operationally demanding: S3 requires almost nothing beyond policy hygiene; EFS requires network and access point configuration but no capacity management; EBS requires capacity planning, file system growth, snapshot scheduling, and Availability Zone-aware failover design. This ranking should influence design decisions in teams with limited operational capacity.
+Latency decreases as data moves closer to memory and closer to the caller. A rough ordering for a well-designed system is: DAX or ElastiCache in the microsecond to low-millisecond range, DynamoDB in single-digit milliseconds, Aurora in low single-digit milliseconds for cached pages, and RDS with cold disk reads in the tens of milliseconds. Cross-Region reads add the physical propagation delay, which no amount of engineering removes.
 
----
+### Cost
+
+The cost structures differ so fundamentally that comparing them requires modelling the actual access pattern. RDS and ElastiCache bill for provisioned capacity whether or not it is used, so utilisation is the dominant cost lever. DynamoDB on-demand bills per request, so request count and item size dominate. A workload with sustained, predictable, high throughput usually favours provisioned capacity or reserved instances; a workload that is idle most of the time usually favours on-demand and serverless modes.
+
+### Maintainability and Operational Complexity
+
+Relational schemas are self-describing and support ad hoc query, which makes them forgiving of requirements that change after launch. DynamoDB single-table designs are extremely efficient for known access patterns and extremely awkward for unknown ones; adding a genuinely new access pattern often means adding a global secondary index or backfilling data. The honest trade-off is that DynamoDB moves design effort forward in time: more thinking before the first write, far less firefighting at scale.
+
+!!! question "The question to ask before choosing DynamoDB"
+    Can you enumerate every access pattern the application will need? If yes, DynamoDB will serve them at any scale. If no, and the query patterns will be discovered through use, a relational database will absorb that uncertainty far more gracefully.
 
 ## AWS Best Practices
 
-The AWS Well-Architected Framework provides six pillars. The following table maps concrete storage practices to each.
+### Operational Excellence
 
-| Pillar | Storage practices |
-|---|---|
-| Operational Excellence | Define all storage in CloudFormation or Terraform; tag every bucket, volume, and file system with owner, environment, and data classification; automate snapshots through Data Lifecycle Manager or AWS Backup; test restores on a schedule; use S3 Inventory and Storage Lens rather than ad hoc listing |
-| Security | Enable Block Public Access at the account level; keep ACLs disabled; enforce TLS through bucket and file system policies; encrypt everything at rest with KMS; apply least privilege to actions, resources, and conditions; enable CloudTrail data events for sensitive buckets; use VPC endpoints; use Object Lock for regulated retention |
-| Reliability | Place state in multi-AZ services wherever the latency budget allows; snapshot EBS volumes and copy the snapshots to a second Region; enable S3 versioning; replicate critical buckets across Regions and accounts; document Recovery Time Objective and Recovery Point Objective and validate them |
-| Performance Efficiency | Choose the abstraction that matches the access pattern before tuning; use gp3 rather than gp2; use multipart upload and byte-range reads for large objects; use CloudFront to cache; use EFS Elastic throughput; measure before provisioning IOPS |
-| Cost Optimization | Apply lifecycle policies from day one; use Intelligent-Tiering for unknown patterns; delete incomplete multipart uploads; expire noncurrent versions; right-size EBS volumes and migrate gp2 to gp3; add a Gateway VPC endpoint for S3; review Storage Lens and Cost Explorer monthly |
-| Sustainability | Delete data that has no retention requirement; use colder storage classes, which consume less energy per stored byte; avoid over-provisioned EBS capacity that occupies physical media without serving requests; compress and use columnar formats such as Parquet to reduce both cost and energy |
+- Define databases as code with CloudFormation, the CDK, or Terraform, and manage schema changes with a migration tool such as Flyway, Liquibase, or Alembic executed from the CI/CD pipeline rather than by hand.
+- Set explicit maintenance and backup windows aligned to genuine low-traffic periods.
+- Enable Performance Insights on RDS and Aurora, and Contributor Insights on DynamoDB, before an incident rather than during one.
+- Practise failover. An untested failover is an assumption, not a capability. Aurora and RDS both support forced failover for exactly this purpose.
+- Tag every database resource with owner, environment, and cost centre so that cost attribution and lifecycle policy are possible.
 
-!!! tip "The two practices with the highest return"
-    If you adopt only two practices from this chapter, adopt these. First, enable S3 versioning together with a lifecycle rule expiring noncurrent versions — this converts accidental deletion from a disaster into an inconvenience at bounded cost. Second, add a Gateway VPC endpoint for S3 in every VPC — this is free, improves security posture, and frequently eliminates a significant NAT Gateway bill.
+### Security
 
----
+- Place every database in private subnets with no route to an Internet Gateway. A publicly accessible RDS instance is almost never justified.
+- Restrict access with security groups referencing the application tier's security group rather than CIDR ranges.
+- Use IAM database authentication or Secrets Manager with automatic rotation instead of static credentials in configuration files or environment variables.
+- Enable encryption at rest at creation time and encryption in transit through TLS, and enforce TLS at the engine level with a parameter such as `rds.force_ssl`.
+- Apply least privilege inside the database as well as in IAM. Application accounts should not own schemas or hold administrative rights.
+
+### Reliability
+
+- Enable Multi-AZ for every production relational database and deletion protection for every database whose loss would be material.
+- Set backup retention deliberately; a retention of zero silently disables point-in-time recovery.
+- Enable point-in-time recovery on DynamoDB tables holding business data.
+- Design the application to tolerate cache absence, replica lag, and transient failover errors, with bounded retries using exponential backoff and jitter.
+- Test restores, not just backups. A backup that has never been restored is an untested hypothesis.
+
+### Performance Efficiency
+
+- Match the data store to the access pattern rather than defaulting to a single technology across the estate.
+- Cache the hot working set, and set TTLs from the tolerable-staleness requirement.
+- Use `Query` rather than `Scan`; a full-table `Scan` in a request path is a defect.
+- Use RDS Proxy where a highly concurrent or serverless compute tier connects to a relational database.
+- Index deliberately. Every index accelerates reads and taxes writes and storage.
+
+### Cost Optimization
+
+- Right-size instances against observed utilisation rather than against peak-day guesses, and use Compute Optimizer and Trusted Advisor recommendations.
+- Purchase Reserved Instances or Savings Plans for steady baseline database capacity.
+- Move DynamoDB tables with predictable traffic from on-demand to provisioned with auto scaling once the pattern is established, and consider the Standard-Infrequent Access table class for large, rarely read tables.
+- Stop or downsize non-production databases outside working hours; an always-on development database is one of the most common sources of avoidable spend.
+- Set log retention. Unbounded CloudWatch Logs retention grows silently and indefinitely.
+
+### Sustainability
+
+Serverless and on-demand capacity modes improve aggregate hardware utilisation, which reduces energy consumption per unit of work. Graviton-based instance classes deliver better performance per watt. Deleting unused snapshots, unattached storage, and idle replicas removes real physical resource consumption, not merely a line on an invoice.
 
 ## Security Considerations
 
-### Layered authorisation for S3
+### Identity and Access Management
 
-Access to an S3 object is the result of evaluating several policy types together. An explicit `Deny` in any of them wins, and access is granted only if at least one policy allows it and none denies it.
+Database security in AWS operates at two distinct layers that students routinely conflate. The **IAM layer** governs control-plane actions: who may create, modify, snapshot, or delete a database. The **engine layer** governs data-plane access: which database user may read which table. An IAM policy granting `rds:*` does not grant the ability to run a `SELECT`, and a database grant does not permit deleting the instance.
+
+DynamoDB is the exception that proves the rule, because its data plane *is* an AWS API. Every `GetItem` and `PutItem` is an IAM-authorised action, which allows remarkably fine-grained control.
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [{
+    "Sid": "TenantIsolationByLeadingKey",
+    "Effect": "Allow",
+    "Action": ["dynamodb:GetItem", "dynamodb:Query", "dynamodb:PutItem", "dynamodb:UpdateItem"],
+    "Resource": "arn:aws:dynamodb:us-east-1:111122223333:table/Orders",
+    "Condition": {
+      "ForAllValues:StringEquals": {
+        "dynamodb:LeadingKeys": ["${aws:PrincipalTag/tenantId}"]
+      }
+    }
+  }]
+}
+```
+
+!!! tip "Fine-grained access control in DynamoDB"
+    The `dynamodb:LeadingKeys` condition key restricts a principal to items whose partition key matches a value derived from their identity. This enforces multi-tenant isolation in IAM rather than in application code, which means a bug in the application cannot leak another tenant's data.
+
+### Least Privilege
+
+Application database accounts should hold only the privileges the application exercises. In practice this means separate accounts for migrations (which need DDL) and for runtime (which needs only DML), and separate read-only accounts for analytics and reporting consumers. For DynamoDB, grant specific actions on specific table and index ARNs rather than `dynamodb:*` on `*`.
+
+### Encryption and Key Management
+
+| Layer | RDS and Aurora | DynamoDB | ElastiCache |
+|---|---|---|---|
+| At rest | KMS-encrypted volumes, snapshots, and logs; must be enabled at creation | Always encrypted; choose AWS owned, AWS managed, or customer managed KMS key | KMS encryption at rest, enabled at creation |
+| In transit | TLS to the endpoint; enforce with `rds.force_ssl` or engine equivalent | TLS on all API endpoints by default | TLS in transit, enabled at creation |
+| Key control | Customer managed keys allow rotation policy, key deletion, and cross-account grants | Customer managed keys allow denying the service access by revoking the key | Customer managed keys supported |
+
+!!! danger "Encryption at rest cannot be enabled in place"
+    For RDS and ElastiCache, encryption at rest is set at creation. Converting an unencrypted database requires taking a snapshot, copying the snapshot with encryption enabled, and restoring from the copy — a migration with downtime. Decide before creation, not after an audit.
+
+### Secrets Management
+
+Store database credentials in AWS Secrets Manager with automatic rotation, and retrieve them at runtime through the SDK or through native integration such as ECS task-definition `secrets` blocks. For RDS and Aurora, IAM database authentication removes the password entirely, issuing a short-lived token derived from IAM credentials — an excellent fit for Lambda and containerised workloads because it eliminates the long-lived secret rather than merely protecting it.
+
+### Network Isolation
 
 ```mermaid
 graph TD
-    A["Request arrives"] --> B["Service Control Policy in the Organization"]
-    B --> C["VPC Endpoint Policy if applicable"]
-    C --> D["IAM Identity Policy or Role"]
-    D --> E["Bucket Policy"]
-    E --> F["Access Point Policy if used"]
-    F --> G["Block Public Access evaluation"]
-    G --> H{"Any explicit Deny"}
-    H -->|"Yes"| I["Request denied"]
-    H -->|"No"| J{"At least one Allow"}
-    J -->|"Yes"| K["Request allowed"]
-    J -->|"No"| I
+    IGW["Internet Gateway"] --> PUB["Public Subnets"]
+    PUB --> ALB["Application Load Balancer"]
+    ALB --> APPSG["App Security Group in Private Subnets"]
+    APPSG --> DBSG["Database Security Group"]
+    DBSG --> RDS["RDS Multi-AZ"]
+    APPSG --> CACHESG["Cache Security Group"]
+    CACHESG --> EC["ElastiCache Replication Group"]
+    APPSG --> VPCE["Gateway VPC Endpoint"]
+    VPCE --> DDB["Amazon DynamoDB"]
 ```
 
-### Least privilege in practice
+The database security group should permit inbound traffic on the engine port **only** from the application security group, expressed as a security-group reference rather than a CIDR. DynamoDB, being a public AWS API endpoint, should be reached through a Gateway VPC endpoint so that traffic never traverses the public internet or a NAT Gateway — which is both a security improvement and a meaningful cost saving.
 
-Least privilege means constraining three things: **actions**, **resources**, and **conditions**. A policy that grants `s3:*` on `arn:aws:s3:::*` violates all three. A least-privilege policy grants `s3:GetObject` on `arn:aws:s3:::app-uploads/tenant-42/*` with a condition requiring `aws:SecureTransport` to be true and optionally requiring a specific `aws:SourceVpce`.
+### Logging, Auditing and Compliance
 
-Note the frequently missed distinction between **bucket-level** and **object-level** actions. `s3:ListBucket` is a bucket-level action and its resource is the bucket ARN; `s3:GetObject` is an object-level action and its resource is the object ARN with a wildcard. A policy that lists only the object ARN will produce confusing `AccessDenied` errors on list operations.
+- **AWS CloudTrail** records every control-plane action and, for DynamoDB, optionally data-plane events.
+- **Database logs** — PostgreSQL and MySQL error, slow-query, and audit logs — can be exported to CloudWatch Logs for retention and alerting.
+- **Amazon RDS Enhanced Monitoring** provides operating-system-level metrics at up to one-second granularity.
+- **AWS Config** rules detect publicly accessible instances, unencrypted storage, and disabled backups.
+- **Amazon Macie**, **GuardDuty RDS Protection**, and **Security Hub** provide anomaly and sensitive-data detection.
 
-### Encryption strategy
-
-| Option | Key ownership | Audit trail | Cost | When to choose |
-|---|---|---|---|---|
-| SSE-S3 | AWS managed, invisible | No per-request KMS trail | No additional charge | Default for non-regulated data |
-| SSE-KMS with an AWS managed key | AWS managed within your account | CloudTrail records key usage | KMS request charges | Baseline auditability with minimal setup |
-| SSE-KMS with a customer managed key | You control the key policy, rotation, and deletion | Full CloudTrail trail | Key charge plus request charges | Regulated data, separation of duties, cross-account control |
-| DSSE-KMS | Two independent KMS layers | Full trail | Highest | Requirements mandating dual-layer encryption |
-| SSE-C | You supply the key on every request | Limited | No key charge | Rare; you accept full key management burden |
-| Client-side encryption | You encrypt before upload | AWS sees only ciphertext | Application complexity | Zero-trust requirements where AWS must not be able to decrypt |
-
-!!! tip "Enable S3 Bucket Keys with SSE-KMS"
-    Without Bucket Keys, every object `PUT` and `GET` under SSE-KMS makes a KMS API call, which adds latency, consumes the KMS request quota, and generates a per-request charge. S3 Bucket Keys derive a short-lived bucket-level key, reducing KMS request volume by up to ninety-nine percent. For high-request-rate buckets this is both a cost and a throughput consideration.
-
-### Network isolation
-
-For S3, network isolation is achieved through VPC endpoints combined with endpoint policies and with bucket policy conditions on `aws:SourceVpce` or `aws:SourceVpc`. For EFS, isolation is achieved with security groups permitting TCP 2049 only from the application's security group, subnet placement of mount targets in private subnets, and Network ACLs that permit both the request and the ephemeral response range. For EBS, there is no network configuration; isolation is achieved through IAM control of attach and snapshot operations.
-
-!!! danger "The three classic storage security failures"
-    First, a bucket policy with `"Principal": "*"` and no condition, which exposes data to the internet — Block Public Access exists specifically to prevent this. Second, a snapshot shared publicly, which exposes an entire disk image including credentials baked into it. Third, an over-broad IAM role attached to an EC2 instance, allowing a compromised web application to read every bucket in the account. All three are configuration errors, not platform weaknesses, and all three are detectable with IAM Access Analyzer and AWS Config.
-
-### Logging and compliance
-
-CloudTrail records **management events** — `CreateBucket`, `PutBucketPolicy`, `CreateVolume`, `DeleteSnapshot` — by default. It does **not** record **data events** such as `GetObject` unless you explicitly enable them, because the volume and cost would be substantial. For sensitive buckets, enable data events and send them to a separate, locked logging account. S3 server access logging provides a lower-cost, best-effort alternative delivered as log files into another bucket.
-
-Compliance controls include Object Lock in Compliance mode for regulatory retention such as SEC Rule 17a-4, KMS customer managed keys for key separation of duties, AWS Config rules for continuous conformance checking, and Macie for discovering sensitive data such as personally identifiable information within buckets.
-
----
+For regulated workloads, note that RDS and DynamoDB are in scope for common compliance programmes, but compliance is a shared outcome: AWS certifies the service, and the customer must still configure encryption, access control, retention, and audit logging correctly.
 
 ## Performance Optimization
 
-### Amazon S3
+### Caching
 
-- **Parallelise.** Aggregate throughput comes from concurrency. Use multipart upload with many concurrent parts, and byte-range `GET` requests to read one large object with several connections.
-- **Choose part size deliberately.** Parts smaller than about 8 MiB waste requests; very large parts reduce retry granularity. A part size between 8 MiB and 100 MiB suits most workloads, subject to the ten-thousand-part limit.
-- **Spread across prefixes** only when a single prefix demonstrably saturates the per-prefix request rate.
-- **Cache with CloudFront** for read-heavy public or semi-public content; this reduces latency, origin request cost, and egress cost simultaneously.
-- **Avoid tiny objects.** Millions of one-kilobyte objects incur enormous per-request and per-object overhead. Aggregate them into larger files, ideally in a columnar format such as Parquet for analytics.
-- **Use S3 Transfer Acceleration** only for geographically distant large uploads, and measure whether it actually helps for your client population.
-- **Use Express One Zone** for workloads where request latency dominates, such as iterative machine learning training over many small reads.
-
-### Amazon EBS
-
-- **Match the volume to the workload shape.** Random small I/O needs SSD types; large sequential streaming needs st1.
-- **Respect the instance ceiling.** Instance EBS bandwidth caps are frequently the true bottleneck. Check the instance type's documented EBS bandwidth before provisioning high IOPS.
-- **Use RAID 0 across multiple volumes** only when a single volume cannot deliver the required throughput; accept that this multiplies the failure surface and complicates consistent snapshots.
-- **Enable Fast Snapshot Restore** when Recovery Time Objective depends on restored volumes performing immediately.
-- **Tune the file system.** Use appropriate mount options, align partitions, and consider `noatime` to eliminate metadata writes on every read.
-- **Monitor `BurstBalance`** on gp2, st1, and sc1 and migrate to gp3 or io2 when it is regularly depleted.
-
-### Amazon EFS
-
-- **Use Elastic throughput** unless you have a steady, predictable load that Provisioned mode serves more cheaply.
-- **Increase parallelism.** A single-threaded client cannot saturate EFS; throughput scales with concurrent operations and clients.
-- **Increase `rsize` and `wsize`** to 1 MiB in mount options to reduce round trips.
-- **Avoid metadata-heavy patterns.** Very large directories, recursive `find`, and compiling large source trees perform poorly. Restructure into shallower hierarchies where possible.
-- **Cache read-mostly data locally** on the instance or in the container where correctness allows.
-
-### Cross-cutting techniques
-
-Connection reuse matters everywhere: reusing HTTPS connections in the AWS SDK avoids repeated TLS handshakes, which can dominate latency for small-object workloads. Compression reduces both transfer time and storage cost. Placing compute in the same Region — and, for EFS, the same Availability Zone — as the data removes both latency and cross-zone transfer charges.
-
----
-
-## Cost Optimization
-
-### Understanding where the money goes
-
-| Service | Dominant cost driver | Most effective lever |
-|---|---|---|
-| S3 with large objects | Storage per GiB-month | Lifecycle transitions to IA and Glacier classes |
-| S3 with many small objects | Request charges and per-object overhead | Aggregate objects; batch writes |
-| S3 serving public content | Data transfer out to the internet | CloudFront in front of the bucket |
-| EBS | Provisioned capacity, whether used or not | Right-size volumes; delete unattached volumes; migrate gp2 to gp3 |
-| EBS snapshots | Accumulated changed blocks over long retention | Enforce retention policies; use the snapshot archive tier for long-term copies |
-| EFS | Storage in the Standard class | Lifecycle transition to Infrequent Access and Archive |
-| Any service reached through NAT | NAT data processing charges | Gateway VPC endpoint for S3 |
-
-### Concrete optimisation actions
-
-1. **Delete unattached EBS volumes.** Volumes left behind after instance termination continue billing indefinitely. Detect them with a Config rule or a scheduled Lambda function.
-2. **Migrate every gp2 volume to gp3.** This is an online operation delivering roughly twenty percent savings with equal or better performance.
-3. **Apply an abort-incomplete-multipart-upload lifecycle rule.** Failed uploads leave parts that are billed but invisible in standard listings — a genuinely common source of untraceable cost.
-4. **Expire noncurrent versions.** Versioning without lifecycle expiry means storage grows without bound.
-5. **Adopt S3 Intelligent-Tiering** for buckets with unpredictable access, accepting the small per-object monitoring charge in exchange for automatic tiering without retrieval fees.
-6. **Compress and columnarise analytics data.** Converting JSON logs to compressed Parquet routinely reduces both storage and Athena scan costs by an order of magnitude.
-7. **Use One Zone classes for recreatable data** such as derived thumbnails, transcoding intermediates, and test fixtures.
-8. **Review Storage Lens** for buckets with high noncurrent-version ratios, high incomplete-multipart counts, or large volumes of objects never retrieved.
-
-### Pricing instruments beyond the storage services
-
-Reserved Instances and Savings Plans apply to compute, not to storage capacity, but they reduce the cost of the instances performing the I/O. Spot Instances suit storage-adjacent batch processing such as transcoding, provided intermediate results are checkpointed to S3. Cost Explorer with resource-level granularity and Trusted Advisor's underutilised-volume checks are the standard tools for finding waste.
-
-!!! warning "The retrieval-cost trap"
-    Moving data to Glacier Deep Archive appears to reduce cost dramatically until someone runs an analytics job over it. Retrieval charges plus the temporary restored copy can exceed a year of Standard storage. Cold classes are for data you are confident you will rarely read. If you are uncertain, Intelligent-Tiering is the safer choice because it has no retrieval fee between its frequent and infrequent tiers.
-
----
-
-## Monitoring and Observability
-
-### What to monitor and why
-
-| Service | Key metrics | What a problem looks like |
-|---|---|---|
-| S3 | `BucketSizeBytes`, `NumberOfObjects` (daily); request metrics `AllRequests`, `4xxErrors`, `5xxErrors`, `FirstByteLatency`, `TotalRequestLatency`; replication metrics | Rising `4xxErrors` indicates permission or key errors; rising `5xxErrors` warrants retries with exponential backoff; latency spikes suggest a hot prefix |
-| EBS | `VolumeReadOps`, `VolumeWriteOps`, `VolumeQueueLength`, `VolumeThroughputPercentage`, `BurstBalance`, `VolumeIdleTime` | A persistently high `VolumeQueueLength` means the volume is the bottleneck; a falling `BurstBalance` predicts an imminent performance collapse |
-| EFS | `TotalIOBytes`, `PercentIOLimit`, `BurstCreditBalance`, `ClientConnections`, `MeteredIOBytes`, `StorageBytes` by class | `PercentIOLimit` near one hundred indicates the General Purpose IOPS ceiling; a falling `BurstCreditBalance` predicts throttling |
-
-### Logging and tracing
-
-CloudTrail management events give you the audit trail of configuration changes and are the first place to look when a bucket policy changed unexpectedly. CloudTrail data events give per-object access records for forensic investigation. S3 server access logs are a cheaper, best-effort alternative. AWS X-Ray traces show how much of a request's latency is attributable to an S3 call, which is essential when diagnosing a slow API endpoint in a microservices architecture. CloudWatch Logs Insights over VPC Flow Logs helps confirm whether S3 traffic is actually traversing the endpoint rather than the NAT Gateway.
-
-### Alarms worth creating
-
-- EBS `BurstBalance` below twenty percent for fifteen minutes.
-- EBS `VolumeQueueLength` above a workload-specific threshold sustained for ten minutes.
-- EFS `BurstCreditBalance` trending toward zero.
-- S3 `5xxErrors` rate exceeding a small percentage of requests.
-- S3 replication latency exceeding the Replication Time Control threshold.
-- AWS Config rules alarming on unencrypted volumes, public buckets, or buckets without versioning.
+The highest-leverage performance optimisation available is usually to avoid the database query entirely.
 
 ```mermaid
 graph LR
-    A["S3, EBS, EFS"] --> B["CloudWatch Metrics"]
-    A --> C["CloudTrail Events"]
-    A --> D["Access Logs"]
-    B --> E["Alarms"]
-    B --> F["Dashboards"]
-    C --> G["Security Analytics in a Logging Account"]
-    D --> G
-    E --> H["SNS Notification"]
-    H --> I["On-call Engineer or Automated Remediation"]
+    C["Client"] --> CF["CloudFront edge cache"]
+    CF --> API["Application"]
+    API --> DAX["DynamoDB Accelerator"]
+    API --> EC["ElastiCache"]
+    DAX --> DDB["DynamoDB"]
+    EC --> RDS["RDS or Aurora"]
 ```
 
-!!! note "Observability is a design requirement, not an afterthought"
-    A storage layer without metrics and alarms is a storage layer whose failures you will learn about from users. Define, at design time, which metric indicates saturation for each storage resource and what the threshold is. This is a direct DSO303 observability outcome.
+Each layer removes work from the layer beneath it. A well-tuned cache hierarchy commonly serves 90 to 99 percent of reads before they reach the primary database, which allows that database to be provisioned for the residual rather than for the peak.
 
----
+### Read Scaling
+
+Add RDS or Aurora read replicas and direct read-only traffic to the reader endpoint. This is effective and cheap, but it introduces replica lag, and any read that must reflect the caller's own immediately preceding write must go to the writer. The pattern of routing "read your own writes" to the primary and everything else to replicas is a standard and worthwhile complication.
+
+### Connection Management
+
+Establishing a database connection is expensive — a TCP handshake, a TLS negotiation, and engine-side authentication and process or thread allocation. Connection pooling amortises this. In serverless and highly elastic architectures, where compute scales horizontally and each execution environment would otherwise hold its own connection, **Amazon RDS Proxy** is the correct answer: it maintains a warm pool, multiplexes many client connections onto few database connections, and improves failover behaviour by holding client connections open during a failover.
+
+!!! warning "The Lambda connection-exhaustion failure"
+    A Lambda function scaling to 1,000 concurrent executions against a `db.t3.medium` will exhaust `max_connections` and fail. The remedy is RDS Proxy, supported by reserved concurrency to bound the blast radius, and by opening connections outside the handler so that warm invocations reuse them.
+
+### Query and Index Optimisation
+
+For relational engines, use `EXPLAIN` and `EXPLAIN ANALYZE` to confirm index usage, watch for sequential scans on large tables, and enable slow-query logging with a threshold that produces a usable signal. Index selectively: each index accelerates a read pattern and taxes every write.
+
+For DynamoDB, the equivalent discipline is to ensure every request-path operation is a `Query` or `GetItem` rather than a `Scan`, that the partition key spreads load, and that secondary indexes project only the attributes actually needed. Enable Contributor Insights to identify the most frequently accessed keys and confirm that no single key dominates.
+
+### Parallelism and Batching
+
+Use `BatchGetItem` and `BatchWriteItem` to amortise request overhead, and `TransactWriteItems` only where atomicity across items is genuinely required, since transactions consume roughly twice the capacity. For large offline scans, use parallel `Scan` with distinct segments, but only outside the request path. For relational bulk loads, disable non-essential indexes, use `COPY` or `LOAD DATA`, and batch commits rather than committing per row.
+
+### Storage and Instance Optimisation
+
+Choose memory-optimised instance classes when the working set should be resident in the buffer pool, because a cache hit in `shared_buffers` or the InnoDB buffer pool is orders of magnitude cheaper than a disk read. Choose Provisioned IOPS storage when the workload requires sustained, predictable I/O with low latency variance. Aurora removes most of this decision by managing storage automatically.
+
+## Cost Optimization
+
+### Understanding the Pricing Dimensions
+
+| Service | Primary cost dimensions |
+|---|---|
+| RDS | Instance hours by class, allocated storage and IOPS, backup storage beyond the database size, data transfer across AZs and Regions, licence costs for commercial engines |
+| Aurora | Instance hours or Aurora Capacity Unit hours, storage consumed, I/O operations on the standard configuration, backup storage, cross-Region replication |
+| DynamoDB | Read and write request units or provisioned capacity hours, storage per gigabyte-month, optional features such as Streams, Global Tables replicated writes, PITR, and backups |
+| ElastiCache | Node hours by node type, or serverless data and processing units, backup storage, cross-AZ and cross-Region data transfer |
+
+!!! info "Verify current figures"
+    Every figure discussed here is a dimension and an order of magnitude only. Consult the current AWS pricing pages and the AWS Pricing Calculator before making a budgetary commitment.
+
+### Levers That Actually Move the Number
+
+1. **Right-size before you optimise anything else.** Most database over-spend is an instance provisioned for an imagined peak. Use CloudWatch metrics over a representative period, and Compute Optimizer recommendations, to select the class.
+2. **Commit to the steady baseline.** Reserved Instances for RDS and ElastiCache, and DynamoDB reserved capacity, offer substantial discounts for one-year or three-year commitments. Commit only to the floor of observed usage, and cover the remainder on demand.
+3. **Choose the right capacity mode.** DynamoDB on-demand is excellent for unknown and spiky traffic and expensive for steady high throughput. Provisioned capacity with auto scaling is materially cheaper once traffic is predictable. Measure before switching.
+4. **Stop non-production databases outside working hours.** RDS instances can be stopped for up to seven days at a time; Aurora Serverless v2 can scale to a very low floor. An idle development database running continuously is pure waste.
+5. **Use a Gateway VPC endpoint for DynamoDB and S3.** Routing this traffic through a NAT Gateway incurs per-gigabyte processing charges for no benefit.
+6. **Control storage growth.** Enable DynamoDB TTL to expire aged items, use the Standard-Infrequent Access table class for large cold tables, archive old relational data to S3 with a lifecycle policy, and delete orphaned manual snapshots — which persist and bill long after the database they came from is gone.
+7. **Set retention on everything.** Backup retention, log retention, and Performance Insights retention all bill, and all default to values that are not necessarily the ones you want.
+8. **Cache aggressively.** A cache node is usually much cheaper than the larger database instance it makes unnecessary.
+9. **Minimise cross-AZ chatter.** Data transfer between Availability Zones is billable in both directions; a chatty application that reads from a replica in another zone on every request pays for it.
+
+!!! tip "Cost governance tooling"
+    Use AWS Cost Explorer with resource tags to attribute database spend to teams and services, AWS Budgets with alerts to catch runaway growth early, and Trusted Advisor to surface idle instances and unassociated resources.
+
+## Monitoring and Observability
+
+### The Four Questions Monitoring Must Answer
+
+Effective database observability answers: is it available, is it fast enough, is it approaching a limit, and did something change? Each service exposes a different set of signals for these questions.
+
+### Amazon CloudWatch Metrics
+
+| Service | Metrics that matter most | Why |
+|---|---|---|
+| RDS and Aurora | `CPUUtilization`, `DatabaseConnections`, `FreeableMemory`, `FreeStorageSpace`, `ReadLatency`, `WriteLatency`, `ReplicaLag`, `DiskQueueDepth`, `BurstBalance` | Connections approaching `max_connections` and storage approaching zero are the two most common causes of hard outage |
+| DynamoDB | `ConsumedReadCapacityUnits`, `ConsumedWriteCapacityUnits`, `ThrottledRequests`, `ReadThrottleEvents`, `WriteThrottleEvents`, `SuccessfulRequestLatency`, `UserErrors`, `SystemErrors`, `AgeOfOldestUnreplicatedRecord` | Throttling is the primary symptom of both under-provisioning and hot partitions and must be alarmed on |
+| ElastiCache | `CPUUtilization`, `EngineCPUUtilization`, `CacheHits`, `CacheMisses`, `Evictions`, `DatabaseMemoryUsagePercentage`, `CurrConnections`, `ReplicationLag` | A rising eviction rate with a falling hit rate means the cache is too small for the working set |
+
+!!! warning "`EngineCPUUtilization` versus `CPUUtilization` on Redis"
+    Because Redis executes commands on a single thread, node-level `CPUUtilization` can look comfortable while the engine thread is saturated. `EngineCPUUtilization` is the metric that reveals command-execution saturation, and it is the one to alarm on.
+
+### Deeper Diagnostic Tools
+
+- **Amazon RDS Performance Insights** visualises database load decomposed by wait event, SQL statement, host, and user, which converts "the database is slow" into "these three queries are waiting on lock acquisition".
+- **Enhanced Monitoring** exposes operating-system metrics — process list, memory breakdown, disk I/O — at up to one-second granularity, finer than the standard hypervisor-level CloudWatch metrics.
+- **DynamoDB Contributor Insights** identifies the most frequently accessed partition keys, which is the direct diagnostic for a hot partition.
+- **AWS X-Ray** traces a request across services and attributes latency to specific database calls, which is how you distinguish a slow database from a slow network path or a slow downstream dependency.
+- **Database Activity Streams** provide a near-real-time, protected stream of database activity for audit and compliance on Aurora and RDS for Oracle and SQL Server.
+
+### Alarms Worth Configuring
+
+```mermaid
+stateDiagram-v2
+    [*] --> Healthy
+    Healthy --> Warning: "Storage below 20 percent or connections above 80 percent"
+    Warning --> Critical: "Storage below 10 percent or throttling sustained"
+    Warning --> Healthy: "Auto scaling or manual remediation applied"
+    Critical --> Incident: "Failover or write failure"
+    Incident --> Healthy: "Recovery and post-incident review"
+```
+
+At minimum, alarm on free storage space below a threshold expressed in days-of-growth rather than gigabytes, database connections above 80 percent of `max_connections`, replica lag above the application's staleness tolerance, DynamoDB throttled requests above zero on a sustained basis, and ElastiCache evictions rising while the hit rate falls. Route alarms to a notification channel through Amazon SNS and, for anything that requires action within minutes, to an on-call rotation.
+
+### Logging and Tracing
+
+Export engine logs — error, slow query, general, and audit — to CloudWatch Logs with an explicit retention period, and use CloudWatch Logs Insights to query them. Emit structured application logs including the query identifier and the correlation identifier so that an application trace and a database log entry can be joined. Enable CloudTrail data events for DynamoDB tables holding sensitive data so that individual item access is auditable.
 
 ## Integration with Other AWS Services
 
-| Service | Nature of the integration | Why the pairing exists |
-|---|---|---|
-| Amazon CloudFront | Caches S3 objects globally; Origin Access Control lets the bucket stay private | Reduces latency, origin load, and egress cost while removing the need for a public bucket |
-| AWS Lambda | Triggered by S3 events; can mount EFS through an access point | Enables serverless event-driven processing of uploaded objects and shared state or large dependencies beyond the deployment package limit |
-| Amazon ECS and Amazon EKS | Mount EFS volumes; attach EBS through the CSI driver | Provides persistent volumes to containers, allowing stateful workloads on an otherwise ephemeral platform |
-| Amazon RDS and Amazon Aurora | RDS uses EBS internally; both export snapshots and logs to S3 | Managed databases inherit EBS durability while S3 holds backups and exports |
-| Amazon DynamoDB | Exports tables to S3; imports from S3 | Enables analytics over operational data without affecting the table's provisioned capacity |
-| Amazon Athena, AWS Glue, Amazon EMR, Redshift Spectrum | Query data directly in S3 | The data lake pattern — compute and storage scale and are billed independently |
-| Amazon SNS, Amazon SQS, Amazon EventBridge | Receive S3 event notifications | Decouple producers from consumers and enable fan-out |
-| AWS Step Functions | Orchestrates multi-step processing over S3 objects | Coordinates long-running workflows with retries and error handling |
-| AWS Backup | Central policy for EBS, EFS, RDS, DynamoDB, and S3 | Unifies backup, retention, cross-Region copy, and compliance reporting |
-| AWS KMS | Supplies encryption keys for all three services | Centralises key policy, rotation, and audit |
-| AWS CloudFormation and Terraform | Declare storage resources | Makes environments reproducible and reviewable |
-| Amazon SageMaker | Reads training data from S3 and FSx for Lustre; writes models to S3 | Decouples the training cluster's lifetime from the dataset |
-| AWS DataSync | Transfers data between on-premises, S3, EFS, and FSx | Automates large-scale migration and ongoing synchronisation |
-| AWS Transfer Family | Provides SFTP, FTPS, and FTP endpoints backed by S3 and EFS | Supports partners who cannot adopt the S3 API |
-| Amazon CloudWatch and AWS CloudTrail | Metrics, logs, and audit records | Provide the observability and audit surface |
-| Amazon Macie | Discovers sensitive data in S3 | Supports data classification and compliance obligations |
-
-### Reference integration architecture
-
 ```mermaid
 graph TD
-    U["Browser"] -->|"Presigned URL upload"| S3R["S3 Raw Bucket"]
-    S3R --> EB["EventBridge Rule"]
-    EB --> L1["Lambda Validator"]
-    L1 --> SQ["SQS Queue"]
-    SQ --> ECS["ECS Fargate Transcoder"]
-    ECS --> EFS["EFS Shared Working Set"]
-    ECS --> S3P["S3 Processed Bucket"]
-    S3P --> CFD["CloudFront Distribution"]
-    CFD --> U2["Global Viewers"]
-    S3P --> GLU["Glue Catalog"]
-    GLU --> ATH["Athena Queries"]
-    S3R --> LC["Lifecycle to Glacier Deep Archive"]
+    subgraph Compute
+        LAM["AWS Lambda"]
+        ECS["Amazon ECS and EKS"]
+        EC2["Amazon EC2"]
+    end
+    subgraph Data
+        RDS["Amazon RDS and Aurora"]
+        DDB["Amazon DynamoDB"]
+        EC["Amazon ElastiCache"]
+    end
+    LAM --> PROXY["Amazon RDS Proxy"]
+    PROXY --> RDS
+    ECS --> RDS
+    ECS --> EC
+    LAM --> DDB
+    DDB --> STREAM["DynamoDB Streams"]
+    STREAM --> LAM2["Lambda Stream Consumer"]
+    LAM2 --> OS["Amazon OpenSearch Service"]
+    LAM2 --> SNS["Amazon SNS"]
+    RDS --> DMS["AWS DMS"]
+    DMS --> S3["Amazon S3 Data Lake"]
+    S3 --> ATH["Amazon Athena"]
+    SM["AWS Secrets Manager"] --> ECS
+    SM --> LAM
+    KMS["AWS KMS"] --> RDS
+    KMS --> DDB
+    CW["Amazon CloudWatch"] --> RDS
+    CW --> DDB
+    CW --> EC
 ```
 
-This single diagram exercises most DSO303 outcomes at once: browser uploads bypass the application tier through presigned URLs; the compute tier is stateless because all state lives in S3 and EFS; processing is event-driven and asynchronous; the CDN handles global delivery; the analytics layer reads the same objects without a separate copy; and lifecycle policies control long-term cost.
+| Integrating service | Why it integrates | Typical use |
+|---|---|---|
+| AWS Lambda | Event-driven compute needs a data store, and DynamoDB Streams needs a consumer | Serverless APIs, change-data processing, aggregation |
+| Amazon RDS Proxy | Bridges highly concurrent, ephemeral compute to connection-limited relational engines | Lambda and Fargate access to RDS and Aurora |
+| AWS Secrets Manager | Removes static credentials from code and configuration, with automatic rotation | Credential injection into ECS tasks and Lambda functions |
+| AWS KMS | Provides customer-controlled encryption keys and an auditable key usage trail | Encryption at rest for every data store |
+| Amazon S3 | Durable, cheap object storage for archives, exports, and analytics | DynamoDB export to S3, RDS snapshot export to Parquet, Aurora `SELECT INTO OUTFILE S3` |
+| Amazon Athena and AWS Glue | Query exported data without loading it into a database | Analytics over operational data without touching the production database |
+| Amazon OpenSearch Service | Provides full-text and complex ad hoc search, which DynamoDB deliberately does not | Search index maintained from DynamoDB Streams |
+| Amazon Kinesis Data Streams | Higher-fanout, longer-retention change streaming than DynamoDB Streams | Multiple independent consumers of the same change feed |
+| AWS Database Migration Service | Moves and continuously replicates data between heterogeneous engines | Migration to AWS, ongoing replication to a data lake |
+| Amazon EventBridge | Decouples database change events from downstream consumers | Event-driven microservice choreography |
+| AWS Step Functions | Coordinates multi-step workflows with built-in error handling | Saga orchestration across service-owned databases |
+| Amazon QuickSight and Redshift | Analytical query and visualisation over data unsuited to the operational store | Business intelligence without loading the production database |
+| AWS Backup | Centralised, policy-driven backup across RDS, Aurora, DynamoDB, and more | Compliance-driven retention and cross-Region copy |
 
----
+!!! note "Why DynamoDB and OpenSearch appear together so often"
+    DynamoDB is deliberately not a search engine: it can retrieve by key extremely efficiently and cannot answer "find every order containing the word *urgent* placed in the last week" without a scan. The idiomatic AWS answer is to stream changes into OpenSearch and route search queries there, keeping each store on the access pattern it is good at. This is polyglot persistence in practice.
 
 ## Common Architecture Patterns
 
-### Externalised state and the stateless service
+### Cache-Aside with a Read-Through Fallback
 
-The foundational cloud-native pattern. Application servers hold no durable state; sessions live in ElastiCache or DynamoDB, uploads live in S3, and shared files live in EFS. Because any instance can serve any request, the tier can be scaled horizontally, replaced during deployment, and terminated by Spot reclamation without data loss. Every other pattern in this section depends on this one.
+The default pattern for read-heavy applications. The application consults ElastiCache or DAX, falls back to the primary store on a miss, and populates the cache with a TTL. It is simple, degrades gracefully, and is the pattern students should reach for first.
 
-### Static website hosting with a private origin
+### Database Per Service
 
-S3 stores the built front-end assets; CloudFront serves them globally; Origin Access Control ensures the bucket itself remains private and accessible only to the distribution. This pattern eliminates web servers entirely, costs a small fraction of an EC2-based equivalent, and scales to any traffic level with no configuration change.
-
-### Event-driven object processing
-
-An object is uploaded; S3 emits an event; a Lambda function or a queue-backed consumer processes it and writes a derived object. This is the standard image-thumbnailing, video-transcoding, virus-scanning, and log-parsing architecture.
+In a microservice architecture, each service owns its data store exclusively and no other service reads its tables directly. This preserves the ability to change schema and even to change database technology without coordinating across teams. The cost is that cross-service queries and cross-service transactions become distributed problems.
 
 ```mermaid
-sequenceDiagram
-    participant B as "Browser"
-    participant API as "API Gateway"
-    participant S3 as "S3 Uploads Bucket"
-    participant EB as "EventBridge"
-    participant L as "Lambda Worker"
-    participant D as "DynamoDB Metadata"
-    B->>API: "Request upload URL"
-    API-->>B: "Presigned PUT URL"
-    B->>S3: "PUT object directly"
-    S3->>EB: "ObjectCreated event"
-    EB->>L: "Invoke worker"
-    L->>S3: "GET original and PUT derivative"
-    L->>D: "Conditional write to record processing"
-    L-->>EB: "Success"
+graph LR
+    O["Order Service"] --> ODB["Aurora PostgreSQL"]
+    I["Inventory Service"] --> IDB["DynamoDB"]
+    S["Search Service"] --> SDB["OpenSearch"]
+    SESS["Session Service"] --> EC["ElastiCache Redis"]
+    O -.->|"events only"| EB["Amazon EventBridge"]
+    EB -.-> I
+    EB -.-> S
 ```
 
-!!! tip "Why the presigned URL matters architecturally"
-    Routing uploads through the application tier means every byte crosses your compute, consuming memory, bandwidth, and request duration, and coupling upload throughput to instance count. Presigned URLs let the client write directly to S3 while the application retains full control over who may upload, where, and for how long. This is a canonical example of using a managed service's capability instead of writing code.
+### Saga for Distributed Transactions
 
-### Fan-out and fan-in
+Because a distributed transaction across service-owned databases is undesirable, a business transaction is modelled as a sequence of local transactions, each publishing an event that triggers the next, with a compensating transaction defined for each step to undo it on failure. AWS Step Functions is the idiomatic orchestrator, providing declarative retry, catch, and compensation.
 
-An S3 event is published to SNS, which fans out to several SQS queues, each feeding an independent consumer — a thumbnail generator, an indexer, and an audit logger. Fan-in is the reverse: many producers write objects under a common prefix, and a scheduled job aggregates them. Fan-out decouples consumers so that adding one requires no change to the producer.
+### CQRS with Change Data Capture
 
-### Data lake with medallion layering
+Separate the write model from the read model. Writes go to DynamoDB or Aurora; DynamoDB Streams or a logical replication slot feeds a projection into a store optimised for reading — OpenSearch for search, a materialised view for reporting, ElastiCache for point lookups. The read model is eventually consistent by construction, which must be acceptable to the business.
 
-Raw, cleansed, and curated data occupy distinct prefixes or buckets. Glue crawlers catalogue the schema; Athena and EMR query in place; lifecycle rules archive the raw layer aggressively because it can always be re-derived if the source system retains it. The defining benefit is that compute engines attach and detach without moving the data.
+### Event Sourcing
 
-### Shared persistent volumes for containers
+Persist the sequence of state-changing events as the source of truth rather than the current state. DynamoDB models this well with the aggregate identifier as partition key and a monotonically increasing sequence number as sort key, using a conditional write on `attribute_not_exists` for optimistic concurrency. Current state is a fold over the event stream, usually snapshotted periodically for efficiency.
 
-An EKS deployment mounts an EFS `ReadWriteMany` persistent volume so that all replicas see the same directory, while a StatefulSet uses EBS `ReadWriteOnce` volumes for per-pod state. The EFS CSI driver and the EBS CSI driver implement dynamic provisioning so that a `PersistentVolumeClaim` produces real AWS storage automatically.
+### Read Replica Fan-Out
 
-```mermaid
-graph TD
-    A["Kubernetes PersistentVolumeClaim"] --> B{"Access mode requested"}
-    B -->|"ReadWriteMany"| C["EFS CSI Driver"]
-    B -->|"ReadWriteOnce"| D["EBS CSI Driver"]
-    C --> E["EFS Access Point per claim"]
-    D --> F["EBS volume in the pod node AZ"]
-    F --> G["Pod must be scheduled in that AZ"]
-```
+A writer instance with multiple readers, with the application routing read-only traffic to the reader endpoint. Aurora makes this particularly attractive because replicas share the storage volume, so replica lag is typically in the tens of milliseconds rather than seconds.
 
-!!! warning "EBS volumes constrain Kubernetes scheduling"
-    Because an EBS volume exists in one Availability Zone, a pod bound to an EBS-backed persistent volume can only be scheduled onto a node in that same zone. If that zone has no capacity, the pod stays `Pending`. This is why `WaitForFirstConsumer` volume binding mode exists and why multi-AZ StatefulSets need careful topology configuration.
+### Sharding by Tenant
 
-### CI/CD artefact storage
+For very large multi-tenant systems, partition tenants across multiple database instances or across partition-key prefixes. This bounds blast radius and permits per-tenant scaling, at the cost of a routing layer and cross-shard query complexity.
 
-Build pipelines store compiled artefacts, container image layers, test reports, and Terraform state in S3, with versioning enabled so a prior release can always be redeployed, and with lifecycle rules removing artefacts older than the retention policy. Terraform state in S3 with DynamoDB-based locking is the standard remote backend.
+### Polyglot Persistence
 
-### Backup, disaster recovery, and the ransomware-resilient copy
+The overarching pattern: select the store per access pattern rather than per organisation. A single application legitimately uses Aurora for transactional integrity, DynamoDB for high-volume key-access, ElastiCache for hot reads and sessions, OpenSearch for search, S3 for large objects, and Redshift for analytics.
 
-EBS snapshots and EFS backups are copied to a second Region for disaster recovery, and critical S3 data is replicated into a **separate AWS account** whose credentials the production workload does not hold, with Object Lock applied. This separation is what defends against a compromised production identity deleting both the data and its backups.
-
-### Additional applicable patterns
-
-**Circuit breaker and retry with exponential backoff and jitter** should wrap every storage call, since `503 SlowDown` responses from S3 are expected under sudden load spikes and are resolved by backing off. **Bulkhead** isolation separates critical and non-critical workloads onto different buckets, volumes, or file systems so that one saturating the other is impossible. **CQRS** appears when writes go to a transactional database on EBS while reads are served from denormalised objects in S3. **Saga** compensation frequently involves deleting objects written by an earlier step when a later step fails.
-
----
+!!! tip "The architect's question"
+    Do not ask "which database should we standardise on?" Ask "what are the access patterns, what are the consistency requirements, and what is the scale of each?" The answer usually names more than one store, and that is a sign of maturity rather than of sprawl.
 
 ## Industry Use Cases
 
-| Industry or company profile | Workload | Storage design and rationale |
+| Organisation type | Workload | Typical data-store selection and rationale |
 |---|---|---|
-| Video streaming, as at Netflix | Transcoded video segment delivery | S3 for masters and renditions, CloudFront for edge delivery, Intelligent-Tiering for the long tail of catalogue content that is rarely watched |
-| Global e-commerce, as at Amazon | Product images, order events, clickstream | S3 for images behind CloudFront, S3 data lake for events, EBS-backed relational databases for the transactional order ledger |
-| Ride-hailing, as at Uber | Trip telemetry and geospatial history | S3 as the landing zone for high-volume event data, queried by Athena and EMR; hot operational state in DynamoDB rather than in storage |
-| Music streaming, as at Spotify | Audio catalogue and machine learning training sets | S3 for audio objects, FSx for Lustre or EFS to feed distributed training jobs at high aggregate throughput |
-| Accommodation marketplace, as at Airbnb | Property photographs and user uploads | Presigned URL uploads directly to S3, Lambda-based derivative generation, CloudFront for delivery |
-| Financial services | Core ledger, trade records, regulatory archive | io2 Block Express for the database, S3 with Object Lock in Compliance mode for the seven-year regulatory archive, cross-Region replication for continuity |
-| Healthcare | Medical imaging and electronic records | S3 with SSE-KMS customer managed keys, CloudTrail data events, Glacier classes for studies beyond the active window, strict least-privilege access |
-| Government and public sector | Document management and citizen records | EFS for legacy applications requiring POSIX shared access, S3 for archival, Object Lock for statutory retention |
-| Internet of Things | Device telemetry at high ingest rates | Kinesis or IoT Core into S3 in partitioned prefixes, lifecycle to Glacier, Athena for analysis |
-| Genomics and scientific computing | Reference genomes and analysis pipelines | S3 as the durable store, FSx for Lustre linked to S3 as the high-throughput scratch layer for the compute cluster |
-| Software as a Service platforms | Per-tenant document storage | A single bucket with tenant prefixes and IAM session policies or S3 Access Points, giving isolation without a bucket-per-tenant explosion |
-| Gaming | Game assets, patches, player save data | S3 with CloudFront for patch distribution, DynamoDB for save state, EFS for shared build assets in the studio pipeline |
-
----
+| Streaming media | Viewing history, watch position, recommendations metadata | DynamoDB for the enormous, key-addressed, globally distributed write volume; ElastiCache for the hot catalogue; a relational store for billing |
+| E-commerce | Product catalogue, cart, orders, inventory | DynamoDB or ElastiCache for cart and session; Aurora for orders and payments where ACID transactions are non-negotiable; OpenSearch for product search |
+| Ride-hailing and delivery | Driver location, trip state, pricing | DynamoDB for high-frequency location writes with TTL; Redis geospatial structures for proximity search; Aurora for trip settlement and finance |
+| Financial services | Ledgers, transactions, positions, audit | Aurora or RDS with Multi-AZ, strict ACID guarantees, encryption, Database Activity Streams for audit; DynamoDB for high-volume idempotency keys and event logs |
+| Healthcare | Patient records, appointments, telemetry | Encrypted RDS or Aurora for the record of truth with strong compliance controls; DynamoDB for device telemetry; strict IAM and audit throughout |
+| Gaming | Player profiles, leaderboards, matchmaking, sessions | DynamoDB for player state at global scale with Global Tables; Redis sorted sets for leaderboards; ElastiCache for matchmaking queues |
+| Internet of Things | Device telemetry at very high ingest rates | DynamoDB with a well-distributed device-identifier partition key and TTL for expiry; Timestream where the workload is genuinely time-series; S3 for the long-term archive |
+| Government and public sector | Citizen services, registries, case management | Relational stores for referential integrity and auditability; Multi-AZ for availability requirements; encryption with customer managed keys for data-sovereignty controls |
+| Software as a Service | Multi-tenant application data | Pool model on DynamoDB with tenant-prefixed partition keys and `LeadingKeys` isolation, or silo model on separate Aurora clusters for regulated tenants |
+| Social platforms | Feeds, follower graphs, notifications | DynamoDB single-table design for feed fan-out; ElastiCache for hot timeline segments; OpenSearch for content search |
 
 ## Advantages
 
-**Durability that is impractical to build yourself.** Eleven nines of durability across three Availability Zones with continuous background integrity verification is not something an organisation can replicate with a storage appliance and a backup schedule. It is the product of a reliability engineering programme at a scale only a hyperscaler can sustain.
+### Managed Relational Databases
 
-**Elasticity that removes capacity planning as a discipline.** S3 and EFS have no size to provision. This eliminates the entire operational category of forecasting, procurement, expansion, and emergency capacity incidents.
+Amazon RDS removes the operational burden that historically consumed a large fraction of a database administrator's time: provisioning, operating-system and engine patching, backup scheduling, failover configuration, and replica setup. Multi-AZ delivers automatic failover with no application-level implementation. Point-in-time recovery converts a class of catastrophic mistakes into a bounded recovery exercise. Crucially, none of this requires abandoning SQL, existing tooling, existing skills, or existing applications, which makes RDS the lowest-friction path to the cloud for the very large population of applications built on relational assumptions.
 
-**Separation of storage from compute.** Because data lives independently of any instance, compute can be scaled, replaced, moved between instance types, or run as Spot capacity without touching the data. This is the mechanism by which cloud-native elasticity is achieved.
+Aurora extends these advantages by re-architecting the storage layer. Because the six-way replicated, self-healing storage volume is shared, adding a read replica does not copy data, failover does not require a data catch-up, and storage grows automatically. Backtrack and fast clone provide operational capabilities that have no on-premises equivalent at comparable cost.
 
-**Performance decoupled from capacity.** gp3 lets you buy 16,000 IOPS on a 20 GiB volume. On-premises, IOPS came from spindles, so performance and capacity were fused. This decoupling frequently reduces cost substantially.
+### DynamoDB
 
-**Security integrated with identity and audited by default.** Access is granted to IAM principals with conditions, encrypted with keys whose usage is logged, and every configuration change is recorded in CloudTrail.
+The advantages are consistency of performance and absence of operational limits. Single-digit-millisecond latency is maintained as the table grows from megabytes to petabytes and from tens to millions of requests per second, because the architecture partitions rather than scales up. There are no instances to size, no version upgrades to schedule, no failover to configure, and no storage to provision. Encryption, multi-AZ replication, and continuous backup are service properties rather than configuration. On-demand capacity means a new application can be launched with no capacity forecast at all, and Global Tables extend the same properties across Regions with a single configuration change.
 
-**Programmability and Infrastructure as Code.** Every storage resource is an API call and therefore expressible in CloudFormation or Terraform, reviewable in a pull request, and reproducible across environments.
+### ElastiCache
 
-**Rich ecosystem integration.** S3 in particular is the interchange format of AWS: dozens of services read from and write to it natively, which means choosing S3 preserves future optionality in a way that a proprietary storage appliance never does.
-
-**Pay-for-what-you-use economics with fine-grained control.** Storage classes, lifecycle policies, and provisioned performance dimensions allow cost to be tuned continuously rather than fixed at purchase time.
-
----
+The advantage is a very large improvement in latency and a very large reduction in primary-database load for a comparatively small cost. Moving the hot working set into memory routinely reduces read latency by one to two orders of magnitude and allows the primary database to be provisioned far below the raw request rate. Redis additionally supplies data structures — sorted sets, streams, geospatial indexes, atomic counters — that solve problems such as leaderboards, rate limiting, and proximity search far more elegantly than a relational query would.
 
 ## Limitations
 
-**S3 has no POSIX semantics.** Applications expecting file locking, atomic rename, partial writes, or append cannot use S3 without modification. Mountpoint for Amazon S3 narrows this gap for read-heavy workloads but does not close it.
+### Amazon RDS and Aurora
 
-**S3 latency is unsuitable for transactional writes.** Tens of milliseconds per operation makes S3 wrong for a database write-ahead log, no matter how attractive its durability figures are.
+- Write throughput remains fundamentally vertical. Aurora raises the ceiling substantially but does not remove it; beyond that ceiling, sharding or a different data model is required.
+- Failover is not instantaneous. Applications must handle connection loss and retry, and in-flight transactions are lost.
+- Read replicas are asynchronous, so read-after-write consistency requires routing to the writer.
+- Managed does not mean unmanaged: schema design, index strategy, query tuning, connection management, and capacity planning remain entirely the customer's responsibility.
+- Engine version upgrades still require planning and a maintenance window, and major-version upgrades can require application testing.
+- Commercial engines carry licensing cost and, in some cases, feature restrictions relative to a self-managed installation, and superuser access is not granted.
 
-**S3 request charges dominate for small objects.** A workload writing billions of small objects can pay more in requests than in storage, and per-object overheads for Intelligent-Tiering monitoring or Object Lock compound this.
+### Amazon DynamoDB
 
-**EBS is confined to a single Availability Zone.** This single fact constrains every high-availability design built on EC2 and is the most consequential limitation in this chapter.
+- Query flexibility is deliberately constrained. There are no joins, no aggregations, and no ad hoc filtering that does not either use a key or scan.
+- Access patterns must be known in advance, because the key design encodes them. Late-discovered access patterns require new indexes or data migration.
+- The 400 KB item size limit forces large payloads into S3 with a pointer stored in the item.
+- A poorly chosen partition key produces hot partitions and throttling that no amount of provisioned capacity fixes.
+- Transactions are limited in scope and roughly double the capacity consumed.
+- Global Tables resolve conflicts by last-writer-wins, which silently discards a concurrent update and is unacceptable for some domains.
+- Cost can be surprising: high-volume small-item traffic, heavily projected indexes, and `Scan`-based access patterns each inflate consumption in ways that are invisible in a small test environment.
 
-**EBS bills for provisioned, not consumed, capacity.** Over-provisioned volumes are pure waste, and volumes cannot be shrunk, so the error is not easily corrected.
+### Amazon ElastiCache
 
-**EBS performance is capped by the instance as well as the volume.** Provisioning 64,000 IOPS on a volume attached to an instance limited to 20,000 IOPS wastes money and confuses benchmarking.
+- It is not durable and must never be the system of record. Asynchronous replication means a failover can lose recent writes.
+- Redis command execution is largely single-threaded, so one expensive command degrades every client on the node.
+- Cache invalidation is genuinely difficult, and stale data is a correctness problem that TTLs bound rather than eliminate.
+- Memory is a hard constraint; exceeding it triggers eviction, and an inappropriate eviction policy causes write failures.
+- Adding a cache adds a component that can fail, adds a consistency question, and adds operational surface. It is not free complexity.
 
-**EFS is more expensive and higher-latency than EBS.** The multi-AZ metadata coordination that gives EFS its availability is the same mechanism that makes it slower and costlier per gigabyte.
+### Cross-Cutting Trade-Offs
 
-**EFS performs poorly on metadata-intensive workloads.** Large directories, recursive traversals, and compilation workloads exhibit latency that surprises teams migrating from local disks.
-
-**Cross-Region replication is asynchronous everywhere.** No AWS storage service offers synchronous cross-Region replication, so any multi-Region design has a non-zero Recovery Point Objective that must be stated explicitly.
-
-**Lifecycle transitions are not instantaneous.** Rules are evaluated approximately daily, and minimum storage durations mean that transitioning short-lived objects can increase cost.
-
-**Eventual consistency persists for configuration.** Bucket policy and replication configuration changes propagate over time, which can produce confusing behaviour immediately after a change.
-
----
+!!! warning "There is no free scalability"
+    Every property gained is paid for somewhere. DynamoDB's unlimited horizontal scale is paid for with query inflexibility and up-front modelling effort. Aurora's rich query capability is paid for with a write ceiling. ElastiCache's microsecond latency is paid for with weak durability and a cache-invalidation problem. The architect's role is to choose which price the workload can afford.
 
 ## Common Mistakes
 
-### Beginner mistakes
+### Beginner Mistakes
 
-- Believing S3 has folders, and therefore assuming a prefix rename is a cheap metadata operation rather than a full copy and delete.
-- Making a bucket public in order to serve a website, instead of using CloudFront with Origin Access Control.
-- Trying to attach one EBS volume to instances in two Availability Zones, or to two instances simultaneously without Multi-Attach and a cluster file system.
-- Formatting an EBS volume that already contains data, destroying it — `mkfs` is not idempotent and gives no warning.
-- Forgetting to add the volume to `/etc/fstab`, so the mount disappears after the next reboot; or adding it by device name rather than UUID, so a device renumbering breaks boot.
-- Attempting to mount EFS without opening TCP 2049 in the security group, then reporting that "EFS does not work".
-- Using EFS as a database data directory because it is shared, and being surprised by the latency.
-- Enabling versioning without a lifecycle rule, then discovering storage costs growing without any apparent increase in data.
+| Mistake | Why it is wrong | Correct approach |
+|---|---|---|
+| Making an RDS instance publicly accessible for convenience | Exposes the database to the internet; a frequent cause of breaches | Private subnets, security-group references, access through a bastion or Session Manager |
+| Hard-coding database credentials in code or environment variables | Credentials leak through source control, logs, and task definitions | Secrets Manager with rotation, or IAM database authentication |
+| Using `Scan` in DynamoDB because it returns everything | Reads and bills for every item; latency and cost grow with table size | Design the key schema so the access pattern is a `Query` or `GetItem` |
+| Choosing a low-cardinality DynamoDB partition key such as `status` or `country` | Concentrates traffic on one partition, causing throttling | Choose a high-cardinality key; add a write-sharding suffix if necessary |
+| Leaving backup retention at zero | Silently disables point-in-time recovery | Set a deliberate retention period for every production database |
+| Treating ElastiCache as durable storage | Data is lost on failover or eviction | Cache only what can be recomputed; keep the system of record elsewhere |
+| Adding an index for every column "just in case" | Every index taxes writes and consumes storage | Index to serve identified query patterns, and remove unused indexes |
+| Not setting a TTL on cached entries | Stale data persists indefinitely | Derive the TTL from tolerable staleness and add jitter |
 
-### Production mistakes
+### Production Mistakes
 
-- Retaining snapshots forever with no policy, accumulating years of incremental blocks.
-- Leaving unattached EBS volumes and orphaned snapshots after instance termination.
-- Never testing a restore, so the Recovery Time Objective is unvalidated until an actual incident.
-- Failing to add a Gateway VPC endpoint, paying NAT data-processing charges on all S3 traffic.
-- Granting `s3:*` on `*` to an instance role, converting an application vulnerability into a full account data breach.
-- Applying a lifecycle rule that moves short-lived objects into Standard-IA or Glacier, increasing cost due to minimum duration charges.
-- Storing backups in the same account and Region as the production data, so a single credential compromise destroys both.
-- Not enabling `AbortIncompleteMultipartUpload`, accumulating invisible billed storage from failed uploads.
-- Ignoring `BurstBalance` on gp2 volumes until performance collapses under sustained load.
-- Assuming S3 event notifications are exactly-once and ordered, producing duplicate or corrupted derived data.
+| Mistake | Consequence | Remedy |
+|---|---|---|
+| Connecting Lambda directly to RDS at high concurrency | Connection exhaustion and cascading failures | RDS Proxy, reserved concurrency, connections created outside the handler |
+| Never testing failover or restore | Recovery capability is assumed rather than proven | Scheduled game days with forced failover and restore drills |
+| Running schema migrations manually during a deployment | Irreproducible state and no rollback path | Versioned migrations executed by the CI/CD pipeline, designed to be backward compatible |
+| Ignoring `ReadThrottleEvents` and `WriteThrottleEvents` because requests eventually succeed on retry | Latency degrades invisibly until it becomes an outage | Alarm on sustained throttling and investigate key distribution |
+| Deploying a schema change that is not backward compatible during a rolling deployment | Old and new application versions run concurrently against one schema | Expand-and-contract migration: add, backfill, switch reads, then remove |
+| Sizing the cache smaller than the working set | High eviction rate, low hit rate, and load pushed back onto the database | Monitor `Evictions` and `CacheHitRate`; scale the cache to the working set |
+| Failing to plan for cross-AZ data transfer | Unexpected and persistent cost | Keep chatty paths within an Availability Zone where possible; use VPC endpoints |
+| Retrying failed writes without exponential backoff and jitter | Retry storms amplify an incident | Use the SDK's adaptive retry mode with jitter and a bounded attempt count |
+| Leaving orphaned manual snapshots | Storage bills accrue indefinitely after the database is deleted | Lifecycle policy and periodic audit of snapshots |
 
-### Certification traps
+### Certification Traps
 
-- Confusing **durability** with **availability** in a question that specifies one of them precisely.
-- Choosing S3 One Zone-IA for data that cannot be recreated — the durability figure applies only within a single Availability Zone, which is destroyed if the zone is lost.
-- Selecting EBS for a requirement that says "shared across multiple instances in multiple Availability Zones", where the answer is EFS.
-- Selecting EFS for a requirement that says "lowest latency block storage for a relational database", where the answer is io2 Block Express.
-- Selecting instance store where the requirement says "must persist after the instance is stopped".
-- Overlooking that Glacier Flexible Retrieval and Deep Archive require a restore step before the object is readable.
-- Assuming a Gateway VPC endpoint works from on-premises over Direct Connect — it does not; that requires an Interface endpoint.
-- Missing that a question describing millisecond retrieval of archival data points to Glacier Instant Retrieval rather than Glacier Flexible Retrieval.
-- Forgetting that Object Lock requires versioning to be enabled.
-- Believing that S3 Cross-Region Replication replicates existing objects automatically — it applies to new objects unless S3 Batch Replication is used for the backlog.
-
----
+!!! danger "Frequently examined misconceptions"
+    - **Multi-AZ is for availability; read replicas are for scaling reads.** The standby in an RDS Multi-AZ instance deployment is not readable. A question asking to "improve read performance" is answered with read replicas, not Multi-AZ.
+    - **A Local Secondary Index can only be created when the table is created**, and shares the base table's partition key. A Global Secondary Index can be created at any time with any key.
+    - **DynamoDB transactions are limited in scope and cost roughly double.** They are not a general substitute for relational transactions.
+    - **DAX is a DynamoDB-specific cache**; ElastiCache is a general-purpose cache. A question specifying microsecond DynamoDB reads with minimal application change wants DAX.
+    - **Encryption at rest must be enabled at creation** for RDS and ElastiCache; it cannot be toggled on an existing instance.
+    - **Aurora replicas are for both read scaling and failover targets**; RDS read replicas require manual promotion unless they are part of a Multi-AZ DB cluster.
+    - **Global Tables use last-writer-wins**, which is eventual consistency across Regions and not a distributed transaction.
+    - **On-demand capacity is not always cheaper.** For steady, high, predictable throughput, provisioned capacity with auto scaling costs materially less.
+    - **A cache does not make an application consistent.** Any answer implying that adding ElastiCache provides strong consistency is wrong.
 
 ## Interview Questions
 
 ### Conceptual Questions
 
-**1. Explain the difference between object, block, and file storage, and why AWS provides three separate services rather than one.**
-Object storage stores immutable whole items in a flat keyspace accessed by API and scales without bound because it forgoes in-place mutation. Block storage exposes a raw device supporting random in-place writes with sub-millisecond latency, at the cost of being attached to one host in one Availability Zone. File storage provides shared POSIX semantics through a distributed metadata service, at the cost of higher latency and price. The trade-offs are mutually exclusive, so a single service cannot satisfy all three access patterns.
+**1. Explain the CAP theorem and how it applies to the AWS database portfolio.**
 
-**2. What does eleven nines of durability actually mean, and what does it not protect against?**
-It is a statistical design target for annual data loss from hardware and facility failure, achieved through erasure coding across at least three Availability Zones with continuous background repair. It provides no protection against accidental deletion, malicious deletion, application bugs, or misconfigured permissions. Those require versioning, MFA Delete, Object Lock, cross-account replication, and backups.
+The CAP theorem states that in the presence of a network partition, a distributed system must choose between consistency and availability. It is not a claim that you pick two of three in normal operation; partition tolerance is mandatory for any distributed system, so the real choice is what to do when a partition occurs. RDS Multi-AZ chooses consistency: during failover the database is briefly unavailable rather than serving divergent data. DynamoDB offers the choice per read — an eventually consistent read favours availability and latency, a strongly consistent read favours correctness. DynamoDB Global Tables choose availability at the Region level and resolve the resulting conflicts with last-writer-wins. ElastiCache with asynchronous replication chooses availability and accepts the loss of recent writes.
 
-**3. Why can an EBS volume not be attached to an instance in another Availability Zone?**
-Because EBS replicates synchronously within a single Availability Zone to preserve sub-millisecond write latency. Replicating across zones separated by tens of kilometres would add round-trip latency that would defeat the purpose of block storage. Cross-zone movement is therefore achieved asynchronously through snapshots.
+**2. What is the practical difference between a Global Secondary Index and a Local Secondary Index?**
 
-**4. Describe S3's consistency model and how it changed.**
-S3 now provides strong read-after-write consistency for `PUT`, overwrite, and `DELETE` operations on all objects in all Regions, with no performance penalty. Previously, overwrites and deletes were eventually consistent. Bucket configuration changes and Cross-Region Replication remain eventually consistent and asynchronous respectively.
+An LSI shares the base table's partition key and provides an alternative sort key. It can only be created at table creation, supports strongly consistent reads, shares the base table's provisioned throughput, and constrains any single item collection to 10 GB. A GSI has an entirely independent partition and sort key, may be created or deleted at any time, is always eventually consistent, has its own provisioned throughput, and has no item-collection size constraint. In practice GSIs are used far more often; LSIs are appropriate only when strong consistency on an alternative sort order within a partition is genuinely required.
 
-**5. What is the difference between the control plane and the data plane, and why does it matter?**
-The control plane provisions and configures resources; the data plane moves bytes. AWS engineers data planes for static stability so they continue functioning during control plane impairment. The design implication is to pre-provision resources and never place control plane calls on a user request's critical path.
+**3. Why is Aurora's storage architecture significant?**
+
+Aurora separates compute from a purpose-built distributed storage service that replicates six ways across three Availability Zones and accepts a write once four of six segments acknowledge it. Only redo log records are shipped to storage; the storage layer materialises pages itself. The consequences are architectural rather than incremental: adding a read replica copies no data because all instances read the same volume, failover does not require catch-up, storage grows and self-heals automatically, backups are continuous and do not affect performance, and a clone can be created almost instantly using copy-on-write. This is the clearest example in the AWS portfolio of re-architecting a component rather than merely managing it.
+
+**4. Explain why a DynamoDB partition key choice determines scalability.**
+
+DynamoDB places an item by hashing its partition key and mapping the hash to a physical partition. Throughput and storage are distributed across partitions. If many requests share one partition-key value, they all target one partition, whose throughput is bounded regardless of table-level provisioning, and requests are throttled. Adaptive capacity redistributes some throughput toward hot partitions and isolates severe cases, but it cannot manufacture capacity for a single key. Therefore scalability is a property of key cardinality and access distribution, decided at design time and expensive to change afterwards.
+
+**5. When is caching the wrong answer?**
+
+When the workload is write-dominant, since a cache accelerates reads and adds work to writes. When every read must be strongly consistent, because a cache introduces a staleness window. When the access pattern has no locality — a uniform random read over a very large keyspace produces a low hit rate and the cache becomes pure overhead. When the underlying query is already fast and the latency budget is met, because the added component contributes failure modes and operational surface without benefit. And when the real problem is a missing index or an N+1 query pattern, in which case caching hides a defect rather than fixing it.
+
+**6. Distinguish RDS Multi-AZ from RDS read replicas.**
+
+Multi-AZ maintains a synchronous standby in a second Availability Zone for availability; in the classic instance deployment the standby is not readable and exists solely to be promoted. Read replicas are asynchronous copies used to scale read throughput, may be in the same Region or a different one, are readable, and require explicit promotion to become writable. Multi-AZ addresses availability; read replicas address performance. The Multi-AZ DB cluster deployment blurs this by providing two readable standbys, which is worth stating explicitly in an interview.
 
 ### Scenario Questions
 
-**1. A team stores ten million one-kilobyte log files per day in S3 Standard and complains the bill is dominated by requests. What do you recommend?**
-Aggregate the logs into larger compressed objects, ideally per five-minute or hourly window, before writing. This reduces `PUT` request count by orders of magnitude, reduces per-object overheads, and makes subsequent analytics far cheaper because Athena scans fewer, larger files. Kinesis Data Firehose performs this buffering natively.
+**1. A social application's feed query takes eight seconds under load. The team proposes a larger RDS instance. Evaluate.**
 
-**2. A relational database on EC2 shows increasing query latency during nightly batch jobs. `BurstBalance` on the gp2 data volume drops to zero at 02:00. What is happening and how do you fix it?**
-The gp2 volume is exhausting its I/O credits and falling back to baseline performance of three IOPS per GiB. Migrate the volume to gp3 with explicitly provisioned IOPS and throughput sized to the measured peak, which removes the credit mechanism entirely. Verify that the instance type's EBS bandwidth can deliver the provisioned figure.
+A larger instance is a valid short-term mitigation and a poor diagnosis. The first step is to determine where the time is spent using Performance Insights and `EXPLAIN ANALYZE`. Common causes are a missing index producing a sequential scan, an N+1 query pattern issuing one query per feed item, a join that materialises far more rows than are returned, or lock contention. If the query is fundamentally a fan-out read of recent items per followed user, the correct architecture is often a precomputed feed: fan out on write into DynamoDB or into a Redis list per user, so the read becomes a single key lookup. Vertical scaling buys time; the redesign fixes the problem and costs less at steady state.
 
-**3. A legacy Java application requires a shared directory across a fleet of servers in three Availability Zones and uses POSIX file locking. Migration to object storage is not funded. What do you propose?**
-Amazon EFS with mount targets in all three Availability Zones, Elastic throughput, encryption at rest and in transit, an access point enforcing the application's root directory and POSIX identity, and a security group permitting TCP 2049 only from the application security group. No application change is required.
+**2. An online store must guarantee that inventory never goes negative under concurrent purchase.**
 
-**4. Auditors require that financial records be immutable for seven years and that no administrator can delete them early. Design the storage.**
-An S3 bucket with versioning enabled and Object Lock in Compliance mode with a seven-year retention period, SSE-KMS with a customer managed key whose key policy separates duties, CloudTrail data events delivered to a separate logging account, Block Public Access fully enabled, and replication to a second Region for continuity. Compliance mode cannot be shortened or removed by any principal, including the account root user.
+This is a concurrency-control question, not a database-selection question. In a relational store, use a transaction with `SELECT ... FOR UPDATE` or an atomic `UPDATE inventory SET qty = qty - 1 WHERE sku = ? AND qty > 0` and treat a zero-row result as out of stock. In DynamoDB, use `UpdateItem` with an `ADD` of minus one and a `ConditionExpression` of `qty > :zero`, which is atomic within a single item, or `TransactWriteItems` if the decrement must be atomic with order creation. The critical teaching point is that read-then-write in application code is a race condition, and correctness must come from an atomic conditional operation rather than from application logic.
 
-**5. A machine learning team runs distributed training across two hundred GPU instances reading the same fifty-terabyte dataset. S3 reads are too slow for their epoch times. What do you propose?**
-Stage the dataset from S3 into Amazon FSx for Lustre, which links directly to the S3 bucket and provides hundreds of gigabytes per second of aggregate throughput with POSIX semantics. S3 remains the durable system of record; FSx for Lustre is the high-performance scratch layer for the duration of the training run.
+**3. A team must migrate a 2 TB on-premises Oracle database to AWS with under fifteen minutes of downtime.**
+
+Use AWS Database Migration Service with the AWS Schema Conversion Tool if changing engines. DMS performs a full load followed by ongoing change data capture, so the bulk copy happens while the source remains live. The cutover is then a short window in which writes are quiesced, the remaining change backlog drains, the application's connection string is switched, and validation runs. Choose the target deliberately: Aurora PostgreSQL if the intent is to leave commercial licensing behind, RDS for Oracle if the application depends on Oracle-specific features. Plan and rehearse rollback, and validate row counts and checksums with DMS data validation before cutting over.
+
+**4. A DynamoDB table shows heavy throttling although consumed capacity is far below provisioned capacity.**
+
+This is the signature of a hot partition. Provisioned capacity is distributed across partitions, so a single key absorbing a disproportionate share of traffic throttles while the table-level metric looks healthy. Use Contributor Insights to identify the dominant keys. Remedies are to choose a higher-cardinality partition key, to apply write sharding by appending a calculated suffix to the key and scattering writes across the resulting keys, to introduce DAX or ElastiCache in front of a hot read key, or to switch to on-demand capacity, which handles bursts more gracefully although it does not eliminate a single-key limit.
+
+**5. An application must serve users in three continents with low read latency and cannot tolerate a full Regional outage.**
+
+DynamoDB Global Tables provide multi-active, multi-Region replication with local read and write latency and automatic conflict resolution by last-writer-wins, and Route 53 latency-based routing directs users to the nearest Region. If the workload is relational, Aurora Global Database provides a primary Region with read-only secondary Regions, typical cross-Region replication lag under a second, and promotion of a secondary in a disaster. The essential caveat to state is that last-writer-wins is not a distributed transaction, so any domain in which a lost concurrent update is unacceptable — a financial ledger, for example — requires a single writer Region and an explicit consistency design.
 
 ### Architecture Questions
 
-**1. Design storage for a multi-tenant SaaS document platform serving ten thousand tenants.**
-Use a single bucket with a `tenant-id/` prefix per tenant rather than a bucket per tenant, because bucket count is a limited resource. Enforce isolation through IAM session policies scoped to the tenant prefix, issued by an identity broker, or through S3 Access Points with per-tenant policies. Encrypt with SSE-KMS, enable versioning with noncurrent expiry, apply Intelligent-Tiering, and serve reads through CloudFront with signed URLs.
+**1. Design the data layer for a ride-hailing platform.**
 
-**2. Design a disaster recovery strategy for a system whose Recovery Point Objective is fifteen minutes and Recovery Time Objective is one hour.**
-For S3, enable Cross-Region Replication with Replication Time Control, which provides a fifteen-minute Service Level Agreement. For EBS-backed databases, take snapshots more frequently than the Recovery Point Objective or use database-native replication such as an RDS cross-Region read replica, which is the better answer given a fifteen-minute target. For EFS, enable EFS replication. Maintain the target Region's infrastructure as code so it can be provisioned within the Recovery Time Objective, and rehearse the failover.
+Driver location updates are extremely high-frequency, small, keyed by driver identifier, and ephemeral: DynamoDB with the driver identifier as partition key, a timestamp sort key, and TTL, or a Redis geospatial index if proximity search is required in the request path. Trip state during a ride is a small, hot, frequently updated item: DynamoDB with conditional writes for state transitions. Completed trips, fares, and settlements require ACID guarantees, reporting, and auditability: Aurora PostgreSQL. Surge pricing and matchmaking work from in-memory structures in ElastiCache. Analytics and machine-learning feature generation read from an S3 data lake fed by DynamoDB export and DMS, queried with Athena. Each store is chosen against a stated access pattern, and the services communicate through events on EventBridge rather than through shared tables.
 
-**3. How would you architect persistent storage for a Kubernetes platform hosting both stateless web services and a Prometheus monitoring stack?**
-Stateless services keep no volumes and externalise state to S3 and RDS. Prometheus runs as a StatefulSet with EBS `ReadWriteOnce` persistent volumes provisioned by the EBS CSI driver, using `WaitForFirstConsumer` binding so the volume is created in the zone the pod is scheduled into. Shared configuration or plugin directories used by multiple replicas use an EFS `ReadWriteMany` volume through the EFS CSI driver with an access point per claim. Long-term metrics are shipped to S3 through Thanos or Amazon Managed Service for Prometheus.
+**2. Design a multi-tenant SaaS data architecture supporting both small and regulated enterprise tenants.**
 
-**4. A media company must serve five hundred terabytes of video globally at minimum cost while keeping the origin private.**
-Store the renditions in S3 with Intelligent-Tiering, serve through CloudFront with Origin Access Control so the bucket is never public, use signed URLs or signed cookies for entitlement enforcement, and set a long cache TTL so the origin request rate and egress cost collapse. Archive masters to Glacier Deep Archive. The dominant saving comes from CloudFront egress pricing being lower than S3 internet egress plus the near-elimination of origin requests.
+Use a hybrid of pool and silo. Small tenants share a DynamoDB table with `TENANT#id` as the partition-key prefix and IAM `dynamodb:LeadingKeys` conditions enforcing isolation, which gives near-linear cost scaling and one operational footprint. Regulated enterprise tenants receive a dedicated Aurora cluster with a customer managed KMS key, satisfying data-isolation and key-control requirements and bounding blast radius. A tenant routing layer resolves a tenant to its data plane. The trade-off to articulate is that the pool model minimises cost and operational effort while concentrating blast radius, and the silo model does the reverse; the hybrid places each tenant where its requirements and its revenue justify.
 
-**5. Design the storage layer for an IoT platform ingesting one million messages per second.**
-Ingest through IoT Core into Kinesis Data Streams, buffer with Kinesis Data Firehose which aggregates records into large compressed Parquet objects, and write to S3 with prefixes partitioned by date and device group. Catalogue with Glue, query with Athena, and apply lifecycle rules moving data older than ninety days to Glacier Flexible Retrieval. Hot device state that must be read per request lives in DynamoDB, not in S3.
+**3. Design a read path targeting a p99 latency of 20 milliseconds at 100,000 reads per second.**
+
+Layer the caches. CloudFront handles cacheable public content at the edge. The application tier consults DAX or ElastiCache, sized to hold the working set, with a hit rate target above 95 percent. DynamoDB serves the residual with a partition key chosen for even distribution, and eventually consistent reads where the staleness is acceptable, halving the capacity cost. The database is provisioned for the miss rate, not the request rate. Instrument the hit rate, the miss latency, and the p99 at each layer, because a cache with a 95 percent hit rate and a slow miss path can still violate a p99 budget — the tail is dominated by misses, which is a point many candidates overlook.
 
 ### Troubleshooting Questions
 
-**1. An EC2 instance cannot mount an EFS file system; the command hangs and eventually times out. How do you diagnose it?**
-Check in order: does a mount target exist in the instance's Availability Zone; does the mount target's security group allow inbound TCP 2049 from the instance's security group; do the subnet's Network ACLs permit both directions including ephemeral ports; is the DNS name resolving, which requires DNS hostnames and DNS resolution enabled on the VPC; and is `amazon-efs-utils` installed if TLS or IAM authorisation is requested.
+**1. An application intermittently reports "too many connections" against RDS.**
 
-**2. An application receives intermittent `503 SlowDown` responses from S3 during a bulk load. What is happening?**
-The request rate against a single partitioned prefix has exceeded the current partition's capacity, and S3 is signalling that it is splitting the partition. The correct response is exponential backoff with jitter, which the AWS SDKs implement by default, combined with spreading writes across more prefixes and ramping up load gradually rather than instantaneously.
+Check `DatabaseConnections` against the `max_connections` parameter, which on RDS is typically derived from instance memory. Causes include an application connection pool sized larger than the database allows multiplied by the number of application instances, connections leaked by code that fails to return them to the pool, a serverless tier scaling horizontally with one connection per execution environment, and long-running idle transactions. Remedies are RDS Proxy, correctly sized pools, connection timeouts, and a larger instance class only if the connection demand is genuinely justified.
 
-**3. A restored EBS volume performs far worse than the original for the first hour. Why?**
-Volumes created from snapshots are lazily loaded; blocks are fetched from S3 on first access, so initial reads incur additional latency. Enable Fast Snapshot Restore for that snapshot in the target Availability Zone, or force hydration by sequentially reading the whole device with a tool such as `dd` or `fio` before putting the volume into service.
+**2. A read replica is reporting steadily increasing replica lag.**
 
-**4. A user reports `AccessDenied` on `ListObjectsV2` but can successfully `GetObject` on known keys. Why?**
-`s3:ListBucket` is a bucket-level action whose resource must be the bucket ARN, whereas `s3:GetObject` is an object-level action whose resource is the object ARN. The policy almost certainly grants both actions against the object ARN pattern only. Add a statement granting `s3:ListBucket` on the bucket ARN, optionally constrained with the `s3:prefix` condition key.
+Replication is single-threaded on some engines, so a heavy write burst on the primary, a long-running transaction, or a large `ALTER TABLE` will cause the replica to fall behind. Other causes are an undersized replica instance class relative to the primary, heavy read queries on the replica competing for its resources, and network saturation for a cross-Region replica. Diagnose with the `ReplicaLag` metric and the engine's replication status, then address the cause: size the replica at least as large as the primary, avoid long transactions, and consider Aurora, whose shared storage makes lag typically an order of magnitude smaller.
 
-**5. Storage costs for a bucket are far higher than the sum of visible object sizes. What do you investigate?**
-Three likely causes: noncurrent object versions accumulating because versioning is on without a lifecycle expiry rule; incomplete multipart upload parts, which are billed but not shown by a standard list operation; and delete markers combined with retained versions. Use S3 Storage Lens or an S3 Inventory report including noncurrent versions, then add lifecycle rules for `NoncurrentVersionExpiration` and `AbortIncompleteMultipartUpload`.
+**3. After deploying a new version, the application returns stale data for several minutes.**
+
+The likely causes are reads being routed to a replica when read-after-write consistency is required, or cached entries with a TTL longer than the deployment window, or a cache not invalidated on write. Determine which by bypassing the cache and querying the writer directly. The fix is to route consistency-sensitive reads to the writer, to invalidate or version cache keys on write, and to include a version or build identifier in cache keys so that a deployment naturally invalidates entries whose shape has changed.
+
+**4. A DynamoDB `Query` returns fewer items than expected, and the application misses records.**
+
+`Query` and `Scan` return at most 1 MB per call, and any filter expression is applied *after* the read, so a filtered query can return zero items while still consuming capacity and still having more pages. Application code that ignores `LastEvaluatedKey` processes only the first page. The fix is to paginate until `LastEvaluatedKey` is absent, or to use the SDK's paginator, and to prefer key conditions over filter expressions so that the read is selective rather than the filter.
+
+**5. ElastiCache hit rate has fallen from 96 percent to 40 percent with no application change.**
+
+Look first at `Evictions` and `DatabaseMemoryUsagePercentage`. A growing dataset that has outgrown the node evicts entries before they are reused. Other causes are a change in key naming that fragmented the keyspace, a TTL set too short, a recent failover or node replacement that started with a cold cache, or a new access pattern with poor locality. Remedies are to scale the node or add shards, to review TTLs, and to warm the cache from a snapshot after a planned replacement.
 
 ### Certification-style Questions
 
-**1. A company needs to store backups that must be retrievable within twelve hours at the lowest possible cost, with a retention period of ten years. Which storage class is most appropriate?**
-S3 Glacier Deep Archive. It offers the lowest storage price with standard retrieval in approximately twelve hours, and the one-hundred-and-eighty-day minimum duration is irrelevant given a ten-year retention.
+**1.** A company needs to improve read performance of an Amazon RDS for MySQL database that is CPU-bound on reads. Which action is MOST appropriate?
 
-**2. An application running on EC2 in three Availability Zones must write to a shared file system with POSIX semantics and must remain available if one Availability Zone fails. Which service should be used?**
-Amazon EFS in Regional mode with mount targets in all three Availability Zones. EBS cannot span zones, and S3 does not provide POSIX semantics.
+- A. Enable Multi-AZ
+- B. Create read replicas and route read traffic to them
+- C. Increase the backup retention period
+- D. Enable storage auto scaling
 
-**3. Which combination provides the most cost-effective private access to S3 from instances in a private subnet?**
-A Gateway VPC endpoint for S3. It carries no hourly or data-processing charge and removes the NAT Gateway from the path entirely.
+**Answer: B.** The Multi-AZ standby in an instance deployment is not readable; read replicas exist precisely to scale reads.
 
-**4. A workload requires 100,000 IOPS with sub-millisecond latency for a single relational database instance. Which EBS volume type meets this?**
-io2 Block Express, which supports up to 256,000 IOPS per volume with sub-millisecond latency. gp3 is limited to 16,000 IOPS and cannot meet the requirement.
+**2.** An application requires microsecond read latency for an existing DynamoDB table with minimal application change. Which service should be used?
 
-**5. A company stores derived thumbnail images that can be regenerated from originals at any time, and wants to minimise cost while keeping millisecond access. Which storage class fits?**
-S3 One Zone-IA. The data is recreatable, so the single-Availability-Zone risk is acceptable, and it provides millisecond retrieval at a lower price than Standard-IA.
+- A. Amazon ElastiCache for Memcached
+- B. Amazon DynamoDB Accelerator (DAX)
+- C. Amazon CloudFront
+- D. Amazon RDS Proxy
 
-**6. Which feature ensures that objects cannot be deleted by any principal, including the account root user, for a defined period?**
-S3 Object Lock in Compliance mode, which requires versioning to be enabled on the bucket.
+**Answer: B.** DAX is a write-through, DynamoDB-specific cache that is API-compatible, so the application change is limited to the client.
 
-**7. An organisation must audit every read of objects in a sensitive bucket. What must be configured?**
-CloudTrail data events for that bucket. Management events, which are on by default, do not record `GetObject`.
+**3.** Which DynamoDB feature allows an application to write an item only if it does not already exist?
 
----
+- A. A transaction
+- B. A conditional expression using `attribute_not_exists`
+- C. A global secondary index
+- D. Time to live
+
+**Answer: B.** Conditional writes provide optimistic concurrency without a transaction and at ordinary write cost.
+
+**4.** A Lambda function at high concurrency exhausts connections to an Aurora database. Which solution addresses this with the LEAST application change?
+
+- A. Increase the Aurora instance size
+- B. Use Amazon RDS Proxy
+- C. Migrate to DynamoDB
+- D. Add read replicas
+
+**Answer: B.** RDS Proxy pools and multiplexes connections and is designed for exactly this failure mode.
+
+**5.** Which statement about an Amazon DynamoDB Local Secondary Index is TRUE?
+
+- A. It can be created at any time after table creation
+- B. It uses a partition key different from the base table
+- C. It supports strongly consistent reads and must be created with the table
+- D. It has its own provisioned throughput separate from the table
+
+**Answer: C.** All the other statements describe a Global Secondary Index.
+
+**6.** A company must recover its database to any point within the last 20 days after an accidental deletion of rows. Which capability provides this?
+
+- A. Multi-AZ deployment
+- B. Read replicas
+- C. Automated backups with point-in-time recovery
+- D. Manual snapshots taken weekly
+
+**Answer: C.** Multi-AZ and replicas replicate the deletion faithfully; only PITR restores to a moment before it.
+
+**7.** Which is the MOST cost-effective DynamoDB configuration for a new application whose traffic pattern is entirely unknown?
+
+- A. Provisioned capacity sized for the expected peak
+- B. On-demand capacity mode
+- C. Provisioned capacity with reserved capacity purchased
+- D. Provisioned capacity with auto scaling and a high minimum
+
+**Answer: B.** On-demand requires no forecast and scales instantly; convert to provisioned once the pattern is established and measured.
 
 ## Hands-on Lab
 
 ### Objective
 
-Build a small but complete storage architecture that exercises all three services. You will create a secure, versioned, encrypted S3 bucket with a lifecycle policy; upload an object using a presigned URL; attach, format, and mount an EBS volume and take a snapshot; create an EFS file system and mount it from two instances in different Availability Zones to prove shared access; and confirm that the S3 traffic uses a Gateway VPC endpoint.
+Build the data layer of a small order-management service that demonstrates polyglot persistence: an Amazon RDS for PostgreSQL Multi-AZ instance holding transactional order data, an Amazon DynamoDB table holding a high-volume event log with a global secondary index and TTL, and an Amazon ElastiCache for Redis replication group serving as a cache-aside layer. Measure the latency difference between a cache hit, a cache miss, and a DynamoDB `Query`, and demonstrate throttling by deliberately creating a hot partition.
 
-The lab is designed to complete within an AWS Academy Learner Lab session using the `LabRole` and default VPC, and to remain within sandbox service restrictions.
+!!! info "Environment"
+    Designed for the AWS Academy Learner Lab. The Learner Lab restricts IAM role creation, so reuse `LabRole` where a role is required, and place all resources in the default VPC's private subnets where possible. Delete every resource at the end; an idle RDS Multi-AZ instance and an ElastiCache node will consume the lab budget quickly.
 
 ### Architecture
 
 ```mermaid
 graph TD
-    subgraph "VPC"
-        subgraph "Availability Zone A"
-            E1["EC2 Instance A"]
-            MT1["EFS Mount Target A"]
-        end
-        subgraph "Availability Zone B"
-            E2["EC2 Instance B"]
-            MT2["EFS Mount Target B"]
-        end
-        VPCE["Gateway VPC Endpoint for S3"]
-    end
-    E1 --> EBS["EBS gp3 Data Volume"]
-    E1 --> MT1
-    E2 --> MT2
-    MT1 --> EFS["EFS File System"]
-    MT2 --> EFS
-    E1 --> VPCE
-    VPCE --> S3["S3 Bucket with Versioning and Lifecycle"]
-    EBS --> SNAP["EBS Snapshot in S3"]
+    CLI["Lab Client on EC2 or Cloud9"] --> APP["Python Application"]
+    APP --> EC["ElastiCache Redis Replication Group"]
+    APP --> RDS["RDS PostgreSQL Multi-AZ"]
+    APP --> DDB["DynamoDB Table OrderEvents"]
+    DDB --> GSI["GSI by customer id"]
+    DDB --> TTL["TTL attribute expires_at"]
+    SM["AWS Secrets Manager"] --> APP
+    CW["CloudWatch Metrics and Alarms"] --> RDS
+    CW --> DDB
+    CW --> EC
 ```
 
-### AWS services used
+### AWS Services Used
 
-Amazon S3, Amazon EBS, Amazon EFS, Amazon EC2, Amazon VPC with a Gateway endpoint, AWS IAM, AWS KMS through default encryption, and Amazon CloudWatch for verification.
+| Service | Role in the lab |
+|---|---|
+| Amazon VPC | Private subnets, DB subnet group, cache subnet group, security groups |
+| Amazon RDS for PostgreSQL | Transactional store with Multi-AZ and automated backups |
+| Amazon DynamoDB | Event log with a GSI, TTL, and Streams |
+| Amazon ElastiCache for Redis | Cache-aside layer with Multi-AZ |
+| AWS Secrets Manager | Database credential storage |
+| Amazon CloudWatch | Metrics, Contributor Insights, alarms |
 
-### Implementation steps
+### Implementation Steps
 
-**Part one — the S3 bucket**
+**Step 1 — Create the network prerequisites.**
 
-1. Choose a globally unique bucket name, for example `dso303-lab-<your-student-id>`, and create the bucket in your lab Region.
-2. Enable versioning on the bucket.
-3. Confirm that Block Public Access is fully enabled and that default encryption is active.
-4. Apply a bucket policy that denies any request not using TLS.
-5. Apply a lifecycle configuration that transitions objects under the `archive/` prefix to Standard-IA after thirty days, expires noncurrent versions after thirty days, and aborts incomplete multipart uploads after seven days.
-6. Upload a small file and then upload a modified version of the same key. List object versions and observe that both versions exist.
-7. Delete the object and observe that a delete marker was created rather than the data being destroyed. Restore the object by deleting the delete marker.
+```bash
+aws rds create-db-subnet-group \
+  --db-subnet-group-name dso303-db-subnets \
+  --db-subnet-group-description "DSO303 private subnets" \
+  --subnet-ids "$PRIV_A" "$PRIV_B"
 
-**Part two — presigned URL**
+aws elasticache create-cache-subnet-group \
+  --cache-subnet-group-name dso303-cache-subnets \
+  --cache-subnet-group-description "DSO303 private subnets" \
+  --subnet-ids "$PRIV_A" "$PRIV_B"
+```
 
-8. Generate a presigned `PUT` URL valid for five minutes using the CLI or the boto3 example in the next section.
-9. Upload a file using `curl` with that URL and no AWS credentials, proving that the delegation works.
-10. Wait for expiry, retry, and observe the `AccessDenied` response, proving that the delegation is time-bounded.
+Create two security groups: `dso303-app-sg` for the client, and `dso303-data-sg` permitting inbound TCP 5432 and 6379 **only** from `dso303-app-sg`.
 
-**Part three — EBS**
+**Step 2 — Store the database credential in Secrets Manager.**
 
-11. Launch a `t3.micro` Amazon Linux instance in Availability Zone A with an IAM instance profile granting S3 read access to your bucket.
-12. Create a 10 GiB encrypted gp3 volume in the same Availability Zone and attach it to the instance as `/dev/sdf`.
-13. On the instance, identify the device with `lsblk`, create an XFS file system, create a mount point, mount it, and add a UUID-based entry to `/etc/fstab`.
-14. Write a test file to the volume.
-15. Create a snapshot of the volume and observe that the API returns immediately while the snapshot state transitions from `pending` to `completed`.
-16. Attempt to attach the volume to an instance in Availability Zone B and observe the error. This is the single most important observation in the lab.
+```bash
+aws secretsmanager create-secret \
+  --name dso303/postgres \
+  --secret-string '{"username":"appuser","password":"REPLACE_WITH_STRONG_VALUE"}'
+```
 
-**Part four — EFS**
+**Step 3 — Create the RDS instance with Multi-AZ, encryption, and backups.**
 
-17. Create an EFS file system with Elastic throughput, General Purpose performance mode, and encryption at rest enabled.
-18. Create a security group `efs-sg` allowing inbound TCP 2049 from the instance security group, and create mount targets in the subnets of both Availability Zone A and Availability Zone B using that security group.
-19. Launch a second instance in Availability Zone B.
-20. On both instances, install `amazon-efs-utils` and mount the file system with TLS enabled.
-21. Write a file from instance A and read it immediately from instance B, demonstrating cross-Availability-Zone shared access — the property EBS cannot provide.
-22. Enable a lifecycle policy transitioning files to Infrequent Access after thirty days.
+```bash
+aws rds create-db-instance \
+  --db-instance-identifier dso303-pg \
+  --db-instance-class db.t3.micro \
+  --engine postgres \
+  --allocated-storage 20 --max-allocated-storage 100 \
+  --storage-type gp3 --storage-encrypted \
+  --master-username appuser \
+  --manage-master-user-password \
+  --db-subnet-group-name dso303-db-subnets \
+  --vpc-security-group-ids "$DATA_SG" \
+  --multi-az \
+  --backup-retention-period 7 \
+  --enable-performance-insights \
+  --no-publicly-accessible \
+  --deletion-protection
+```
 
-**Part five — network path and observability**
+**Step 4 — Create the DynamoDB table with a GSI and TTL.**
 
-23. Create a Gateway VPC endpoint for S3 and associate it with the route table used by your subnets.
-24. From the instance, run an S3 copy and confirm connectivity.
-25. In CloudWatch, inspect the EBS `VolumeWriteOps` metric and the EFS `StorageBytes` metric for your resources.
-26. Clean up: terminate instances, delete the EFS file system and mount targets, delete the volume and snapshot, empty and delete the bucket including all versions.
+```bash
+aws dynamodb create-table \
+  --table-name OrderEvents \
+  --attribute-definitions \
+      AttributeName=pk,AttributeType=S \
+      AttributeName=sk,AttributeType=S \
+      AttributeName=customer_id,AttributeType=S \
+  --key-schema AttributeName=pk,KeyType=HASH AttributeName=sk,KeyType=RANGE \
+  --billing-mode PAY_PER_REQUEST \
+  --global-secondary-indexes '[{
+      "IndexName": "gsi-customer",
+      "KeySchema": [{"AttributeName":"customer_id","KeyType":"HASH"},
+                    {"AttributeName":"sk","KeyType":"RANGE"}],
+      "Projection": {"ProjectionType":"INCLUDE","NonKeyAttributes":["status","amount"]}
+  }]' \
+  --stream-specification StreamEnabled=true,StreamViewType=NEW_AND_OLD_IMAGES
 
-### Expected output
+aws dynamodb update-time-to-live \
+  --table-name OrderEvents \
+  --time-to-live-specification "Enabled=true,AttributeName=expires_at"
+```
 
-- A versioned bucket containing at least two versions of one key and a delete marker you subsequently removed.
-- A successful anonymous upload through a presigned URL, followed by an `AccessDenied` after expiry.
-- `df -h` on instance A showing both the mounted EBS volume and the mounted EFS file system.
-- An explicit error when attempting to attach the EBS volume across Availability Zones, with the message indicating the volume and instance are not in the same Availability Zone.
-- A file written on instance A visible from instance B within seconds.
-- A completed EBS snapshot listed in the console.
-- CloudWatch metrics showing non-zero write operations on the volume and non-zero stored bytes on the file system.
+**Step 5 — Create the ElastiCache replication group.**
 
-!!! tip "The conceptual takeaway from the lab"
-    Steps 16 and 21 together are the entire lesson. EBS is Availability-Zone-bound and single-attach; EFS is Regional and multi-attach. Everything else in this chapter about high availability follows from that single contrast.
+```bash
+aws elasticache create-replication-group \
+  --replication-group-id dso303-cache \
+  --replication-group-description "DSO303 cache-aside layer" \
+  --engine redis \
+  --cache-node-type cache.t3.micro \
+  --num-cache-clusters 2 \
+  --automatic-failover-enabled \
+  --multi-az-enabled \
+  --cache-subnet-group-name dso303-cache-subnets \
+  --security-group-ids "$DATA_SG" \
+  --at-rest-encryption-enabled \
+  --transit-encryption-enabled
+```
 
----
+**Step 6 — Create the relational schema and seed data.** Connect from the client instance and run the SQL in the Code Examples section, then insert approximately 50,000 order rows so that index behaviour is observable.
+
+**Step 7 — Run the measurement script.** Execute the Python program in the Code Examples section, which measures cache-miss latency, cache-hit latency, and DynamoDB `Query` latency over many iterations and prints the p50 and p99 for each.
+
+**Step 8 — Demonstrate a hot partition.** Write 5,000 items using a single constant partition key value, then repeat with a high-cardinality key. Enable Contributor Insights on the table and compare the key-distribution graphs and the `ThrottledRequests` metric.
+
+```bash
+aws dynamodb update-contributor-insights \
+  --table-name OrderEvents --contributor-insights-action ENABLE
+```
+
+**Step 9 — Force an RDS failover and observe application behaviour.**
+
+```bash
+aws rds reboot-db-instance --db-instance-identifier dso303-pg --force-failover
+```
+
+Observe that existing connections break, that the endpoint DNS resolves to the promoted standby, and that an application with bounded retry and reconnection logic recovers automatically while one without it does not.
+
+**Step 10 — Clean up.** Disable deletion protection, delete the RDS instance skipping the final snapshot, delete the DynamoDB table, delete the replication group, and delete the secret with a short recovery window.
+
+### Expected Output
+
+| Measurement | Expected result |
+|---|---|
+| Cache hit latency (p50) | Well under one millisecond at the client, dominated by network round trip |
+| Cache miss latency including database read and cache population | Typically one to two orders of magnitude higher than a hit |
+| DynamoDB `Query` latency (p50) | Single-digit milliseconds, stable as the item count grows |
+| Hot-partition write test | `ThrottledRequests` rises and Contributor Insights shows one dominant key |
+| High-cardinality write test | No throttling; Contributor Insights shows an even key distribution |
+| RDS forced failover | Connection error followed by successful reconnection within one to two minutes; the endpoint resolves to a new address |
+| CloudWatch after the lab | `CacheHitRate` above 90 percent under the read loop; `Evictions` at zero while the working set fits |
+
+!!! tip "The lesson to take from the measurements"
+    The numbers make the abstraction concrete. Students who have personally measured a 100-fold latency difference between a memory hit and a disk read, and who have personally throttled a table by choosing a bad partition key, retain the design principle in a way that reading about it does not achieve.
 
 ## Code Examples
 
-### AWS CLI — creating and securing an S3 bucket
+### SQL — schema design with deliberate indexing
 
-Creates a bucket, enables versioning, enforces default encryption, and blocks all public access. This is the minimum secure baseline for any production bucket.
+```sql
+-- Orders are the system of record and require referential integrity.
+CREATE TABLE customers (
+    id           BIGSERIAL PRIMARY KEY,
+    email        TEXT NOT NULL UNIQUE,
+    created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE orders (
+    id           BIGSERIAL PRIMARY KEY,
+    customer_id  BIGINT NOT NULL REFERENCES customers(id),
+    status       TEXT NOT NULL CHECK (status IN ('PENDING','PAID','SHIPPED','CANCELLED')),
+    total_cents  BIGINT NOT NULL CHECK (total_cents >= 0),
+    created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- Composite index supporting the dominant query: a customer's recent orders.
+-- Column order matters: equality column first, range column second.
+CREATE INDEX idx_orders_customer_created
+    ON orders (customer_id, created_at DESC);
+
+-- Partial index: most queries only care about live orders, so exclude the rest
+-- and keep the index small.
+CREATE INDEX idx_orders_active
+    ON orders (created_at DESC)
+    WHERE status IN ('PENDING','PAID');
+
+-- Atomic inventory decrement. The condition in the WHERE clause is what makes
+-- this safe under concurrency; a read-then-write in application code is a race.
+UPDATE inventory
+   SET quantity = quantity - 1
+ WHERE sku = 'SKU-123'
+   AND quantity > 0
+RETURNING quantity;
+```
+
+### AWS CLI — DynamoDB operations that illustrate the key concepts
 
 ```bash
-REGION="ap-south-1"
-BUCKET="dso303-lab-example-bucket"
+# Query is selective: it reads only items under one partition key.
+aws dynamodb query \
+  --table-name OrderEvents \
+  --key-condition-expression "pk = :pk AND begins_with(sk, :prefix)" \
+  --expression-attribute-values '{":pk":{"S":"ORDER#1001"},":prefix":{"S":"EVENT#2026"}}' \
+  --no-scan-index-forward --limit 25
 
-aws s3api create-bucket \
-  --bucket "$BUCKET" \
-  --region "$REGION" \
-  --create-bucket-configuration LocationConstraint="$REGION"
+# Conditional write: create only if absent. This is optimistic concurrency
+# control and costs the same as an ordinary write.
+aws dynamodb put-item \
+  --table-name OrderEvents \
+  --item '{"pk":{"S":"ORDER#1001"},"sk":{"S":"EVENT#001"},"status":{"S":"PENDING"}}' \
+  --condition-expression "attribute_not_exists(pk) AND attribute_not_exists(sk)"
 
-aws s3api put-bucket-versioning \
-  --bucket "$BUCKET" \
-  --versioning-configuration Status=Enabled
-
-aws s3api put-bucket-encryption \
-  --bucket "$BUCKET" \
-  --server-side-encryption-configuration '{
-    "Rules": [{
-      "ApplyServerSideEncryptionByDefault": {"SSEAlgorithm": "AES256"},
-      "BucketKeyEnabled": true
-    }]
-  }'
-
-aws s3api put-public-access-block \
-  --bucket "$BUCKET" \
-  --public-access-block-configuration \
-    BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true
+# Query the GSI for an alternative access pattern.
+aws dynamodb query \
+  --table-name OrderEvents --index-name gsi-customer \
+  --key-condition-expression "customer_id = :c" \
+  --expression-attribute-values '{":c":{"S":"CUST#42"}}'
 ```
 
-### AWS CLI — high-throughput transfer configuration
-
-Tunes the CLI's concurrency and multipart thresholds before a large sync. Default settings are conservative; raising concurrency is the single most effective way to increase aggregate throughput.
-
-```bash
-aws configure set default.s3.max_concurrent_requests 40
-aws configure set default.s3.multipart_threshold 64MB
-aws configure set default.s3.multipart_chunksize 32MB
-
-aws s3 sync ./local-dataset "s3://$BUCKET/dataset/" \
-  --storage-class STANDARD_IA \
-  --exclude "*.tmp"
-```
-
-### S3 bucket policy — denying non-TLS access and enforcing encryption
-
-Two explicit `Deny` statements. The first rejects any request not made over HTTPS; the second rejects uploads that do not request KMS encryption. Explicit denies cannot be overridden by any identity policy, which makes this pattern a reliable guardrail.
-
-```json
-{
-  "Version": "2012-10-17",
-  "Statement": [
-    {
-      "Sid": "DenyInsecureTransport",
-      "Effect": "Deny",
-      "Principal": "*",
-      "Action": "s3:*",
-      "Resource": [
-        "arn:aws:s3:::dso303-lab-example-bucket",
-        "arn:aws:s3:::dso303-lab-example-bucket/*"
-      ],
-      "Condition": {
-        "Bool": {"aws:SecureTransport": "false"}
-      }
-    },
-    {
-      "Sid": "DenyUnencryptedObjectUploads",
-      "Effect": "Deny",
-      "Principal": "*",
-      "Action": "s3:PutObject",
-      "Resource": "arn:aws:s3:::dso303-lab-example-bucket/*",
-      "Condition": {
-        "StringNotEquals": {"s3:x-amz-server-side-encryption": "aws:kms"}
-      }
-    }
-  ]
-}
-```
-
-### S3 lifecycle configuration
-
-Transitions objects through progressively cheaper classes, expires noncurrent versions to bound the cost of versioning, and aborts abandoned multipart uploads. The last rule in particular should be present in every bucket.
-
-```json
-{
-  "Rules": [
-    {
-      "ID": "TierApplicationLogs",
-      "Filter": {"Prefix": "logs/"},
-      "Status": "Enabled",
-      "Transitions": [
-        {"Days": 30, "StorageClass": "STANDARD_IA"},
-        {"Days": 90, "StorageClass": "GLACIER_IR"},
-        {"Days": 365, "StorageClass": "DEEP_ARCHIVE"}
-      ],
-      "Expiration": {"Days": 2555}
-    },
-    {
-      "ID": "ExpireNoncurrentVersions",
-      "Filter": {},
-      "Status": "Enabled",
-      "NoncurrentVersionExpiration": {
-        "NoncurrentDays": 30,
-        "NewerNoncurrentVersions": 3
-      }
-    },
-    {
-      "ID": "AbortIncompleteMultipartUploads",
-      "Filter": {},
-      "Status": "Enabled",
-      "AbortIncompleteMultipartUpload": {"DaysAfterInitiation": 7}
-    }
-  ]
-}
-```
-
-### Python boto3 — presigned URLs
-
-Generates a time-limited URL that lets an anonymous client upload or download one specific object. This keeps large payloads off the application tier entirely.
+### Python (boto3) — DynamoDB single-table access with pagination and retries
 
 ```python
-import boto3
+import boto3, time, os
+from boto3.dynamodb.conditions import Key, Attr
 from botocore.config import Config
 
-s3 = boto3.client("s3", config=Config(signature_version="s3v4"))
+# Adaptive retry mode applies exponential backoff with jitter and respects
+# throttling responses. Never write a bare retry loop against a throttled API.
+cfg = Config(retries={"max_attempts": 10, "mode": "adaptive"})
+ddb = boto3.resource("dynamodb", config=cfg)
+table = ddb.Table(os.environ["TABLE_NAME"])
 
-def presigned_upload_url(bucket: str, key: str, expires: int = 300) -> str:
-    """Return a URL allowing a single PUT of one object for a bounded time."""
-    return s3.generate_presigned_url(
-        ClientMethod="put_object",
-        Params={
-            "Bucket": bucket,
-            "Key": key,
-            "ContentType": "application/octet-stream",
-            "ServerSideEncryption": "AES256",
+
+def put_event(order_id: str, seq: int, payload: dict, ttl_days: int = 30) -> None:
+    """Append an event, failing if this sequence number already exists.
+
+    The conditional expression provides optimistic concurrency: two writers
+    racing on the same sequence number cannot both succeed.
+    """
+    table.put_item(
+        Item={
+            "pk": f"ORDER#{order_id}",
+            "sk": f"EVENT#{seq:09d}",
+            "customer_id": payload["customer_id"],
+            "status": payload["status"],
+            "amount": payload["amount"],
+            "expires_at": int(time.time()) + ttl_days * 86400,
         },
-        ExpiresIn=expires,
+        ConditionExpression=Attr("pk").not_exists() & Attr("sk").not_exists(),
     )
 
-def presigned_download_url(bucket: str, key: str, expires: int = 300) -> str:
-    """Return a URL allowing a single GET of one object for a bounded time."""
-    return s3.generate_presigned_url(
-        ClientMethod="get_object",
-        Params={"Bucket": bucket, "Key": key},
-        ExpiresIn=expires,
-    )
 
-if __name__ == "__main__":
-    print(presigned_upload_url("dso303-lab-example-bucket", "uploads/report.pdf"))
-```
+def all_events(order_id: str):
+    """Query every event for an order, paginating correctly.
 
-The generated URL is used with no credentials at all.
+    Query returns at most 1 MB per call. Ignoring LastEvaluatedKey is a defect
+    that passes small-data tests and silently truncates in production.
+    """
+    kwargs = {"KeyConditionExpression": Key("pk").eq(f"ORDER#{order_id}")}
+    while True:
+        resp = table.query(**kwargs)
+        yield from resp["Items"]
+        if "LastEvaluatedKey" not in resp:
+            return
+        kwargs["ExclusiveStartKey"] = resp["LastEvaluatedKey"]
 
-```bash
-curl -X PUT \
-  -H "Content-Type: application/octet-stream" \
-  -H "x-amz-server-side-encryption: AES256" \
-  --upload-file ./report.pdf \
-  "<the-presigned-url>"
-```
 
-### Python boto3 — managed multipart upload with progress
-
-`upload_file` transparently performs a multipart upload above the configured threshold, uploading parts concurrently and retrying individual parts. Writing multipart logic by hand is almost never necessary.
-
-```python
-import os
-import threading
-import boto3
-from boto3.s3.transfer import TransferConfig
-
-s3 = boto3.client("s3")
-
-transfer_config = TransferConfig(
-    multipart_threshold=64 * 1024 * 1024,   # start multipart above 64 MiB
-    multipart_chunksize=32 * 1024 * 1024,   # 32 MiB parts
-    max_concurrency=16,                     # parallel part uploads
-    use_threads=True,
-)
-
-class ProgressReporter:
-    def __init__(self, filename: str):
-        self._filename = filename
-        self._size = float(os.path.getsize(filename))
-        self._seen = 0
-        self._lock = threading.Lock()
-
-    def __call__(self, bytes_amount: int) -> None:
-        with self._lock:
-            self._seen += bytes_amount
-            pct = (self._seen / self._size) * 100
-            print(f"{self._filename}: {self._seen} of {int(self._size)} bytes, {pct:.1f} percent")
-
-s3.upload_file(
-    Filename="large-dataset.tar.gz",
-    Bucket="dso303-lab-example-bucket",
-    Key="datasets/large-dataset.tar.gz",
-    ExtraArgs={"StorageClass": "INTELLIGENT_TIERING", "ServerSideEncryption": "AES256"},
-    Config=transfer_config,
-    Callback=ProgressReporter("large-dataset.tar.gz"),
-)
-```
-
-### Python boto3 — low-level multipart upload
-
-Shown to make the underlying protocol explicit: initiate, upload parts collecting each `ETag`, then complete with the ordered part list. Note the `abort` on failure, without which the parts remain billed.
-
-```python
-import boto3
-
-s3 = boto3.client("s3")
-BUCKET, KEY, PART_SIZE = "dso303-lab-example-bucket", "big/archive.bin", 16 * 1024 * 1024
-
-response = s3.create_multipart_upload(Bucket=BUCKET, Key=KEY)
-upload_id = response["UploadId"]
-parts = []
-
-try:
-    with open("archive.bin", "rb") as handle:
-        part_number = 1
-        while True:
-            chunk = handle.read(PART_SIZE)
-            if not chunk:
-                break
-            result = s3.upload_part(
-                Bucket=BUCKET, Key=KEY, PartNumber=part_number,
-                UploadId=upload_id, Body=chunk,
-            )
-            parts.append({"ETag": result["ETag"], "PartNumber": part_number})
-            part_number += 1
-
-    s3.complete_multipart_upload(
-        Bucket=BUCKET, Key=KEY, UploadId=upload_id,
-        MultipartUpload={"Parts": parts},
-    )
-except Exception:
-    # Without this abort the uploaded parts remain in storage and are billed.
-    s3.abort_multipart_upload(Bucket=BUCKET, Key=KEY, UploadId=upload_id)
-    raise
-```
-
-### Python boto3 — paginated listing and EBS snapshot automation
-
-Paginators handle the thousand-key page limit correctly; naive `list_objects_v2` calls silently truncate. The second function demonstrates a tag-driven snapshot routine.
-
-```python
-import boto3
-
-s3 = boto3.client("s3")
-ec2 = boto3.client("ec2")
-
-def total_bytes_under_prefix(bucket: str, prefix: str) -> int:
-    """Sum object sizes under a prefix, handling pagination correctly."""
-    paginator = s3.get_paginator("list_objects_v2")
-    total = 0
-    for page in paginator.paginate(Bucket=bucket, Prefix=prefix):
-        for obj in page.get("Contents", []):
-            total += obj["Size"]
-    return total
-
-def snapshot_tagged_volumes(tag_key: str = "Backup", tag_value: str = "daily") -> list:
-    """Create snapshots of all volumes carrying a given tag."""
-    volumes = ec2.describe_volumes(
-        Filters=[{"Name": f"tag:{tag_key}", "Values": [tag_value]}]
-    )["Volumes"]
-
-    created = []
-    for volume in volumes:
-        snapshot = ec2.create_snapshot(
-            VolumeId=volume["VolumeId"],
-            Description=f"Automated snapshot of {volume['VolumeId']}",
-            TagSpecifications=[{
-                "ResourceType": "snapshot",
-                "Tags": [
-                    {"Key": "Name", "Value": f"auto-{volume['VolumeId']}"},
-                    {"Key": "CreatedBy", "Value": "dso303-automation"},
-                ],
-            }],
+def atomic_decrement(sku: str) -> bool:
+    """Decrement stock only when it is positive, atomically, in one round trip."""
+    try:
+        table.update_item(
+            Key={"pk": f"SKU#{sku}", "sk": "STOCK"},
+            UpdateExpression="ADD quantity :neg",
+            ConditionExpression=Attr("quantity").gt(0),
+            ExpressionAttributeValues={":neg": -1},
         )
-        created.append(snapshot["SnapshotId"])
-    return created
+        return True
+    except ddb.meta.client.exceptions.ConditionalCheckFailedException:
+        return False   # Out of stock; not an error, an expected outcome.
 ```
 
-### Shell — partitioning, formatting, and mounting an EBS volume
+### Python — cache-aside with TTL jitter and a stampede guard
 
-The critical detail is using the file system UUID in `/etc/fstab` rather than the device name, because NVMe device naming is not guaranteed stable across reboots. The `nofail` option prevents an unbootable instance if the volume is absent.
+```python
+import json, random, time
+import redis
 
-```bash
-# Identify the attached device; on Nitro instances it appears as an NVMe device.
-lsblk
-sudo nvme list
+r = redis.Redis(host=CACHE_ENDPOINT, port=6379, ssl=True, decode_responses=True)
 
-DEVICE="/dev/nvme1n1"
-MOUNT_POINT="/data"
+TTL_BASE = 300          # five minutes of tolerable staleness
+TTL_JITTER = 60         # spread expiries so keys do not expire in lockstep
+LOCK_TTL = 5
 
-# Verify the device is empty. If this prints "data" the device has no file system.
-sudo file -s "$DEVICE"
 
-# Create an XFS file system. This DESTROYS existing data - never run on a volume with data.
-sudo mkfs -t xfs "$DEVICE"
+def get_customer(conn, customer_id: str) -> dict:
+    key = f"v1:customer:{customer_id}"          # version prefix invalidates on deploy
+    cached = r.get(key)
+    if cached is not None:
+        return json.loads(cached)
 
-sudo mkdir -p "$MOUNT_POINT"
-sudo mount "$DEVICE" "$MOUNT_POINT"
+    # Stampede guard: only the lock holder recomputes; others wait briefly and
+    # re-read rather than all hammering the database simultaneously.
+    lock_key = f"{key}:lock"
+    if r.set(lock_key, "1", nx=True, ex=LOCK_TTL):
+        try:
+            with conn.cursor() as cur:
+                cur.execute("SELECT id, email, created_at FROM customers WHERE id = %s",
+                            (customer_id,))
+                row = cur.fetchone()
+            value = {"id": row[0], "email": row[1], "created_at": str(row[2])}
+            r.setex(key, TTL_BASE + random.randint(0, TTL_JITTER), json.dumps(value))
+            return value
+        finally:
+            r.delete(lock_key)
 
-# Persist the mount using the UUID so device renaming cannot break boot.
-UUID=$(sudo blkid -s UUID -o value "$DEVICE")
-echo "UUID=$UUID  $MOUNT_POINT  xfs  defaults,noatime,nofail  0  2" | sudo tee -a /etc/fstab
-
-sudo mount -a
-df -hT "$MOUNT_POINT"
+    time.sleep(0.05)
+    cached = r.get(key)
+    if cached is not None:
+        return json.loads(cached)
+    # Fall through to the database rather than failing the request.
+    with conn.cursor() as cur:
+        cur.execute("SELECT id, email, created_at FROM customers WHERE id = %s",
+                    (customer_id,))
+        row = cur.fetchone()
+    return {"id": row[0], "email": row[1], "created_at": str(row[2])}
 ```
 
-### Shell — growing an EBS volume online
+### Python — retrieving credentials from Secrets Manager rather than embedding them
 
-After `ModifyVolume` increases the volume size, the partition table and the file system must be grown separately. Forgetting this is why a resized volume often shows no additional space.
+```python
+import json, boto3, psycopg
 
-```bash
-aws ec2 modify-volume --volume-id vol-0123456789abcdef0 --size 200 --volume-type gp3 --iops 6000
+def connect():
+    """Fetch the rotating credential at connection time.
 
-# On the instance, after the modification reaches the optimizing state:
-sudo growpart /dev/nvme1n1 1     # only if the volume is partitioned
-sudo xfs_growfs /data            # XFS
-# sudo resize2fs /dev/nvme1n1    # ext4 equivalent
-df -hT /data
+    Caching the secret for the lifetime of the execution environment is
+    acceptable; embedding it in an environment variable is not, because
+    rotation would then require a redeploy.
+    """
+    sm = boto3.client("secretsmanager")
+    secret = json.loads(sm.get_secret_value(SecretId="dso303/postgres")["SecretString"])
+    return psycopg.connect(
+        host=secret["host"], port=secret.get("port", 5432),
+        dbname=secret.get("dbname", "postgres"),
+        user=secret["username"], password=secret["password"],
+        sslmode="require",              # enforce TLS to the database
+        connect_timeout=5,
+    )
 ```
 
-### Shell — mounting Amazon EFS with TLS
-
-The `efs-utils` helper resolves the zone-local mount target, establishes a TLS tunnel, and can sign requests with the instance's IAM role. A plain `mount -t nfs4` works but transmits data unencrypted.
-
-```bash
-sudo yum install -y amazon-efs-utils      # or: sudo apt-get install -y amazon-efs-utils
-
-FS_ID="fs-0123456789abcdef0"
-sudo mkdir -p /mnt/shared
-
-# Mount with encryption in transit and IAM authorization.
-sudo mount -t efs -o tls,iam "$FS_ID":/ /mnt/shared
-
-# Persist across reboots. The _netdev option delays the mount until networking is up.
-echo "$FS_ID:/ /mnt/shared efs _netdev,tls,iam 0 0" | sudo tee -a /etc/fstab
-
-# Mount through an access point, which enforces a root directory and POSIX identity.
-sudo mount -t efs -o tls,iam,accesspoint=fsap-0123456789abcdef0 "$FS_ID":/ /mnt/app-data
-
-df -hT /mnt/shared
-```
-
-### CloudFormation — a secure bucket, an EBS volume, and an EFS file system
-
-Declarative definition means the environment is reproducible, reviewable in a pull request, and destroyable in one operation. Note the deletion policy on the bucket, which prevents an accidental stack deletion from destroying data.
+### CloudFormation — RDS, DynamoDB and ElastiCache (abridged)
 
 ```yaml
-AWSTemplateFormatVersion: "2010-09-09"
-Description: DSO303 storage baseline - S3, EBS and EFS
+AWSTemplateFormatVersion: '2010-09-09'
+Description: DSO303 polyglot data layer
 
 Parameters:
-  VpcId:
-    Type: AWS::EC2::VPC::Id
-  SubnetAId:
-    Type: AWS::EC2::Subnet::Id
-  SubnetBId:
-    Type: AWS::EC2::Subnet::Id
-  AvailabilityZoneA:
-    Type: AWS::EC2::AvailabilityZone::Name
+  PrivateSubnets: {Type: List<AWS::EC2::Subnet::Id>}
+  DataSecurityGroup: {Type: AWS::EC2::SecurityGroup::Id}
 
 Resources:
-  DataBucket:
-    Type: AWS::S3::Bucket
-    DeletionPolicy: Retain
-    UpdateReplacePolicy: Retain
+  DBSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
     Properties:
-      VersioningConfiguration:
-        Status: Enabled
-      BucketEncryption:
-        ServerSideEncryptionConfiguration:
-          - BucketKeyEnabled: true
-            ServerSideEncryptionByDefault:
-              SSEAlgorithm: AES256
-      PublicAccessBlockConfiguration:
-        BlockPublicAcls: true
-        BlockPublicPolicy: true
-        IgnorePublicAcls: true
-        RestrictPublicBuckets: true
-      OwnershipControls:
-        Rules:
-          - ObjectOwnership: BucketOwnerEnforced
-      LifecycleConfiguration:
-        Rules:
-          - Id: TierAndExpire
-            Status: Enabled
-            Transitions:
-              - StorageClass: STANDARD_IA
-                TransitionInDays: 30
-              - StorageClass: GLACIER_IR
-                TransitionInDays: 120
-            NoncurrentVersionExpirationInDays: 30
-            AbortIncompleteMultipartUpload:
-              DaysAfterInitiation: 7
+      DBSubnetGroupDescription: DSO303 private subnets
+      SubnetIds: !Ref PrivateSubnets
 
-  BucketTlsPolicy:
-    Type: AWS::S3::BucketPolicy
-    Properties:
-      Bucket: !Ref DataBucket
-      PolicyDocument:
-        Version: "2012-10-17"
-        Statement:
-          - Sid: DenyInsecureTransport
-            Effect: Deny
-            Principal: "*"
-            Action: "s3:*"
-            Resource:
-              - !GetAtt DataBucket.Arn
-              - !Sub "${DataBucket.Arn}/*"
-            Condition:
-              Bool:
-                "aws:SecureTransport": "false"
-
-  ApplicationDataVolume:
-    Type: AWS::EC2::Volume
+  Postgres:
+    Type: AWS::RDS::DBInstance
     DeletionPolicy: Snapshot
     Properties:
-      AvailabilityZone: !Ref AvailabilityZoneA
-      Size: 100
-      VolumeType: gp3
-      Iops: 6000
-      Throughput: 250
-      Encrypted: true
-      Tags:
-        - Key: Backup
-          Value: daily
+      DBInstanceIdentifier: dso303-pg
+      Engine: postgres
+      DBInstanceClass: db.t3.micro
+      AllocatedStorage: '20'
+      MaxAllocatedStorage: 100         # storage auto scaling prevents a full disk outage
+      StorageType: gp3
+      StorageEncrypted: true
+      MultiAZ: true
+      BackupRetentionPeriod: 7
+      DeletionProtection: true
+      PubliclyAccessible: false
+      EnablePerformanceInsights: true
+      ManageMasterUserPassword: true   # credential created and rotated in Secrets Manager
+      DBSubnetGroupName: !Ref DBSubnetGroup
+      VPCSecurityGroups: [!Ref DataSecurityGroup]
 
-  EfsSecurityGroup:
-    Type: AWS::EC2::SecurityGroup
+  OrderEvents:
+    Type: AWS::DynamoDB::Table
     Properties:
-      GroupDescription: Allow NFS from application instances
-      VpcId: !Ref VpcId
+      TableName: OrderEvents
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - {AttributeName: pk, AttributeType: S}
+        - {AttributeName: sk, AttributeType: S}
+        - {AttributeName: customer_id, AttributeType: S}
+      KeySchema:
+        - {AttributeName: pk, KeyType: HASH}
+        - {AttributeName: sk, KeyType: RANGE}
+      GlobalSecondaryIndexes:
+        - IndexName: gsi-customer
+          KeySchema:
+            - {AttributeName: customer_id, KeyType: HASH}
+            - {AttributeName: sk, KeyType: RANGE}
+          Projection:
+            ProjectionType: INCLUDE
+            NonKeyAttributes: [status, amount]
+      TimeToLiveSpecification: {AttributeName: expires_at, Enabled: true}
+      PointInTimeRecoverySpecification: {PointInTimeRecoveryEnabled: true}
+      StreamSpecification: {StreamViewType: NEW_AND_OLD_IMAGES}
+      SSESpecification: {SSEEnabled: true}
 
-  SharedFileSystem:
-    Type: AWS::EFS::FileSystem
+  CacheSubnetGroup:
+    Type: AWS::ElastiCache::SubnetGroup
     Properties:
-      Encrypted: true
-      PerformanceMode: generalPurpose
-      ThroughputMode: elastic
-      BackupPolicy:
-        Status: ENABLED
-      LifecyclePolicies:
-        - TransitionToIA: AFTER_30_DAYS
-        - TransitionToPrimaryStorageClass: AFTER_1_ACCESS
+      Description: DSO303 private subnets
+      SubnetIds: !Ref PrivateSubnets
 
-  MountTargetA:
-    Type: AWS::EFS::MountTarget
+  Cache:
+    Type: AWS::ElastiCache::ReplicationGroup
     Properties:
-      FileSystemId: !Ref SharedFileSystem
-      SubnetId: !Ref SubnetAId
-      SecurityGroups:
-        - !Ref EfsSecurityGroup
-
-  MountTargetB:
-    Type: AWS::EFS::MountTarget
-    Properties:
-      FileSystemId: !Ref SharedFileSystem
-      SubnetId: !Ref SubnetBId
-      SecurityGroups:
-        - !Ref EfsSecurityGroup
+      ReplicationGroupId: dso303-cache
+      ReplicationGroupDescription: DSO303 cache-aside layer
+      Engine: redis
+      CacheNodeType: cache.t3.micro
+      NumCacheClusters: 2
+      AutomaticFailoverEnabled: true
+      MultiAZEnabled: true
+      AtRestEncryptionEnabled: true
+      TransitEncryptionEnabled: true
+      CacheSubnetGroupName: !Ref CacheSubnetGroup
+      SecurityGroupIds: [!Ref DataSecurityGroup]
 
 Outputs:
-  BucketName:
-    Value: !Ref DataBucket
-  FileSystemId:
-    Value: !Ref SharedFileSystem
-  VolumeId:
-    Value: !Ref ApplicationDataVolume
+  PostgresEndpoint: {Value: !GetAtt Postgres.Endpoint.Address}
+  CachePrimaryEndpoint: {Value: !GetAtt Cache.PrimaryEndPoint.Address}
+  StreamArn: {Value: !GetAtt OrderEvents.StreamArn}
 ```
 
-### Terraform — equivalent storage baseline
-
-The same intent expressed in HCL, including the Gateway VPC endpoint for S3 that removes NAT charges from the S3 path.
+### Terraform — DynamoDB with auto scaling on provisioned capacity
 
 ```hcl
-terraform {
-  required_providers {
-    aws = {
-      source  = "hashicorp/aws"
-      version = "~> 5.0"
-    }
+resource "aws_dynamodb_table" "orders" {
+  name         = "Orders"
+  billing_mode = "PROVISIONED"
+  read_capacity  = 25
+  write_capacity = 25
+  hash_key     = "pk"
+  range_key    = "sk"
+
+  attribute { name = "pk" type = "S" }
+  attribute { name = "sk" type = "S" }
+
+  ttl {
+    attribute_name = "expires_at"
+    enabled        = true
+  }
+
+  point_in_time_recovery { enabled = true }
+  server_side_encryption { enabled = true }
+
+  lifecycle {
+    # Auto scaling changes capacity out of band; ignore it so Terraform does
+    # not fight the scaling policy on every plan.
+    ignore_changes = [read_capacity, write_capacity]
   }
 }
 
-variable "vpc_id" { type = string }
-variable "subnet_ids" { type = list(string) }
-variable "route_table_ids" { type = list(string) }
-variable "availability_zone" { type = string }
-
-resource "aws_s3_bucket" "data" {
-  bucket = "dso303-data-${data.aws_caller_identity.current.account_id}"
+resource "aws_appautoscaling_target" "read" {
+  service_namespace  = "dynamodb"
+  resource_id        = "table/${aws_dynamodb_table.orders.name}"
+  scalable_dimension = "dynamodb:table:ReadCapacityUnits"
+  min_capacity       = 25
+  max_capacity       = 500
 }
 
-data "aws_caller_identity" "current" {}
+resource "aws_appautoscaling_policy" "read" {
+  name               = "orders-read-target-70"
+  policy_type        = "TargetTrackingScaling"
+  service_namespace  = aws_appautoscaling_target.read.service_namespace
+  resource_id        = aws_appautoscaling_target.read.resource_id
+  scalable_dimension = aws_appautoscaling_target.read.scalable_dimension
 
-resource "aws_s3_bucket_versioning" "data" {
-  bucket = aws_s3_bucket.data.id
-  versioning_configuration {
-    status = "Enabled"
-  }
-}
-
-resource "aws_s3_bucket_server_side_encryption_configuration" "data" {
-  bucket = aws_s3_bucket.data.id
-  rule {
-    apply_server_side_encryption_by_default {
-      sse_algorithm = "AES256"
-    }
-    bucket_key_enabled = true
-  }
-}
-
-resource "aws_s3_bucket_public_access_block" "data" {
-  bucket                  = aws_s3_bucket.data.id
-  block_public_acls       = true
-  block_public_policy     = true
-  ignore_public_acls      = true
-  restrict_public_buckets = true
-}
-
-resource "aws_s3_bucket_lifecycle_configuration" "data" {
-  bucket = aws_s3_bucket.data.id
-
-  rule {
-    id     = "tier-and-expire"
-    status = "Enabled"
-    filter {}
-
-    transition {
-      days          = 30
-      storage_class = "STANDARD_IA"
-    }
-    transition {
-      days          = 120
-      storage_class = "GLACIER_IR"
-    }
-    noncurrent_version_expiration {
-      noncurrent_days = 30
-    }
-    abort_incomplete_multipart_upload {
-      days_after_initiation = 7
-    }
-  }
-}
-
-resource "aws_vpc_endpoint" "s3" {
-  vpc_id            = var.vpc_id
-  service_name      = "com.amazonaws.${data.aws_region.current.name}.s3"
-  vpc_endpoint_type = "Gateway"
-  route_table_ids   = var.route_table_ids
-}
-
-data "aws_region" "current" {}
-
-resource "aws_ebs_volume" "app_data" {
-  availability_zone = var.availability_zone
-  size              = 100
-  type              = "gp3"
-  iops              = 6000
-  throughput        = 250
-  encrypted         = true
-
-  tags = {
-    Name   = "dso303-app-data"
-    Backup = "daily"
-  }
-}
-
-resource "aws_efs_file_system" "shared" {
-  encrypted        = true
-  performance_mode = "generalPurpose"
-  throughput_mode  = "elastic"
-
-  lifecycle_policy {
-    transition_to_ia = "AFTER_30_DAYS"
-  }
-
-  tags = {
-    Name = "dso303-shared"
-  }
-}
-
-resource "aws_security_group" "efs" {
-  name        = "dso303-efs-sg"
-  description = "Allow NFS from application tier"
-  vpc_id      = var.vpc_id
-}
-
-resource "aws_efs_mount_target" "shared" {
-  count           = length(var.subnet_ids)
-  file_system_id  = aws_efs_file_system.shared.id
-  subnet_id       = var.subnet_ids[count.index]
-  security_groups = [aws_security_group.efs.id]
-}
-
-resource "aws_efs_access_point" "app" {
-  file_system_id = aws_efs_file_system.shared.id
-
-  posix_user {
-    uid = 1000
-    gid = 1000
-  }
-
-  root_directory {
-    path = "/app"
-    creation_info {
-      owner_uid   = 1000
-      owner_gid   = 1000
-      permissions = "0750"
+  target_tracking_scaling_policy_configuration {
+    target_value = 70.0
+    predefined_metric_specification {
+      predefined_metric_type = "DynamoDBReadCapacityUtilization"
     }
   }
 }
 ```
 
-### Kubernetes YAML — EFS shared volume and EBS per-pod volume
+### Lambda — consuming DynamoDB Streams to maintain a search projection
 
-Demonstrates the two access modes side by side. `ReadWriteMany` on EFS lets every replica share one directory; `ReadWriteOnce` on EBS gives each StatefulSet pod its own volume, bound in the zone where the pod is scheduled.
+```python
+import json, os, boto3
+from opensearchpy import OpenSearch, RequestsHttpConnection
 
-```yaml
----
-apiVersion: storage.k8s.io/v1
-kind: StorageClass
-metadata:
-  name: efs-shared
-provisioner: efs.csi.aws.com
-parameters:
-  provisioningMode: efs-ap
-  fileSystemId: fs-0123456789abcdef0
-  directoryPerms: "750"
----
-apiVersion: v1
-kind: PersistentVolumeClaim
-metadata:
-  name: shared-content
-spec:
-  accessModes:
-    - ReadWriteMany
-  storageClassName: efs-shared
-  resources:
-    requests:
-      storage: 20Gi
----
-apiVersion: storage.k8s.io/v1
-kind: StorageClass
-metadata:
-  name: ebs-gp3
-provisioner: ebs.csi.aws.com
-volumeBindingMode: WaitForFirstConsumer
-parameters:
-  type: gp3
-  iops: "3000"
-  throughput: "125"
-  encrypted: "true"
----
-apiVersion: apps/v1
-kind: StatefulSet
-metadata:
-  name: metrics-store
-spec:
-  serviceName: metrics-store
-  replicas: 2
-  selector:
-    matchLabels:
-      app: metrics-store
-  template:
-    metadata:
-      labels:
-        app: metrics-store
-    spec:
-      containers:
-        - name: server
-          image: public.ecr.aws/docker/library/alpine:3.20
-          command: ["sleep", "infinity"]
-          volumeMounts:
-            - name: local-state
-              mountPath: /var/lib/state
-            - name: shared-content
-              mountPath: /mnt/shared
-      volumes:
-        - name: shared-content
-          persistentVolumeClaim:
-            claimName: shared-content
-  volumeClaimTemplates:
-    - metadata:
-        name: local-state
-      spec:
-        accessModes: ["ReadWriteOnce"]
-        storageClassName: ebs-gp3
-        resources:
-          requests:
-            storage: 50Gi
+# CQRS in practice: DynamoDB is the write model, OpenSearch the read model
+# for search. The stream is the change-data-capture mechanism between them.
+def handler(event, context):
+    actions = []
+    for record in event["Records"]:
+        keys = record["dynamodb"]["Keys"]
+        doc_id = f'{keys["pk"]["S"]}#{keys["sk"]["S"]}'
+
+        if record["eventName"] in ("INSERT", "MODIFY"):
+            new_image = record["dynamodb"]["NewImage"]
+            actions.append(("index", doc_id, _flatten(new_image)))
+        elif record["eventName"] == "REMOVE":
+            actions.append(("delete", doc_id, None))
+
+    _apply(actions)
+    # Returning normally acknowledges the batch. Raising causes the whole batch
+    # to be retried, so handlers must be idempotent.
+    return {"processed": len(actions)}
 ```
-
-### Docker and ECS — mounting EFS into a Fargate task
-
-The ECS task definition mounts EFS through an access point with TLS and IAM authorisation, giving containers durable shared state without any node-level configuration.
-
-```json
-{
-  "family": "dso303-web",
-  "networkMode": "awsvpc",
-  "requiresCompatibilities": ["FARGATE"],
-  "cpu": "512",
-  "memory": "1024",
-  "executionRoleArn": "arn:aws:iam::123456789012:role/ecsTaskExecutionRole",
-  "taskRoleArn": "arn:aws:iam::123456789012:role/dso303TaskRole",
-  "volumes": [
-    {
-      "name": "shared-content",
-      "efsVolumeConfiguration": {
-        "fileSystemId": "fs-0123456789abcdef0",
-        "transitEncryption": "ENABLED",
-        "authorizationConfig": {
-          "accessPointId": "fsap-0123456789abcdef0",
-          "iam": "ENABLED"
-        }
-      }
-    }
-  ],
-  "containerDefinitions": [
-    {
-      "name": "web",
-      "image": "123456789012.dkr.ecr.ap-south-1.amazonaws.com/dso303-web:1.0.0",
-      "essential": true,
-      "portMappings": [{"containerPort": 8080, "protocol": "tcp"}],
-      "mountPoints": [
-        {"sourceVolume": "shared-content", "containerPath": "/srv/content", "readOnly": false}
-      ],
-      "logConfiguration": {
-        "logDriver": "awslogs",
-        "options": {
-          "awslogs-group": "/ecs/dso303-web",
-          "awslogs-region": "ap-south-1",
-          "awslogs-stream-prefix": "web"
-        }
-      }
-    }
-  ]
-}
-```
-
-### Shell — useful diagnostic and cost-hygiene commands
-
-Everyday operational commands that surface the two most common sources of hidden storage cost.
-
-```bash
-# List EBS volumes that are not attached to anything and are therefore pure waste.
-aws ec2 describe-volumes \
-  --filters Name=status,Values=available \
-  --query 'Volumes[].{ID:VolumeId,Size:Size,Type:VolumeType,AZ:AvailabilityZone}' \
-  --output table
-
-# List incomplete multipart uploads, which are billed but hidden from normal listings.
-aws s3api list-multipart-uploads --bucket "$BUCKET" \
-  --query 'Uploads[].{Key:Key,Initiated:Initiated,UploadId:UploadId}' --output table
-
-# Convert every gp2 volume in the Region to gp3.
-for VOL in $(aws ec2 describe-volumes --filters Name=volume-type,Values=gp2 \
-             --query 'Volumes[].VolumeId' --output text); do
-  aws ec2 modify-volume --volume-id "$VOL" --volume-type gp3
-done
-
-# Show total size of all object versions, including noncurrent ones.
-aws s3api list-object-versions --bucket "$BUCKET" \
-  --query 'sum(Versions[].Size)' --output text
-```
-
----
 
 ## AWS Certification Tips
 
-### Reading the question correctly
+### Exam tips
 
-Associate-level examinations rarely test recall of numbers. They test whether you can map a set of requirements onto the correct service. Train yourself to extract the discriminating keywords.
+- Identify the discriminating requirement first. *Relational*, *ACID*, *joins*, *complex queries*, and *existing SQL application* point to RDS or Aurora. *Single-digit millisecond at any scale*, *key-value*, *serverless*, and *unpredictable traffic* point to DynamoDB. *Microsecond*, *in-memory*, *leaderboard*, and *session store* point to ElastiCache or DAX.
+- "Improve read performance" is answered by read replicas or a cache, never by Multi-AZ.
+- "Improve availability" or "automatic failover" is answered by Multi-AZ, never by read replicas.
+- "Recover from accidental deletion" is answered by point-in-time recovery or backups, never by replication, because replication faithfully reproduces the deletion.
+- "Least operational overhead" favours DynamoDB and Aurora Serverless over self-managed alternatives, and managed services over EC2-hosted databases.
+- Watch for a stated latency requirement. Microseconds means DAX or ElastiCache; single-digit milliseconds means DynamoDB; tens of milliseconds is comfortable for RDS.
+- Watch for a stated scale. Petabytes with millions of requests per second eliminates a single relational instance.
 
-| Phrase in the question | What it points to |
-|---|---|
-| "shared across multiple instances" or "shared file system" | Amazon EFS, or FSx for Windows if SMB is mentioned |
-| "POSIX", "NFS", "mount", "directory hierarchy" | EFS or FSx, never S3 |
-| "block storage", "boot volume", "attach to an instance" | Amazon EBS |
-| "lowest latency", "sub-millisecond", "highest IOPS", "mission-critical database" | io2 Block Express |
-| "temporary", "scratch", "cache", "can be lost" | Instance store |
-| "millions of objects", "static assets", "data lake", "unlimited storage" | Amazon S3 |
-| "archive", "retrieve within twelve hours", "lowest cost" | S3 Glacier Deep Archive |
-| "archive but must be retrieved in milliseconds" | S3 Glacier Instant Retrieval |
-| "access pattern is unknown or changes" | S3 Intelligent-Tiering |
-| "can be recreated", "non-critical", "reduce cost" with millisecond access | S3 One Zone-IA |
-| "immutable", "WORM", "regulatory retention", "cannot be deleted" | S3 Object Lock in Compliance mode |
-| "private access from a VPC without internet" and cost sensitivity | Gateway VPC endpoint for S3 |
-| "private access from on-premises over Direct Connect" | Interface VPC endpoint with PrivateLink |
-| "high-performance computing", "hundreds of GB per second", "Lustre" | FSx for Lustre |
-| "Windows", "Active Directory", "SMB" | FSx for Windows File Server |
-| "on-premises appliance", "hybrid", "virtual tape" | AWS Storage Gateway |
-
-### Frequently confused pairs
+### Frequently confused services and concepts
 
 | Pair | The distinguishing fact |
 |---|---|
-| Durability versus availability | Durability is about not losing data; availability is about being able to reach it |
-| S3 Standard-IA versus S3 One Zone-IA | One Zone-IA stores data in a single Availability Zone and is only appropriate for recreatable data |
-| Glacier Instant versus Glacier Flexible | Instant retrieves in milliseconds; Flexible requires a restore taking minutes to hours |
-| gp2 versus gp3 | gp3 decouples IOPS and throughput from size, costs less, and has no burst-credit mechanism |
-| io1 versus io2 Block Express | io2 Block Express offers higher durability, a higher IOPS-to-size ratio, and up to 256,000 IOPS |
-| EBS snapshot versus AMI | A snapshot is volume data; an AMI is a launch template referencing one or more snapshots plus metadata |
-| Gateway endpoint versus Interface endpoint | Gateway is free, route-table based, and not reachable from on-premises; Interface uses an ENI, costs money, and is reachable from on-premises |
-| SSE-S3 versus SSE-KMS | SSE-KMS gives you key policy control and a CloudTrail record of every key use |
-| EFS versus FSx for Lustre | EFS is general-purpose shared storage; FSx for Lustre is for extreme-throughput HPC and machine learning |
-| Instance store versus EBS | Instance store is ephemeral and host-local; EBS persists independently of the instance |
+| Multi-AZ versus read replica | Availability with an unreadable standby versus read scaling with a readable asynchronous copy |
+| RDS versus Aurora | Managed community engines on conventional storage versus an AWS-engineered engine with a distributed, shared, six-way replicated storage layer |
+| Aurora Serverless v2 versus provisioned Aurora | Fine-grained automatic capacity scaling versus fixed instance classes |
+| DAX versus ElastiCache | DynamoDB-specific, API-compatible, write-through cache versus a general-purpose cache requiring application integration |
+| Redis versus Memcached | Rich data structures with replication, persistence, and failover versus a simple multi-threaded object cache |
+| LSI versus GSI | Same partition key, created only with the table, strongly consistent versus any keys, created anytime, eventually consistent, own throughput |
+| Query versus Scan | Reads items under one partition key versus reading the entire table |
+| Filter expression versus key condition | Applied after the read and still billed versus applied to select what is read |
+| On-demand versus provisioned capacity | Per-request billing with no forecast versus committed throughput at lower unit cost |
+| DynamoDB Streams versus Kinesis Data Streams for DynamoDB | Twenty-four-hour retention with limited consumers versus longer retention and higher fan-out |
+| Global Tables versus Aurora Global Database | Multi-active, last-writer-wins versus single writer Region with read-only secondaries |
+| Automated backup versus manual snapshot | Retained for the configured window and deleted with the instance versus retained until explicitly deleted |
+| Parameter group versus option group | Engine configuration tuning versus enabling engine-specific features |
+| RDS Proxy versus a client-side connection pool | Managed, shared, failover-aware pool outside the application versus a pool per application process |
 
 ### Memory aids
 
-- **Object, Block, File maps to S3, EBS, EFS** in that order — the most useful single mapping in the examination.
-- **EBS is one zone, one instance; EFS is every zone, every instance.**
-- **The colder the storage class, the longer the minimum duration and the higher the retrieval cost.**
-- **Versioning is a prerequisite for Object Lock and for replication.**
-- **Snapshots are Regional; volumes are zonal.**
+- **"Replicate for reads, stand by for availability, back up for mistakes."** These three requirements map to three different features and are the most common source of confusion.
+- **"The partition key is the scalability decision."** Everything else in DynamoDB can be changed later; this cannot, cheaply.
+- **"Encryption at rest is a birth decision."** RDS and ElastiCache cannot be encrypted in place.
+- **"Cache for latency, replica for throughput, shard for volume."**
+- **RCU arithmetic:** one strongly consistent read of up to 4 KB, or two eventually consistent reads. WCU: one write of up to 1 KB. Round item size **up** to the block boundary before multiplying.
+- **"Managed is not unmanaged."** Schema, indexes, queries, and capacity remain the customer's responsibility on every managed database.
 
-!!! warning "Two traps that catch most candidates"
-    First, a question that says data "must survive the loss of an Availability Zone" eliminates every single-zone option — a lone EBS volume, One Zone-IA, EFS One Zone, and instance store — regardless of how attractive their cost is. Second, a question that says data is "accessed once a quarter but must be available immediately" is describing Glacier Instant Retrieval, not Glacier Flexible Retrieval, and not Standard-IA.
-
----
+!!! danger "Frequently examined traps"
+    - The RDS Multi-AZ standby in an instance deployment is **not readable**.
+    - An LSI **cannot** be added after table creation.
+    - DynamoDB filter expressions consume capacity for **every item read**, not only for items returned.
+    - Global Tables use **last-writer-wins**; they are not a distributed transaction.
+    - A read replica does **not** protect against accidental data deletion.
+    - ElastiCache is **not durable** and must never be described as a system of record.
+    - Increasing provisioned capacity does **not** fix a hot partition.
+    - `Scan` with a filter is **not** an optimisation; it is a full read that discards results after billing for them.
 
 ## Summary
 
-Storage is the durable substrate on which cloud-native architectures are built, and the storage decision is made before, not after, the compute decision. This chapter established three ideas that generalise far beyond AWS.
+The AWS database portfolio is best understood as a deliberate rejection of the idea that one database technology should serve every access pattern. For decades the relational database was the default answer to every persistence question, and applications were bent to fit it. AWS instead offers purpose-built stores and asks the architect to characterise the access pattern first and select the store second.
 
-The first idea is that **access pattern determines abstraction**. Object, block, and file storage exist because they make different, mutually incompatible trade-offs. Object storage abandons in-place mutation to gain unbounded scale and eleven nines of durability. Block storage abandons sharing and cross-zone reach to gain sub-millisecond random-access latency. File storage accepts higher cost and latency to gain shared POSIX semantics across many hosts. Once you know how your data is read and written, the service follows.
+**Amazon RDS** removes the operational burden of running a relational engine — provisioning, patching, backups, failover, replicas — without asking the organisation to abandon SQL, transactions, referential integrity, or existing skills. **Amazon Aurora** goes further and re-architects the storage layer itself, decoupling compute from a six-way replicated, self-healing distributed volume, which is what makes near-instant replica addition, fast failover, automatic storage growth, continuous backup, and fast cloning possible. These services remain the correct default whenever the data is relational, the queries are complex or unknown in advance, and strong transactional guarantees matter.
 
-The second idea is that **scope determines availability**. Amazon S3 and Amazon EFS are Regional services replicating across at least three Availability Zones and therefore survive the loss of one. Amazon EBS is bound to a single Availability Zone by a deliberate engineering decision that preserves its latency profile, and instance store is bound to a single host. Every high-availability design on AWS is shaped by this hierarchy, and the correct response to an EBS volume's zonal scope is snapshots for durability and database-level or file-system-level replication for availability.
+**Amazon DynamoDB** trades query flexibility for unbounded, predictable horizontal scale. Because it partitions by the hash of the partition key, its performance is a function of key design rather than of data volume, and single-digit-millisecond latency holds from megabytes to petabytes. The price is that access patterns must be known in advance and encoded into the key schema and secondary indexes; there are no joins, no aggregations, and no free ad hoc queries. This is not a deficiency but the deliberate exchange that makes the scale guarantee possible.
 
-The third idea is that **durability, availability, cost, and latency are dials, not defaults**. Storage classes, volume types, throughput modes, lifecycle policies, replication, and encryption choices are all levers an architect sets deliberately against explicit requirements. A design that has not stated its Recovery Point Objective, Recovery Time Objective, latency budget, and cost ceiling has not made these choices — it has merely accepted whichever defaults the console offered.
+**Amazon ElastiCache** exploits the fact that most workloads have strong locality, serving the hot fraction of data from memory in microseconds. It is the highest-leverage performance investment available in most architectures and simultaneously the component most likely to introduce subtle correctness problems, because cache invalidation and staleness are genuinely hard. It must never be treated as durable.
 
-Three architectural lessons deserve particular emphasis. Externalising state into managed storage is what makes compute stateless, and stateless compute is what makes elasticity, rolling deployments, and Spot capacity possible. Durability figures describe hardware failure only; protection against human and application error requires versioning, Object Lock, cross-account replication, and tested restores. And security must be designed in from the first line of Infrastructure as Code — Block Public Access, default encryption, TLS enforcement, least-privilege policies, and VPC endpoints cost nothing to enable at creation time and are painful to retrofit after an incident.
+Several architectural lessons generalise well beyond these three services.
 
-!!! info "Connecting back to the module"
-    Every subsequent DSO303 topic depends on this one. Container platforms need persistent volumes from EBS and EFS. Serverless architectures are triggered by S3 events and read their data from S3. Continuous delivery pipelines store artefacts and Terraform state in S3. Observability pipelines land logs in S3 for analysis. Security and compliance controls are expressed largely as storage policies. Master this chapter and the rest of the module becomes an exercise in composition.
+First, **the data model is the architecture**. A DynamoDB partition key, a relational index strategy, and a cache key scheme are not implementation details; they determine whether the system scales, and they are among the most expensive decisions to reverse.
 
----
+Second, **consistency is a requirement to be elicited, not a property to be maximised**. Strong consistency costs latency, availability during partitions, and money. The architect's job is to ask which reads genuinely require the most recent write and to route only those to the writer.
+
+Third, **replication, standby, and backup solve three different problems**. Read replicas scale reads, standbys provide availability, and backups recover from mistakes. Conflating them produces architectures that survive hardware failure and are destroyed by a mistaken `DELETE`.
+
+Fourth, **cost follows the access pattern**. Provisioned capacity rewards steady utilisation; on-demand rewards unpredictability; caching converts expensive database capacity into cheap memory. These are design-time decisions whose consequences appear months later on an invoice.
+
+Finally, **polyglot persistence is a sign of maturity rather than sprawl** — provided each store is chosen against a stated access pattern, each is owned by a single service, and the resulting eventual consistency between them is deliberate and understood. The mark of a competent cloud architect is not knowing the most services, but being able to justify each choice against the alternative that was rejected.
 
 ## Practice Questions
 
 ### Beginner Questions
 
-1. Define object storage, block storage, and file storage, and name the primary AWS service that implements each. For each, give one workload that suits it and one that does not.
-
-2. A colleague states that "S3 buckets contain folders". Explain why this is inaccurate, describe what the S3 console is actually displaying, and state one practical consequence of the misunderstanding.
-
-3. What is the difference between durability and availability? Give an example of a situation in which data is fully durable but temporarily unavailable.
-
-4. An EBS volume was created in `us-east-1a`. Can it be attached to an EC2 instance in `us-east-1b`? Justify your answer with reference to how EBS replication works, and explain how you would move the data to another Availability Zone.
-
-5. List the four Block Public Access settings conceptually and explain why AWS enables them by default on new buckets. What alternative should be used to serve public web content?
+1. Define ACID and explain what each property guarantees. Give one example of an application requirement that depends on each.
+2. Explain the difference between a partition key and a sort key in Amazon DynamoDB, and give an example of an access pattern that requires both.
+3. What is a read replica, and how does it differ from a Multi-AZ standby in an Amazon RDS instance deployment? State one requirement that each is designed to satisfy.
+4. Describe the cache-aside pattern in sequence. What happens on a cache hit, and what happens on a cache miss?
+5. An RDS instance is created with a backup retention period of zero. Explain precisely what capability is lost and why this is dangerous in production.
 
 ### Intermediate Questions
 
-1. A bucket holds four hundred terabytes of application logs. Recent logs are queried daily for two weeks, then almost never, but must be retained for seven years for audit. Design a lifecycle configuration, justify each transition point, and identify the risk if the objects were on average only 20 KiB in size.
-
-2. Compare gp2 and gp3 across price, performance model, maximum IOPS, maximum throughput, and burst behaviour. Explain why gp3 is generally the better default and describe the operational steps needed to migrate an in-use gp2 volume.
-
-3. An EC2 instance cannot mount an EFS file system and the `mount` command hangs. Produce a systematic diagnostic checklist in the order you would work through it, explaining what each check rules out.
-
-4. Explain what a presigned URL is, how it is validated by S3, and why using presigned URLs for uploads is architecturally superior to routing uploads through an application tier. State two security controls you would apply to presigned URL issuance.
-
-5. A team enabled S3 versioning six months ago and is now surprised that storage costs have tripled while the visible object count is unchanged. Explain the likely causes and write the lifecycle rules that would bound the cost without losing recent recoverability.
+1. A DynamoDB table stores events with `event_type` as the partition key across five possible values, and the application reports throttling despite generous provisioned capacity. Explain the cause in terms of DynamoDB's internal partitioning, then propose two distinct remedies and state the trade-off of each.
+2. Calculate the read and write capacity units required for the following workload, showing your reasoning: 1,200 strongly consistent reads per second of items averaging 7 KB, and 400 writes per second of items averaging 2.5 KB. Then state how the read requirement changes if eventually consistent reads are acceptable.
+3. Compare RDS Multi-AZ, RDS read replicas, and Aurora replicas across purpose, consistency, failover behaviour, replication mechanism, and typical lag. Identify the single most important architectural difference that Aurora's storage design produces.
+4. An AWS Lambda function scaling to 800 concurrent executions exhausts connections to an Aurora PostgreSQL cluster. Explain the mechanism of the failure and design a complete remedy addressing connection management, blast-radius containment, and failover behaviour.
+5. Explain the thundering-herd problem in caching. Describe three distinct mitigations and explain the circumstances under which each is preferable.
 
 ### Advanced Questions
 
-1. Design the complete storage layer for a multi-tenant SaaS platform serving five thousand tenants, each storing documents. Address tenant isolation, encryption and key strategy, cost control, backup and ransomware resilience, and the Recovery Point and Recovery Time Objectives. Justify why you did or did not create one bucket per tenant.
-
-2. A financial services firm must run a PostgreSQL database on EC2 sustaining 80,000 IOPS at sub-millisecond latency, survive the loss of an Availability Zone with a Recovery Point Objective of one minute, and retain regulatory records immutably for seven years. Produce an architecture covering the volume type and sizing, the instance selection constraint, the replication mechanism, the backup strategy, and the archival control. Explain each trade-off you accept.
-
-3. An EKS platform hosts both stateless web services and a stateful analytics workload. Explain how the EBS and EFS CSI drivers differ in access mode, provisioning behaviour, and scheduling implications. Describe the failure mode that occurs when an EBS-backed pod cannot be scheduled in its volume's Availability Zone, and design around it.
-
-4. A machine learning team's training jobs are bottlenecked reading a fifty-terabyte dataset from S3 across two hundred instances. Analyse where the bottleneck could be — client concurrency, prefix partitioning, instance network capacity, or storage throughput — and describe how you would measure each. Then propose a solution and explain why the durable system of record should remain S3.
-
-5. Your organisation's monthly AWS bill shows storage costs growing twenty percent per quarter while data volume grows only five percent. Design a systematic investigation using Storage Lens, S3 Inventory, Cost Explorer, and Trusted Advisor. Identify at least six specific, distinct sources of waste you would expect to find, and give the remediation for each. State which remediations are safe to automate and which require human judgement.
-
----
-
-*End of Unit 1.2.2 — Storage Services.*
+1. Design the complete data architecture for a global e-commerce platform serving customers in North America, Europe, and Asia. It must guarantee that orders and payments are transactionally correct, serve product catalogue reads at under 20 milliseconds p99 in all three regions, support full-text product search, retain seven years of order history for audit, and survive the loss of an entire AWS Region. Specify every data store, justify each against a stated rejected alternative, identify precisely where eventual consistency is introduced, and explain how the design prevents that eventual consistency from producing an incorrect financial outcome.
+2. A DynamoDB single-table design must support the following access patterns: retrieve a customer by identifier; list a customer's orders newest first; retrieve an order with all its line items in one request; list all orders in a given status placed in the last 24 hours; and retrieve the ten highest-value orders for a customer. Design the complete key schema, including partition key, sort key, and any secondary indexes with their projections. Justify each index, identify which patterns are eventually consistent, and explain what you would do differently if a sixth pattern — arbitrary full-text search across order notes — were added.
+3. Critically evaluate the claim that "DynamoDB is cheaper than Aurora". Construct a quantitative comparison for a workload of 5,000 reads and 500 writes per second on items averaging 3 KB, with 2 TB of stored data. State every assumption explicitly, identify the conditions under which each service wins, and then explain why the financial comparison alone is insufficient grounds for the architectural decision.
+4. A financial institution requires a ledger that is auditable, tamper-evident, strictly ordered, and able to sustain 20,000 appends per second, with the ability to reconstruct account balances at any historical instant. Design the persistence layer using an event-sourcing approach. Address the choice of store, the key schema or table design, optimistic concurrency control, snapshotting strategy, the read model and how it is maintained, retention and archival to S3, encryption and key management, and the audit trail. Identify the specific failure modes your design accepts and explain why they are tolerable.
+5. An organisation operates 40 microservices, each with its own database, and finds that cross-service reporting has become impossible without querying production databases directly, which is degrading them. Design a solution that restores analytical capability without coupling services or affecting production performance. Address change-data capture, the landing and transformation layers, schema evolution across 40 independently versioned services, data freshness expectations, cost, governance, and how you would prevent the analytical layer from becoming a new form of coupling between the services.

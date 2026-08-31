@@ -1,3258 +1,2642 @@
-# Database Services on AWS — Amazon RDS and Aurora, Amazon DynamoDB, and Amazon ElastiCache
-
-!!! info "Module Context"
-    This chapter belongs to DSO303 *Cloud Native Solution Design (AWS)*, Unit 1.2.3. It assumes you understand relational databases, SQL, indexing, transactions, and the ACID properties from your Database Systems module, and TCP/IP, DNS, and latency from Computer Networks. It does **not** assume any prior cloud experience.
-
-    The purpose of this chapter is not to make you fluent in the AWS Console. It is to make you capable of *choosing* a data store, *justifying* that choice against measurable engineering criteria, and *defending* it in a design review, an examination, or a job interview.
-
----
-
-## Learning Objectives
-
-After studying this chapter, you should be able to:
-
-- Explain **why the data layer is the hardest part of any distributed system to scale**, and why cloud providers offer managed database services rather than leaving databases to the customer.
-- Articulate the **shared responsibility model** as it applies to databases, and explain precisely which operational duties AWS assumes and which remain yours.
-- Describe AWS's **purpose-built database philosophy** and argue for or against the "one database to rule them all" approach in a given scenario.
-- Compare **relational and NoSQL data models** in terms of schema, query flexibility, scaling axis, consistency, and cost, and select between them with justification.
-- State the **CAP theorem** precisely, explain why it is frequently misapplied, and extend it with **PACELC** to reason about latency in the absence of partitions.
-- Explain the **internal architecture of Amazon RDS**: Multi-AZ synchronous replication, DNS-based failover, read replicas with asynchronous replication and replica lag, automated backups, and point-in-time recovery mechanics.
-- Explain **Amazon Aurora's** decoupled compute-and-storage architecture, its six-way replication across three Availability Zones, quorum-based reads and writes, and the "the log is the database" design that eliminates full-page writes.
-- Explain **Amazon DynamoDB's** partitioning by hash of the partition key, request routing, replicated storage nodes with Paxos-based leader election, adaptive capacity, and DynamoDB Streams.
-- Perform **DynamoDB data modelling** at a professional level: partition key and sort key selection, single-table design, LSI versus GSI, avoidance of hot partitions, and correct **RCU/WCU capacity calculations**.
-- Explain **Amazon ElastiCache** for Redis and Memcached: replication groups, cluster mode enabled versus disabled, hash slots and sharding, and the correct application of the **cache-aside**, **write-through**, and **write-behind** patterns.
-- Distinguish the **control plane from the data plane** for each service and trace the **networking path** a query takes inside a VPC.
-- Apply the **AWS Well-Architected Framework** to database design decisions across all six pillars.
-- Design **secure** data layers using IAM, KMS encryption at rest, TLS in transit, Secrets Manager, security groups, and private subnets.
-- Reason about **cost** in terms of the actual pricing dimensions of each service, and identify the most common sources of unexpected database spend.
-- Connect the data layer to broader cloud-native concerns: **database-per-service** in microservices, **connection pooling and RDS Proxy** for Lambda and ECS/EKS workloads, **event-driven architecture** via DynamoDB Streams, **schema migration in CI/CD**, and **observability**.
-
----
+# Networking Services: Amazon VPC, Amazon Route 53, and Amazon API Gateway
 
 ## Definition
 
-A **database service** on AWS is a managed data persistence and retrieval capability in which AWS operates the underlying infrastructure — hardware provisioning, operating system installation and patching, database engine installation and patching, backup orchestration, failure detection, and failover — while the customer retains responsibility for data modelling, schema design, query performance, access control policy, and capacity or cost decisions.
+**Amazon Virtual Private Cloud (Amazon VPC)** is a logically isolated, software-defined virtual network within an AWS Region, in which you provision AWS resources using an IP address range that you define. A VPC gives you control over IP addressing, subnetting, route tables, gateways, and both instance-level and subnet-level packet filtering. A VPC is a **regional** construct: it spans all Availability Zones in one Region and cannot cross Regions.
 
-The three services in scope for this chapter occupy distinct positions in the AWS data layer:
+**Amazon Route 53** is a highly available and scalable authoritative Domain Name System (DNS) service, combined with domain registration, DNS health checking, traffic policy management, and application recovery controls. It is a **global** service with a **regional** control-plane anchor in `us-east-1`. Route 53 is what turns a human-readable name such as `api.example.com` into an IP address or an alias to an AWS-managed endpoint, and it is the first place where you can express traffic-steering and failover intent.
 
-| Service | Category | Data Model | Primary Purpose |
-|---|---|---|---|
-| **Amazon RDS** | Managed relational database | Relational, SQL, ACID | Structured transactional data with complex relationships and joins |
-| **Amazon Aurora** | Cloud-native relational database (an RDS engine option) | Relational, MySQL- and PostgreSQL-compatible | Relational workloads requiring higher throughput, faster recovery, and storage elasticity than standard RDS |
-| **Amazon DynamoDB** | Managed NoSQL key-value and document database | Key-value and document | Predictable single-digit millisecond access at effectively unbounded scale for known access patterns |
-| **Amazon ElastiCache** | Managed in-memory data store and cache | Key-value in memory, Redis rich data structures | Microsecond-latency reads, reduction of load on the primary database, session and leaderboard state |
+**Amazon API Gateway** is a fully managed service for creating, publishing, securing, monitoring, and operating APIs at any scale. It sits in front of backend compute (Lambda, containers on ECS or EKS, EC2, or any HTTP endpoint including on-premises services) and provides authentication and authorization, request validation, throttling, caching, transformation, and observability as a managed capability rather than as application code.
 
-### Where These Services Sit in AWS Architecture
+<figure markdown="span">
+    ![3layerglobalinfra](../img/U1/neworkServices.png){width="80%"}
+    <figcaption>AWS network services</figcaption>
+    <p align='right' style="font-size:0.8em"><i>Image Source: AI Generaed (Google Gemini)</i></p>
+</figure>
 
-```mermaid
-graph TD
-    A["Client Browser or Mobile App"] --> B["Amazon Route 53"]
-    B --> C["Amazon CloudFront"]
-    C --> D["Application Load Balancer"]
-    D --> E["Compute Tier - ECS, EKS, EC2 or Lambda"]
-    E --> F["Amazon ElastiCache"]
-    E --> G["Amazon RDS or Aurora"]
-    E --> H["Amazon DynamoDB"]
-    F -.->|"Cache Miss"| G
-    G --> I["Amazon S3 - Backups and Snapshots"]
-    H --> J["DynamoDB Streams"]
-    J --> K["AWS Lambda - Event Processing"]
-    E --> L["AWS Secrets Manager"]
-    G --> M["Amazon CloudWatch"]
-    H --> M
-    F --> M
-```
 
-!!! note "The Data Tier Is the Stateful Tier"
-    Everything above the database in this diagram is, in a well-designed cloud-native system, **stateless** — it can be destroyed and recreated freely. The database tier is where state lives, and state is what makes distributed systems difficult. Scaling stateless compute is a solved problem: add more instances behind a load balancer. Scaling state requires you to make explicit, irreversible decisions about consistency, partitioning, and replication. This is why the data layer, not the application layer, determines the ceiling on your architecture.
+### Where They Sit in AWS Architecture
 
-### Architectural Position
+<figure markdown="span">
+    ![3layerglobalinfra](../img/U1/NetworkPosition.png){width="80%"}
+    <figcaption>Where netwroking sits in the architecture</figcaption>
+    <p align='right' style="font-size:0.8em"><i>Image Source: AI Generaed (Google Gemini)</i></p>
+</figure>
 
-- **RDS and Aurora** sit in private subnets inside your VPC, reachable only from the compute tier. They serve the **system of record** for transactional business data.
-- **DynamoDB** is a *regional* service that lives outside your VPC and is accessed over the AWS network via a public service endpoint or, preferably, a **VPC Gateway Endpoint**. It serves workloads whose access patterns are known in advance and whose scale requirements exceed what a single relational writer can absorb.
-- **ElastiCache** sits inside your VPC, in front of the database, absorbing repetitive read traffic and holding ephemeral state that does not justify durable storage.
+!!! note "The Three Layers of a Network Answer"
+    Almost every AWS networking question decomposes into three layers:
+    
+    1. **name resolution** (Route 53 — what address do I connect to?),
+    2. **path** (VPC route tables, gateways, endpoints — can the packet get there?),
+    3. **permission** (security groups, NACLs, IAM policies, resource policies — is the packet allowed?). When something does not work, check all three, in that order.
 
 ---
 
 ## Why This Service or Concept Exists
 
-### The Problem: Databases Are Operationally Brutal
+### The Problem Before Amazon VPC
 
-Consider what an organisation must do to run a production PostgreSQL database on its own hardware, or even on a bare EC2 instance:
+The original EC2 offering, retroactively called **EC2-Classic**, placed every customer's instances on a single flat shared network. Each instance received a public IP address from a shared pool and a private address from a shared `10.0.0.0/8` space. There were security groups, but there was no customer-defined address space, no subnetting, no route tables, no private-only instances, and no way to build a network topology that mirrored a traditional data centre.
 
-| Responsibility | What It Actually Involves |
-|---|---|
-| Provisioning | Sizing CPU, memory, IOPS and storage; procuring hardware with a lead time of weeks |
-| Installation | Installing and configuring the OS, tuning kernel parameters, installing the engine |
-| Patching | Tracking CVEs for both OS and engine; scheduling maintenance windows; testing patches |
-| Backups | Writing and testing backup scripts; verifying restores; managing offsite retention |
-| High Availability | Configuring streaming replication, a witness or arbiter, and automated failover tooling |
-| Failure Detection | Building health checks that distinguish a hung database from a slow one |
-| Failover | Promoting a standby, repointing clients, fencing the old primary to prevent split-brain |
-| Monitoring | Instrumenting slow queries, replication lag, connection saturation, disk pressure |
-| Scaling | Planning capacity months ahead; downtime for vertical resize; sharding for horizontal growth |
-| Security | Encryption at rest and in transit, credential rotation, network isolation, audit logging |
+This was unacceptable for enterprises for three reasons:
 
-None of this activity differentiates the business. A retail company does not win customers by being excellent at PostgreSQL minor-version upgrades. This is what AWS calls **undifferentiated heavy lifting**, and eliminating it is the core value proposition of managed database services.
+1. **No network-level isolation.** Regulated workloads (finance, healthcare, government) require that a database be *unreachable* from the internet as a property of the network, not merely as a property of a firewall rule.
+2. **No address planning.** Enterprises extending an on-premises data centre into the cloud need to choose their own RFC 1918 addresses so that VPN or Direct Connect routing does not collide with existing addresses.
+3. **No architectural tiering.** The classic three-tier architecture — public web tier, private application tier, isolated database tier — depends on the ability to say "this subnet has no route to the internet."
 
-### The Shared Responsibility Model for Databases
+Amazon VPC, launched in 2009 and made the default in 2013, gave customers a network they could design.
 
-```mermaid
-graph TD
-    subgraph AWS["AWS Responsibility - Security OF the Cloud"]
-        A1["Physical Data Centres"]
-        A2["Host Hardware and Hypervisor"]
-        A3["Network Infrastructure"]
-        A4["Guest OS Installation and Patching"]
-        A5["Database Engine Installation and Patching"]
-        A6["Automated Backup Execution"]
-        A7["Failure Detection and Failover Automation"]
-        A8["Storage Replication and Durability"]
-    end
-    subgraph CUST["Customer Responsibility - Security IN the Cloud"]
-        B1["Schema and Data Model Design"]
-        B2["Query Design and Index Strategy"]
-        B3["IAM Policies and Database Users"]
-        B4["Security Group and Subnet Placement"]
-        B5["Encryption Configuration and Key Policy"]
-        B6["Capacity Mode and Instance Sizing"]
-        B7["Backup Retention Policy"]
-        B8["Application-Level Data Validation"]
-    end
-    AWS --> C["Managed Database Service"]
-    CUST --> C
-```
+!!! info "Traditional Data Centre Versus VPC"
+    | Concern | Traditional Data Centre | Amazon VPC |
+    |---|---|---|
+    | Address space | Assigned by network team, changing it is a project | You choose the CIDR at creation; secondary CIDRs can be added later |
+    | Subnet creation | Physical VLAN, switch configuration, change window | An API call, seconds |
+    | Router | Physical device you buy, rack, patch, and licence | Implicit, built into the VPC, infinitely available, free |
+    | Firewall | Appliance pair, capacity-planned, a shared bottleneck | Security groups enforced distributed at every ENI, no chokepoint |
+    | NAT | An appliance or a pair of servers you maintain | NAT Gateway, managed, scales to tens of gigabits per second |
+    | Scaling the network | Buy more hardware, months of lead time | Bandwidth follows instance size; the fabric is already there |
+    | Cost model | Large capital expenditure, depreciated | Operating expenditure, per hour and per gigabyte processed |
 
-!!! warning "A Managed Service Is Not an Unmanaged Responsibility"
-    A common and expensive misconception among students and junior engineers is that "managed" means "AWS handles everything." AWS will faithfully replicate a badly designed schema and diligently back up a table with no indexes. AWS will not tell you that your query does a full table scan, that your partition key is causing a hot partition, or that you have granted `AdministratorAccess` to your application role. Poor design is *your* failure mode, and it is the failure mode that actually causes production outages.
+### Why Route 53 Exists
 
-### Traditional Approach Versus AWS Approach
+Running your own authoritative DNS is deceptively hard. It demands globally distributed anycast infrastructure, resistance to volumetric DDoS attacks (DNS is a favourite amplification target), sub-second propagation of record changes, and near-perfect availability — because when DNS fails, *everything* fails, and it fails in a way that caches make slow to recover from.
 
-| Dimension | Traditional On-Premises | AWS Managed |
-|---|---|---|
-| Time to first database | Weeks to months | Minutes |
-| HA setup | Manual replication plus custom failover scripts, weeks of engineering | One checkbox for Multi-AZ |
-| Failover time | Minutes to hours, often manual, error-prone | Typically 60–120 seconds for RDS Multi-AZ, often under 35 seconds for Aurora |
-| Backups | Custom cron scripts, untested restores | Automated daily snapshots plus continuous transaction log capture |
-| Point-in-time recovery | Requires disciplined log shipping and manual replay | Built in, to any second within the retention window |
-| Vertical scaling | Buy hardware, schedule outage, migrate | Modify instance class, brief failover |
-| Read scaling | Manual replica configuration | Add a read replica with a few API calls |
-| Patching | Manual, risky, often deferred indefinitely | Applied in a customer-defined maintenance window |
-| Capital expenditure | Large upfront CAPEX | Operational expenditure, pay for what you run |
-| Encryption at rest | Requires disk-level or engine-level configuration | Enable at creation, integrated with KMS |
+Route 53 also solves a problem that classical DNS never addressed: **DNS as a traffic-management control plane**. Classic DNS answers "what is the address of this name?" Route 53 answers "what is the *best* address for *this particular* resolver, given health, latency, geography, and my declared weighting?" That converts DNS from a lookup table into a global load-balancing and disaster-recovery mechanism.
 
-### The Deeper Reason: Purpose-Built Databases
+The `Alias` record type is an AWS-specific innovation worth understanding: it lets you point the *apex* of a zone (`example.com`, which the DNS standards forbid from carrying a CNAME) at an AWS resource such as a CloudFront distribution or an ALB, with the resolution performed inside Route 53 at no query charge.
 
-The second, more architectural reason these services exist is that **the relational model is not universally optimal**. For roughly thirty years the industry defaulted to a relational database for every problem, because a relational database was the only mature option and because a single database server was the natural unit of deployment.
+### Why API Gateway Exists
 
-Cloud-scale workloads broke this assumption. A social graph, a time-series stream of IoT telemetry, a full-text search index, a shopping cart, and a financial ledger have genuinely different access patterns, consistency requirements, and scaling characteristics. Forcing all of them into one relational engine means every workload is served by a compromise.
+Before managed API front doors, every team re-implemented the same cross-cutting concerns inside the application: authentication, authorization, rate limiting, request validation, API keys and usage plans, versioning and stage management, CORS, request and response transformation, caching, and per-route metrics. This code was duplicated across microservices, drifted between them, and became the source of a disproportionate share of security incidents.
 
-AWS's response is the **purpose-built database strategy**: offer a family of databases, each optimised for a category of workload, and expect architects to select deliberately.
+API Gateway externalises those concerns into a managed, horizontally scaled tier that sits *before* your code. This is the **API Gateway pattern** from microservices literature, delivered as a service. It also enables true serverless HTTP: Lambda has no listening socket and no port, so something must terminate TLS, parse HTTP, and invoke the function. API Gateway (or a Lambda function URL, or an ALB) performs that role.
 
-```mermaid
-graph TD
-    A["Workload Characteristics"] --> B{"What Shape Is the Data and Access Pattern"}
-    B -->|"Rows, joins, transactions"| C["Relational - RDS or Aurora"]
-    B -->|"Key-value at massive scale"| D["Key-Value - DynamoDB"]
-    B -->|"Microsecond latency, ephemeral"| E["In-Memory - ElastiCache or MemoryDB"]
-    B -->|"Highly connected relationships"| F["Graph - Amazon Neptune"]
-    B -->|"Time-stamped measurements"| G["Time Series - Amazon Timestream"]
-    B -->|"Documents with flexible schema"| H["Document - DocumentDB"]
-    B -->|"Wide column, high write volume"| I["Wide Column - Amazon Keyspaces"]
-    B -->|"Immutable cryptographic ledger"| J["Ledger - QLDB"]
-    B -->|"Analytical scans over columns"| K["Data Warehouse - Amazon Redshift"]
-    B -->|"Full text and relevance ranking"| L["Search - Amazon OpenSearch Service"]
-```
-
-!!! tip "The Architect's Rule"
-    Choose the database that matches the **access pattern**, not the one you already know. The cost of an incorrect data store choice is not a slow query — it is a rewrite, because data models are the hardest thing in a system to change once production data exists in them.
-
-!!! warning "But Do Not Over-Fragment"
-    The purpose-built philosophy is frequently taken too far. Every additional data store adds an operational surface: another backup policy, another monitoring dashboard, another failure mode, another set of credentials, another consistency boundary that your application must reconcile. A three-person startup running six database technologies has made an architectural error, not a sophisticated choice. Introduce a new data store when the workload *demonstrably* does not fit the ones you have, and not before.
+!!! tip "Architect's Framing"
+    Do not ask "which AWS networking service should I use?" Ask "what is the smallest set of components that gets the packet to the right place, denies everything else by default, survives the loss of one Availability Zone, and can be described entirely in code?" The service choice usually falls out of that question.
 
 ---
 
 ## Real-World Motivation
 
-### Amazon.com and the Origin of DynamoDB
+!!! example "Financial Services — Regulated Isolation"
+    A payment processor must demonstrate to auditors that cardholder data never traverses the public internet and that the database tier has no route to an Internet Gateway. The design uses three subnet tiers per Availability Zone: public subnets containing only load balancers and NAT Gateways; private subnets containing application containers; and isolated subnets containing Amazon RDS, whose route table contains only the `local` route plus a Gateway endpoint for S3. Access to AWS APIs (KMS, Secrets Manager, CloudWatch) is provided by Interface endpoints so that no traffic leaves the AWS network. VPC Flow Logs are delivered to a separate logging account. The auditor's question — "prove that this database cannot reach the internet" — is answered by showing a route table, not by showing firewall configuration.
 
-The most instructive story in this chapter is Amazon's own. In the early 2000s, Amazon's retail site ran on large relational databases. During peak events, the shopping cart service — arguably the most availability-critical component in the entire business — experienced outages when the relational tier was saturated or when a failover occurred.
-
-Amazon's engineers observed something important: the shopping cart did not need joins, did not need complex transactions across many entities, and did not need ad hoc queries. It needed to read and write a cart by customer ID, with extremely high availability, at any scale. They were paying the full cost of a relational database for none of its benefits.
-
-The 2007 **Dynamo paper** described the resulting system: a partitioned, replicated key-value store that prioritised availability and partition tolerance over strict consistency, using consistent hashing for partitioning and quorum techniques for replication. Amazon DynamoDB, launched in 2012, is the managed evolution of those ideas — it retains the partitioning and replication approach while adding strongly consistent read options and a managed control plane.
-
-!!! example "The Business Framing"
-    Amazon's internal calculation was that a shopping cart which is *available but occasionally shows a slightly stale item* is vastly more valuable than a cart which is *perfectly consistent but unavailable*. An unavailable cart is a lost sale, immediately and measurably. This is a **business decision expressed as a consistency model** — precisely the kind of reasoning this module exists to teach.
-
-### Netflix
-
-Netflix serves viewing history, playback position, and personalisation state to hundreds of millions of profiles. A user resuming a film on a different device expects their position within seconds. The access pattern is: read by profile ID and title ID; write on every playback heartbeat. This is enormous write volume with a trivially simple access pattern — a textbook key-value workload. Netflix uses Cassandra-family and DynamoDB-style stores for this, with caching layers in front to absorb the read amplification of the homepage.
-
-Meanwhile, Netflix's **billing** system — subscriptions, invoices, payment reconciliation — is relational and transactional. The same company runs both models, in the same product, for different subsystems. This is the purpose-built philosophy in practice.
-
-### Uber
-
-A ride request involves several distinct workloads simultaneously:
-
-| Subsystem | Requirement | Appropriate Store |
-|---|---|---|
-| Driver location updates | Extremely high write rate, ephemeral, geospatial | In-memory store with geospatial indexing, such as Redis |
-| Trip record | Transactional, must never be lost, financially significant | Relational with ACID guarantees |
-| Surge pricing lookups | Read-heavy, tolerant of seconds of staleness | Cache |
-| Trip history | Append-only, large volume, queried by user | Key-value or wide-column |
-| Fraud analytics | Large scans, aggregations | Data warehouse |
-
-No single database serves all five well. Attempting to do so means the geospatial write firehose competes for resources with the financial ledger — an unacceptable coupling.
-
-### Financial Services
-
-A core banking ledger has non-negotiable requirements: every transaction must be atomic, balances must never be observed in an inconsistent intermediate state, and every change must be auditable. These are the exact guarantees ACID transactions provide. A bank running its ledger on an eventually consistent store would be unable to answer the question "what is this account's balance?" with confidence — a regulatory impossibility.
-
-But the *same bank* will run its mobile app's session state in ElastiCache, its transaction search in OpenSearch, and its fraud-detection feature store in DynamoDB. Regulatory rigour applies to the ledger, not to every byte the institution stores.
-
-!!! info "Sovereignty and Compliance"
-    Regulated industries frequently face data residency requirements — data about citizens of a country must remain within that country's borders. AWS Regions map directly to this requirement: choosing a Region is choosing a jurisdiction. RDS, DynamoDB and ElastiCache are all Regional or AZ-scoped resources, so residency is enforced by architecture rather than by policy documentation. This is a significant reason government and healthcare systems adopt managed databases in specific Regions.
-
-### Healthcare
-
-An electronic health record system stores patient demographics and clinical encounters relationally, because clinical data is deeply relational — a patient has encounters, an encounter has observations, an observation references a coded terminology. Losing referential integrity in that graph is a patient-safety issue.
-
-At the same time, ingesting a continuous stream of vital-sign telemetry from bedside monitors at thousands of writes per second is not a relational workload. It is a time-series or key-value workload. Both live in the same architecture, separated by their access characteristics.
-
-### E-Commerce at Scale
-
-Consider a national e-commerce platform during a flash sale:
-
-```mermaid
-sequenceDiagram
-    participant U as "User"
-    participant CF as "CloudFront"
-    participant ALB as "Load Balancer"
-    participant APP as "Application on ECS"
-    participant EC as "ElastiCache"
-    participant DDB as "DynamoDB"
-    participant RDS as "Aurora"
-    U->>CF: "Request product page"
-    CF->>ALB: "Cache miss for dynamic content"
-    ALB->>APP: "Forward request"
-    APP->>EC: "GET product 12345"
-    EC-->>APP: "Cache hit - 0.3 ms"
-    APP-->>U: "Render page"
-    U->>APP: "Add to cart"
-    APP->>DDB: "PutItem cart record"
-    DDB-->>APP: "Success - 6 ms"
-    U->>APP: "Place order"
-    APP->>RDS: "BEGIN TRANSACTION"
-    APP->>RDS: "Insert order, decrement stock, write payment"
-    RDS-->>APP: "COMMIT"
-    APP-->>U: "Order confirmed"
-```
-
-Notice the deliberate allocation: the product catalogue read path is served from cache at microsecond latency; the cart, which must never fail and has a simple access pattern, is on DynamoDB; the order placement, which requires a multi-row atomic transaction, is on Aurora. Each store is used for what it is good at.
-
----
 
 ## Core Concepts
 
-### Relational Databases and the ACID Guarantees
+### The VPC as a Software-Defined Network
 
-A **relational database** organises data into tables of rows and columns, with a fixed schema, relationships expressed through foreign keys, and a declarative query language (SQL) that permits arbitrary joins, filters and aggregations decided at query time rather than at design time.
+The single most important conceptual leap is this: **a VPC is not a physical network**. Your instances are not on a dedicated switch. They share physical hosts and physical network fabric with other customers. Isolation is achieved in software, by encapsulation and by a distributed mapping and policy system. Understanding this explains many otherwise-arbitrary behaviours: why you cannot run a packet sniffer and see a neighbour's traffic, why broadcast and multicast do not work natively, why you cannot use a custom routing protocol between instances, and why a security group is not a chokepoint that can be overwhelmed.
 
-Its defining contract is **ACID**:
+### CIDR and Address Planning
 
-| Property | Meaning | Why It Matters Architecturally |
-|---|---|---|
-| **Atomicity** | A transaction executes completely or not at all | A funds transfer cannot debit one account without crediting the other |
-| **Consistency** | A transaction moves the database from one valid state to another, respecting all constraints | Foreign keys, check constraints and uniqueness are never violated, even under concurrency |
-| **Isolation** | Concurrent transactions do not observe each other's intermediate state | Two simultaneous stock decrements cannot both read the same starting value and oversell |
-| **Durability** | Once committed, data survives crashes | An acknowledged order is not lost when the instance dies |
+Classless Inter-Domain Routing (CIDR) notation expresses a network as `address/prefix-length`. The prefix length is the number of leading bits that are fixed; the remaining bits enumerate hosts. A `/16` fixes 16 bits and leaves 16 host bits, giving 65,536 addresses.
 
-!!! note "Isolation Levels Are a Trade-off Dial"
-    Isolation is not binary. SQL defines levels — Read Uncommitted, Read Committed, Repeatable Read, Serializable — that trade correctness guarantees against concurrency. PostgreSQL defaults to Read Committed; MySQL InnoDB defaults to Repeatable Read. Stronger isolation costs throughput because it holds locks longer or forces more transaction retries. Knowing your engine's default isolation level is a genuine production concern, not academic trivia.
+| CIDR | Total addresses | Usable in an AWS subnet | Typical AWS use |
+|---|---|---|---|
+| `/16` | 65,536 | 65,531 | Maximum size of a VPC CIDR block |
+| `/17` | 32,768 | 32,763 | Very large subnet, rarely appropriate |
+| `/18` | 16,384 | 16,379 | Large container subnet for EKS with the VPC CNI |
+| `/19` | 8,192 | 8,187 | Application tier in a large VPC |
+| `/20` | 4,096 | 4,091 | Common private subnet size |
+| `/21` | 2,048 | 2,043 | Application tier, medium |
+| `/22` | 1,024 | 1,019 | Application tier, medium |
+| `/23` | 512 | 507 | Database tier |
+| `/24` | 256 | 251 | Public subnet for load balancers and NAT |
+| `/26` | 64 | 59 | Minimum practical for an ALB subnet |
+| `/27` | 32 | 27 | Endpoint or transit attachment subnet |
+| `/28` | 16 | 11 | Smallest subnet AWS permits |
 
-### NoSQL and the BASE Model
+AWS permits VPC CIDR blocks between `/16` and `/28`, and subnet CIDR blocks between `/16` and `/28`. A VPC may have a primary CIDR plus additional secondary CIDRs, which is the standard remedy when a VPC runs out of address space.
 
-**NoSQL** is a family of databases that relax one or more relational constraints — usually the fixed schema, the join capability, or the strict consistency guarantee — in exchange for horizontal scalability and predictable latency.
+**Five addresses in every subnet are reserved** and are not assignable:
 
-The counterpart to ACID is **BASE**:
-
-- **Basically Available** — the system responds to every request, even if the response is not the most current data.
-- **Soft state** — the system's state may change over time without new input, as replicas converge.
-- **Eventually consistent** — given no new writes, all replicas will converge to the same value.
-
-!!! warning "NoSQL Does Not Mean "No Consistency""
-    DynamoDB offers *strongly consistent reads* as a per-request option, and *ACID transactions* across up to 100 items. The BASE model describes a default behaviour and a design philosophy, not an absolute limitation. Conversely, a relational database with asynchronous read replicas is *eventually consistent when read through a replica*. The line between the two families is far blurrier than introductory material suggests, and examination questions exploit this.
-
-### The Fundamental Scaling Distinction
-
-```mermaid
-graph TD
-    subgraph V["Vertical Scaling - Scale Up"]
-        V1["Small Instance"] --> V2["Medium Instance"]
-        V2 --> V3["Large Instance"]
-        V3 --> V4["Ceiling - Largest Instance Available"]
-    end
-    subgraph H["Horizontal Scaling - Scale Out"]
-        H1["Node 1"] --- H2["Node 2"]
-        H2 --- H3["Node 3"]
-        H3 --- H4["Node N - Add More Indefinitely"]
-    end
-```
-
-| Aspect | Vertical Scaling | Horizontal Scaling |
-|---|---|---|
-| Method | Bigger machine | More machines |
-| Applies naturally to | Relational writers | Key-value stores, stateless compute |
-| Ceiling | Hard — the largest instance type in the Region | Effectively none |
-| Downtime | Usually requires restart or failover | None if designed for it |
-| Cost curve | Superlinear — the largest instances cost disproportionately more | Roughly linear |
-| Complexity | Low | High — requires partitioning strategy |
-| Failure blast radius | Entire database | One shard or partition |
-
-The critical insight is that **a relational database's write path scales vertically by default**. You can add read replicas to scale reads horizontally, but there is one writer, and that writer is a single machine. This is the ceiling that motivated the entire NoSQL movement. DynamoDB, by contrast, scales writes horizontally by adding partitions, which is why it can absorb workloads no single relational instance could.
-
-### The CAP Theorem, Stated Correctly
-
-Eric Brewer's CAP theorem states that a distributed data store can provide **at most two** of the following three guarantees:
-
-| Guarantee | Precise Meaning |
+| Address in `10.0.1.0/24` | Reserved for |
 |---|---|
-| **Consistency (C)** | Every read receives the most recent write or an error. This is *linearizability*, not the "C" in ACID. |
-| **Availability (A)** | Every request receives a non-error response, without a guarantee that it contains the most recent write. |
-| **Partition Tolerance (P)** | The system continues to operate despite arbitrary loss of messages between nodes. |
+| `10.0.1.0` | Network address |
+| `10.0.1.1` | VPC implicit router |
+| `10.0.1.2` | Amazon-provided DNS (the Route 53 Resolver, mapped from VPC base plus two) |
+| `10.0.1.3` | Reserved by AWS for future use |
+| `10.0.1.255` | Network broadcast address; AWS does not support broadcast but reserves it |
 
-!!! danger "The Most Common CAP Misconception"
-    Students routinely say "DynamoDB is AP and RDS is CA." **CA is not an achievable option for a distributed system.** Network partitions are not a design choice — they are a fact of physical networks. Cables are cut, switches fail, an Availability Zone loses connectivity. Any system distributed across machines *must* tolerate partitions, so **P is mandatory**. The real theorem, in practice, is: *when a partition occurs, you must choose between C and A.* A single-node database is technically CA only because it is not distributed at all — and a single-node database has no availability story worth having.
+!!! warning "The Reserved-Address Trap"
+    A `/28` subnet gives you 11 usable addresses, not 16, and an ALB requires at least 8 free addresses per subnet to scale. Sizing a subnet by dividing the expected instance count by 256 and rounding down is how teams end up with `InsufficientFreeAddressesInSubnet` errors during a traffic spike, precisely when scaling matters most.
+
+#### A Reference CIDR Plan
+
+A disciplined plan allocates address space hierarchically so that ranges are summarisable and never collide across accounts, environments, and Regions.
+
+| Scope | CIDR | Rationale |
+|---|---|---|
+| Whole organisation | `10.0.0.0/8` | Reserve the entire RFC 1918 class A for AWS |
+| Production, Region A | `10.0.0.0/14` | Room for many VPCs, summarisable in one on-premises route |
+| Production VPC 1 | `10.0.0.0/16` | One VPC |
+| Public subnets (3 AZ) | `10.0.0.0/24`, `10.0.1.0/24`, `10.0.2.0/24` | Load balancers, NAT Gateways only |
+| Private app subnets | `10.0.16.0/20`, `10.0.32.0/20`, `10.0.48.0/20` | Containers and instances; large because `awsvpc` mode consumes one IP per task |
+| Isolated data subnets | `10.0.64.0/22`, `10.0.68.0/22`, `10.0.72.0/22` | RDS, ElastiCache; no internet route |
+| Reserved for growth | `10.0.128.0/17` | Never allocate the second half on day one |
+| Non-production, Region A | `10.4.0.0/14` | Distinct range so peering to production remains possible |
+| Disaster recovery Region | `10.8.0.0/14` | Distinct so cross-Region peering never overlaps |
+
+!!! danger "Overlapping CIDRs Are Permanent"
+    VPC peering and Transit Gateway attachments **cannot** connect networks with overlapping CIDR blocks. There is no cloud equivalent of source NAT on a peering connection. If two teams both use `10.0.0.0/16`, the only remedies are re-addressing an entire VPC (which means rebuilding every resource in it) or inserting a NAT layer in a middle VPC. Address planning is one of the few AWS decisions that is genuinely expensive to reverse.
+
+### Subnets and Availability Zones
+
+A subnet is a range of IP addresses within a VPC, bound to **exactly one Availability Zone**. This binding is the foundation of high availability in AWS: to survive the loss of an Availability Zone, you must have subnets — and running capacity — in at least two, and preferably three.
+
+A subnet is **public** if and only if its associated route table contains a route to an Internet Gateway. A subnet is **private** if it has a route to a NAT Gateway (outbound only). A subnet is **isolated** if it has neither. Nothing else about the subnet distinguishes these cases; "public subnet" is a statement about a route table.
+
+!!! note "Availability Zone IDs Versus Names"
+    The name `us-east-1a` is mapped to a different physical zone for different AWS accounts, deliberately, to spread load. The **AZ ID** (for example `use1-az2`) is consistent across accounts. When correlating placement across accounts — for example to keep a shared-services VPC in the same physical zone as a workload VPC and avoid cross-AZ data charges — compare AZ IDs, not names.
+
+### Route Tables and the Implicit Router
+
+Every VPC has an **implicit router**, a distributed function rather than a device. Route tables tell it what to do. Every subnet is associated with exactly one route table; if you do not associate one explicitly, the subnet uses the VPC's **main** route table.
+
+Routing uses **longest prefix match**: the most specific matching route wins, regardless of the order rules appear in the table. Every route table implicitly contains a `local` route for the VPC's CIDR (and each secondary CIDR), which cannot be removed and always wins for intra-VPC traffic.
+
+<figure markdown="span">
+    ![3layerglobalinfra](../img/U1/VPCPacketrouting.png){width="80%"}
+    <figcaption>VPC Packet Routing</figcaption>
+    <p align='right' style="font-size:0.8em"><i>Image Source: AI Generaed (Google Gemini)</i></p>
+</figure>
+
+
+!!! warning "Silent Drops"
+    When no route matches, the packet is discarded without an ICMP unreachable message in most cases. This is why a missing route presents to the application as a **timeout**, whereas a security group or NACL denial also presents as a timeout, but a rejected TCP connection (RST) usually means the packet arrived and something at the destination refused it. Learning to read *timeout versus connection refused* is the single most useful troubleshooting reflex in AWS networking.
+
+### Internet Gateway
+
+An Internet Gateway (IGW) is a horizontally scaled, redundant, highly available VPC component attached to a VPC (one IGW per VPC). It performs two functions:
+
+1. It provides a target in route tables for internet-routable traffic.
+2. It performs **one-to-one network address translation** between an instance's private address and its associated public IPv4 address or Elastic IP.
+
+The second point is frequently misunderstood. An EC2 instance with a public IP address does *not* see that address on its network interface. `ip addr` inside the instance shows only the private address. The IGW rewrites the source address on the way out and the destination address on the way in. This is why the instance's operating system must never be configured with the public address, and why an Elastic IP that is disassociated does not require any change inside the guest.
+
+An IGW is free, imposes no bandwidth constraint of its own, and adds no measurable latency.
+
+For IPv6, the analogue of a NAT Gateway is the **egress-only Internet Gateway**, which allows outbound IPv6 traffic and stateful return traffic but blocks inbound connections. IPv6 addresses in AWS are globally routable, so there is no NAT; the egress-only gateway provides the outbound-only semantic without address translation.
+
+### NAT Gateway
+
+A NAT Gateway allows instances in a private subnet to initiate outbound connections to the internet (for operating system patches, container image pulls from public registries, third-party API calls) while preventing the internet from initiating connections to them.
+
+Key architectural facts:
+
+- A NAT Gateway lives **in a public subnet** and requires an Elastic IP. It is a zonal resource; it does not fail over across Availability Zones.
+- Instances in private subnets route `0.0.0.0/0` to the NAT Gateway.
+- For high availability you deploy **one NAT Gateway per Availability Zone**, with each Availability Zone's private route table pointing at the NAT Gateway in its own zone. A single shared NAT Gateway is both a single point of failure and a source of cross-AZ data transfer charges.
+- It scales automatically from 5 Gbps up to 100 Gbps and supports up to 55,000 simultaneous connections **to each unique destination** (destination IP, destination port, protocol). Exceeding that produces `ErrorPortAllocation` errors.
+- It is stateful and supports TCP, UDP, and ICMP. It does not support inbound-initiated connections and cannot be used to publish a service.
+
+!!! tip "The Most Common Avoidable AWS Networking Cost"
+    NAT Gateways charge both an hourly rate and a per-gigabyte data-processing rate. A workload that pulls container images and writes logs and objects to S3 through a NAT Gateway can spend more on NAT data processing than on compute. Adding a **Gateway endpoint for S3** costs nothing and removes that traffic from the NAT path entirely. Always audit what is actually traversing NAT using VPC Flow Logs before accepting the bill.
+
+### Security Groups Versus Network ACLs
+
+These are the two packet-filtering layers in a VPC, and the difference between them is examined constantly.
+
+| Dimension | Security Group | Network ACL |
+|---|---|---|
+| Attaches to | Elastic network interfaces (so, effectively, instances, tasks, load balancer nodes, RDS instances, endpoints) | Subnets |
+| Statefulness | **Stateful** — return traffic for an allowed flow is automatically permitted | **Stateless** — return traffic must be explicitly allowed by a rule in the opposite direction |
+| Rule types | Allow rules only; there is no deny | Allow **and** deny rules |
+| Evaluation | All rules are evaluated; if any rule allows the traffic, it is permitted | Rules are evaluated in ascending rule-number order; the first match wins and evaluation stops |
+| Default behaviour | Default security group allows all outbound and allows inbound from itself; a newly created security group allows all outbound and nothing inbound | Default NACL allows all inbound and outbound; a custom NACL denies everything until you add rules |
+| Source or destination can be | CIDR, another security group, a prefix list | CIDR and prefix list only — **not** a security group |
+| Typical use | Primary control; expresses application intent ("the web tier may talk to the app tier") | Coarse subnet-wide guardrail; blocking a specific malicious CIDR; regulatory requirement for a second layer |
+| Ephemeral ports | Not a concern, statefulness handles it | **Must** be allowed outbound (or inbound for responses), typically `1024-65535` |
+| Quota | Default 5 security groups per network interface (adjustable to 16), 60 inbound and 60 outbound rules per group by default | 1 NACL per subnet; 20 rules per direction by default, adjustable to 40 |
 
 ```mermaid
 stateDiagram-v2
-    [*] --> Normal
-    Normal --> Partitioned: "Network partition occurs"
-    Partitioned --> ChooseC: "Prioritise Consistency"
-    Partitioned --> ChooseA: "Prioritise Availability"
-    ChooseC --> Rejecting: "Refuse writes on minority side"
-    ChooseA --> Diverging: "Accept writes on both sides"
-    Rejecting --> Normal: "Partition heals"
-    Diverging --> Reconciling: "Partition heals"
-    Reconciling --> Normal: "Conflicts resolved"
+    [*] --> Inbound
+    Inbound --> NaclIn : Packet enters the subnet
+    NaclIn --> SgIn : Stateless allow rule matched by lowest rule number
+    NaclIn --> DroppedA : Deny rule or implicit deny
+    SgIn --> Delivered : Any inbound allow rule matches
+    SgIn --> DroppedB : No inbound rule matches
+    Delivered --> Response : Application replies
+    Response --> SgOut : Security group is stateful so the reply is permitted automatically
+    SgOut --> NaclOut : NACL is stateless and must allow the ephemeral source port range
+    NaclOut --> [*] : Reply leaves the subnet
+    NaclOut --> DroppedC : Missing outbound ephemeral port rule
+```
+Generate a professional with proper symbol in whie background image 
+
+
+!!! danger "The Classic NACL Failure"
+    A team adds a custom NACL allowing inbound TCP 443 and outbound TCP 443, and every HTTPS request hangs. The reason: a client connecting to your server on port 443 uses a random **ephemeral source port**. Your server's reply is sourced from port 443 but *destined* for that ephemeral port. Because NACLs are stateless, the outbound rule for port 443 does not cover it. The outbound rule must allow destination ports `1024-65535`. This is why security groups should carry your real policy and NACLs should stay coarse.
+
+### Security Group Referencing — the Cloud-Native Idiom
+
+The most important cloud-native property of security groups is that a rule's source can be **another security group**, not a CIDR. `sg-app` allows inbound TCP 8080 from `sg-alb`. As the ALB scales out and its nodes acquire new addresses, and as tasks are replaced with new IP addresses, the rule remains correct without modification. You have expressed *identity-based* rather than *address-based* policy — a firewall rule that survives elasticity. Address-based rules in an auto-scaling environment are a maintenance defect.
+
+### VPC Endpoints
+
+By default, calling `s3.amazonaws.com` or `kinesis.us-east-1.amazonaws.com` from a private subnet sends the request out through a NAT Gateway and across the public internet path (though within the AWS backbone in many cases) to a public service endpoint. VPC endpoints keep that traffic on the AWS private network and remove the dependency on a NAT Gateway.
+
+| Aspect | Gateway Endpoint | Interface Endpoint (AWS PrivateLink) |
+|---|---|---|
+| Services supported | Amazon S3 and Amazon DynamoDB only | Most AWS services, plus Marketplace and your own services |
+| Mechanism | A **route** in the route table pointing at a prefix list | An **elastic network interface** with a private IP in your subnet |
+| DNS | Uses the normal public service DNS name, resolved to the public IP but routed via the endpoint | Provides endpoint-specific DNS names, plus optional **private DNS** which overrides the public name inside the VPC |
+| Cross-VPC or on-premises reachability | No — route-table scoped, does not work over peering, VPN, or Direct Connect | Yes — an ENI has an IP address reachable from anywhere that can route to it |
+| Security control | Endpoint policy (a resource policy) plus route table | Endpoint policy plus a **security group** on the ENI |
+| Cost | **No charge** | Hourly charge per endpoint per Availability Zone, plus a per-gigabyte data-processing charge |
+| High availability | Managed, regional | You create one ENI per Availability Zone; you own the redundancy decision |
+
+```mermaid
+graph LR
+    subgraph vpc["Amazon VPC"]
+        subgraph priv["Private Subnet"]
+            APP["Application Instance or Task"]
+            ENI["Interface Endpoint ENI 10.0.16.25"]
+        end
+        RT["Route Table"]
+    end
+    APP -->|"Route to prefix list pl-xxxx"| RT
+    RT --> GWE["Gateway Endpoint"]
+    GWE --> S3["Amazon S3"]
+    APP -->|"Private DNS resolves to the ENI address"| ENI
+    ENI --> PL["AWS PrivateLink Fabric"]
+    PL --> KMS["AWS KMS"]
+    PL --> SM["AWS Secrets Manager"]
+    PL --> ECR["Amazon ECR"]
+```
+Generate a professional with proper symbol in whie background image 
+
+
+
+!!! note "Interface Endpoints Are Also How You Publish a Service"
+    AWS PrivateLink is bidirectional in concept. A software vendor can place a Network Load Balancer in front of its service, create a **VPC endpoint service**, and allow named AWS accounts to create Interface endpoints into it. The consumer reaches the provider's service using an address in the *consumer's* own VPC, with no peering, no route exchange, and no CIDR-overlap constraint. This is the correct pattern for software-as-a-service delivered privately, and it is far more scalable than peering.
+
+### VPC Peering Versus Transit Gateway
+
+**VPC peering** creates a one-to-one networking connection between two VPCs, in the same or different Regions and accounts. Traffic uses the AWS backbone, never the internet. Crucially, peering is **non-transitive**: if A peers with B and B peers with C, A cannot reach C. Each pair needs its own connection and a route-table entry in every subnet route table on both sides.
+
+**AWS Transit Gateway** is a regional network transit hub. Each VPC, VPN, or Direct Connect gateway attaches once to the Transit Gateway, and the Transit Gateway performs transitive routing between attachments according to its own route tables. This converts an O(n²) mesh into an O(n) hub-and-spoke.
+
+```mermaid
+graph TD
+    subgraph mesh["Full Mesh with VPC Peering - n times n minus 1 over 2 connections"]
+        A1["VPC A"] --- B1["VPC B"]
+        A1 --- C1["VPC C"]
+        A1 --- D1["VPC D"]
+        B1 --- C1
+        B1 --- D1
+        C1 --- D1
+    end
+    subgraph hub["Hub and Spoke with Transit Gateway - n attachments"]
+        TGW["Transit Gateway"]
+        TGW --- A2["VPC A"]
+        TGW --- B2["VPC B"]
+        TGW --- C2["VPC C"]
+        TGW --- D2["VPC D"]
+        TGW --- VPN["Site to Site VPN"]
+        TGW --- DX["Direct Connect Gateway"]
+    end
 ```
 
-Applied to our three services:
+Generate a professional with proper symbol in whie background image 
 
-| Service | Behaviour Under Partition | Classification |
+
+
+| Criterion | VPC Peering | Transit Gateway |
 |---|---|---|
-| RDS Multi-AZ | Standby is synchronous; if the primary is isolated, failover occurs and the old primary is fenced. Writes are unavailable during failover. | CP-leaning |
-| Aurora | Quorum-based storage; tolerates loss of an entire AZ plus one additional node for reads, and an entire AZ for writes | CP-leaning with high availability |
-| DynamoDB (eventually consistent reads) | Serves reads from any replica, always available | AP-leaning |
-| DynamoDB (strongly consistent reads) | Reads from the leader; unavailable if the leader partition is unreachable | CP for those requests |
-| ElastiCache Redis with replicas | Failover promotes a replica; recently written data not yet replicated may be lost | AP-leaning, and not durable by design |
+| Topology | Point to point | Hub and spoke |
+| Transitive routing | No | Yes |
+| Connections for *n* VPCs | *n(n−1)/2* | *n* |
+| Route table entries | Per peering, in every subnet route table | One summarised route per VPC toward the Transit Gateway |
+| Bandwidth | No aggregate limit imposed by peering itself | Up to 50 Gbps per VPC attachment (burst); design around it |
+| On-premises integration | Not supported; a peer cannot use another VPC's VPN | Native; VPN and Direct Connect attach directly |
+| Segmentation | Implicit through which peerings exist | Explicit through multiple Transit Gateway route tables |
+| Cost | No hourly charge; data transfer charges apply | Hourly charge per attachment plus a per-gigabyte data-processing charge |
+| Latency | Marginally lower — one fewer hop | One additional hop, typically sub-millisecond |
+| When to choose | Two to roughly five VPCs, stable topology, latency and cost sensitive | More than a handful of VPCs, hybrid connectivity, multi-account, segmentation requirements |
 
-### PACELC — The Extension That Matters More in Practice
+!!! tip "The Decision Rule"
+    Below roughly five VPCs with no on-premises requirement, peering is cheaper and simpler. Above that, or the moment you need Direct Connect, VPN, or account segmentation, Transit Gateway wins decisively — and the crossover is reached faster than teams expect, because peering's operational cost is in route-table churn, not in the connection itself.
 
-CAP only describes behaviour *during* a partition, which is rare. **PACELC** (Daniel Abadi) extends it:
+### Elastic Load Balancing in the Request Path
 
-> **If** there is a **P**artition, choose between **A**vailability and **C**onsistency; **E**lse (in normal operation), choose between **L**atency and **C**onsistency.
+Elastic Load Balancing distributes incoming traffic across multiple targets in multiple Availability Zones. Load balancer nodes themselves live in the subnets you nominate, scale horizontally, and are addressed by a DNS name whose underlying addresses change — which is why you must never hard-code a load balancer's IP address (for ALB) and must always use its DNS name or a Route 53 alias.
 
-The "else" branch is what you actually experience daily. A strongly consistent DynamoDB read costs twice the RCUs of an eventually consistent read and has higher latency, because it must be served by the partition leader rather than any replica. Reading from an RDS read replica is faster and cheaper for the primary but may return stale data. **You trade latency for consistency on almost every request you design.**
-
-!!! tip "How to Use PACELC in a Design Review"
-    For each read path in your system, ask: *what is the business cost of returning data that is 500 milliseconds stale?* For a product description: zero. For a user's own profile immediately after they edited it: high, because it looks like a bug. For an account balance before a withdrawal: unacceptable. Different read paths in the same application legitimately warrant different consistency choices. This is called **read-your-own-writes** consistency and is often solved by routing a user's reads to the primary for a short window after their write.
-
-### OLTP Versus OLAP
-
-| Characteristic | OLTP — Online Transaction Processing | OLAP — Online Analytical Processing |
+| Dimension | Application Load Balancer | Network Load Balancer |
 |---|---|---|
-| Typical operation | Read or write a few rows by key | Scan and aggregate millions of rows |
-| Query latency target | Milliseconds | Seconds to minutes |
-| Concurrency | Thousands of short transactions | Few long-running queries |
-| Storage layout | Row-oriented | Column-oriented |
-| Example | "Insert this order" | "Total revenue by region by month for three years" |
-| AWS service | RDS, Aurora, DynamoDB | Redshift, Athena, EMR |
+| OSI layer | 7 (HTTP and HTTPS, gRPC) | 4 (TCP, UDP, TLS) |
+| Routing decisions | Host header, path, HTTP header, query string, source IP, HTTP method | Flow hash of the 5-tuple only |
+| Latency added | Low, but the request is parsed | Ultra low, roughly tens of microseconds |
+| Static IP | No — use the DNS name | Yes — one Elastic IP per Availability Zone |
+| TLS termination | Yes, with SNI and multiple certificates | Yes with a TLS listener, or pass through with a TCP listener |
+| Preserves client source IP | No — use the `X-Forwarded-For` header | Yes, by default for instance and IP targets in many modes |
+| Target types | Instance, IP, Lambda | Instance, IP, Application Load Balancer |
+| WebSockets | Supported | Supported at layer 4 |
+| WAF integration | Yes, AWS WAF attaches directly | No, not directly |
+| Sticky sessions | Yes, cookie based | Yes, source-IP based |
+| Typical use | Microservices behind one entry point, host and path routing, containers | Extreme throughput, static IP requirements, non-HTTP protocols, PrivateLink providers |
 
-!!! danger "Do Not Run Analytics on Your Production OLTP Database"
-    This is the single most common cause of self-inflicted production outages in early-stage systems. A business analyst runs a report that scans the orders table, the query holds locks or saturates I/O, connection pools exhaust, and the checkout path times out. The correct architecture separates these: replicate to a read replica dedicated to reporting, or export to S3 and query with Athena, or load into Redshift. Aurora's **zero-ETL integration with Amazon Redshift** exists precisely to make this separation cheap.
+### Amazon CloudFront in the Request Path
 
-### Consistency Models Summarised
+CloudFront is a global content delivery network with hundreds of points of presence. It terminates the client TLS connection at the edge closest to the user, serves cached content directly, and forwards cache misses to the origin over AWS's optimised backbone rather than the public internet — which usually reduces latency even for entirely dynamic, uncacheable content.
 
-| Model | Guarantee | Where You See It |
-|---|---|---|
-| **Strong / Linearizable** | A read always reflects all prior writes | RDS primary, DynamoDB strongly consistent read, Aurora writer |
-| **Eventual** | Replicas converge given no new writes; a read may be stale | DynamoDB default read, RDS read replica, Aurora reader (with small lag) |
-| **Read-your-own-writes** | A client always sees its own prior writes | Achieved by routing that client's reads to the primary |
-| **Monotonic reads** | A client never sees data go backwards in time | Achieved by pinning a client session to one replica |
-| **Causal** | Causally related operations are seen in order by all observers | Application-level design, or specialised stores |
+CloudFront also provides the natural attachment point for AWS WAF and AWS Shield, supports **Origin Access Control** so that a private S3 bucket can be served without ever being public, and can execute logic at the edge through CloudFront Functions (lightweight, viewer-facing, sub-millisecond) and Lambda@Edge (heavier, supports origin-facing triggers and network access).
 
-### Durability Versus Availability
+!!! note "CloudFront Is Not Only for Static Content"
+    Placing CloudFront in front of an API reduces TCP and TLS handshake latency (the handshake terminates at the edge, tens of milliseconds away, rather than at a Region thousands of kilometres away), absorbs volumetric attacks before they reach your origin, and lets you cache safely at the route level with a well-designed cache key. Treating CloudFront as "only for images" leaves substantial performance on the table.
 
-These are routinely confused and are entirely different properties.
+### DNS Fundamentals and Route 53 Concepts
 
-- **Durability** is the probability that committed data will *not be lost*. It concerns permanence.
-- **Availability** is the proportion of time the system can *serve requests*. It concerns reachability.
+DNS is a distributed, hierarchical, cached database. Resolution proceeds from the root, to the top-level domain, to the authoritative name servers for the zone.
 
-A database can be highly durable and unavailable: your data is safely stored across three AZs but the instance is failing over, so you cannot read it. It can be highly available and non-durable: ElastiCache serves every request but loses everything on restart.
+- **Domain and zone.** A *domain* is a name in the hierarchy. A *hosted zone* in Route 53 is the container of records for a domain and its subdomains, and it corresponds to a DNS zone file.
+- **Public hosted zone** answers queries from the public internet. **Private hosted zone** answers queries only from the VPCs you associate with it, which is how you give internal names to internal resources without publishing them.
+- **Name server (NS) records** delegate authority. When you create a public hosted zone, Route 53 assigns four name servers drawn from different top-level domains for resilience; you must place these NS records at the registrar for delegation to work.
+- **Start of Authority (SOA)** carries zone metadata including the negative-caching TTL.
+- **TTL (time to live)** is how long a resolver may cache an answer. It is the single most important operational parameter in DNS: a long TTL reduces query cost and improves resilience to Route 53 unavailability, while a short TTL shortens failover time. Sixty seconds is a common compromise for records participating in failover; 300 to 3600 seconds suits stable records.
+- **Alias record** is Route 53-specific. It maps a name directly to an AWS resource (CloudFront distribution, ALB or NLB, API Gateway custom domain, S3 website endpoint, Global Accelerator, another record in the same zone). Unlike a CNAME it may be used at the zone apex, it returns an A or AAAA answer rather than a second lookup, it automatically tracks the resource's changing addresses, and queries to alias targets that are AWS resources are not charged.
+- **Health check** is an active probe from a fleet of Route 53 checkers in many locations. Health checks can monitor an endpoint, monitor a CloudWatch alarm, or compute a boolean over other health checks (a *calculated* health check). Only records with certain routing policies can be associated with health checks.
+- **Route 53 Resolver** is the VPC-internal recursive resolver at `VPC base plus two`, along with inbound and outbound **Resolver endpoints** that allow DNS to be forwarded between a VPC and on-premises networks in either direction.
 
-| Concept | Metric | Example Target |
-|---|---|---|
-| Durability | Annual probability of data loss | Aurora and S3-class storage designs target extremely low loss probability |
-| Availability | Percentage uptime, expressed in "nines" | 99.99 percent equals roughly 52 minutes of downtime per year |
-| **RPO** — Recovery Point Objective | Maximum acceptable *data loss*, in time | "We can lose at most 5 minutes of transactions" |
-| **RTO** — Recovery Time Objective | Maximum acceptable *downtime* | "We must be serving within 15 minutes" |
+!!! warning "Route 53 Health Checks Cannot See Private Resources"
+    The Route 53 health-checking fleet lives on the public internet. It cannot probe an endpoint in a private subnet. To fail over on the health of a private resource, publish a CloudWatch metric and use a **CloudWatch alarm health check**, which reads the alarm state rather than probing the network.
 
-!!! example "Translating Business Requirements into Architecture"
-    A requirement of "RPO of 5 minutes, RTO of 1 hour" can be met by automated backups with point-in-time recovery. A requirement of "RPO near zero, RTO under 2 minutes" demands Multi-AZ synchronous replication with automatic failover. A requirement of "survive the loss of an entire Region with RPO under 1 second" demands Aurora Global Database or DynamoDB Global Tables. **RPO and RTO are the two numbers that determine your entire data-tier architecture and its cost.** Always extract them from stakeholders before designing.
+### API Gateway Concepts
 
-### Caching Fundamentals
+- **API** — the top-level container. Choose REST, HTTP, or WebSocket at creation; the type cannot be changed afterwards.
+- **Resource and method** (REST) or **route** (HTTP and WebSocket) — the path and verb that a request matches.
+- **Integration** — what API Gateway calls: Lambda proxy, Lambda custom, HTTP proxy, HTTP custom, AWS service integration (call DynamoDB, SQS, Step Functions, or S3 directly with no compute in between), VPC Link (to a private ALB, NLB, or Cloud Map service), or MOCK.
+- **Stage** — a named deployment of an API, such as `dev`, `test`, `prod`. Stages carry their own throttling, caching, logging, and **stage variables**, which lets one API definition point at different backends per environment.
+- **Authorizer** — IAM (SigV4), Amazon Cognito user pools, a Lambda authorizer (token or request based, with policy caching), or, for HTTP APIs, a built-in JWT authorizer that validates OIDC and OAuth 2.0 tokens without any code.
+- **Usage plan and API key** — quota and rate limiting per consumer, for monetised or partner APIs (REST APIs only).
+- **Mapping template** — Velocity Template Language transformation of request or response bodies (REST APIs only). Powerful, but application logic in a template is difficult to test and version; prefer proxy integration and keep transformation in code.
+- **Endpoint type** — Edge-optimized (fronted by a CloudFront distribution AWS manages), Regional (clients in one Region, or you want to attach your own CloudFront distribution), or Private (accessible only through an Interface endpoint in your VPC, controlled by a resource policy).
 
-A **cache** is a high-speed store holding a subset of data so that future requests are served faster than from the origin. Caching works because real workloads exhibit **locality of reference** — a small fraction of items receives a large fraction of requests (the Pareto or power-law distribution).
-
-| Term | Meaning |
-|---|---|
-| **Cache hit** | The requested item was found in the cache |
-| **Cache miss** | The item was absent; the origin must be consulted |
-| **Hit ratio** | Hits divided by total requests — the primary measure of cache effectiveness |
-| **TTL — Time To Live** | Duration after which an entry expires automatically |
-| **Eviction policy** | Rule for discarding entries when memory is full, for example LRU or LFU |
-| **Cache stampede** | Many concurrent requests miss simultaneously and all hit the origin at once |
-| **Cache invalidation** | Removing or updating an entry when the underlying data changes |
-
-!!! note "Why Hit Ratio Dominates Everything"
-    If a cache read takes 0.5 ms and a database read takes 10 ms, a 95 percent hit ratio gives an average latency of `0.95 × 0.5 + 0.05 × 10 = 0.975 ms`. Dropping to an 80 percent hit ratio gives `0.8 × 0.5 + 0.2 × 10 = 2.4 ms` — nearly 2.5 times worse. Cache effectiveness is highly nonlinear in hit ratio. Monitoring `CacheHitRate` is therefore not optional.
+!!! tip "Direct Service Integration Is an Underused Architecture"
+    An API Gateway AWS-service integration can put a message on an SQS queue or start a Step Functions execution with **no Lambda function at all**. That removes a whole compute tier from the critical path: no cold starts, no runtime patching, no concurrency limits, and no per-invocation charge. When the API's job is to accept and enqueue, this is often the correct design.
 
 ---
 
 ## Internal Working
 
-Understanding what happens beneath the API is what separates an architect from a console operator. This section describes the actual mechanisms.
+### The VPC Is Implemented by a Mapping Service and Encapsulation
+
+A VPC is realised by AWS's network virtualisation layer. When an instance sends a packet to another instance's private IP address, the following happens:
+
+1. The packet leaves the guest operating system to the elastic network interface, which on modern instance families is presented by the **AWS Nitro card** — a dedicated hardware device on the host that offloads networking and storage from the main CPUs.
+2. The Nitro card consults the **Mapping Service**, a distributed lookup that translates *(VPC identifier, destination private IP)* into *(physical host address, destination interface)*. Mappings are cached locally and refreshed; the Mapping Service is the authoritative store.
+3. The packet is **encapsulated** — wrapped in an outer header addressed to the physical host — and sent across the physical substrate network. Because the customer's addresses appear only in the inner header, two customers may both use `10.0.0.0/16` with no conflict.
+4. At the destination host, the Nitro card decapsulates the packet and delivers it to the correct interface, after enforcing that host's security group rules.
+
+This design explains a family of otherwise puzzling behaviours:
+
+- **You cannot sniff a neighbour's traffic**, because packets are only ever delivered to the interface identified in the mapping. Promiscuous mode has no effect.
+- **Broadcast and multicast do not work natively**, because there is no shared layer 2 segment to broadcast onto. (Transit Gateway offers a multicast feature that reimplements the semantic in software.)
+- **Source and destination checking** is enforced by default: an interface will not forward packets whose source or destination address is not its own. Building a NAT instance or a virtual router requires explicitly disabling the source/destination check on that interface.
+- **Security groups do not become a bottleneck**, because enforcement happens on the Nitro card of each host, in a distributed fashion, at line rate. There is no appliance to size.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant G as Guest OS on Instance A
+    participant NA as Nitro Card Host A
+    participant MS as Mapping Service
+    participant SUB as Physical Substrate Network
+    participant NB as Nitro Card Host B
+    participant GB as Guest OS on Instance B
+
+    G->>NA: IP packet to 10.0.16.25
+    NA->>NA: Evaluate outbound security group rules
+    NA->>MS: Look up VPC id plus 10.0.16.25
+    MS-->>NA: Physical host B and interface id
+    NA->>SUB: Encapsulated packet addressed to host B
+    SUB->>NB: Deliver encapsulated packet
+    NB->>NB: Decapsulate and evaluate inbound security group rules
+    NB->>GB: Original IP packet delivered
+    GB-->>NB: Reply
+    NB-->>NA: Return flow permitted by connection tracking
+```
+Generate a professional with proper symbol in whie background image 
+
+
 
 ### Control Plane Versus Data Plane
 
-Every AWS service is internally split into two planes with radically different characteristics.
+This distinction governs how failures manifest and how you should design.
 
-| Plane | Purpose | Example Operations | Design Properties |
+| Layer | Examples | Characteristics | Failure behaviour |
 |---|---|---|---|
-| **Control plane** | Manage the lifecycle of resources | `CreateDBInstance`, `ModifyDBInstance`, `CreateTable`, `CreateReplicationGroup` | Lower request volume, higher latency, more complex, changes configuration |
-| **Data plane** | Serve actual application requests | SQL queries, `GetItem`, `PutItem`, Redis `GET` and `SET` | Extremely high volume, low latency, simple, must be maximally available |
+| **Control plane** | `CreateSubnet`, `AuthorizeSecurityGroupIngress`, `ChangeResourceRecordSets`, `CreateDeployment` on an API | Lower request rate, strongly consistent, propagates configuration | If the control plane is impaired you cannot *change* the network, but existing traffic continues to flow |
+| **Data plane** | Packet forwarding, security group enforcement, DNS query answering, API Gateway request handling, load balancer forwarding | Extremely high request rate, designed for far higher availability than the control plane | Impairment means traffic actually stops |
 
-!!! info "Why This Distinction Is Architecturally Important"
-    AWS deliberately engineers the data plane to have **static stability** — it continues to function correctly even if the control plane is entirely unavailable. If the RDS control plane were degraded, you might be unable to create a new instance, but your existing instance would continue serving queries. This is why the guidance "do not put control plane calls in your request path" matters: never have your application call `DescribeDBInstances` or `DescribeTable` on every user request. Cache configuration at startup. Depending on the control plane at request time imports its lower availability into your critical path.
+!!! tip "A Design Principle That Comes Directly From This"
+    Build systems whose **recovery path depends only on data planes**. A disaster-recovery plan that requires launching new instances (a control-plane action) during a regional event is more fragile than one that requires only shifting DNS weights against pre-provisioned capacity. This is the reasoning behind pre-warmed standby stacks and behind Route 53 Application Recovery Controller, whose data-plane-only routing controls are explicitly designed to be usable when control planes are degraded.
 
-```mermaid
-graph TD
-    subgraph CP["Control Plane"]
-        C1["AWS Management Console"]
-        C2["AWS CLI and SDK"]
-        C3["CloudFormation and Terraform"]
-        C1 --> C4["Service Control API"]
-        C2 --> C4
-        C3 --> C4
-        C4 --> C5["Provisioning Workflows"]
-        C5 --> C6["Metadata Store"]
-    end
-    subgraph DP["Data Plane"]
-        D1["Application on ECS or Lambda"]
-        D1 --> D2["Request Router"]
-        D2 --> D3["Storage Nodes"]
-    end
-    C5 -.->|"Configures"| D3
-```
+### Security Group Connection Tracking
 
-### Amazon RDS Internal Working
+Security groups are stateful because the Nitro card maintains a **connection-tracking table**. When an allowed outbound flow is created, an entry keyed by the 5-tuple (protocol, source IP, source port, destination IP, destination port) is recorded, and return packets matching that entry are permitted regardless of inbound rules.
 
-#### Single-AZ Instance
+Two refinements matter in production:
 
-A single-AZ RDS instance is an EC2 instance running the database engine, with its data on **Amazon EBS** volumes attached over the network. The separation of compute from storage is significant: if the EC2 host fails, AWS can start a replacement instance and reattach the same EBS volumes, preserving data.
+- **Untracked flows.** If a security group rule allows all traffic (`0.0.0.0/0` on all ports) in both directions for a given flow, AWS may treat the flow as *untracked* and skip the tracking table entirely, which improves performance. Consequently, an existing connection can be interrupted immediately when rules change for tracked flows, whereas untracked flows behave differently. This is a subtle but real operational difference.
+- **Connection-tracking capacity.** Each instance type has a maximum number of tracked connections. Extremely high-connection-count workloads (a proxy or an ingestion tier) can exhaust it, which appears as packet loss under load. The `conntrack_allowance_exceeded` metric exposed by the ENA driver is the diagnostic.
 
-```mermaid
-graph TD
-    A["Application in Private Subnet"] --> B["RDS Endpoint - DNS Name"]
-    B --> C["EC2 Host running Database Engine"]
-    C --> D["EBS Volume - Data Files"]
-    C --> E["EBS Volume - Transaction Logs"]
-    D --> F["Automated Snapshot to S3"]
-    E --> F
-```
+Because tracking is per-flow, **changing a security group rule takes effect on new flows within seconds and can also terminate existing tracked flows** whose permission has been revoked. NACL changes, by contrast, apply to every packet immediately because there is no state to consult.
 
-#### Multi-AZ Deployment — Synchronous Replication
+### Why NACLs Are Evaluated by Rule Number
 
-Multi-AZ is the mechanism by which RDS achieves high availability. Two distinct architectures exist:
+A NACL is an ordered list. Evaluation walks rules in ascending numeric order and stops at the first match — allow or deny. The implicit final rule, numbered `*`, denies everything. This ordered-first-match model is what makes deny rules meaningful: a deny at rule 90 blocks traffic that an allow at rule 100 would otherwise permit. Conventionally you leave gaps (100, 200, 300) so rules can be inserted later without renumbering.
 
-**Multi-AZ instance deployment (one standby):**
+### NAT Gateway Internals and Port Allocation
 
-- AWS provisions a **standby replica** in a different Availability Zone.
-- Every write to the primary is **synchronously replicated** to the standby at the storage or engine level before the commit is acknowledged to the client.
-- The standby is **not readable**. It exists solely for failover. Students very frequently get this wrong.
-- Failure detection is continuous. On primary failure, AZ failure, storage failure, network partition, or a customer-initiated reboot with failover, RDS promotes the standby.
+A NAT Gateway performs **port address translation**. For every outbound flow it rewrites the source address to its Elastic IP and the source port to a port it allocates from its own pool, recording the mapping so that return traffic can be reversed.
 
-**Multi-AZ DB cluster deployment (two readable standbys):**
+The 55,000-connection figure is per unique destination tuple, because the constraint is the source-port space available for a given *(NAT EIP, destination IP, destination port, protocol)* combination — roughly the ephemeral port range. Consequences:
 
-- Available for MySQL and PostgreSQL. Provisions a writer and **two readable standby instances** across three AZs.
-- Uses semi-synchronous replication: a commit is acknowledged once at least one standby confirms.
-- Typically offers faster failover than the single-standby model and adds read capacity.
+- 55,000 connections to `api.partner.com:443` will exhaust allocation; 55,000 connections spread across many destinations will not.
+- Adding a second Elastic IP is not possible on a NAT Gateway; the remedy is multiple NAT Gateways, or, better, connection reuse (HTTP keep-alive, connection pools) so that the flow count stays low.
+- The `ErrorPortAllocation` CloudWatch metric is the direct signal; alarm on it.
 
 ```mermaid
 sequenceDiagram
-    participant APP as "Application"
-    participant P as "Primary in AZ-a"
-    participant S as "Standby in AZ-b"
-    APP->>P: "INSERT INTO orders"
-    P->>P: "Write to transaction log"
-    P->>S: "Synchronously replicate log record"
-    S->>S: "Persist log record"
-    S-->>P: "Acknowledge"
-    P-->>APP: "COMMIT successful"
-    Note over P,S: "Commit latency includes the cross-AZ round trip"
+    autonumber
+    participant T as Task in Private Subnet 10.0.16.40
+    participant RT as Private Route Table
+    participant NAT as NAT Gateway EIP 52.x.x.x
+    participant IGW as Internet Gateway
+    participant EXT as External API 203.0.113.10 port 443
+
+    T->>RT: TCP SYN to 203.0.113.10:443 source port 41022
+    RT->>NAT: Longest prefix match on 0.0.0.0/0
+    NAT->>NAT: Allocate source port 30015 and record the mapping
+    NAT->>IGW: SYN with source 52.x.x.x port 30015
+    IGW->>EXT: One to one NAT already applied, packet leaves
+    EXT-->>IGW: SYN ACK to 52.x.x.x port 30015
+    IGW-->>NAT: Delivered to the NAT Gateway
+    NAT->>NAT: Reverse the mapping
+    NAT-->>T: SYN ACK to 10.0.16.40 port 41022
 ```
+Generate a professional with proper symbol in whie background image 
 
-!!! warning "Multi-AZ Costs You Write Latency"
-    Because the commit waits for the standby to acknowledge, every write pays a cross-AZ network round trip — typically one to two milliseconds. For a write-heavy OLTP workload this is a real, measurable cost. It is almost always worth paying, but you must *know* you are paying it. This is the durability-versus-latency trade-off from PACELC, made concrete.
 
-#### The Failover Mechanism — DNS CNAME Switching
 
-This mechanism is examined constantly, so understand it precisely.
+### DNS Resolution Inside a VPC
 
-Your application does **not** connect to an IP address. It connects to an RDS **endpoint**, a DNS name such as `orders-db.abc123xyz.eu-west-1.rds.amazonaws.com`. This DNS record is a **CNAME** that resolves to the address of the current primary.
+Each VPC has an Amazon-provided DNS server, the **Route 53 Resolver**, reachable at the VPC's base address plus two (for `10.0.0.0/16` that is `10.0.0.2`) and also at the link-local address `169.254.169.253`. Two VPC attributes govern its behaviour:
 
-```mermaid
-sequenceDiagram
-    participant APP as "Application"
-    participant DNS as "Route 53 DNS"
-    participant P as "Primary in AZ-a"
-    participant S as "Standby in AZ-b"
-    participant RDS as "RDS Control Plane"
-    APP->>DNS: "Resolve db endpoint"
-    DNS-->>APP: "Address of primary in AZ-a"
-    APP->>P: "Queries flowing normally"
-    Note over P: "Primary fails"
-    RDS->>RDS: "Health check detects failure"
-    RDS->>S: "Promote standby to primary"
-    RDS->>DNS: "Update CNAME to AZ-b address"
-    APP->>P: "Connection error"
-    APP->>DNS: "Re-resolve endpoint"
-    DNS-->>APP: "Address of new primary in AZ-b"
-    APP->>S: "Reconnect and resume"
-```
+- `enableDnsSupport` — whether the resolver answers queries at all. Turning it off breaks almost everything, including Interface endpoint private DNS.
+- `enableDnsHostnames` — whether instances receive public DNS hostnames.
 
-Key consequences that architects must design around:
+Resolution order inside a VPC is, in effect: Route 53 Resolver rules and outbound endpoints, then associated **private hosted zones**, then the VPC's internal names, then public DNS.
 
-1. **Existing connections are severed.** The application *will* see errors during failover. Your code must implement retry with exponential backoff and jitter.
-2. **DNS caching can delay recovery.** The RDS endpoint has a short TTL, but JVM applications historically cache DNS resolutions indefinitely by default. Setting `networkaddress.cache.ttl` to a low value such as 5 seconds is a mandatory step for Java applications on RDS. This single misconfiguration causes more prolonged post-failover outages than any other.
-3. **Failover typically completes in roughly 60 to 120 seconds** for the classic Multi-AZ instance deployment, and faster for Multi-AZ DB clusters and Aurora. Treat these as typical observed ranges, not contractual guarantees.
-4. **The endpoint name never changes.** Do not hard-code IP addresses; never resolve once at startup and cache forever.
+A behaviour worth internalising: a public DNS name for an AWS resource that has both a public and a private address (a classic example is an EC2 public hostname) resolves to the **private** address when queried from inside the VPC and the **public** address when queried from outside. This is deliberate; it keeps intra-VPC traffic on the private path and avoids the hairpin through an Internet Gateway, which would otherwise incur charges and break for instances without public addresses.
 
-!!! danger "The Retry Requirement Is Not Optional"
-    A cloud-native application must assume its database connection can be terminated at any moment — by failover, by maintenance, by scaling, or by a transient network event. Applications that treat a dropped connection as a fatal error will experience an outage every time AWS performs routine maintenance. Retry logic with exponential backoff and jitter, plus a connection pool that validates connections before handing them out, is a baseline requirement.
+!!! warning "The Interface Endpoint Private DNS Trap"
+    Enabling **private DNS** on an Interface endpoint causes the standard service name (for example `secretsmanager.eu-west-1.amazonaws.com`) to resolve to the endpoint's private ENI address *inside the VPC*. If `enableDnsSupport` or `enableDnsHostnames` is disabled, private DNS cannot be enabled, and your applications will silently continue using the public endpoint through NAT — which works, so nobody notices, until the security review asks why traffic is leaving through the NAT Gateway.
 
-#### Read Replicas — Asynchronous Replication
+### Route 53 Internals
 
-Read replicas serve a different purpose from Multi-AZ standbys, and confusing them is a classic examination trap.
+Route 53's authoritative name servers are deployed across a global fleet of edge locations using **anycast**: the same IP addresses are advertised from many locations, and internet routing delivers each query to the topologically nearest instance. This yields low latency, high resilience, and natural absorption of volumetric attacks.
+
+- **Shuffle sharding** is applied to name-server assignment. Each hosted zone is assigned four name servers out of a much larger pool, chosen so that two customers rarely share the same complete set. If one shard is degraded, only a small fraction of zones are affected, and those zones still have other functioning name servers.
+- The four name servers deliberately span multiple top-level domains (`.com`, `.net`, `.org`, `.co.uk`) so that a failure confined to one TLD's infrastructure does not remove all delegation paths.
+- **Health checkers** run from many AWS locations. Each checker independently evaluates the endpoint, and the health state is computed from the proportion of checkers reporting healthy, against a configurable threshold. This avoids treating a single regional internet problem as an application failure. Because checks originate from many public addresses, an endpoint that filters by source IP must allow the published Route 53 health-checker ranges.
+- The **control plane** for Route 53 (creating and modifying records) is hosted in `us-east-1`, while the **data plane** (answering queries) is global and designed for extremely high availability. Failover that depends on calling `ChangeResourceRecordSets` therefore has a control-plane dependency; failover that depends on an already-configured health check is data-plane only and is the more resilient design.
 
 ```mermaid
 graph TD
-    A["Application Write Path"] --> B["Primary Instance - Writer Endpoint"]
-    B -->|"Synchronous"| C["Multi-AZ Standby - Not Readable"]
-    B -->|"Asynchronous"| D["Read Replica 1 - Same Region"]
-    B -->|"Asynchronous"| E["Read Replica 2 - Same Region"]
-    B -->|"Asynchronous"| F["Read Replica 3 - Cross Region"]
-    G["Application Read Path"] --> D
-    G --> E
-    H["Reporting and Analytics"] --> F
+    C["Client Application"] --> SR["Stub Resolver on the Device"]
+    SR --> RR["Recursive Resolver at the ISP or a Public Resolver"]
+    RR -->|"Cached answer available"| ANS["Answer returned immediately"]
+    RR -->|"Cache miss"| ROOT["Root Name Servers"]
+    ROOT --> TLD["Top Level Domain Servers for .com"]
+    TLD --> NS["Route 53 Authoritative Name Servers via Anycast"]
+    NS --> POL{"Routing Policy Evaluation"}
+    POL --> HC["Health Check State"]
+    POL --> GEO["Geolocation and Latency Data"]
+    POL --> RESULT["Selected record returned with a TTL"]
+    RESULT --> RR
+    RR --> ANS
 ```
+Generate a professional with proper symbol in whie background image 
 
-| Dimension | Multi-AZ Standby | Read Replica |
-|---|---|---|
-| Purpose | High availability and disaster recovery | Read scaling and offloading |
-| Replication | Synchronous | Asynchronous |
-| Readable | No (in the single-standby model) | Yes |
-| Automatic failover | Yes | No — manual promotion |
-| Placement | Different AZ, same Region | Same AZ, different AZ, or different Region |
-| Data currency | Identical to primary | Lagging by milliseconds to seconds |
-| Effect on write latency | Increases it | Negligible |
-| Can be promoted to standalone | No | Yes |
 
-The replication mechanism is engine-specific: MySQL and MariaDB use binary log replication; PostgreSQL uses its native streaming replication protocol. In both cases the primary does not wait for the replica, so the primary's write path is unaffected — but the replica may fall behind.
 
-**Replica lag** is the delay between a commit on the primary and its visibility on the replica. It is exposed as the CloudWatch metric `ReplicaLag`. Lag grows when:
+### API Gateway Internals
 
-- The write rate on the primary exceeds the replica's ability to apply changes (single-threaded apply in some engines).
-- The replica instance class is smaller than the primary's.
-- A long-running query on the replica blocks the apply process.
-- A large batch operation such as a bulk `DELETE` generates a burst of replication traffic.
+API Gateway is a managed, multi-tenant, horizontally scaled front end. A request passes through a fixed pipeline:
 
-!!! warning "The Stale Read Bug"
-    A user updates their profile, the application writes to the primary and immediately redirects to a page that reads from a replica. The replica has not caught up, so the user sees their *old* profile and concludes the save failed. They save again. This produces duplicate writes and support tickets. Solutions: route reads to the primary for a short window after a write for that session; or return the written object from the write response rather than re-reading; or use a session-consistency token. Design for this explicitly — it is one of the most common real-world defects in read-replica architectures.
-
-#### Automated Backups and Point-in-Time Recovery
-
-RDS's backup mechanism has two components working together:
-
-1. **Daily automated snapshot** — a storage-level snapshot of the volumes, taken during the configured backup window and stored in Amazon S3 (in AWS-managed buckets you do not see).
-2. **Continuous transaction log capture** — the database's write-ahead log or binary log is uploaded to S3 continuously, typically at around five-minute granularity.
-
-Point-in-time recovery works by restoring the most recent snapshot **before** the target time and then replaying transaction logs forward to the exact requested second.
+1. **TLS termination and endpoint routing.** For an Edge-optimized API this happens at a CloudFront edge location; for a Regional API it happens in the Region; for a Private API the request arrives via an Interface endpoint ENI in your VPC.
+2. **Resource policy evaluation.** For Private APIs and for source-IP or VPC-endpoint restrictions, the resource policy is evaluated before anything else. A Private API without an allowing resource policy rejects every request.
+3. **Route or method matching.** The path and method are matched to a route (HTTP API) or resource and method (REST API). Greedy path variables (`{proxy+}`) match remaining segments.
+4. **Authorization.** IAM SigV4 verification, a Cognito user-pool token check, a JWT authorizer, or an invocation of a Lambda authorizer. Lambda authorizer results — the returned IAM policy or simple allow response — are **cached** by the identity source for a configurable TTL, which is essential for performance because otherwise every request would pay a Lambda invocation.
+5. **Request validation** (REST APIs). Required headers, query parameters, and a JSON Schema model can be validated at the gateway, so malformed requests never reach the backend and never cost a Lambda invocation.
+6. **Throttling.** Account-level, stage-level, per-method, and per-usage-plan limits are applied using a **token bucket**: a steady-state rate plus a burst capacity. Exceeding it returns HTTP 429 with `Too Many Requests`.
+7. **Caching** (REST APIs). If a stage cache is enabled, a cache key derived from the configured request parameters is looked up; a hit returns immediately without invoking the backend.
+8. **Integration request.** Mapping templates transform the request if configured; the backend is invoked. Timeouts apply — historically 29 seconds maximum for REST and HTTP APIs, now adjustable upward for REST APIs in many Regions, but the practical guidance remains that synchronous APIs should complete quickly and long work should be made asynchronous.
+9. **Integration response and method response.** Status-code mapping, response transformation, and CORS headers are applied.
+10. **Logging and metrics.** Execution logs, access logs, CloudWatch metrics, and optional X-Ray traces are emitted.
 
 ```mermaid
-graph TD
-    A["Daily Snapshot at 03:00"] --> B["Restore Base Image"]
-    C["Transaction Logs 03:00 to 14:37"] --> D["Replay Forward"]
-    B --> D
-    D --> E["New DB Instance at Exactly 14:37:22"]
+flowchart TD
+    IN["Incoming HTTPS Request"] --> TLS["TLS Termination at Edge or Region"]
+    TLS --> RP{"Resource Policy Allows"}
+    RP -->|"No"| R403["403 Forbidden"]
+    RP -->|"Yes"| MATCH{"Route Matched"}
+    MATCH -->|"No"| R404["403 Missing Authentication Token or 404"]
+    MATCH -->|"Yes"| AUTH{"Authorizer Result"}
+    AUTH -->|"Deny"| R401["401 or 403"]
+    AUTH -->|"Allow, result cached by identity source"| VAL{"Request Validation Passes"}
+    VAL -->|"No"| R400["400 Bad Request"]
+    VAL -->|"Yes"| THR{"Within Throttle Token Bucket"}
+    THR -->|"No"| R429["429 Too Many Requests"]
+    THR -->|"Yes"| CACHE{"Stage Cache Hit"}
+    CACHE -->|"Yes"| OUT["Cached Response Returned"]
+    CACHE -->|"No"| INTEG["Integration - Lambda, HTTP, VPC Link, or AWS Service"]
+    INTEG --> XFORM["Response Mapping and CORS Headers"]
+    XFORM --> LOG["Access Logs, Metrics, and X-Ray Segment"]
+    LOG --> OUT
 ```
+Generate a professional with proper symbol in whie background image 
 
-!!! danger "Point-in-Time Recovery Creates a NEW Instance"
-    PITR does not roll back your existing database in place. It provisions a **new** instance restored to the target time, with a **new endpoint**. Recovering therefore involves: restore to a new instance, validate the data, then repoint the application — either by updating configuration or by renaming instances. Factor this into your RTO calculation, because restoring a large database takes real time proportional to its size.
 
-!!! note "Snapshot Lifecycle Semantics"
-    **Automated backups are deleted when you delete the DB instance** (unless you take a final snapshot). **Manual snapshots persist until you explicitly delete them.** This asymmetry has destroyed real companies' data. If a database matters, take manual snapshots on a schedule, or use AWS Backup with a retention policy, and consider copying snapshots to a second Region and a second account for ransomware and account-compromise resilience.
 
-### Amazon Aurora Internal Working
-
-Aurora is not "RDS with a faster engine." It is a fundamentally re-architected database in which the storage layer was rewritten as a distributed, multi-tenant, log-structured service. Understanding this design is one of the highest-value pieces of knowledge in this chapter.
-
-#### The Core Insight: The Log Is the Database
-
-In a traditional relational database, committing a transaction involves writing several things to disk: the write-ahead log, the data pages, a double-write buffer (in MySQL), and eventually more. When you replicate that database, you ship *all* of those writes across the network. This is enormous write amplification.
-
-Aurora's designers observed that the **redo log is sufficient** — data pages can always be reconstructed from a prior page image plus the log records that apply to it. So Aurora's database node sends **only redo log records** to the storage layer. The storage nodes themselves materialise data pages in the background, asynchronously and continuously.
-
-```mermaid
-graph TD
-    A["Aurora Writer Instance - Compute Only"] -->|"Redo log records only"| B["Distributed Storage Service"]
-    subgraph AZ1["Availability Zone A"]
-        S1["Storage Node 1"]
-        S2["Storage Node 2"]
-    end
-    subgraph AZ2["Availability Zone B"]
-        S3["Storage Node 3"]
-        S4["Storage Node 4"]
-    end
-    subgraph AZ3["Availability Zone C"]
-        S5["Storage Node 5"]
-        S6["Storage Node 6"]
-    end
-    B --> S1
-    B --> S2
-    B --> S3
-    B --> S4
-    B --> S5
-    B --> S6
-    S1 --> C["Continuous Backup to S3"]
-    S3 --> C
-    S5 --> C
-```
-
-#### Six-Way Replication and Quorum
-
-Aurora maintains **six copies of every data segment across three Availability Zones — two copies per AZ**. It uses quorum protocols rather than requiring all copies to respond:
-
-| Operation | Quorum Required | Meaning |
-|---|---|---|
-| **Write** | 4 out of 6 | A commit is acknowledged when 4 of 6 storage nodes persist the log record |
-| **Read** | 3 out of 6 | A read is satisfied by 3 of 6 nodes (in practice Aurora tracks which segments are current and reads from one) |
-
-The arithmetic is deliberate: because write quorum (4) plus read quorum (3) exceeds the total number of copies (6), any read quorum necessarily intersects any write quorum, guaranteeing that a read observes the latest committed write.
-
-The failure tolerance that follows:
-
-| Failure Scenario | Effect on Writes | Effect on Reads |
-|---|---|---|
-| Loss of one storage node | None — 5 of 6 available, quorum of 4 met | None |
-| Loss of an entire AZ (2 nodes) | None — 4 of 6 available, quorum of 4 exactly met | None |
-| Loss of an AZ plus one more node | Writes unavailable until repair — only 3 of 6 | Reads still served — quorum of 3 met |
-
-!!! info "Why This Design Is Superior for Availability"
-    Aurora can lose **an entire Availability Zone and still accept writes**, and lose an AZ plus one additional node and still serve reads. A traditional Multi-AZ RDS deployment loses its primary and must fail over — a disruptive event. Aurora's storage layer absorbs the failure without any failover at all, because no single node is authoritative.
-
-#### Segments and Protection Groups
-
-Aurora's storage volume is divided into **10 GiB segments**. Each segment is replicated six ways. A large database is thousands of segments spread across hundreds of storage nodes. This granularity is what makes repair fast: if a node fails, Aurora only needs to re-replicate the 10 GiB segments it held, in parallel across many nodes, typically completing in seconds to minutes rather than the hours a full-volume rebuild would take.
-
-Aurora storage grows automatically in 10 GiB increments up to a documented maximum (128 TiB for recent versions — verify the current figure for your engine version, as AWS has raised it over time). **You never provision storage size for Aurora.** This eliminates an entire class of operational incident: running out of disk.
-
-#### Reader Instances and Replica Lag
-
-Aurora reader instances attach to the **same shared storage volume** as the writer. They do not replicate data by shipping and replaying logs in the traditional sense; they read the same pages and apply in-memory cache invalidation from the writer's log stream.
-
-This has two important consequences:
-
-1. **Replica lag is typically in the tens of milliseconds**, not seconds, because there is no data to copy — only cache coherence to maintain.
-2. **Adding a reader does not copy data**, so a new reader becomes available quickly regardless of database size.
-
-Aurora supports up to 15 Aurora Replicas per cluster, and provides two endpoints:
-
-| Endpoint | Behaviour |
-|---|---|
-| **Cluster (writer) endpoint** | Always points at the current writer; follows failover automatically |
-| **Reader endpoint** | Load-balances connections across available readers |
-| **Custom endpoint** | A user-defined subset of instances, for example "all r6g.4xlarge readers for reporting" |
-| **Instance endpoint** | A specific instance; used for diagnostics, rarely for application traffic |
-
-!!! warning "The Reader Endpoint Balances Connections, Not Queries"
-    The Aurora reader endpoint performs DNS round-robin at *connection* time. If your application uses long-lived pooled connections, they will be distributed once at pool creation and then remain pinned. A pool created when only one reader existed will never use readers added later, unless the pool recycles connections. Configure a maximum connection lifetime in your pool to allow periodic rebalancing.
-
-#### Aurora Failover
-
-Aurora failover promotes an existing reader to writer. Because storage is shared, there is no data to recover or synchronise — the new writer simply begins accepting writes against the same volume. Failover typically completes in around 30 seconds or less, and often faster with the **RDS Proxy** in front or with cluster-aware drivers.
-
-You assign a **failover priority tier** (0 through 15) to each reader; Aurora promotes the lowest-numbered tier, breaking ties by choosing the instance closest in size to the writer.
-
-#### Aurora Serverless v2
-
-Aurora Serverless v2 replaces provisioned instance classes with **Aurora Capacity Units (ACUs)**, where one ACU is approximately 2 GiB of memory with corresponding CPU and networking. You set a minimum and maximum ACU range and Aurora scales within it in fine-grained increments, in place, in seconds, without dropping connections.
-
-| Aspect | Provisioned Aurora | Aurora Serverless v2 |
-|---|---|---|
-| Capacity unit | Instance class | ACU |
-| Scaling granularity | Whole instance resize with failover | Fractional ACU steps, in place |
-| Scaling speed | Minutes | Seconds |
-| Best for | Steady, predictable load | Variable, spiky or unpredictable load |
-| Cost at steady high load | Lower | Higher per unit of capacity |
-| Cost at low or intermittent load | Higher — you pay for idle | Lower |
-
-!!! tip "When Serverless v2 Is the Right Call"
-    Development and test environments, workloads with pronounced daily or seasonal peaks, multi-tenant systems where each tenant's load is unpredictable, and new applications with unknown traffic. For a steady 24/7 production workload at high utilisation, provisioned instances with a Reserved Instance commitment are usually cheaper.
-
-#### Aurora Global Database
-
-An Aurora Global Database has one primary Region that handles writes and up to five secondary Regions that receive changes through a **dedicated storage-layer replication infrastructure**, not through the database engine. Typical cross-Region lag is under one second. A secondary Region can be promoted to primary — planned failover typically completes quickly, and unplanned promotion is measured in minutes with an RPO usually under one second.
-
-```mermaid
-graph TD
-    subgraph R1["Primary Region - eu-west-1"]
-        W["Writer Instance"] --> SV1["Aurora Storage Volume"]
-        RD1["Reader Instances"] --> SV1
-    end
-    subgraph R2["Secondary Region - ap-south-1"]
-        SV2["Aurora Storage Volume"] --> RD2["Reader Instances"]
-    end
-    subgraph R3["Secondary Region - us-east-1"]
-        SV3["Aurora Storage Volume"] --> RD3["Reader Instances"]
-    end
-    SV1 -->|"Storage-level replication, sub-second"| SV2
-    SV1 -->|"Storage-level replication, sub-second"| SV3
-```
-
-### Amazon DynamoDB Internal Working
-
-#### Partitioning by Hash of the Partition Key
-
-This is the single most important mechanism in DynamoDB, and almost every DynamoDB design mistake traces back to misunderstanding it.
-
-When you write an item, DynamoDB computes an **internal hash function over the partition key value**. The output of that hash determines which **partition** stores the item. A partition is a unit of storage and throughput, physically located on a set of storage nodes.
-
-```mermaid
-graph TD
-    A["PutItem with PartitionKey = user#4471"] --> B["Request Router"]
-    B --> C["Apply internal hash to partition key"]
-    C --> D["Hash output maps to a keyspace range"]
-    D --> E{"Which partition owns this range"}
-    E -->|"Range 1"| P1["Partition 1"]
-    E -->|"Range 2"| P2["Partition 2"]
-    E -->|"Range 3"| P3["Partition 3"]
-    E -->|"Range N"| PN["Partition N"]
-    P2 --> R1["Storage Node - Leader Replica in AZ-a"]
-    P2 --> R2["Storage Node - Replica in AZ-b"]
-    P2 --> R3["Storage Node - Replica in AZ-c"]
-```
-
-Consequences that follow directly from this design:
-
-1. **Every read or write that supplies the full partition key is routed to exactly one partition.** This is why `GetItem` is O(1) and why latency is predictable regardless of table size — a 10 KB table and a 100 TB table both take one hop.
-2. **A query without the partition key cannot be routed** and must therefore `Scan` every partition. This is why `Scan` is expensive and why access patterns must be designed up front.
-3. **Items sharing a partition key value are stored together**, physically adjacent and sorted by the sort key. This is why range queries on the sort key are efficient.
-4. **Throughput is distributed across partitions.** If all your traffic targets one partition key value, you are limited by what one partition can deliver, regardless of how much capacity the table has in total. This is the **hot partition** problem.
-
-#### Replication and Leader Election
-
-Each partition is replicated across three Availability Zones. One replica is the **leader**; the others are followers.
-
-| Operation | Path |
-|---|---|
-| Write | Routed to the leader; the leader appends to its log and replicates; acknowledged once a quorum of replicas has durably persisted it |
-| Strongly consistent read | Served by the leader, guaranteeing the latest committed value |
-| Eventually consistent read | Served by any replica, which may lag the leader by a very short interval |
-
-Leader election uses a **Paxos-based** consensus protocol. If the leader becomes unreachable, the remaining replicas elect a new leader. This happens automatically and is invisible to applications — there is no endpoint to update, because clients always talk to the DynamoDB request routing layer rather than directly to storage nodes.
-
-!!! info "Why DynamoDB Has No Endpoint to Fail Over"
-    Unlike RDS, DynamoDB has no per-customer host to connect to. Your application calls a **Regional service endpoint** such as `dynamodb.eu-west-1.amazonaws.com`, and a fleet of request routers determines which storage nodes hold the relevant partition. Failures of individual storage nodes are handled inside that fleet. This is the architectural reason DynamoDB's availability model is fundamentally stronger than a single-writer relational database's — there is no single point of failure to lose.
-
-#### Partition Splitting
-
-DynamoDB splits partitions automatically for two reasons:
-
-- **Size** — a partition holds up to approximately 10 GB of data. Exceeding this triggers a split.
-- **Throughput** — a partition can sustain approximately 3,000 RCU and 1,000 WCU. If provisioned throughput exceeds what current partitions can serve, DynamoDB splits.
-
-Splits are performed by dividing the partition's key-hash range in two and redistributing items. Splits happen in the background without downtime.
-
-!!! warning "Partitions Never Merge"
-    If you provision very high throughput temporarily — for example, 100,000 WCU for a bulk load — DynamoDB creates many partitions. When you reduce throughput afterwards, **those partitions remain**, and the reduced capacity is now divided among many more partitions. Each partition receives a smaller share, which can cause throttling on keys that were previously fine. This behaviour has been substantially mitigated by adaptive capacity in modern DynamoDB, but the underlying principle — that historical high provisioning shapes your partition layout — remains worth knowing and is a favourite examination topic.
-
-#### Adaptive Capacity
-
-Modern DynamoDB includes **adaptive capacity**, which addresses uneven access distribution in two ways:
-
-1. **Throughput reallocation** — DynamoDB shifts unused capacity from cold partitions to hot ones automatically, within seconds. This is now instantaneous rather than the slow reallocation of earlier generations.
-2. **Isolating frequently accessed items** — if a single item or a small set of items is extremely hot, DynamoDB can split the partition around them so the hot items get a dedicated partition.
-
-!!! danger "Adaptive Capacity Is a Safety Net, Not a Design Strategy"
-    Adaptive capacity mitigates moderate skew. It **cannot** rescue you from a genuinely pathological key design — for example, a partition key of `"ALL_ORDERS"` for every item, or a date-based partition key where all of today's traffic hits one value. A single partition still has a physical ceiling of roughly 3,000 RCU and 1,000 WCU. No amount of adaptive capacity exceeds a single partition's physical limits. **Design a high-cardinality partition key with an even access distribution. That is the requirement.**
-
-#### DynamoDB Streams
-
-DynamoDB Streams is an ordered, time-ordered change log of item-level modifications in a table, retained for 24 hours.
-
-```mermaid
-sequenceDiagram
-    participant APP as "Application"
-    participant DDB as "DynamoDB Table"
-    participant STR as "DynamoDB Stream"
-    participant L as "AWS Lambda"
-    participant SNS as "Amazon SNS"
-    APP->>DDB: "PutItem - new order"
-    DDB-->>APP: "200 OK"
-    DDB->>STR: "Append INSERT record to shard"
-    STR->>L: "Lambda poller invokes with batch"
-    L->>SNS: "Publish OrderCreated event"
-    L-->>STR: "Checkpoint successful batch"
-```
-
-Stream view types determine what each record contains:
-
-| View Type | Record Contains |
-|---|---|
-| `KEYS_ONLY` | Only the key attributes of the modified item |
-| `NEW_IMAGE` | The entire item as it appears after the modification |
-| `OLD_IMAGE` | The entire item as it appeared before the modification |
-| `NEW_AND_OLD_IMAGES` | Both before and after images |
-
-Ordering guarantee: **records for a given partition key are delivered in the exact order the modifications occurred**. There is no global ordering across different partition keys — this mirrors the partitioning model and is exactly the guarantee an event-driven system usually needs.
-
-!!! example "Streams as the Foundation of Event-Driven Architecture"
-    Streams make DynamoDB writes into events without any application-level publishing code. This directly implements the **transactional outbox** pattern: because the stream record is produced by the database itself, there is no possibility of the write succeeding but the event publication failing. Common uses include maintaining a materialised view, replicating to OpenSearch for full-text search, triggering notifications, updating aggregate counters, and auditing. This is a DSO303 module outcome — event-driven architecture with AWS service integration — expressed as a single configuration setting.
-
-#### DynamoDB Accelerator (DAX)
-
-DAX is a fully managed, write-through caching layer that sits in front of DynamoDB and is API-compatible with it, reducing read latency from single-digit milliseconds to **microseconds**. It runs as a cluster of nodes inside your VPC.
-
-DAX maintains two caches: an **item cache** for `GetItem` and `BatchGetItem` results, and a **query cache** for `Query` and `Scan` results. Writes go through DAX to DynamoDB, and DAX updates its item cache — but the query cache is invalidated by TTL rather than by write, so query results can be stale.
-
-!!! warning "DAX Is Only Consistent for Eventually Consistent Reads"
-    Strongly consistent reads bypass the DAX cache entirely and go directly to DynamoDB. If your workload requires strong consistency, DAX provides no benefit for those requests. Additionally, writes made directly to DynamoDB while bypassing DAX will not invalidate the DAX cache, producing stale reads. **All access must route through DAX** for it to be coherent.
-
-### Amazon ElastiCache Internal Working
-
-#### Memcached Architecture
-
-Memcached is deliberately simple: a set of independent nodes, each holding a distinct slice of the keyspace, with **no replication and no persistence**.
-
-```mermaid
-graph TD
-    A["Application with Memcached Client"] --> B["Client-Side Consistent Hashing"]
-    B --> C["Node 1 - Keys hashing to range 1"]
-    B --> D["Node 2 - Keys hashing to range 2"]
-    B --> E["Node 3 - Keys hashing to range 3"]
-    F["Configuration Endpoint - Auto Discovery"] -.->|"Provides node list"| A
-```
-
-Critically, **the partitioning logic lives in the client library**, not in the server. Each node is unaware of the others. ElastiCache provides **Auto Discovery** through a configuration endpoint so clients can learn the current node list without redeployment.
-
-The consequence: **if a node fails, the data on it is simply gone**, and clients rehash to the remaining nodes. This is acceptable only because Memcached is a pure cache — every miss can be satisfied from the origin.
-
-#### Redis Architecture — Replication Groups
-
-Redis in ElastiCache is organised into **replication groups**. A replication group contains one or more **shards** (called node groups); each shard has one primary node and up to five read replicas.
-
-**Cluster mode disabled** — a single shard:
-
-```mermaid
-graph TD
-    A["Application"] --> B["Primary Endpoint - Writes"]
-    A --> C["Reader Endpoint - Reads"]
-    B --> D["Primary Node in AZ-a"]
-    C --> E["Replica 1 in AZ-b"]
-    C --> F["Replica 2 in AZ-c"]
-    D -->|"Asynchronous Replication"| E
-    D -->|"Asynchronous Replication"| F
-```
-
-- The entire dataset lives on one primary and is fully replicated to each replica.
-- Scaling writes or dataset size requires a **larger node type** — vertical scaling only.
-- Simpler to operate; supports multi-key operations and transactions freely, because all keys are on one node.
-
-**Cluster mode enabled** — multiple shards:
-
-```mermaid
-graph TD
-    A["Application with Cluster-Aware Client"] --> B["Configuration Endpoint"]
-    B --> C["Shard 1 - Slots 0 to 5460"]
-    B --> D["Shard 2 - Slots 5461 to 10922"]
-    B --> E["Shard 3 - Slots 10923 to 16383"]
-    C --> C1["Primary"]
-    C --> C2["Replica"]
-    D --> D1["Primary"]
-    D --> D2["Replica"]
-    E --> E1["Primary"]
-    E --> E2["Replica"]
-```
-
-- The keyspace is divided into **16,384 hash slots**. Each key maps to a slot via `CRC16(key) mod 16384`, and each shard owns a contiguous range of slots.
-- Data and write throughput scale **horizontally** by adding shards.
-- Requires a cluster-aware client that understands `MOVED` and `ASK` redirections.
-- **Multi-key operations only work if all keys are in the same slot.** You force this with **hash tags**: keys written as `user:{4471}:profile` and `user:{4471}:cart` both hash only the portion inside the braces, so both land in the same slot and can participate in the same transaction.
-
-| Aspect | Cluster Mode Disabled | Cluster Mode Enabled |
-|---|---|---|
-| Shards | Exactly 1 | Up to 500 (a soft, adjustable quota) |
-| Scaling | Vertical only | Horizontal by adding shards |
-| Max dataset | Limited by one node's memory | Sum across all shards |
-| Multi-key operations | Unrestricted | Only within a hash slot |
-| Client requirement | Standard Redis client | Cluster-aware client |
-| Failure blast radius | Whole dataset | One shard |
-
-#### Redis Failover
-
-With **Multi-AZ with automatic failover** enabled, ElastiCache monitors the primary. On failure it promotes the replica with the least replication lag and updates the **primary endpoint DNS** to point at the new primary. Failover typically completes within tens of seconds.
-
-!!! danger "Redis Replication Is Asynchronous — Writes Can Be Lost"
-    Because replication to Redis replicas is asynchronous, a primary that fails immediately after acknowledging a write may lose that write if it had not yet reached a replica. **Never treat ElastiCache Redis as your system of record.** If you need durable, ACID-compliant in-memory storage, the correct service is **Amazon MemoryDB for Redis**, which writes to a distributed multi-AZ transaction log before acknowledging — trading a small amount of write latency for durability.
-
-#### Redis Persistence Options
-
-Redis in ElastiCache supports snapshots (RDB) written to S3, and append-only file (AOF) behaviour on some configurations. Snapshots are useful for seeding a new cluster or for recovering a warm cache after a planned change, but should not be relied upon as a primary durability mechanism.
-
-### The Networking Path Inside a VPC
-
-Understanding the actual network path is essential for debugging connectivity, which is the most common practical problem students encounter in labs.
-
-```mermaid
-graph TD
-    A["ECS Task or Lambda ENI in Private Subnet"] --> B{"Security Group Egress Rule"}
-    B -->|"Allow TCP 5432 to DB SG"| C["Subnet Route Table"]
-    C --> D{"Destination Type"}
-    D -->|"RDS or ElastiCache - VPC internal"| E["Local VPC Route"]
-    D -->|"DynamoDB - AWS service"| F["VPC Gateway Endpoint"]
-    E --> G{"Database Security Group Ingress"}
-    G -->|"Allow TCP 5432 from App SG"| H["RDS Instance ENI"]
-    G -->|"Deny"| I["Connection Timeout"]
-    F --> J["DynamoDB Regional Endpoint"]
-```
-
-Three checks resolve almost every connectivity failure:
-
-| Check | Question | Symptom If Wrong |
-|---|---|---|
-| Security group | Does the DB security group allow inbound on the engine port **from the application's security group**? | Connection times out (no response at all) |
-| Subnet and route | Is the DB in a subnet reachable from the application's subnet, and is there a route? | Connection times out |
-| DNS and credentials | Does the endpoint resolve, and are the credentials valid? | DNS failure or authentication error |
-
-!!! tip "Diagnosing a Timeout Versus a Refusal"
-    A **timeout** almost always means a network or security group problem — the packet never reached the database, or the reply never returned. A **connection refused** means the network path worked but nothing was listening on that port. An **authentication error** means the network path *and* the listener worked, and the problem is credentials or database-level permissions. Learning to read these three symptoms correctly will save you hours in every lab and every production incident.
-
-!!! note "Reference Security Groups, Not CIDR Blocks"
-    The professional pattern is to allow inbound traffic to the database security group *from the application's security group ID*, rather than from an IP range. This is self-maintaining: as tasks and instances are created and destroyed with changing IP addresses, the rule remains correct. Using CIDR blocks such as `10.0.0.0/16` grants access to everything in the VPC and is a real security weakness.
+!!! note "Why VPC Link Exists"
+    API Gateway runs in an AWS-managed network, not in your VPC. To reach a service that has only private addresses, it needs a bridge. A **VPC Link** is that bridge: for REST APIs it targets a Network Load Balancer; for HTTP APIs it creates ENIs in your subnets and can target an ALB, an NLB, or an AWS Cloud Map service directly. This is what lets a public API front a container fleet that has no public IP addresses at all.
 
 ---
 
 ## Architecture Components
 
-A production data tier is never a database in isolation. The following components each carry a distinct responsibility.
-
-### Network and Edge Components
-
-| Component | Responsibility in the Data Tier Context |
-|---|---|
-| **Amazon Route 53** | Resolves service and database endpoint names; provides health-check-driven DNS failover for multi-Region designs |
-| **Amazon CloudFront** | Caches static and cacheable dynamic responses at the edge, removing load from the origin and therefore from the database |
-| **Application Load Balancer** | Distributes HTTP traffic to the compute tier; keeps the compute tier stateless so that database connections are managed per task, not per user |
-| **Amazon VPC** | Provides the isolated network in which RDS, Aurora and ElastiCache reside |
-| **Public subnets** | Host internet-facing components only — NAT gateways and load balancers. **Databases never belong here.** |
-| **Private subnets** | Host the compute tier and the database tier; have no direct route to an internet gateway |
-| **DB Subnet Group** | An RDS construct listing the subnets (in at least two AZs) in which RDS may place instances; a prerequisite for Multi-AZ |
-| **Cache Subnet Group** | The equivalent construct for ElastiCache |
-| **Security Groups** | Stateful virtual firewalls attached to ENIs; the primary access control at the network layer |
-| **Network ACLs** | Stateless subnet-level filters; a secondary, coarse defence-in-depth layer |
-| **VPC Gateway Endpoint** | Routes DynamoDB and S3 traffic over the AWS network without traversing a NAT gateway or the internet; no additional charge |
-| **VPC Interface Endpoint (PrivateLink)** | Provides private ENIs for services such as Secrets Manager and KMS; hourly and data-processing charges apply |
-
-### Compute Tier Components
-
-| Component | Data Tier Concern |
-|---|---|
-| **Amazon EC2** | Long-lived instances; can hold long-lived connection pools efficiently |
-| **Amazon ECS on Fargate** | Tasks are ephemeral; each task holds its own pool, so total connections scale with task count |
-| **Amazon EKS** | Same connection multiplication concern as ECS, amplified by pod autoscaling |
-| **AWS Lambda** | The most severe connection problem: each concurrent execution environment opens its own connection, and thousands of concurrent invocations can exhaust an RDS instance's connection limit |
-| **Amazon RDS Proxy** | Sits between the compute tier and RDS or Aurora, multiplexing many client connections onto a small pool of database connections; also handles failover transparently and integrates with Secrets Manager and IAM authentication |
-
-!!! danger "The Lambda and RDS Connection Problem — A Core DSO303 Concern"
-    A `db.t3.medium` PostgreSQL instance supports a few hundred connections. A Lambda function scaled to 1,000 concurrent executions, each opening one connection, will exhaust that limit and every subsequent invocation will fail with a connection error — including invocations from other, healthy services sharing the database. This is not a hypothetical: it is one of the most common serverless production incidents.
-
-    The remedies, in order of preference:
-
-    1. **Use RDS Proxy** — the purpose-built solution. It pools and multiplexes connections and holds them across Lambda invocations.
-    2. **Reuse the connection across invocations** by declaring the client outside the handler so it persists in the warm execution environment.
-    3. **Set reserved concurrency** on the function to cap the maximum number of connections it can create.
-    4. **Reconsider the data store** — DynamoDB uses stateless HTTPS requests and has no connection concept at all, which is precisely why it pairs naturally with Lambda.
-
-### Data Tier Components
-
-| Component | Responsibility |
-|---|---|
-| **RDS DB instance** | Runs the database engine; the unit of compute and memory sizing |
-| **RDS Multi-AZ standby** | Synchronous replica for failover; not readable in the single-standby model |
-| **RDS read replica** | Asynchronous readable copy for read scaling and reporting isolation |
-| **Aurora cluster** | The logical container comprising the shared storage volume plus its instances |
-| **Aurora writer instance** | The single instance accepting writes for a cluster (in the default single-master configuration) |
-| **Aurora reader instance** | Serves reads from the shared volume; a failover candidate |
-| **Aurora shared storage volume** | The distributed, six-way-replicated, auto-growing storage service |
-| **DynamoDB table** | The top-level container; scoped to a Region |
-| **DynamoDB partition** | The physical unit of storage and throughput |
-| **Global Secondary Index (GSI)** | An alternative-key index with its own partitions and its own capacity |
-| **Local Secondary Index (LSI)** | An alternative sort key sharing the base table's partition key and partitions |
-| **DynamoDB Streams** | The ordered change log enabling event-driven integration |
-| **DAX cluster** | In-VPC microsecond read cache in front of DynamoDB |
-| **ElastiCache node** | A single cache instance |
-| **ElastiCache shard / node group** | A primary plus its replicas, owning a slice of the keyspace |
-| **ElastiCache replication group** | The full set of shards forming a Redis deployment |
-
-### Supporting Services
-
-| Component | Responsibility |
-|---|---|
-| **AWS IAM** | Controls which principals may call which database APIs, and enables IAM database authentication |
-| **AWS KMS** | Manages the customer master keys used for encryption at rest |
-| **AWS Secrets Manager** | Stores database credentials and rotates them automatically using a Lambda rotation function |
-| **AWS Systems Manager Parameter Store** | A lower-cost alternative for non-rotating configuration values |
-| **Amazon S3** | Destination for RDS snapshots, Aurora continuous backup, DynamoDB exports, and Redis snapshots |
-| **Amazon CloudWatch** | Metrics, logs, alarms and dashboards for every service in the data tier |
-| **AWS CloudTrail** | Audit record of every control plane API call; optionally, DynamoDB data plane events |
-| **AWS X-Ray** | Distributed tracing, including database call subsegments, to locate latency |
-| **AWS Backup** | Centralised, policy-driven backup across RDS, Aurora, DynamoDB and other services |
-| **AWS Database Migration Service (DMS)** | Migrates data between engines and into AWS, with optional continuous replication |
-| **AWS Schema Conversion Tool (SCT)** | Converts schema and procedural code between heterogeneous engines |
-
-### A Complete Reference Architecture
-
-```mermaid
-graph TD
-    U["Users"] --> R53["Route 53"]
-    R53 --> CF["CloudFront"]
-    CF --> ALB["Application Load Balancer in Public Subnets"]
-    subgraph VPC["VPC"]
-        subgraph PUB["Public Subnets - AZ a and b"]
-            ALB
-            NAT["NAT Gateway"]
-        end
-        subgraph APPSUB["Private App Subnets - AZ a and b"]
-            ECS["ECS Fargate Tasks"]
-            PROXY["RDS Proxy"]
-        end
-        subgraph DATASUB["Private Data Subnets - AZ a, b and c"]
-            CACHE["ElastiCache Redis Replication Group"]
-            AUR["Aurora Cluster - Writer and Readers"]
-        end
-        GWEP["VPC Gateway Endpoint for DynamoDB"]
-        IFEP["Interface Endpoint for Secrets Manager"]
-    end
-    ALB --> ECS
-    ECS --> CACHE
-    ECS --> PROXY
-    PROXY --> AUR
-    ECS --> GWEP
-    GWEP --> DDB["DynamoDB Regional Endpoint"]
-    ECS --> IFEP
-    IFEP --> SM["Secrets Manager"]
-    DDB --> STR["DynamoDB Streams"]
-    STR --> LAM["Lambda Consumer"]
-    AUR --> S3["S3 - Backups"]
-    ECS --> CW["CloudWatch"]
-    AUR --> CW
-    CACHE --> CW
-```
+| Component | Layer | Responsibility | Failure domain |
+|---|---|---|---|
+| Client (browser, mobile, device) | — | Initiates the request, caches DNS answers according to TTL | — |
+| Route 53 | Global DNS | Resolves the name; applies routing policy and health checks | Global, anycast |
+| AWS WAF | Edge or regional | Inspects HTTP requests, blocks injection, bad bots, and rate-abusive sources | Attached to CloudFront, ALB, API Gateway, AppSync |
+| AWS Shield | Edge | Absorbs volumetric and protocol DDoS attacks | Global |
+| CloudFront | Edge | Terminates TLS near the user, caches, forwards misses over the AWS backbone | Hundreds of points of presence |
+| API Gateway | Regional or edge | Authentication, validation, throttling, transformation, routing to integrations | Regional, multi-AZ |
+| Application Load Balancer | Regional, layer 7 | Content-based routing across targets and Availability Zones | Nodes per subnet, multi-AZ |
+| Network Load Balancer | Regional, layer 4 | Ultra-low-latency flow distribution, static IPs, PrivateLink provider endpoint | Nodes per subnet, multi-AZ |
+| VPC | Regional | The address space and the boundary of the software-defined network | Regional |
+| Subnet | Zonal | An address range bound to one Availability Zone | Single Availability Zone |
+| Route table | Subnet-scoped | Declares where non-local traffic is sent | Follows the subnet |
+| Internet Gateway | VPC-scoped | Internet path plus one-to-one NAT for public addresses | Highly available by design |
+| NAT Gateway | Zonal | Outbound-only internet access for private subnets | Single Availability Zone; deploy one per zone |
+| Egress-only Internet Gateway | VPC-scoped | Outbound-only IPv6 access | Highly available |
+| Security group | ENI-scoped | Stateful allow-list expressing application intent | Distributed, no chokepoint |
+| Network ACL | Subnet-scoped | Stateless ordered allow and deny guardrail | Follows the subnet |
+| Gateway endpoint | Route-table-scoped | Private path to S3 and DynamoDB with no charge | Regional |
+| Interface endpoint | Zonal ENI | Private path to AWS services or partner services via PrivateLink | One ENI per Availability Zone |
+| VPC peering | VPC pair | Non-transitive private connectivity between two VPCs | Managed, no bandwidth bottleneck |
+| Transit Gateway | Regional | Hub for transitive routing between VPCs, VPN, and Direct Connect | Regional, multi-AZ |
+| Site-to-Site VPN | Regional | Encrypted tunnels over the internet to on premises | Two tunnels per connection |
+| Direct Connect | Location-based | Dedicated private circuit to AWS | Requires a second circuit for resilience |
+| Elastic IP | Regional | A static public IPv4 address you own and can remap | Remappable within a Region |
+| Elastic network interface | Zonal | The actual virtual NIC, carrying addresses and security groups | Bound to one subnet |
+| EC2, ECS, EKS, Lambda | Compute | The workload that terminates the connection | Placement determines resilience |
+| RDS, ElastiCache, DynamoDB | Data | The persistence tier reached over the network | Multi-AZ or regional |
+| VPC Flow Logs | Observability | Records accepted and rejected flow metadata | Per VPC, subnet, or ENI |
+| CloudWatch, CloudTrail, X-Ray | Observability | Metrics and alarms, API audit trail, distributed traces | Regional |
 
 ---
 
 ## Request Lifecycle
 
-### Synchronous Read Path with Cache-Aside
+Consider a user in Mumbai loading a single-page application hosted on S3 and CloudFront, which then calls `api.example.com/orders/42`, served by API Gateway, backed by an ECS service in a private subnet, reading from Amazon RDS in an isolated subnet.
 
 ```mermaid
 sequenceDiagram
-    participant C as "Client"
-    participant A as "Application"
-    participant R as "ElastiCache Redis"
-    participant D as "Aurora Writer or Reader"
-    C->>A: "GET /products/12345"
-    A->>R: "GET product:12345"
-    alt Cache Hit
-        R-->>A: "Serialized product JSON"
-        A-->>C: "200 OK - latency around 2 ms"
-    else Cache Miss
-        R-->>A: "nil"
-        A->>D: "SELECT * FROM products WHERE id = 12345"
-        D-->>A: "Row"
-        A->>R: "SETEX product:12345 300 payload"
-        A-->>C: "200 OK - latency around 12 ms"
+    autonumber
+    participant B as Browser in Mumbai
+    participant RES as Recursive Resolver
+    participant R53 as Route 53 Authoritative
+    participant CFE as CloudFront Edge - Mumbai
+    participant WAF as AWS WAF
+    participant AGW as API Gateway Regional Endpoint
+    participant AUTHZ as Lambda or JWT Authorizer
+    participant VL as VPC Link and Private NLB
+    participant TASK as ECS Task in Private Subnet
+    participant EP as Interface Endpoint for Secrets Manager
+    participant DB as Amazon RDS in Isolated Subnet
+
+    B->>RES: Query api.example.com type A
+    RES->>R53: Cache miss, recurse to authoritative
+    R53->>R53: Evaluate latency routing and health check state
+    R53-->>RES: Alias answer, CloudFront addresses, TTL 60
+    RES-->>B: A record answer
+    B->>CFE: TLS handshake and HTTPS GET /orders/42
+    CFE->>WAF: Evaluate web ACL rules
+    WAF-->>CFE: Allow
+    CFE->>CFE: Cache lookup on the configured cache key
+    CFE->>AGW: Cache miss forwarded over the AWS backbone
+    AGW->>AGW: Resource policy and route matching
+    AGW->>AUTHZ: Validate bearer token, result may be cached
+    AUTHZ-->>AGW: Allow with principal and scopes
+    AGW->>AGW: Request validation and throttle token bucket
+    AGW->>VL: Integration request over the VPC Link ENI
+    VL->>TASK: Forward to a healthy target, security group permits port 8080 from the link
+    TASK->>EP: Retrieve the database credential privately
+    EP-->>TASK: Secret value
+    TASK->>DB: SQL query, security group permits 5432 from the task security group only
+    DB-->>TASK: Result set
+    TASK-->>VL: HTTP 200 JSON
+    VL-->>AGW: Integration response
+    AGW->>AGW: Response mapping, CORS headers, access log, X-Ray segment
+    AGW-->>CFE: HTTP 200
+    CFE->>CFE: Store in cache if the policy permits
+    CFE-->>B: HTTP 200 over the already established TLS connection
+```
+Generate a professional with proper symbol in whie background image 
+
+
+
+### Narrating the Path
+
+**Name resolution.** The browser consults its stub resolver, then a recursive resolver. If the answer is cached anywhere along that chain the query never reaches Route 53 — which is why TTL, not Route 53's own speed, dominates how quickly a change takes effect. Route 53 evaluates the routing policy and health checks at answer time, and returns an alias answer directly containing addresses.
+
+**Edge.** The browser opens a TCP and TLS connection to the nearest CloudFront edge. The handshake completes in a few milliseconds rather than the hundreds of milliseconds a cross-ocean handshake would take. AWS Shield Standard is already absorbing network-layer attacks; AWS WAF inspects the HTTP request.
+
+**Regional entry.** On a cache miss, CloudFront forwards over AWS's private backbone. API Gateway performs its pipeline. Note that authorization happens *before* the backend is invoked — an unauthorised request costs you a fraction of a cent and never touches your code.
+
+**Into the VPC.** The VPC Link is the boundary crossing from the AWS-managed network into your address space. From here on, every hop is governed by route tables and security groups you wrote.
+
+**Data tier.** The task retrieves credentials from Secrets Manager over an Interface endpoint — no NAT Gateway, no internet path — and queries RDS. The database's security group permits port 5432 only from the task's security group, so an attacker who compromises a different service in the same subnet still cannot reach the database.
+
+**Return path.** Because security groups are stateful, no return rules are needed. The response travels back through the same components. If a NACL were in play, its outbound ephemeral-port rule would matter here.
+
+### Synchronous Versus Asynchronous
+
+The path above is entirely **synchronous**: the browser waits, and every component's latency and every component's failure is in the user's critical path. Cloud-native design pushes work out of that path:
+
+- API Gateway integrates directly with SQS or EventBridge; the API returns `202 Accepted` immediately and a worker processes the message.
+- Long-running operations become Step Functions executions with a status endpoint the client polls, or a WebSocket API pushes completion to the client.
+- This changes the availability arithmetic. A synchronous chain of five components each at 99.9 percent yields roughly 99.5 percent. Decoupling with a durable queue means the front end can succeed even when the worker tier is entirely down.
+
+```mermaid
+flowchart LR
+    subgraph sync["Synchronous - User Waits"]
+        C1["Client"] --> A1["API Gateway"] --> L1["Lambda"] --> D1["DynamoDB"]
+    end
+    subgraph async["Asynchronous - Decoupled"]
+        C2["Client"] --> A2["API Gateway"] --> Q["SQS Queue"]
+        A2 -.->|"202 Accepted returned at once"| C2
+        Q --> W["Worker on ECS or Lambda"] --> D2["DynamoDB"]
+        W --> N["EventBridge Event"] --> WS["WebSocket API pushes completion"]
     end
 ```
+Generate a professional with proper symbol in whie background image 
 
-Step by step:
-
-1. The client's request reaches the compute tier through Route 53, CloudFront and the ALB.
-2. The application constructs a deterministic cache key. Key design matters: it must incorporate every parameter that changes the result, including tenant identity and locale, or you will serve one tenant's data to another.
-3. The application issues a `GET` to Redis. Network latency inside a VPC is on the order of hundreds of microseconds.
-4. On a hit, the value is deserialised and returned. The database is never consulted.
-5. On a miss, the application queries the database, writes the result into the cache with a TTL, and returns it.
-6. The TTL bounds staleness. A short TTL means fresher data and a lower hit ratio; a long TTL means the opposite. This is a business decision per data type, not a global setting.
-
-### Synchronous Write Path with Transaction
-
-```mermaid
-sequenceDiagram
-    participant C as "Client"
-    participant A as "Application"
-    participant P as "RDS Proxy"
-    participant W as "Aurora Writer"
-    participant S as "Storage Quorum"
-    participant R as "ElastiCache"
-    C->>A: "POST /orders"
-    A->>P: "Acquire pooled connection"
-    P->>W: "BEGIN"
-    A->>W: "INSERT INTO orders"
-    A->>W: "UPDATE inventory SET qty = qty - 1 WHERE id = 55 AND qty > 0"
-    A->>W: "INSERT INTO payments"
-    A->>W: "COMMIT"
-    W->>S: "Write redo log records"
-    S-->>W: "Quorum of 4 of 6 acknowledged"
-    W-->>A: "Commit successful"
-    A->>R: "DEL product:55"
-    A-->>C: "201 Created"
-```
-
-Points worth noting:
-
-- The three statements form one atomic transaction. If the inventory update matches zero rows because stock ran out, the application rolls back and no order or payment record persists. This is atomicity doing real work.
-- The `qty > 0` predicate in the `UPDATE` is an **optimistic concurrency** technique: it prevents overselling without holding a lock across the whole request.
-- The commit is not acknowledged until the storage quorum confirms. **Durability is established before the client is told the order succeeded.**
-- The cache entry is **deleted rather than updated**. Deleting is safer than writing a new value, because two concurrent writers updating a cache entry can interleave and leave the cache permanently inconsistent with the database. Deleting forces the next reader to repopulate from the source of truth.
-
-### Asynchronous Event-Driven Path via DynamoDB Streams
-
-```mermaid
-sequenceDiagram
-    participant A as "Order Service"
-    participant D as "DynamoDB Orders Table"
-    participant S as "DynamoDB Stream"
-    participant L as "Lambda Processor"
-    participant E as "EventBridge"
-    participant N as "Notification Service"
-    participant O as "OpenSearch"
-    A->>D: "PutItem order#9001"
-    D-->>A: "200 OK"
-    Note over A: "Client response returns here - the rest is asynchronous"
-    D->>S: "Append INSERT record"
-    L->>S: "Poll shard iterator"
-    S-->>L: "Batch of stream records"
-    L->>E: "PutEvents OrderCreated"
-    E->>N: "Rule match - send confirmation email"
-    L->>O: "Index order document for search"
-    L-->>S: "Checkpoint"
-```
-
-The essential architectural distinction:
-
-| Property | Synchronous | Asynchronous |
-|---|---|---|
-| Client waits | Yes | No |
-| Failure visible to client | Immediately | Not at all — needs separate alerting |
-| Coupling | Tight — caller depends on callee availability | Loose — callee can be down temporarily |
-| Latency perceived by user | Sum of all steps | Only the first write |
-| Retry responsibility | Caller | Platform, with a dead letter queue |
-| Ordering | Natural | Guaranteed only per partition key |
-
-!!! warning "Asynchronous Failures Are Silent"
-    When the Lambda stream processor fails, the user sees nothing wrong — their order was accepted. But the confirmation email never sends and the order never appears in search. You **must** configure a destination for failed records (an `OnFailure` destination or a dead letter queue), set `BisectBatchOnFunctionError` so one poison record does not block a whole batch, bound `MaximumRetryAttempts` and `MaximumRecordAgeInSeconds`, and alarm on `IteratorAge`. A rising `IteratorAge` means your consumer is falling behind, and since stream data expires after 24 hours, sustained lag results in permanent data loss.
-
-### DynamoDB Request Lifecycle in Detail
-
-```mermaid
-graph TD
-    A["Application calls GetItem"] --> B["SDK signs request with SigV4 using IAM credentials"]
-    B --> C["HTTPS request to Regional endpoint"]
-    C --> D["Request Router fleet"]
-    D --> E["IAM authorization check including condition keys"]
-    E -->|"Denied"| F["AccessDeniedException"]
-    E -->|"Allowed"| G["Compute hash of partition key"]
-    G --> H["Locate owning partition"]
-    H --> I{"Consistency requested"}
-    I -->|"Strong"| J["Route to leader replica"]
-    I -->|"Eventual"| K["Route to any replica"]
-    J --> L["Read item"]
-    K --> L
-    L --> M["Meter consumed capacity"]
-    M --> N{"Capacity available"}
-    N -->|"No"| O["ProvisionedThroughputExceededException"]
-    N -->|"Yes"| P["Return item and ConsumedCapacity"]
-```
-
-Three details of practical importance:
-
-1. **Authorization happens per request**, using the IAM policy attached to the calling principal. Because IAM condition keys such as `dynamodb:LeadingKeys` can restrict access to items whose partition key matches the caller's identity, DynamoDB supports genuine row-level authorization without application code.
-2. **Throttling is a normal, expected condition**, not necessarily a bug. The AWS SDKs retry `ProvisionedThroughputExceededException` automatically with exponential backoff. Your responsibility is to monitor `ThrottledRequests` and decide whether the correct response is more capacity, a better key design, or accepting the backoff.
-3. **Every response carries `ConsumedCapacity`** if you request it. This is the single most useful diagnostic in DynamoDB, because it tells you the true cost of a query — frequently revealing that a `Query` is reading far more data than it returns because a filter expression is applied *after* the read.
-
-!!! danger "Filter Expressions Do Not Reduce Cost"
-    A `FilterExpression` is applied **after** items are read from storage and **after** capacity is consumed. Filtering 10,000 items down to 3 costs the RCUs for all 10,000. Filters reduce network transfer and application-side work, nothing more. If you find yourself relying on filters for selectivity, your key or index design is wrong.
 
 ---
 
 ## AWS Service Deep Dive
 
-### Amazon RDS and Amazon Aurora
+### Amazon VPC
 
-#### Purpose
+**Purpose.** To provide a customer-defined, logically isolated network in which AWS resources are placed, with full control over addressing, routing, and packet filtering.
 
-To provide a managed relational database that preserves full SQL compatibility, ACID transactions, referential integrity and the mature tooling ecosystem of established engines, while removing the operational burden of running them.
+**Architecture.** A VPC is regional and spans every Availability Zone in the Region. Within it, subnets are zonal. An implicit, infinitely available router forwards according to per-subnet route tables. Gateways (Internet Gateway, NAT Gateway, virtual private gateway, Transit Gateway attachment, endpoints) are the exits. Enforcement is distributed to the Nitro card at every elastic network interface.
 
-#### Supported Engines
+**Important features.**
 
-| Engine | Notes |
+- Multiple CIDR blocks per VPC (a primary plus secondary blocks), IPv4 and dual-stack IPv6, and IPv6-only subnets.
+- Amazon-provided DNS with private hosted zones, Resolver rules, and inbound and outbound Resolver endpoints for hybrid DNS.
+- VPC Flow Logs at VPC, subnet, or ENI granularity, in a customisable format, delivered to CloudWatch Logs, S3, or Kinesis Data Firehose.
+- Traffic Mirroring for packet-level inspection by intrusion-detection appliances.
+- Security groups, network ACLs, and **AWS Network Firewall** for stateful deep inspection, domain filtering, and Suricata-compatible rules.
+- VPC Sharing through AWS Resource Access Manager, so a network team owns the VPC and application accounts deploy into shared subnets.
+- Prefix lists (customer-managed and AWS-managed) so that rules and routes reference a named set of CIDRs rather than a list of literals.
+- Reachability Analyzer and Network Access Analyzer for static, configuration-based path analysis without sending a packet.
+
+**Limitations.**
+
+- A VPC cannot span Regions. Cross-Region connectivity requires inter-Region peering, Transit Gateway peering, or a VPN.
+- The CIDR block of a VPC cannot be changed after creation; only additional blocks can be added, and blocks can only be removed if unused.
+- Subnets cannot be resized after creation.
+- Peering is non-transitive and does not permit overlapping CIDRs.
+- No native broadcast or multicast on the VPC data path (Transit Gateway multicast is a separate feature).
+- Only five reserved addresses per subnet are unavailable, but load balancers and container networking consume addresses faster than most teams predict.
+
+**Pricing model.** The VPC itself, subnets, route tables, Internet Gateways, security groups, and NACLs carry **no charge**. Costs arise from:
+
+| Dimension | Charged as |
 |---|---|
-| **Amazon Aurora (MySQL-compatible)** | Cloud-native, wire-compatible with MySQL |
-| **Amazon Aurora (PostgreSQL-compatible)** | Cloud-native, wire-compatible with PostgreSQL |
-| **MySQL** | Community MySQL |
-| **PostgreSQL** | Community PostgreSQL, with a wide extension catalogue |
-| **MariaDB** | MySQL fork |
-| **Oracle** | Bring Your Own Licence or Licence Included |
-| **Microsoft SQL Server** | Multiple editions; Licence Included or BYOL under specific terms |
-| **IBM Db2** | Available in RDS with BYOL |
+| NAT Gateway | Per hour, plus per gigabyte processed |
+| Interface endpoint (PrivateLink) | Per hour per endpoint per Availability Zone, plus per gigabyte processed |
+| Gateway endpoint (S3, DynamoDB) | No charge |
+| Transit Gateway | Per attachment hour, plus per gigabyte processed |
+| VPC peering | No hourly charge; data transfer charges apply, higher across Availability Zones and Regions |
+| Public IPv4 addresses | Per hour for every public IPv4 address, whether attached or idle |
+| Data transfer out to the internet | Per gigabyte, tiered |
+| Cross-AZ data transfer | Per gigabyte in each direction |
+| Site-to-Site VPN, Direct Connect | Per connection hour plus data transfer |
+| VPC Flow Logs | Charged by the destination service (CloudWatch Logs or S3 ingestion and storage) |
 
-!!! tip "Choosing an Engine"
-    For a greenfield cloud-native application with no licence constraints, **Aurora PostgreSQL** is the strong default: PostgreSQL's extension ecosystem (including `pgvector` for embeddings, `PostGIS` for geospatial and `pg_stat_statements` for query analysis) combined with Aurora's storage architecture is difficult to beat. Choose Oracle or SQL Server only when an existing application genuinely requires them; the licence cost frequently exceeds the infrastructure cost.
+!!! warning "Public IPv4 Addresses Are Now Metered"
+    Since 2024 every public IPv4 address in AWS carries an hourly charge, including addresses attached to running instances. This changed cost architecture materially: idle Elastic IPs, one public IP per instance in a large fleet, and NAT Gateways all now have a visible line item. It is also a deliberate incentive toward IPv6 and toward keeping workloads private behind load balancers.
 
-#### Architecture
+**Performance characteristics.** Network bandwidth is a function of instance type, not of the VPC. Within an Availability Zone, latency between instances is typically a few hundred microseconds; between Availability Zones in a Region, single-digit milliseconds. Enhanced networking (ENA) and, for the most demanding workloads, Elastic Fabric Adapter provide high packets-per-second and low jitter. Cluster placement groups reduce inter-node latency for tightly coupled workloads at the cost of correlated failure risk.
 
-Standard RDS: an EC2-based instance with EBS storage, optionally with a synchronous standby and asynchronous read replicas.
+**Scaling behaviour.** The network fabric is already provisioned; there is no capacity to plan for the VPC itself. What you must plan is **address space**, because address exhaustion is the practical scaling limit. NAT Gateways scale automatically to 100 Gbps. Interface endpoints scale but are per-Availability-Zone resources you must place deliberately.
 
-Aurora: a fleet of compute instances sharing a distributed, log-structured, six-way-replicated storage service, as described in *Internal Working*.
+**Availability.** Internet Gateways and the implicit router are designed to be highly available with no single point of failure. **NAT Gateways, Interface endpoint ENIs, and subnets are zonal** and are the components where your architecture, not AWS, determines availability.
 
-#### Important Features
+**Security features.** Security groups, network ACLs, AWS Network Firewall, endpoint policies, VPC Flow Logs, Traffic Mirroring, private subnets with no internet route, and integration with IAM condition keys such as `aws:SourceVpce` and `aws:SourceVpc` for resource policies.
 
-| Feature | Available In | Description |
-|---|---|---|
-| Multi-AZ deployment | RDS and Aurora | Automatic failover to another AZ |
-| Read replicas | RDS and Aurora | Up to 15 Aurora Replicas; RDS engine limits are lower (commonly 5 or 15 depending on engine) |
-| Automated backups with PITR | Both | Retention configurable from 1 to 35 days |
-| Manual snapshots | Both | Retained until explicitly deleted; copyable across Regions and accounts |
-| Encryption at rest with KMS | Both | Must be enabled at creation for RDS; cannot be added in place |
-| IAM database authentication | Both (MySQL and PostgreSQL) | Short-lived token instead of a password |
-| Performance Insights | Both | Database load visualised by wait event and by SQL statement |
-| Enhanced Monitoring | Both | OS-level metrics at up to 1-second granularity |
-| RDS Proxy | Both | Connection pooling and multiplexing |
-| Blue/Green Deployments | RDS and Aurora (MySQL and PostgreSQL) | A synchronised staging environment for low-risk upgrades and schema changes |
-| Aurora Serverless v2 | Aurora only | Fine-grained automatic capacity scaling |
-| Aurora Global Database | Aurora only | Cross-Region replication with sub-second typical lag |
-| Aurora Backtrack | Aurora MySQL only | Rewind the cluster in place to a prior point without a restore |
-| Aurora fast database cloning | Aurora only | Copy-on-write clone created in minutes regardless of size |
-| Zero-ETL integration with Redshift | Aurora | Near-real-time analytics without building a pipeline |
-| Aurora I/O-Optimized | Aurora | A pricing configuration that removes per-I/O charges in exchange for higher instance and storage rates |
+**Service limits (defaults; most are adjustable quotas — verify current values in Service Quotas).**
 
-!!! tip "Aurora Fast Cloning Is Underused and Extremely Valuable"
-    An Aurora clone shares the source's storage using copy-on-write, so creating a full-size copy of a 10 TB production database takes minutes and initially costs almost nothing in storage — you pay only for the pages that subsequently diverge. This makes it practical to test a destructive schema migration against a genuine copy of production data before running it for real. In a CI/CD context, this is the correct way to validate migrations, and it directly addresses the DSO303 outcome on CI/CD and database change management.
-
-#### Limitations
-
-| Limitation | Consequence |
+| Quota | Default |
 |---|---|
-| Single writer (standard configuration) | Write throughput ultimately bounded by one instance |
-| No OS access | Cannot install arbitrary agents or modify the OS |
-| Restricted superuser | Some engine features requiring true superuser are unavailable |
-| Encryption cannot be enabled in place | Requires snapshot, encrypted copy, restore |
-| Major version upgrades require care | Potential downtime and application incompatibility |
-| Aurora is not available on all engines | Only MySQL and PostgreSQL compatibility |
-| Storage cannot be reduced | RDS storage can be increased but never decreased |
-| Cross-Region read replica lag | Subject to inter-Region network latency |
+| VPCs per Region | 5 |
+| Subnets per VPC | 200 |
+| IPv4 CIDR blocks per VPC | 5 (up to 50) |
+| Route tables per VPC | 200 |
+| Routes per route table | 50 (up to 1000, with caveats for propagated routes) |
+| Security groups per VPC | 2,500 |
+| Rules per security group | 60 inbound and 60 outbound |
+| Security groups per network interface | 5 (up to 16) |
+| Network ACLs per VPC | 200 |
+| Rules per network ACL | 20 per direction (up to 40) |
+| Active VPC peering connections per VPC | 50 (up to 125) |
+| Internet Gateways per Region | Matches the VPC quota |
+| NAT Gateways per Availability Zone | 5 |
+| Elastic IPs per Region | 5 |
 
-#### Pricing Model
+**Common configurations.** A three-tier, three-Availability-Zone VPC with a `/16` CIDR, one public `/24` per zone containing only load balancers and NAT Gateways, one private `/20` per zone for compute, one isolated `/22` per zone for data, one NAT Gateway per zone, a Gateway endpoint for S3 and DynamoDB, Interface endpoints for the AWS APIs actually used, and Flow Logs enabled to a central logging account.
 
-Charges accrue along these dimensions. Always verify current rates on the AWS pricing pages, as they vary by Region and change over time.
+### Amazon Route 53
 
-| Dimension | Description |
-|---|---|
-| Instance hours | Per second, with a 10-minute minimum, by instance class |
-| Storage | Per GB-month provisioned (RDS) or consumed (Aurora) |
-| Provisioned IOPS | Charged separately for `io1` and `io2` volume types |
-| I/O requests | Aurora Standard charges per million requests; Aurora I/O-Optimized does not |
-| Backup storage | Free up to the size of the database; charged beyond that |
-| Snapshot export to S3 | Per GB exported |
-| Data transfer | Cross-AZ and cross-Region transfer charges apply |
-| RDS Proxy | Per vCPU-hour of the underlying database instance |
-| Aurora Serverless v2 | Per ACU-hour |
-| Backtrack | Per million change records stored |
-| Licence | Included in the hourly rate for Licence Included Oracle and SQL Server |
+**Purpose.** Authoritative DNS, domain registration, health checking, and DNS-based traffic management and failover.
 
-!!! warning "Aurora I/O Charges Surprise People"
-    With Aurora Standard, every read that misses the buffer pool and every write to storage is a billable I/O. A poorly indexed, scan-heavy workload can accumulate an I/O bill exceeding the instance cost. **Aurora I/O-Optimized** eliminates per-I/O charges for a higher instance and storage rate; AWS guidance is that it becomes economical when I/O exceeds roughly 25 percent of your total Aurora spend. Check the `VolumeReadIOPs` and `VolumeWriteIOPs` metrics and compute the crossover for your workload.
+**Architecture.** Globally distributed anycast authoritative name servers, a global health-checker fleet, a control plane anchored in `us-east-1`, and a per-VPC Route 53 Resolver for private DNS. Hosted zones are global objects; private hosted zones are associated with specific VPCs.
 
-#### Performance Characteristics
+**Important features.**
 
-| Metric | Typical Behaviour |
-|---|---|
-| Point read latency | Sub-millisecond from buffer pool; low single-digit milliseconds from storage |
-| Commit latency (single-AZ) | Around 1 ms |
-| Commit latency (Multi-AZ) | Around 2 to 5 ms due to the cross-AZ round trip |
-| Aurora commit latency | Low, because only redo log records are written and only a 4-of-6 quorum is required |
-| Aurora replica lag | Typically tens of milliseconds |
-| RDS read replica lag | Milliseconds to seconds, workload-dependent |
-| Throughput claim | AWS states Aurora MySQL can deliver up to roughly five times standard MySQL throughput and Aurora PostgreSQL up to roughly three times standard PostgreSQL, on equivalent hardware — treat these as vendor benchmark figures, not guarantees for your workload |
+- Public and private hosted zones, with the same zone name permitted in both (**split-horizon DNS**), so `api.example.com` can resolve to an internal load balancer inside the VPC and to a public endpoint outside.
+- Alias records to AWS resources, usable at the zone apex, resolved internally, and not charged.
+- Seven routing policies, described below.
+- Health checks against endpoints, CloudWatch alarms, or other health checks, with configurable failure thresholds, request intervals, string matching in the response body, and latency measurement.
+- Traffic Flow — a visual policy editor that composes routing policies into a reusable traffic policy with versioning.
+- Route 53 Resolver endpoints and forwarding rules for hybrid DNS in both directions.
+- Route 53 Resolver DNS Firewall for blocking queries to known-malicious or disallowed domains — an effective data-exfiltration control.
+- Route 53 Application Recovery Controller with **routing controls** whose data plane is deliberately independent of control planes, plus readiness checks and safety rules.
+- DNSSEC signing for public hosted zones, and domain registration with DNSSEC support.
 
-#### Scaling Behaviour
+**Routing policies.**
 
-| Axis | RDS | Aurora |
-|---|---|---|
-| Compute vertical | Modify instance class; brief downtime or failover | Same, plus Serverless v2 in-place scaling |
-| Storage | Increase manually, or enable storage autoscaling; cannot decrease | Automatic in 10 GiB increments; no action required |
-| Read horizontal | Add read replicas | Add Aurora Replicas, up to 15 |
-| Write horizontal | Not supported natively — requires application-level sharding | Aurora Limitless Database addresses this for supported configurations; otherwise the same constraint applies |
-| Cross-Region | Cross-Region read replica | Aurora Global Database |
+| Policy | What it does | Health checks | Typical use | Key caution |
+|---|---|---|---|---|
+| **Simple** | Returns a single record; multiple values in one record are returned in random order to the client | Not supported | A single endpoint, static mappings | No failover at all; the client picks arbitrarily |
+| **Weighted** | Distributes answers across records in proportion to assigned weights, from 0 to 255 | Supported | Canary and blue-green releases, gradual migration, splitting between Regions | Weight 0 removes a record unless all are 0; caching means the split is statistical, not exact |
+| **Latency-based** | Returns the record for the Region with the lowest measured network latency to the *resolver* | Supported | Multi-Region active-active for performance | It optimises latency, not geography or compliance; measurement is to the resolver, not the user |
+| **Failover** | Active-passive; returns the primary while healthy, otherwise the secondary | Required for the primary | Disaster recovery, static maintenance page in S3 | Failover speed is bounded by TTL plus health-check detection time |
+| **Geolocation** | Returns a record based on the *user's* inferred location, by continent, country, or subdivision | Supported | Data-residency and licensing compliance, localised content | Always configure a **default** record for unmatched locations, or those users get no answer |
+| **Geoproximity** | Routes by geographic distance between user and resource, with a **bias** that expands or shrinks a resource's effective region | Supported | Shifting traffic gradually toward or away from a Region | Requires a traffic policy (Traffic Flow); more complex to reason about |
+| **Multivalue answer** | Returns up to eight healthy records at random, each optionally health-checked | Supported | Cheap client-side load spreading with health awareness | Not a load balancer; no connection draining, no capacity awareness |
+| **IP-based** | Routes based on the client subnet using CIDR collections you define | Supported | Steering specific ISPs or corporate networks to specific endpoints | Requires accurate, maintained CIDR data |
 
-#### Availability and Durability
+!!! question "Weighted Versus Latency — a Classic Exam Discriminator"
+    If the requirement mentions **performance for globally distributed users**, choose latency-based. If it mentions **percentages, canaries, gradual shifts, or A/B testing**, choose weighted. If it mentions **legal or compliance restrictions on which country serves which user**, choose geolocation. If it mentions **active-passive disaster recovery**, choose failover.
 
-| Configuration | Availability Characteristics | Durability Characteristics |
-|---|---|---|
-| Single-AZ RDS | No automatic failover; an AZ failure is an outage | EBS-backed, plus automated backups to S3 |
-| Multi-AZ RDS instance | Automatic failover, typically 60–120 seconds | Synchronous standby means near-zero RPO for AZ failure |
-| Multi-AZ DB cluster | Faster failover, plus two readable standbys | Semi-synchronous commit |
-| Aurora | Survives an AZ loss without failover of storage; instance failover typically under 30 seconds | Six copies across three AZs; continuous backup to S3 |
-| Aurora Global Database | Regional failure survivable; promotion in minutes | Typical cross-Region RPO under one second |
+**Limitations.**
 
-#### Security Features
+- DNS-based failover is bounded by TTL and by resolvers that ignore TTL. It is a coarse instrument; for sub-second failover use a load balancer or AWS Global Accelerator, which shifts traffic at the network layer using anycast addresses and does not depend on client DNS caching.
+- Health checks cannot reach private endpoints directly; use CloudWatch alarm health checks.
+- The control plane is `us-east-1`-dependent for record changes.
+- Route 53 does not perform load balancing in any capacity-aware sense; it only chooses which answer to return.
 
-IAM for control plane authorization; IAM database authentication for the data plane; KMS encryption at rest including automated backups, snapshots and replicas; TLS in transit with certificate verification; security groups; private subnet placement; Secrets Manager integration with automatic rotation; database activity streams for Aurora providing a near-real-time audit stream; and engine-native audit logging exported to CloudWatch Logs.
+**Pricing model.** Per hosted zone per month (with a lower rate beyond the first 25 zones); per million queries, with different rates for standard queries, latency-based, geo, and IP-based queries; per health check per month, with additional charges for optional features such as string matching and HTTPS; domain registration priced per TLD per year. **Alias queries to AWS resources are not charged.** Traffic Flow policy records carry an additional monthly charge.
 
-#### Service Limits
+**Performance characteristics.** Query latency is typically a few milliseconds from anycast edge locations. Record changes propagate to all Route 53 name servers within about 60 seconds, but *visible* propagation to end users is governed entirely by TTL and by intermediate resolver behaviour.
 
-Most RDS limits are **soft quotas** adjustable through AWS Support, and several vary by Region and engine version. Verify current values in the Service Quotas console rather than memorising them.
+**Scaling behaviour.** Effectively unbounded from the customer's perspective; Route 53 answers many trillions of queries and is engineered to absorb attack traffic.
 
-| Limit | Typical Default | Adjustable |
-|---|---|---|
-| DB instances per Region | 40 | Yes |
-| Manual snapshots per Region | 100 | Yes |
-| Read replicas per source (engine-dependent) | 5 or 15 | Sometimes |
-| Aurora Replicas per cluster | 15 | No |
-| Aurora cluster storage maximum | 128 TiB for recent engine versions | No |
-| Backup retention | 1 to 35 days | No — use manual snapshots or AWS Backup for longer |
-| Maximum database connections | Determined by a formula based on instance memory | Configurable via parameter group |
-| Security groups per DB instance | Small, engine-independent limit | Yes |
+**Availability.** Route 53 carries a 100 percent availability service-level agreement for its DNS data plane — unique among AWS services — reflecting anycast, shuffle sharding, and multi-TLD name-server distribution.
 
-#### Common Configurations
+**Security features.** DNSSEC signing and validation, Resolver DNS Firewall, query logging (public zones and Resolver query logs), IAM policies on hosted-zone operations, domain transfer lock, and private hosted zones so internal names are never published.
 
-| Scenario | Recommended Configuration |
-|---|---|
-| Production OLTP | Aurora PostgreSQL, Multi-AZ with at least one reader, encryption on, 14–35 day backup retention, RDS Proxy, Performance Insights enabled |
-| Development and test | Aurora Serverless v2 with a low minimum ACU, or a small single-AZ RDS instance, 1-day backups |
-| Read-heavy public content | Aurora with several readers behind the reader endpoint, plus ElastiCache in front |
-| Reporting isolation | A dedicated read replica or a custom endpoint targeting reporting-sized readers |
-| Regulated multi-Region | Aurora Global Database with a customer-managed KMS key in each Region |
-| Legacy commercial engine | RDS for Oracle or SQL Server, Multi-AZ, with licence model chosen deliberately |
+**Service limits (defaults, adjustable unless stated).** 500 hosted zones per account; 10,000 records per hosted zone; 200 health checks per account; 100 VPC associations per private hosted zone; 50 domains per account for registration.
 
-### Amazon DynamoDB
+**Common configurations.** A public hosted zone with alias records to CloudFront and to Regional API Gateway custom domains; a private hosted zone associated with the workload VPCs giving internal service names; failover records with health checks for a disaster-recovery Region; weighted records for canary deployments; Resolver outbound endpoints and forwarding rules for on-premises name resolution.
 
-#### Purpose
+### Amazon API Gateway
 
-To provide a fully managed, serverless, horizontally scalable key-value and document database delivering consistent single-digit millisecond latency at any scale, with no servers to manage, no connection management, and no capacity ceiling that requires re-architecture.
+**Purpose.** A fully managed front door for APIs, providing routing, authorization, validation, throttling, transformation, caching, and observability without application code.
 
-#### Architecture
+**Architecture.** A multi-tenant, regionally distributed managed service. Edge-optimized APIs are fronted by an AWS-managed CloudFront distribution; Regional APIs are reached directly in the Region; Private APIs are reachable only through Interface endpoints inside a VPC. Backend integration happens over AWS-internal paths, or through a VPC Link into your private subnets.
 
-A Regional service composed of a request routing fleet, a metadata service, and a storage fleet organised into partitions, each replicated across three Availability Zones with Paxos-based leader election, as described in *Internal Working*. There is no instance, no endpoint to fail over, and no VPC placement.
+**API type comparison.**
 
-#### The Data Model
-
-| Concept | Definition |
-|---|---|
-| **Table** | A collection of items. Regional. No fixed schema beyond the primary key. |
-| **Item** | A single record, analogous to a row. Maximum size **400 KB** including attribute names. |
-| **Attribute** | A name-value pair, analogous to a column. Items in the same table need not have the same attributes. |
-| **Primary key** | Either a **simple** key (partition key only) or a **composite** key (partition key plus sort key) |
-| **Partition key (HASH)** | Determines the physical partition. Required. |
-| **Sort key (RANGE)** | Orders items within a partition key. Optional. Enables range queries. |
-| **Item collection** | All items sharing the same partition key value |
-
-Supported attribute types: `S` (string), `N` (number), `B` (binary), `BOOL`, `NULL`, `L` (list), `M` (map), `SS`/`NS`/`BS` (sets). Only scalar types (`S`, `N`, `B`) may be used as key attributes.
-
-!!! warning "The 400 KB Item Limit Shapes Your Design"
-    An item cannot exceed 400 KB. This rules out storing images, documents or large blobs in DynamoDB. The correct pattern is to store the object in **S3** and keep the S3 key, size, content type and metadata in DynamoDB. It also constrains unbounded lists: an item containing a growing list of comments will eventually hit the limit and start failing writes. Model one-to-many relationships as **multiple items in an item collection**, not as a nested list inside one item.
-
-#### Partition Key Design — The Central Skill
-
-A good partition key has two properties:
-
-1. **High cardinality** — many distinct values, so data spreads across many partitions.
-2. **Uniform access distribution** — no single value receives disproportionate traffic.
-
-| Candidate Partition Key | Cardinality | Distribution | Verdict |
+| Dimension | REST API | HTTP API | WebSocket API |
 |---|---|---|---|
-| `user_id` for a per-user workload | Very high | Even, assuming no dominant user | Excellent |
-| `order_id` (UUID) | Very high | Even | Excellent |
-| `device_id` for IoT telemetry | High | Even | Good |
-| `status` with values PENDING, SHIPPED, DELIVERED | 3 | Extremely skewed | Unusable |
-| `order_date` for daily ingest | High overall | All of today's traffic hits one value | Poor for writes |
-| `country` for a national app | Low, and heavily skewed | One country dominates | Poor |
-| `tenant_id` in multi-tenant SaaS | Medium | Skewed if one tenant is very large | Requires care |
+| Protocol | Request-response over HTTP | Request-response over HTTP | Persistent bidirectional connection |
+| Relative cost | Highest | Roughly 70 percent cheaper than REST for the same request volume | Charged per message and per connection minute |
+| Relative latency | Higher | Lower — a leaner pipeline | Low, connection is already established |
+| Authorizers | IAM, Cognito user pools, Lambda (token and request) | IAM, JWT (OIDC and OAuth 2.0 built in), Lambda | IAM, Lambda on the connect route |
+| Request validation | Yes, with JSON Schema models | No built-in body validation | No |
+| Mapping templates (VTL) | Yes | No — parameter mapping only | No |
+| Caching | Yes, per stage, configurable size | No | Not applicable |
+| Usage plans and API keys | Yes | No | No |
+| Endpoint types | Edge-optimized, Regional, Private | Regional only | Regional only |
+| AWS WAF integration | Yes | No | No |
+| Direct AWS service integrations | Yes, extensive | Yes, for a set of services including SQS, SNS, EventBridge, Step Functions, Kinesis | Yes |
+| Private integrations | VPC Link to an NLB | VPC Link to an ALB, NLB, or Cloud Map | VPC Link |
+| Certificates for backend mutual TLS | Yes | Yes | Yes |
+| X-Ray tracing | Yes | Limited | Limited |
+| Best for | Regulated or monetised APIs needing validation, keys, WAF, and caching | Most new serverless APIs — simpler, faster, cheaper | Chat, live dashboards, notifications, multiplayer, streaming progress |
 
-##### Write Sharding for Unavoidably Hot Keys
+!!! tip "Choosing the API Type"
+    Start with **HTTP API**. Move to **REST API** only when you specifically need one of: AWS WAF, API keys and usage plans, request validation with models, response caching, edge-optimized endpoints, private endpoints, or VTL transformation. Choose **WebSocket API** only when the server must push to the client without the client polling.
 
-When the natural key is inherently hot — for example, all events for the current day — you distribute writes artificially by appending a shard suffix.
+**Important features.** Custom domain names with ACM certificates and base-path mapping; mutual TLS for client authentication; canary release deployments that split a percentage of stage traffic to a new deployment; stage variables; usage plans; request and response transformation; SDK and OpenAPI export; direct integrations with more than a hundred AWS services on REST APIs; access logging with a customisable format; and per-route throttling.
 
-```
-Natural key:  2026-08-10                     -> one partition, throttled
-Sharded key:  2026-08-10#0 ... 2026-08-10#9  -> ten partitions, ten times the throughput
-```
+**Limitations.**
 
-On write, choose the suffix by a random number or by a deterministic hash of another attribute. On read, issue ten parallel `Query` calls (a scatter-gather) and merge the results.
+- Default integration timeout of 29 seconds for both REST and HTTP APIs; REST APIs now support raising this quota in many Regions, but the architectural guidance remains that synchronous APIs should be fast and long work should be asynchronous.
+- Maximum payload of 10 MB for REST APIs; large uploads should use pre-signed S3 URLs instead of passing bytes through the API.
+- API type cannot be changed after creation.
+- HTTP APIs lack WAF, caching, usage plans, and request validation.
+- Caching, when enabled on a REST API, is charged per hour by cache size regardless of hit rate.
+- Header and query-string manipulation in REST APIs through VTL is powerful but hard to test; treat it as a last resort.
 
-| Suffix Strategy | Write Behaviour | Read Behaviour |
-|---|---|---|
-| Random suffix | Perfectly even | Must query all shards for a complete result |
-| Calculated suffix, for example `hash(order_id) mod 10` | Even | Can target the exact shard when you know `order_id` |
+**Pricing model.** REST APIs and HTTP APIs are charged per million requests, with HTTP APIs substantially cheaper and both offering volume tiers. Caching on REST APIs is charged per hour by cache size. WebSocket APIs are charged per million messages plus connection minutes. Data transfer out is charged separately. Edge-optimized APIs incur CloudFront data-transfer pricing. Always confirm current figures on the AWS pricing pages; the ratios between types are stable but the absolute numbers change.
 
-!!! tip "The Trade-off Is Explicit"
-    Write sharding trades read simplicity for write throughput. Use a **calculated** suffix when you will frequently look up individual items, because it lets you compute the exact shard. Use a **random** suffix when reads are always full-collection scans anyway. The number of shards should reflect your required throughput divided by roughly 1,000 WCU per partition, with headroom.
+**Performance characteristics.** Added latency is typically in the low tens of milliseconds for HTTP APIs and somewhat higher for REST APIs with transformation and validation. Lambda authorizer caching, stage caching, and connection reuse to backends are the main levers. Edge-optimized endpoints reduce handshake latency for globally distributed clients but add a hop for clients already in the Region.
 
-##### Sort Key Design and Composite Sort Keys
+**Scaling behaviour.** Scales automatically. The relevant limits are the **account-level throttle** (a steady-state requests-per-second rate with a burst capacity, per Region, adjustable) and, more often in practice, the **backend's** capacity — Lambda reserved concurrency, ECS task count, or database connections. API Gateway will happily accept more traffic than your backend can serve, which is precisely why per-route throttling is a design tool, not an afterthought.
 
-The sort key is the mechanism for expressing hierarchy and enabling range queries. A composite sort key encodes multiple dimensions in one string, ordered from most to least significant.
+**Availability.** Regional, multi-Availability-Zone, managed. Edge-optimized APIs additionally benefit from the CloudFront edge network. For multi-Region availability, deploy Regional APIs in each Region behind Route 53 failover or latency records, or behind AWS Global Accelerator.
 
-```
-PK: USER#4471
-SK: ORDER#2026-08-10#9001
-SK: ORDER#2026-08-11#9014
-SK: ADDRESS#HOME
-SK: ADDRESS#WORK
-```
+**Security features.** IAM authorization with SigV4, Cognito user pools, JWT authorizers, Lambda authorizers, resource policies (including restriction by source VPC endpoint or source IP), mutual TLS, AWS WAF (REST APIs), throttling as a denial-of-service mitigation, private endpoints, and full CloudTrail coverage of management actions.
 
-With this design, a single `Query` on `PK = USER#4471 AND begins_with(SK, "ORDER#2026-08")` retrieves every order placed by that user in August 2026, sorted chronologically, in one request. This is the essence of DynamoDB modelling: **the key structure encodes the query**.
+**Service limits (defaults; most are adjustable).** Account-level throttle of 10,000 requests per second with a 5,000-request burst per Region; 600 APIs per account per type; 300 routes or resources per API; 10 stages per API; 29-second integration timeout; 10 MB payload for REST; 32 KB WebSocket frame size; Lambda authorizer result cache TTL up to 3600 seconds.
 
-!!! danger "Model the Access Patterns Before the Data"
-    Relational design begins with entities and normalisation, and queries come later because SQL can express anything. DynamoDB design begins with an exhaustive written list of access patterns, and the key schema is derived from that list. If you design a DynamoDB table without first enumerating every query your application will make, you will get it wrong, and correcting it after production data exists requires a data migration. **Access patterns first. Always.**
+**Common configurations.** An HTTP API with a JWT authorizer validating Cognito or an external identity provider, `$default` stage with auto-deploy, Lambda proxy integration for business logic, a VPC Link to a private ALB for containerised services, a custom domain with an ACM certificate, access logging to CloudWatch Logs in JSON, and per-route throttling protecting an expensive downstream.
 
-#### Single-Table Design
-
-Single-table design places multiple entity types in one table, using generic key attribute names (`PK`, `SK`) and a type discriminator, so that related entities of different types share a partition and can be retrieved together in one request.
-
-```mermaid
-erDiagram
-    CUSTOMER ||--o{ ORDER : "places"
-    ORDER ||--o{ ORDER_ITEM : "contains"
-    PRODUCT ||--o{ ORDER_ITEM : "referenced by"
-    CUSTOMER {
-        string partition_key "CUST#4471"
-        string sort_key "PROFILE"
-        string email
-        string name
-    }
-    ORDER {
-        string partition_key "CUST#4471"
-        string sort_key "ORDER#9001"
-        string status
-        number total
-    }
-    ORDER_ITEM {
-        string partition_key "ORDER#9001"
-        string sort_key "ITEM#SKU-55"
-        number quantity
-        number unit_price
-    }
-    PRODUCT {
-        string partition_key "PROD#SKU-55"
-        string sort_key "METADATA"
-        string title
-        number price
-    }
-```
-
-An example table layout:
-
-| PK | SK | entity_type | Other Attributes |
-|---|---|---|---|
-| `CUST#4471` | `PROFILE` | Customer | `email`, `name`, `created_at` |
-| `CUST#4471` | `ORDER#2026-08-10#9001` | Order | `status`, `total`, `GSI1PK=STATUS#PENDING` |
-| `CUST#4471` | `ORDER#2026-08-11#9014` | Order | `status`, `total` |
-| `CUST#4471` | `ADDRESS#HOME` | Address | `line1`, `city`, `postcode` |
-| `ORDER#9001` | `ITEM#SKU-55` | OrderItem | `qty`, `unit_price` |
-| `ORDER#9001` | `ITEM#SKU-72` | OrderItem | `qty`, `unit_price` |
-| `PROD#SKU-55` | `METADATA` | Product | `title`, `price`, `stock` |
-
-| Access Pattern | Implementation |
-|---|---|
-| Get a customer's profile | `GetItem PK=CUST#4471, SK=PROFILE` |
-| Get a customer's profile and all orders and addresses in one call | `Query PK=CUST#4471` |
-| Get a customer's August 2026 orders | `Query PK=CUST#4471 AND begins_with(SK,"ORDER#2026-08")` |
-| Get all line items for an order | `Query PK=ORDER#9001 AND begins_with(SK,"ITEM#")` |
-| Get all pending orders across customers | `Query` on GSI1 where `GSI1PK=STATUS#PENDING` |
-| Get product details | `GetItem PK=PROD#SKU-55, SK=METADATA` |
-
-| Aspect | Single-Table | Multi-Table |
-|---|---|---|
-| Requests per page render | Often one | One per entity type |
-| Latency | Lower | Higher, and variable |
-| Cost | Lower — fewer requests | Higher |
-| Readability of data | Poor — the table looks opaque | Good |
-| Onboarding difficulty | High | Low |
-| Adding a new access pattern | May require a new GSI or a migration | Easier |
-| Per-entity capacity and monitoring | Not separable | Separable |
-
-!!! note "A Balanced Professional View"
-    Single-table design is the canonical DynamoDB pattern and is genuinely optimal for latency and cost in high-scale systems with well-understood access patterns. It is also difficult to reason about, hard to hand over, and unforgiving of requirement changes. For a microservice owning a small number of tightly related entities with stable access patterns, single-table design is correct. For an exploratory application whose requirements are still moving, a small number of purpose-specific tables is a defensible and pragmatic choice. State the trade-off explicitly in a design review rather than asserting a dogma.
-
-#### Secondary Indexes — LSI Versus GSI
-
-| Property | Local Secondary Index (LSI) | Global Secondary Index (GSI) |
-|---|---|---|
-| Partition key | **Must** be the same as the base table's | **Any** attribute |
-| Sort key | A different attribute | Any attribute, optional |
-| When it can be created | **Only at table creation** | Any time, and deletable any time |
-| Maximum per table | 5 | 20 by default (a soft quota) |
-| Consistency | Supports **strongly consistent** reads | **Eventually consistent only** |
-| Capacity | Shares the base table's throughput | Has its **own** provisioned throughput |
-| Storage location | Same partitions as the base table | Separate partitions |
-| Constraint imposed | Item collection (all items with one partition key, across table and LSIs) limited to **10 GB** | None |
-| Key uniqueness required | No | No |
-
-```mermaid
-graph TD
-    A["Base Table - PK = user_id, SK = order_date"] --> B["LSI - PK = user_id, SK = order_total"]
-    A --> C["GSI1 - PK = status, SK = order_date"]
-    A --> D["GSI2 - PK = product_id, SK = order_date"]
-    A -.->|"Same partitions, shared capacity"| B
-    A -.->|"Separate partitions, own capacity, async replication"| C
-    A -.->|"Separate partitions, own capacity, async replication"| D
-```
-
-!!! danger "The Two Most Dangerous GSI Behaviours"
-    **First: a throttled GSI can throttle your base table.** GSI updates are applied asynchronously, but if a GSI's write capacity is insufficient, the backlog eventually causes writes to the *base table* to be throttled, because DynamoDB will not allow the index to fall arbitrarily far behind. Always provision GSI write capacity at least as generously as the base table's for attributes that change on every write.
-
-    **Second: a GSI with a low-cardinality partition key is a hot partition you built on purpose.** A GSI on `status` with three possible values creates three partitions receiving all traffic. If you need to query by status, use a **sparse index** — only write the GSI key attribute for items in the state you care about (for example, only set `GSI1PK` while an order is `PENDING`, and remove the attribute when it ships). The index then contains only the active working set, which is both small and cheap.
-
-!!! tip "Sparse Indexes Are One of the Most Elegant DynamoDB Techniques"
-    An item appears in a GSI **only if it has the GSI's key attributes**. Deliberately omitting those attributes gives you an index containing only the subset of items you need — a work queue of unprocessed records, for instance. The index stays small no matter how large the table grows, so scanning it is cheap and predictable. Use this instead of scanning the table with a filter.
-
-##### Index Projections
-
-| Projection Type | Attributes Copied Into the Index | Trade-off |
-|---|---|---|
-| `KEYS_ONLY` | Table and index keys only | Smallest and cheapest; usually requires a second read to fetch the full item |
-| `INCLUDE` | Keys plus a specified list | Balanced; the usual correct choice |
-| `ALL` | Every attribute | Fastest reads, highest storage and write cost |
-
-A read from an index that must then fetch the full item from the base table is a **fetch**, and it consumes additional capacity. Choose `INCLUDE` with exactly the attributes your query needs to avoid fetches without paying for `ALL`.
-
-#### Capacity Modes
-
-| Aspect | Provisioned | On-Demand |
-|---|---|---|
-| You specify | RCU and WCU per second | Nothing |
-| Billing | Per provisioned capacity-hour | Per request |
-| Cost per request | Lower at steady, high utilisation | Higher per request |
-| Cost at low or spiky use | Higher — you pay for idle | Lower |
-| Auto scaling | Available, target-utilisation based | Inherent |
-| Instant scale-up | No — auto scaling reacts over minutes | Yes, up to double the previous peak instantly |
-| Throttling risk | Yes, if under-provisioned or during a scaling lag | Much lower, but not zero for extreme, sudden spikes |
-| Best for | Predictable, sustained traffic | New applications, spiky, unpredictable, or development |
-
-!!! tip "The Standard Practical Approach"
-    Launch a new table in **on-demand** mode. You do not know the traffic pattern yet, and on-demand removes the risk of throttling during launch. After a few weeks, examine the `ConsumedReadCapacityUnits` and `ConsumedWriteCapacityUnits` metrics. If utilisation is steady and high, switch to provisioned with auto scaling and consider a **reserved capacity** commitment — the saving can be substantial. If traffic is spiky, remain on demand. You may switch modes, subject to a cooldown period between switches.
-
-!!! info "On-Demand Scaling Headroom"
-    On-demand tables instantly accommodate up to double the previous observed peak. Beyond that, DynamoDB scales further but may throttle briefly while it does. If you know a very large spike is coming — a ticket sale opening, a marketing campaign — you can either **pre-warm** by driving controlled traffic in advance, or set a **maximum throughput** limit on the on-demand table to bound runaway cost. Do not assume on-demand is infinitely elastic at zero notice.
-
-#### Read Consistency Options
-
-| Option | Behaviour | Cost |
-|---|---|---|
-| **Eventually consistent read** | Served from any replica; may not reflect a very recent write | **0.5 RCU** per 4 KB |
-| **Strongly consistent read** | Served from the leader; always reflects all prior successful writes | **1 RCU** per 4 KB |
-| **Transactional read** | Part of a `TransactGetItems` serializable snapshot | **2 RCU** per 4 KB |
-
-#### RCU and WCU Calculation
-
-These formulas are examinable and are genuinely used in capacity planning.
-
-**Read Capacity Unit (RCU)**
-
-- 1 RCU = one **strongly consistent** read per second of an item up to **4 KB**.
-- 1 RCU = **two** eventually consistent reads per second of an item up to 4 KB.
-- Item size is **rounded up** to the next 4 KB boundary.
-
-**Write Capacity Unit (WCU)**
-
-- 1 WCU = one standard write per second of an item up to **1 KB**.
-- Item size is **rounded up** to the next 1 KB boundary.
-- A transactional write costs **2 WCU** per 1 KB.
-
-!!! example "Worked Example 1 — Basic Reads"
-    **Requirement:** 100 strongly consistent reads per second of 6 KB items.
-
-    1. Round item size up: 6 KB rounds up to 8 KB, which is 2 units of 4 KB.
-    2. RCUs per read: 2.
-    3. Total: `100 × 2 =` **200 RCU**.
-
-    Now the same workload with **eventually consistent** reads:
-
-    - Eventually consistent reads cost half: `200 / 2 =` **100 RCU**.
-
-    The lesson: simply choosing eventual consistency where the business permits it halves your read cost.
-
-!!! example "Worked Example 2 — Writes"
-    **Requirement:** 250 writes per second of 3.2 KB items.
-
-    1. Round up: 3.2 KB rounds up to 4 KB, which is 4 units of 1 KB.
-    2. WCUs per write: 4.
-    3. Total: `250 × 4 =` **1,000 WCU**.
-
-    Note that 1,000 WCU is approximately the throughput ceiling of a single partition, so this workload requires a partition key that distributes across multiple partitions.
-
-!!! example "Worked Example 3 — Mixed Workload with a GSI"
-    **Requirement:** An orders table.
-
-    - Writes: 500 new orders per second, item size 2.5 KB.
-    - Reads: 2,000 eventually consistent reads per second, item size 2.5 KB.
-    - One GSI on `status` with `ALL` projection, receiving every write.
-
-    **Base table writes:** 2.5 KB rounds up to 3 KB = 3 WCU per write. `500 × 3 =` **1,500 WCU**.
-
-    **Base table reads:** 2.5 KB rounds up to 4 KB = 1 unit. Strong would be 1 RCU; eventual is 0.5 RCU. `2,000 × 0.5 =` **1,000 RCU**.
-
-    **GSI writes:** With `ALL` projection the index item is also about 2.5 KB, rounding to 3 WCU. Every base write produces an index write, so **1,500 WCU** on the GSI.
-
-    **Total write capacity to provision: 3,000 WCU** across the table and its index. This is the calculation people forget, and it is why an unnecessary `ALL`-projection GSI **doubles your write bill**.
-
-!!! example "Worked Example 4 — Transactions"
-    **Requirement:** 50 transactions per second, each writing 3 items of 0.8 KB.
-
-    1. Each item rounds up to 1 KB = 1 unit.
-    2. Transactional writes cost 2 WCU per unit: 2 WCU per item.
-    3. Per transaction: `3 × 2 = 6` WCU.
-    4. Total: `50 × 6 =` **300 WCU**.
-
-    A transaction costs twice a standard write because DynamoDB executes a two-phase commit across partitions. Use transactions where atomicity is genuinely required, not by default.
-
-!!! example "Worked Example 5 — Query Cost and the Filter Trap"
-    **Scenario:** `Query PK=CUST#4471` returns an item collection of 300 items averaging 1.5 KB, and a `FilterExpression` reduces the result to 12 items.
-
-    1. Total data read: `300 × 1.5 KB = 450 KB`.
-    2. A `Query` aggregates the size of all items read and rounds the **total** up to a 4 KB boundary: `450 / 4 = 112.5`, rounding to 113 units.
-    3. Eventually consistent: `113 × 0.5 =` **56.5 RCU**, billed as 57.
-
-    You paid for 450 KB to receive 18 KB. Had the sort key encoded the filter condition, the same result would have cost around 3 RCU. **This single misunderstanding accounts for a large share of unexpected DynamoDB bills.**
-
-#### Transactions
-
-DynamoDB supports ACID transactions via `TransactWriteItems` and `TransactGetItems`.
-
-| Property | Detail |
-|---|---|
-| Maximum items per transaction | 100 |
-| Maximum total size | 4 MB |
-| Scope | Multiple items, multiple tables, **same Region and same account** |
-| Supported actions in a write transaction | `Put`, `Update`, `Delete`, `ConditionCheck` |
-| Constraint | The same item may not appear twice in one transaction |
-| Cost | Twice a non-transactional operation |
-| Isolation | Serializable |
-
-!!! tip "Condition Expressions Handle Most Cases More Cheaply"
-    Before reaching for a transaction, ask whether a **conditional write** suffices. `PutItem` with `ConditionExpression: attribute_not_exists(PK)` gives you atomic create-if-absent at standard cost. `UpdateItem` with `ConditionExpression: version = :expected` gives you optimistic locking. These single-item conditional operations are atomic, cost half what a transaction costs, and cover a large majority of real requirements. Reserve transactions for genuinely multi-item invariants such as debit-and-credit.
-
-#### Other Important Features
-
-| Feature | Description |
-|---|---|
-| **Time To Live (TTL)** | Designate a numeric attribute holding a Unix epoch timestamp; DynamoDB deletes expired items automatically in the background at **no write cost**. Deletions typically occur within 48 hours of expiry, so TTL is not a precise scheduler. |
-| **Global Tables** | Multi-Region, multi-active replication with last-writer-wins conflict resolution based on timestamps |
-| **Point-in-Time Recovery (PITR)** | Continuous backups allowing restore to any second within the last 35 days; restores to a **new table** |
-| **On-demand backup** | Full backups retained indefinitely, with no performance impact |
-| **Export to S3** | Export table data to S3 in DynamoDB JSON or Ion format without consuming RCUs, for querying with Athena |
-| **Import from S3** | Populate a new table directly from S3 without consuming WCUs |
-| **PartiQL** | A SQL-compatible query language over DynamoDB. Convenient, but it does not change the underlying cost model — a PartiQL statement that cannot use a key still performs a scan. |
-| **DAX** | Microsecond read caching |
-| **Contributor Insights** | Identifies the most frequently accessed keys — the definitive tool for diagnosing hot partitions |
-| **Streams and Kinesis Data Streams integration** | Change data capture for event-driven and analytics pipelines |
-
-!!! warning "Global Tables Conflict Resolution Is Last-Writer-Wins"
-    In a multi-active Global Table, concurrent writes to the same item in two Regions are resolved by choosing the write with the later timestamp; **the other write is silently discarded**. This is acceptable for user-partitioned data where a given user writes in one Region. It is **not** acceptable for a counter, a shared inventory quantity, or a financial balance, where losing a write is a correctness failure. If your data has genuine cross-Region write contention, either partition writes by Region at the application layer or use a single-writer design.
-
-#### Limitations
-
-| Limitation | Consequence |
-|---|---|
-| No joins | Relationships must be denormalised or resolved with multiple requests |
-| No ad hoc queries | Every query must be served by the primary key or an index |
-| 400 KB item limit | Large objects must live in S3 |
-| Query requires the full partition key | No equivalent of an arbitrary `WHERE` clause |
-| No native aggregations | Counts and sums must be maintained by the application, often via Streams |
-| GSIs are eventually consistent | Read-after-write against a GSI is unreliable |
-| LSIs only at creation | An access pattern discovered later cannot use an LSI |
-| Sorting only on the sort key | Cannot order results by an arbitrary attribute |
-| Cross-Region transactions unsupported | Transactions are Region- and account-scoped |
-| Vendor-specific | The API is proprietary; portability is limited |
-
-#### Pricing Model
-
-| Dimension | Notes |
-|---|---|
-| Provisioned RCU and WCU | Per capacity-unit-hour; reserved capacity available for a one- or three-year commitment |
-| On-demand read and write request units | Per million requests |
-| Data storage | Per GB-month; a small monthly allowance is included in the Free Tier |
-| Global Tables | Replicated write request units, charged per Region |
-| Streams | Read request units for `GetRecords` beyond the free allowance; Lambda triggers consume no stream read charges of their own beyond Lambda invocation cost |
-| PITR | Per GB-month of table size |
-| On-demand backup and restore | Per GB stored and per GB restored |
-| Export and import via S3 | Per GB processed |
-| DAX | Per node-hour |
-| Data transfer | Out of the Region |
-
-!!! info "Storage and Index Cost Compound"
-    A GSI with `ALL` projection roughly **doubles** your storage cost as well as your write cost for the projected attributes. With PITR enabled, backup cost also scales with total table size including indexes. Three `ALL`-projection GSIs on a 1 TB table means roughly 4 TB of storage plus 4 TB of PITR coverage. Project only what you query.
-
-#### Performance Characteristics and Scaling
-
-| Metric | Behaviour |
-|---|---|
-| `GetItem` latency | Consistently single-digit milliseconds, independent of table size |
-| `GetItem` through DAX on a cache hit | Microseconds |
-| Table size | Effectively unlimited |
-| Throughput | Effectively unlimited, subject to per-partition limits and account quotas |
-| Per-partition ceiling | Approximately 3,000 RCU and 1,000 WCU |
-| Scaling mechanism | Automatic partition splitting; no downtime |
-| Latency at scale | Flat — this is the defining property |
-
-#### Availability, Durability and Service Limits
-
-Data is synchronously replicated across three Availability Zones within a Region. AWS publishes a service level agreement of 99.99 percent for standard tables and 99.999 percent for Global Tables — verify current SLA terms, which are commitments about service credits rather than physical guarantees.
-
-| Limit | Value | Adjustable |
-|---|---|---|
-| Item size | 400 KB | No |
-| Partition key value length | 1 to 2048 bytes | No |
-| Sort key value length | 1 to 1024 bytes | No |
-| LSIs per table | 5 | No |
-| GSIs per table | 20 | Yes — a soft quota |
-| Items per transaction | 100 | No |
-| Transaction payload | 4 MB | No |
-| `Query` or `Scan` result page | 1 MB before pagination | No |
-| `BatchGetItem` | 100 items or 16 MB | No |
-| `BatchWriteItem` | 25 put or delete requests or 16 MB | No |
-| Tables per Region | 2,500 | Yes |
-| Account-level provisioned throughput | Region-dependent default | Yes |
-| Stream retention | 24 hours | No |
-| PITR window | 35 days | No |
-
-!!! note "Pagination Is Not Optional"
-    Both `Query` and `Scan` return at most 1 MB of data per call and include a `LastEvaluatedKey` when more results remain. Application code that ignores `LastEvaluatedKey` will silently process only the first page — a defect that passes every test with small data volumes and fails in production. Always loop until `LastEvaluatedKey` is absent, or use the SDK's paginator.
-
-#### Common Configurations
-
-| Scenario | Configuration |
-|---|---|
-| Session store | Simple key on `session_id`, TTL attribute, on-demand capacity |
-| Shopping cart | PK `CUST#id`, SK `CART#item_id`, on-demand, Streams for abandoned-cart processing |
-| IoT telemetry | PK `device_id`, SK ISO-8601 timestamp, TTL for expiry, provisioned with auto scaling |
-| Event sourcing | PK `aggregate_id`, SK monotonically increasing sequence number, conditional write on `attribute_not_exists` for optimistic concurrency |
-| Multi-tenant SaaS | PK includes `tenant_id`; IAM policies use the `dynamodb:LeadingKeys` condition for tenant isolation |
-| Global user profiles | Global Tables in the Regions your users occupy, PITR enabled |
-
-
-### Amazon ElastiCache
-
-#### Purpose
-
-To provide managed, in-memory data stores — Redis (and the AWS-maintained Valkey-compatible engine) and Memcached — that sit in front of a primary database or act as a primary store for ephemeral data, so that read-heavy and latency-sensitive workloads are served from RAM in microseconds instead of from disk-backed storage in milliseconds.
-
-The architectural motivation is that most application workloads exhibit strong locality: a small fraction of the data is responsible for the overwhelming majority of reads. Serving that hot fraction from memory removes load from the primary database, which in turn allows the primary database to be smaller, cheaper, and further from its saturation point.
-
-#### Architecture
-
-```mermaid
-graph TD
-    APP["Application Tier"] --> PE["Primary Endpoint for writes"]
-    APP --> RE["Reader Endpoint for reads"]
-    PE --> P1["Shard 1 Primary Node"]
-    RE --> R1A["Shard 1 Replica in AZ b"]
-    RE --> R1B["Shard 1 Replica in AZ c"]
-    P1 --> R1A
-    P1 --> R1B
-    PE --> P2["Shard 2 Primary Node"]
-    RE --> R2A["Shard 2 Replica in AZ b"]
-    P2 --> R2A
-    APP --> DB["Amazon RDS or DynamoDB"]
-    P1 --> SNAP["Backup to Amazon S3"]
-```
-
-An ElastiCache for Redis deployment is described by a **replication group**. With cluster mode disabled, a replication group is a single shard: one primary node accepting writes and up to five read replicas receiving asynchronous replication. With cluster mode enabled, the keyspace is divided into 16,384 hash slots distributed across up to 500 shards, each shard being an independent primary with its own replicas. Nodes are placed in a **cache subnet group**, which is a set of subnets inside a VPC, and are protected by security groups exactly like an RDS instance.
-
-ElastiCache for Memcached is architecturally simpler and deliberately so: a cluster is a set of independent nodes with no replication, no persistence, and no failover. Client libraries shard across nodes using consistent hashing, and node loss simply means the keys that hashed to that node are gone and will be recomputed on the next miss.
-
-#### Redis Versus Memcached
-
-| Dimension | Redis / Valkey | Memcached |
-|---|---|---|
-| Data structures | Strings, lists, sets, sorted sets, hashes, bitmaps, HyperLogLog, streams, geospatial | Strings only |
-| Replication | Yes, asynchronous, with automatic failover | None |
-| Persistence | Yes, RDB snapshots and append-only file | None |
-| Multi-AZ and failover | Yes | No |
-| Backup and restore | Yes, to Amazon S3 | No |
-| Transactions | Yes, `MULTI`/`EXEC`, plus Lua scripting | No |
-| Pub/Sub and Streams | Yes | No |
-| Multi-threaded | Largely single-threaded for command execution | Multi-threaded |
-| Horizontal scaling | Sharding via cluster mode | Add nodes; client-side consistent hashing |
-| Encryption in transit and at rest | Yes | In-transit encryption supported on recent versions |
-| Typical use | Leaderboards, sessions, rate limiting, queues, caching, geospatial | Simple, very high-throughput object caching |
-
-!!! tip "The selection heuristic"
-    Choose Memcached only when the requirement is genuinely a simple, ephemeral, multi-threaded object cache and losing the entire cache is acceptable. In every other case — and that is most cases — Redis is the correct default, because replication, persistence, failover, and richer data structures cost little and remove entire categories of failure.
-
-#### Caching Strategies
-
-```mermaid
-sequenceDiagram
-    participant A as "Application"
-    participant C as "ElastiCache"
-    participant D as "Primary Database"
-    A->>C: GET user 42
-    alt Cache hit
-        C-->>A: Value returned in microseconds
-    else Cache miss
-        C-->>A: Null
-        A->>D: SELECT from users where id equals 42
-        D-->>A: Row
-        A->>C: SETEX user 42 with TTL
-        A-->>A: Return value to caller
-    end
-```
-
-**Cache-aside, also called lazy loading.** The application checks the cache, and on a miss reads the database and populates the cache. Only requested data is ever cached, so the cache stays small and relevant, and a cache failure degrades performance without breaking correctness. The costs are a three-trip penalty on every miss and the risk of serving stale data until the TTL expires.
-
-**Write-through.** The application writes to the cache and the database together, so the cache is never stale. The costs are write latency on every write, and a cache filled with data that may never be read — which wastes memory. Write-through is usually combined with a TTL to evict cold entries.
-
-**Write-behind, or write-back.** The application writes to the cache, which asynchronously flushes to the database. This gives the lowest write latency but risks data loss and is rarely appropriate with a cache as the intermediary unless durability is otherwise guaranteed.
-
-**Time-to-live as a correctness tool.** Every cached entry should carry a TTL. The TTL is the maximum staleness the business will tolerate, expressed in seconds. Setting it is a product decision, not a technical one.
-
-!!! warning "Thundering herd and cache stampede"
-    When a very popular key expires, thousands of concurrent requests miss simultaneously and all query the database at once, which can saturate it. Mitigations include adding jitter to TTLs so keys do not expire in lockstep, using a short-lived distributed lock so that only one request recomputes the value while others wait or serve a stale copy, and proactively refreshing hot keys before expiry.
-
-#### Important Features
-
-| Feature | Architectural value |
-|---|---|
-| Multi-AZ with automatic failover | A replica is promoted on primary failure, typically within tens of seconds, with the primary endpoint DNS updated |
-| Cluster mode | Horizontal write scaling and memory scaling beyond a single node |
-| Online resharding and scaling | Add or remove shards and replicas without downtime |
-| Data tiering | On specific node families, less-frequently accessed data is stored on local NVMe SSD rather than RAM, lowering cost per gigabyte |
-| Global Datastore | Cross-Region replication for Redis with sub-second typical replication latency, for low-latency global reads and Regional disaster recovery |
-| Backup and restore | Snapshots to Amazon S3, restorable into a new cluster |
-| Encryption | At rest with KMS, in transit with TLS, plus Redis AUTH and Role-Based Access Control |
-| ElastiCache Serverless | Capacity is managed automatically and billed by data stored and compute consumed, removing node sizing entirely |
-| Reserved nodes | Substantial discount for one-year or three-year commitments |
-
-#### Limitations
-
-- Redis command execution is largely single-threaded, so a single expensive command such as `KEYS *` or a large `LRANGE` blocks all other clients on that node. Command complexity is an operational concern, not merely a coding style preference.
-- Replication is asynchronous, so a failover can lose the most recent writes. ElastiCache is not a system of record.
-- Memcached offers no replication, persistence, failover, or backup at all.
-- A cluster is confined to one VPC and one Region unless Global Datastore is used.
-- Scaling operations, although online, involve slot migration and can cause brief elevated latency.
-- Memory is the binding constraint; exceeding it triggers eviction according to the configured `maxmemory-policy`, and an inappropriate policy such as `noeviction` will cause writes to fail rather than evict.
-
-#### Pricing Model
-
-Node-based clusters are billed per node-hour by node type, plus backup storage beyond the free allowance, plus data transfer between Availability Zones and Regions. ElastiCache Serverless is billed by gigabyte-hours of data stored and by ElastiCache Processing Units consumed. Reserved nodes provide a significant discount for a one-year or three-year commitment.
-
-!!! info "Verify current figures"
-    All pricing here is described in terms of dimensions and relative magnitude only. Consult the current AWS pricing pages and the AWS Pricing Calculator before committing to a design or a budget.
-
-#### Performance Characteristics and Scaling Behaviour
-
-In-memory access latency is typically in the range of tens to hundreds of microseconds at the server, with total round-trip latency dominated by the network path within the VPC. A single well-chosen Redis node can serve hundreds of thousands of simple operations per second, but this collapses if the workload contains large values, expensive commands, or very large pipelines.
-
-Scaling proceeds along three axes. **Vertical scaling** moves to a larger node type, increasing memory and network bandwidth. **Read scaling** adds replicas and directs reads to the reader endpoint, accepting replica lag. **Write and memory scaling** requires cluster mode and additional shards, which redistributes hash slots. ElastiCache Serverless removes the axis choice by scaling automatically.
-
-#### Availability, Durability and Service Limits
-
-Multi-AZ replication groups with automatic failover are the baseline for any production cache whose loss would cause a stampede against the primary database. Durability is explicitly weak by design: Redis persistence through snapshots and append-only file reduces but does not eliminate loss, and asynchronous replication means recent writes may not survive a failover.
-
-Limits worth knowing: up to 500 shards per Redis cluster in cluster mode, up to five read replicas per shard, and 16,384 hash slots. Node counts and cluster counts per Region are soft quotas adjustable through AWS Service Quotas, and several limits are Region-dependent.
-
-#### Security Features
-
-Deploy inside private subnets with a cache subnet group; use security groups to restrict the port (6379 for Redis, 11211 for Memcached) to the application tier's security group only. Enable encryption at rest with AWS KMS and encryption in transit with TLS. Use Redis Role-Based Access Control to create users with restricted command and key-pattern permissions rather than relying on a single shared AUTH token. Never place a cache in a public subnet or attach a security group permitting `0.0.0.0/0`; unauthenticated Redis instances exposed to the internet are a well-documented and frequently exploited attack surface.
-
-#### Common Configurations
-
-| Scenario | Configuration |
-|---|---|
-| Session store for a stateless web tier | Redis, cluster mode disabled, Multi-AZ enabled, TTL equal to session timeout, `volatile-lru` eviction |
-| Database read cache | Redis, cache-aside, TTL with jitter, `allkeys-lru` eviction, sized to hold the working set |
-| Leaderboard or ranking | Redis sorted sets, cluster mode enabled if the keyspace is large |
-| Rate limiting | Redis counters with `INCR` and `EXPIRE`, or a Lua script for atomic token-bucket logic |
-| Very high-throughput simple object cache | Memcached with client-side consistent hashing, accepting total loss on node failure |
-| Global low-latency reads | Redis Global Datastore with secondary clusters in reader Regions |
-| Unpredictable or spiky demand | ElastiCache Serverless |
+---
 
 ## Important AWS Terminology
 
 | Term | Meaning |
 |---|---|
-| ACID | Atomicity, Consistency, Isolation, Durability — the transactional guarantees of a classical relational database |
-| Adaptive capacity | DynamoDB's automatic redistribution of throughput toward hot partitions, which mitigates but does not eliminate hot-key problems |
-| Aurora cluster volume | The distributed, self-healing storage layer shared by all instances in an Aurora cluster, replicated six ways across three Availability Zones |
-| Aurora Serverless v2 | An Aurora capacity mode that scales compute in fine-grained Aurora Capacity Units in response to load |
-| Availability Zone | One or more discrete data centres with independent power, cooling, and networking within an AWS Region |
-| BASE | Basically Available, Soft state, Eventual consistency — the design posture of many distributed NoSQL systems |
-| Cache-aside | A caching pattern in which the application reads from the cache and, on a miss, reads the database and populates the cache |
-| CAP theorem | In the presence of a network partition, a distributed system must sacrifice either consistency or availability |
-| Capacity mode | For DynamoDB, the choice between provisioned throughput with optional auto scaling and fully on-demand billing |
-| Cluster endpoint | The DNS name that always resolves to the current writer instance of an Aurora or RDS cluster |
-| Composite primary key | A DynamoDB primary key consisting of a partition key and a sort key, permitting many items under one partition |
-| Conditional write | A write that succeeds only if a stated condition holds, providing optimistic concurrency control |
-| DAX | DynamoDB Accelerator, a fully managed, write-through, in-memory cache purpose-built for DynamoDB with microsecond read latency |
-| Database engine | The software implementing the database, such as PostgreSQL, MySQL, MariaDB, Oracle, SQL Server, or Aurora |
-| DB parameter group | A named collection of engine configuration parameters applied to RDS instances |
-| DB subnet group | The set of subnets across Availability Zones in which RDS may place instances |
-| Eventual consistency | A read may return a value that does not reflect the most recent completed write, but will converge |
-| Failover | Promotion of a standby or replica to primary following failure of the current primary |
-| Global Secondary Index | A DynamoDB index with a partition key and optional sort key different from the base table, with its own throughput and eventual consistency |
-| Global Table | A DynamoDB multi-Region, multi-active replicated table using last-writer-wins conflict resolution |
-| Hash slot | One of the 16,384 logical partitions across which an ElastiCache Redis cluster distributes keys |
-| Hot partition | A DynamoDB partition receiving disproportionate traffic because of poor partition-key selection |
-| Item | A single record in a DynamoDB table, limited to 400 KB including attribute names |
-| Item collection | All items in a DynamoDB table sharing the same partition key value |
-| Local Secondary Index | A DynamoDB index sharing the base table's partition key with a different sort key, supporting strongly consistent reads, created only at table creation |
-| Multi-AZ deployment | An RDS configuration maintaining a synchronous standby in a second Availability Zone for automatic failover |
-| Optimistic concurrency | Concurrency control by detecting conflicting modification at write time rather than by locking |
-| Parameter group versus option group | Parameter groups tune engine configuration; option groups enable engine-specific features such as Oracle TDE or SQL Server auditing |
-| Partition key | The DynamoDB attribute whose hash determines the physical partition storing an item; also called the hash key |
-| Point-in-time recovery | Restoration of a database to any second within the retention window, using continuous backups and transaction logs |
-| Projection | The set of attributes copied into a DynamoDB secondary index, one of `KEYS_ONLY`, `INCLUDE`, or `ALL` |
-| Provisioned IOPS | An EBS or RDS storage configuration guaranteeing a specified rate of input and output operations per second |
-| Quorum | The minimum number of replica acknowledgements required for a read or a write to be considered complete |
-| RCU | Read Capacity Unit — one strongly consistent read per second of an item up to 4 KB, or two eventually consistent reads |
-| Read replica | An asynchronously replicated, read-only copy of a database used to scale reads or to serve as a promotion candidate |
-| Replica lag | The delay between a write committing on the primary and appearing on a replica |
-| Replication group | An ElastiCache for Redis construct comprising a primary node and its replicas, optionally sharded |
-| RDS Proxy | A managed connection pool that multiplexes application connections onto a smaller set of database connections |
-| Scan versus Query | `Scan` reads every item in a table or index; `Query` reads only items sharing a specified partition key value |
-| Single-table design | A DynamoDB modelling technique storing multiple entity types in one table using generic key attributes and overloaded indexes |
-| Sparse index | A DynamoDB global secondary index containing only items that possess the index key attribute, used to model filtered views efficiently |
-| Storage auto scaling | The RDS feature that increases allocated storage automatically when free space falls below a threshold |
-| Streams | An ordered, time-ordered change log of item-level modifications, available in DynamoDB Streams and Kinesis Data Streams for DynamoDB |
-| Strong consistency | A read that reflects all writes that completed successfully before it |
-| Thundering herd | A load spike on the origin database caused by simultaneous expiry of a popular cache entry |
-| Time to live | An attribute-driven DynamoDB mechanism, or a Redis expiry, that automatically removes items after a timestamp |
-| Transaction | A group of operations applied atomically, all succeeding or all failing |
-| WCU | Write Capacity Unit — one write per second of an item up to 1 KB |
-| Write-through | A caching pattern in which every write updates both the cache and the database |
-| Writer and reader endpoints | Aurora DNS endpoints directing traffic to the single writer instance and to the load-balanced set of readers respectively |
+| Region | A geographic area containing multiple isolated Availability Zones; the scope of most AWS services |
+| Availability Zone | One or more discrete data centres with independent power, cooling, and networking within a Region |
+| AZ ID | A stable identifier for a physical zone (for example `use1-az1`), consistent across accounts unlike zone names |
+| VPC | A logically isolated, customer-defined virtual network within one Region |
+| CIDR block | An IP range expressed as address and prefix length, for example `10.0.0.0/16` |
+| Secondary CIDR | An additional address range added to an existing VPC when the primary is exhausted |
+| Subnet | A CIDR range within a VPC, bound to exactly one Availability Zone |
+| Public subnet | A subnet whose route table has a route to an Internet Gateway |
+| Private subnet | A subnet with outbound internet access via a NAT Gateway but no inbound path |
+| Isolated subnet | A subnet with no route to the internet in either direction |
+| Route table | The set of routes applied to traffic leaving a subnet |
+| Main route table | The default route table used by any subnet without an explicit association |
+| Local route | The immutable route for the VPC's own CIDR blocks; always present and always wins for intra-VPC traffic |
+| Longest prefix match | The rule that the most specific matching route is chosen |
+| Implicit router | The distributed forwarding function inside a VPC, addressed at the second IP of each subnet |
+| Internet Gateway | The VPC component providing an internet path and one-to-one NAT for public addresses |
+| NAT Gateway | A managed zonal component providing outbound-only internet access via port address translation |
+| Egress-only Internet Gateway | The IPv6 equivalent of outbound-only access, with no address translation |
+| Elastic IP | A static public IPv4 address allocated to your account and remappable between resources |
+| Elastic network interface (ENI) | A virtual network interface carrying private and public addresses, MAC address, and security groups |
+| Security group | A stateful, allow-only packet filter attached to network interfaces |
+| Network ACL | A stateless, ordered allow and deny filter attached to subnets |
+| Ephemeral port | The short-lived high-numbered source port a client uses, typically 1024 to 65535 |
+| Connection tracking | The per-flow state that makes security groups stateful |
+| Prefix list | A named, reusable set of CIDR blocks usable in routes and security group rules |
+| Gateway endpoint | A route-table-based private path to Amazon S3 or DynamoDB, at no charge |
+| Interface endpoint | An ENI in your subnet providing a private path to a service via AWS PrivateLink |
+| AWS PrivateLink | The technology behind Interface endpoints and endpoint services, exposing a service by private IP |
+| VPC endpoint service | A service you publish behind an NLB or GWLB for others to consume via PrivateLink |
+| VPC peering | A non-transitive one-to-one private connection between two VPCs |
+| Transit Gateway | A regional hub providing transitive routing between VPCs, VPNs, and Direct Connect |
+| Transit Gateway route table | A routing domain within a Transit Gateway used to segment which attachments can reach which |
+| Direct Connect | A dedicated physical network circuit between a customer location and AWS |
+| Site-to-Site VPN | Encrypted IPsec tunnels between a customer gateway and AWS over the internet |
+| VPC Flow Logs | Records of accepted and rejected IP flow metadata for a VPC, subnet, or ENI |
+| Traffic Mirroring | Copying packets from an ENI to a monitoring appliance for deep inspection |
+| Reachability Analyzer | A static configuration analysis tool that determines whether a path exists between two resources |
+| Route 53 Resolver | The VPC-internal recursive DNS resolver, at the VPC base address plus two |
+| Hosted zone | A container for DNS records for a domain; public or private |
+| Split-horizon DNS | The same domain name resolving differently inside a VPC and on the public internet |
+| Alias record | A Route 53 record type pointing to an AWS resource, usable at the zone apex and not charged |
+| TTL | The duration for which a resolver may cache a DNS answer |
+| Routing policy | The Route 53 rule determining which record is returned for a query |
+| Health check | A Route 53 probe of an endpoint, a CloudWatch alarm, or a combination of other checks |
+| Traffic Flow | The Route 53 visual editor that composes routing policies into versioned traffic policies |
+| DNSSEC | Cryptographic signing of DNS records to prevent spoofing and cache poisoning |
+| Resolver endpoint | Inbound or outbound endpoints enabling DNS forwarding between a VPC and on-premises networks |
+| Listener | The load balancer component defining the protocol and port on which client connections are accepted |
+| Target group | The set of registered targets a load balancer forwards to, with its own health check |
+| Connection draining | Deregistration delay, allowing in-flight requests to complete before a target is removed |
+| Cross-zone load balancing | Distributing traffic evenly across all targets in all zones rather than per zone |
+| Origin Access Control | The CloudFront mechanism allowing access to a private S3 bucket without making it public |
+| Stage | A named deployment of an API Gateway API with its own settings and URL |
+| Integration | The backend that API Gateway invokes for a route or method |
+| VPC Link | The API Gateway construct that reaches private resources in a VPC |
+| Authorizer | The API Gateway component that authenticates and authorizes a request |
+| Usage plan | A REST API construct binding API keys to throttle and quota limits |
+| Token bucket | The throttling algorithm using a steady refill rate plus a burst allowance |
+| Mapping template | A Velocity Template Language transformation of an API Gateway request or response |
+| awsvpc mode | The ECS networking mode giving each task its own ENI, private IP, and security groups |
+| Amazon VPC CNI | The EKS networking plugin that assigns VPC IP addresses directly to pods |
+| Control plane | The APIs that create and change configuration |
+| Data plane | The path that actually carries traffic |
+
+---
 
 ## Configuration Options
 
-### Amazon RDS and Aurora
+### VPC and Subnet Configuration
 
-| Configuration | Options and guidance |
-|---|---|
-| Engine and version | PostgreSQL, MySQL, MariaDB, Oracle, SQL Server, Db2, Aurora PostgreSQL, Aurora MySQL. Prefer Aurora when the workload benefits from its storage architecture and read scaling; prefer community engines when portability or licence cost dominates |
-| Instance class | `db.t` burstable for development, `db.m` general purpose, `db.r` memory-optimised for large working sets, `db.x` for extreme memory. Graviton-based classes usually offer better price-performance |
-| Deployment option | Single-AZ for non-production only; Multi-AZ instance deployment for standard high availability; Multi-AZ DB cluster for faster failover and two readable standbys; Aurora cluster for the storage-decoupled architecture |
-| Storage type | `gp3` general purpose for most workloads, `io1` or `io2` Provisioned IOPS for sustained high I/O with low latency variance. Aurora manages storage automatically |
-| Storage auto scaling | Enable it, with a maximum threshold. Running out of storage takes a database offline |
-| Backup retention | Zero disables automated backups and point-in-time recovery entirely; production should use seven to thirty-five days |
-| Backup window and maintenance window | Set explicitly to low-traffic periods rather than accepting the default |
-| Parameter group | Custom groups allow tuning of `max_connections`, `work_mem`, `shared_buffers`, timeouts, and logging. Note that static parameters require a reboot |
-| Option group | Engine-specific features such as Oracle Transparent Data Encryption, SQL Server Audit, or MariaDB audit plugin |
-| Encryption at rest | Enable at creation with a KMS key. An unencrypted instance cannot be converted in place; it must be snapshotted, copied with encryption, and restored |
-| Performance Insights | Enable it. The retention period beyond the free tier is billable but the diagnostic value is high |
-| Deletion protection | Enable in production; it prevents accidental deletion through the API or console |
-| Aurora Serverless v2 capacity range | Minimum and maximum Aurora Capacity Units; the minimum determines both cost floor and cold-scaling behaviour |
+| Setting | Options | Guidance |
+|---|---|---|
+| VPC CIDR | `/16` to `/28`, plus secondary blocks | Choose `/16` unless you have a strong reason; unused address space is free |
+| Tenancy | Default or dedicated | Dedicated tenancy is expensive and rarely required; it cannot be reverted for the VPC |
+| DNS support and hostnames | Enabled or disabled | Enable both; Interface endpoint private DNS depends on them |
+| Subnet auto-assign public IPv4 | On or off | Off for private and isolated subnets; on only for genuinely public subnets, and prefer explicit Elastic IPs |
+| IPv6 | Amazon-provided `/56`, or bring your own | Consider dual stack to reduce IPv4 address charges and avoid NAT for outbound |
+| Route table association | Explicit or main | Always associate explicitly; relying on the main route table causes accidents |
+| NAT | NAT Gateway or self-managed NAT instance | NAT Gateway unless you need a very low-traffic development environment at minimal cost |
+| DHCP option set | Amazon-provided or custom | Custom sets are used to point at on-premises DNS servers in hybrid designs |
 
-### Amazon DynamoDB
+### Endpoint, Peering, and Transit Configuration
 
-| Configuration | Options and guidance |
-|---|---|
-| Capacity mode | On-demand for unpredictable, spiky, or new workloads; provisioned with auto scaling for steady, forecastable traffic where the discount matters |
-| Table class | Standard for typical access patterns; Standard-Infrequent Access for large tables read rarely, trading higher request cost for lower storage cost |
-| Primary key | Simple partition key for pure key-value lookups; composite partition and sort key wherever a one-to-many relationship or range query exists |
-| Secondary indexes | GSIs for alternative access patterns, created at any time, eventually consistent, separately provisioned; LSIs only at table creation, sharing the partition key, strongly consistent, subject to a 10 GB item-collection limit |
-| Index projection | `KEYS_ONLY` is cheapest, `INCLUDE` is usually optimal, `ALL` avoids base-table fetches but duplicates storage and write cost |
-| Point-in-time recovery | Enable for any table holding business data; it provides second-granularity restore across the retention window |
-| Time to live | Specify an attribute holding a Unix epoch timestamp; expired items are removed asynchronously without consuming write capacity |
-| Streams | Enable with `NEW_AND_OLD_IMAGES` when downstream event-driven processing needs before-and-after state |
-| Encryption | Enabled by default with an AWS owned key; choose an AWS managed or customer managed KMS key where audit or key-control requirements exist |
-| Global Tables | Add replica Regions for multi-active global access; be explicit that conflict resolution is last-writer-wins |
-| DAX | Add when read latency must fall below single-digit milliseconds to microseconds and the workload is read-dominant |
+| Setting | Options | Guidance |
+|---|---|---|
+| Endpoint type | Gateway or Interface | Gateway for S3 and DynamoDB always; Interface for everything else you use frequently |
+| Interface endpoint private DNS | Enabled or disabled | Enable so existing code needs no change; disable when you must reach both the endpoint and the public service |
+| Endpoint policy | Full access or restricted | Restrict to your own buckets and accounts to prevent exfiltration to third-party buckets |
+| Peering DNS resolution | Enabled or disabled | Enable so private hosted-zone names resolve across the peering |
+| Transit Gateway route tables | Single shared or multiple segmented | Use separate route tables to build production, non-production, and shared-services segments |
+| Transit Gateway appliance mode | On or off | Enable when traffic must remain on the same appliance across Availability Zones, for stateful inspection |
+| Route propagation | Static or propagated (BGP) | Propagation reduces manual routes for VPN and Direct Connect but obscures intent; document it |
 
-### Amazon ElastiCache
+### Load Balancer Configuration
 
-| Configuration | Options and guidance |
-|---|---|
-| Engine | Redis or Valkey for almost all cases; Memcached only for simple, disposable, multi-threaded object caching |
-| Cluster mode | Disabled for a single shard up to the node's memory; enabled when memory or write throughput exceeds one node |
-| Node type | `cache.t` for development, `cache.m` general purpose, `cache.r` memory-optimised. Data-tiering node families reduce cost per gigabyte for large, partly cold datasets |
-| Multi-AZ and automatic failover | Enable for any cache whose loss would stampede the origin database |
-| `maxmemory-policy` | `allkeys-lru` for a pure cache; `volatile-lru` or `volatile-ttl` when some keys must never be evicted; avoid `noeviction` unless write failure is genuinely preferable to eviction |
-| Encryption | At rest with KMS and in transit with TLS; enable Redis RBAC users rather than a single shared AUTH token |
-| Snapshot retention | Useful for warm restart of a large cache, not as a durability mechanism |
-| Serverless | Choose when demand is unpredictable and node sizing is undesirable operational work |
+| Setting | Options | Guidance |
+|---|---|---|
+| Scheme | Internet-facing or internal | Internal for anything behind an API Gateway VPC Link or another service |
+| Target type | Instance, IP, Lambda, ALB | IP targets are required for `awsvpc` ECS tasks and for on-premises targets |
+| Health check | Protocol, path, interval, thresholds, matcher | Point at a real dependency-aware health endpoint, not at `/` |
+| Deregistration delay | 0 to 3600 seconds | Set it to slightly longer than your longest request to avoid dropping in-flight work |
+| Cross-zone load balancing | On by default for ALB; off by default for NLB | Enabling on NLB improves distribution but incurs cross-AZ data charges |
+| Idle timeout | Default 60 seconds on ALB | Must exceed the client and backend keep-alive settings, or you will see intermittent 502 responses |
+| TLS policy | Predefined security policies | Choose the most restrictive policy your clients support; review annually |
+
+### API Gateway Configuration
+
+| Setting | Options | Guidance |
+|---|---|---|
+| API type | REST, HTTP, WebSocket | Default to HTTP; choose REST for WAF, keys, caching, validation, or private endpoints |
+| Endpoint type | Edge-optimized, Regional, Private | Regional plus your own CloudFront gives the most control; Private for internal-only APIs |
+| Integration | Lambda proxy, HTTP proxy, AWS service, VPC Link, MOCK | Prefer proxy integrations; use AWS service integrations to remove compute entirely |
+| Authorizer | IAM, Cognito, JWT, Lambda | JWT on HTTP APIs is zero-code; Lambda authorizers need result caching to perform |
+| Throttling | Account, stage, route, usage plan | Set per-route limits to protect fragile downstreams, not just to control cost |
+| Caching | Off, or 0.5 GB to 237 GB per stage | Only for REST APIs; charged by size per hour, so justify it with a measured hit rate |
+| Logging | Access logs, execution logs, X-Ray | Enable structured JSON access logs always; execution logs are verbose and expensive |
+| CORS | Per-API or per-route | Configure at the gateway rather than in every handler |
+
+---
 
 ## Design Considerations
 
+### The Entry-Point Decision Framework
+
+```mermaid
+flowchart TD
+    START["A client must reach my workload"] --> Q1{"Is it an API needing auth, throttling, and validation as managed capability"}
+    Q1 -->|"Yes"| Q2{"Do I need WAF, API keys, caching, or private endpoints"}
+    Q2 -->|"Yes"| REST["API Gateway REST API"]
+    Q2 -->|"No"| HTTP["API Gateway HTTP API"]
+    Q1 -->|"No"| Q3{"Is the protocol HTTP or HTTPS"}
+    Q3 -->|"No, it is TCP, UDP, or TLS passthrough"| NLB["Network Load Balancer"]
+    Q3 -->|"Yes"| Q4{"Do I need static IP addresses or extreme throughput at minimal latency"}
+    Q4 -->|"Yes"| NLB
+    Q4 -->|"No"| Q5{"Do I need host, path, or header based routing to many services"}
+    Q5 -->|"Yes"| ALB["Application Load Balancer"]
+    Q5 -->|"No"| Q6{"Is the backend a single Lambda function with simple needs"}
+    Q6 -->|"Yes"| FURL["Lambda Function URL"]
+    Q6 -->|"No"| ALB
+    REST --> CDN{"Are users globally distributed or is content cacheable"}
+    HTTP --> CDN
+    ALB --> CDN
+    NLB --> GA{"Do I need anycast static IPs with fast regional failover"}
+    CDN -->|"Yes"| CF["Place CloudFront in front"]
+    GA -->|"Yes"| AGA["Place AWS Global Accelerator in front"]
+```
+Generate a professional with proper symbol in whie background image 
+
+
+
 ### Scalability
 
-Relational databases scale writes vertically, which has a hard ceiling. Aurora pushes that ceiling higher by decoupling storage, and read scaling is straightforward with up to fifteen low-lag replicas sharing one storage volume. DynamoDB scales horizontally by partition and is, for practical purposes, unbounded — provided the partition key distributes traffic evenly. This is the single most consequential design decision in a DynamoDB table, and it cannot be changed after the fact without a migration.
+The VPC fabric does not need to be scaled, but three things do: **address space**, **NAT capacity**, and **downstream capacity**. Address exhaustion is the most common hard wall, especially with EKS and the Amazon VPC CNI, where every pod consumes a VPC IP address. A 300-node cluster running 30 pods per node needs roughly 9,000 addresses in the pod subnets alone, plus warm-pool headroom the CNI keeps per node. Mitigations include large secondary CIDRs dedicated to pods, custom networking to place pods in a secondary `100.64.0.0/10` range, or prefix delegation to allocate `/28` blocks per ENI.
 
-!!! warning "Scalability is a property of the data model, not the service"
-    A DynamoDB table with `status` as the partition key does not scale, no matter how much capacity is provisioned, because all `ACTIVE` items land on one partition. The service is horizontally scalable; a badly keyed table is not.
+For API Gateway, scaling is automatic but must be **bounded**: unbounded scaling simply relocates the failure to your database. Per-route throttling plus Lambda reserved concurrency plus RDS Proxy for connection pooling constitute a coherent back-pressure chain.
 
-### Availability
+### Availability and Fault Tolerance
 
-RDS Multi-AZ provides automatic failover typically within one to two minutes for the instance deployment, and often under thirty-five seconds for a Multi-AZ DB cluster. Aurora typically fails over in under thirty seconds because the storage layer survives the compute failure. DynamoDB replicates synchronously across three Availability Zones as a service property, with no configuration and no failover event visible to the application. ElastiCache with Multi-AZ promotes a replica automatically, but the cache is a performance component, and the architecture must survive its absence.
+Enumerate the zonal components: subnets, NAT Gateways, Interface endpoint ENIs, EC2 instances, ECS tasks, single-AZ RDS instances. Each one is a component whose loss must be survivable.
 
-### Reliability and Durability
-
-| Service | Durability mechanism | Recovery capability |
+| Component | Zonal or regional | Availability design |
 |---|---|---|
-| RDS | Synchronous standby, automated backups, transaction logs | Point-in-time recovery within the retention window, up to thirty-five days |
-| Aurora | Six-way replication across three AZs, quorum writes, continuous backup to Amazon S3, self-healing storage | Point-in-time recovery, backtrack on Aurora MySQL, fast clone |
-| DynamoDB | Synchronous replication across three AZs | Point-in-time recovery to any second in the retention window, on-demand backups |
-| ElastiCache | Asynchronous replication, optional snapshots | Restore from snapshot; recent writes may be lost. Not a system of record |
+| Internet Gateway | Highly available by design | Nothing to do |
+| NAT Gateway | Zonal | One per Availability Zone, with per-zone route tables |
+| Interface endpoint | ENI per Availability Zone | Create in every zone the workload uses |
+| ALB and NLB | Nodes per subnet | Enable at least two, preferably three, subnets |
+| ECS or EKS workload | Task or pod placement | Spread across zones with placement or topology constraints |
+| RDS | Single-AZ or Multi-AZ | Multi-AZ for production; Multi-AZ cluster for faster failover and readable standbys |
+| Route 53 | Global | Health checks plus failover records |
+| API Gateway | Regional, multi-AZ | Multi-Region only if the requirement justifies it |
+
+!!! danger "The Single NAT Gateway Anti-Pattern"
+    A very common cost-saving decision is to deploy one NAT Gateway and route all private subnets to it. This creates two problems at once. First, if that Availability Zone fails, **every** private subnet in the VPC loses outbound internet access, including the zones that are still healthy — a zonal failure has become a VPC-wide failure. Second, all traffic from other zones crosses an Availability Zone boundary and incurs cross-AZ data-transfer charges in addition to NAT processing charges. The saving is one NAT Gateway's hourly rate; the cost is a correlated failure mode and a per-gigabyte surcharge.
+
+### Reliability
+
+Prefer designs whose failure recovery uses only data planes. Pre-provision standby capacity rather than planning to create it during an incident. Use health checks that reflect the ability to serve real requests, including critical dependencies, but be careful: a health check that fails when a non-critical dependency is degraded will remove healthy capacity and turn a partial outage into a total one. Distinguish **shallow** health checks (is the process alive?) used for load-balancer target health from **deep** checks used for alarms.
+
+### Durability
+
+Networking components hold little state, but two exceptions matter: DNS records, which are configuration whose loss is an outage and which should therefore live in version-controlled Infrastructure as Code, and VPC Flow Logs, which are evidence and should be delivered to an S3 bucket in a separate, restricted logging account with object lock where compliance demands it.
 
 ### Latency
 
-Latency decreases as data moves closer to memory and closer to the caller. A rough ordering for a well-designed system is: DAX or ElastiCache in the microsecond to low-millisecond range, DynamoDB in single-digit milliseconds, Aurora in low single-digit milliseconds for cached pages, and RDS with cold disk reads in the tens of milliseconds. Cross-Region reads add the physical propagation delay, which no amount of engineering removes.
+Every hop costs. A request path of CloudFront, API Gateway, Lambda, RDS Proxy, RDS has five network legs, and each adds latency and a failure mode. Reduce by: terminating TLS at the edge (large win for distant users), keeping components in the same Availability Zone when consistent with availability requirements, using connection reuse everywhere, and deleting components that exist only out of habit. Cross-AZ latency is single-digit milliseconds — negligible for a web request, significant for a chatty service making 50 sequential calls per request.
 
 ### Cost
 
-The cost structures differ so fundamentally that comparing them requires modelling the actual access pattern. RDS and ElastiCache bill for provisioned capacity whether or not it is used, so utilisation is the dominant cost lever. DynamoDB on-demand bills per request, so request count and item size dominate. A workload with sustained, predictable, high throughput usually favours provisioned capacity or reserved instances; a workload that is idle most of the time usually favours on-demand and serverless modes.
+Networking is where cloud bills surprise people, because the charges are per gigabyte and invisible in application code. The dominant dimensions are NAT Gateway processing, cross-AZ data transfer, internet egress, Interface endpoint hours, Transit Gateway attachment hours and processing, and public IPv4 address hours.
 
 ### Maintainability and Operational Complexity
 
-Relational schemas are self-describing and support ad hoc query, which makes them forgiving of requirements that change after launch. DynamoDB single-table designs are extremely efficient for known access patterns and extremely awkward for unknown ones; adding a genuinely new access pattern often means adding a global secondary index or backfilling data. The honest trade-off is that DynamoDB moves design effort forward in time: more thinking before the first write, far less firefighting at scale.
+Prefer fewer moving parts. A Transit Gateway is more complex than one peering connection but far simpler than fifteen. Security groups referencing other security groups are dramatically more maintainable than CIDR lists. Everything should be defined in code; a network built by console clicking cannot be reviewed, cannot be reproduced in another Region, and cannot be recovered quickly.
 
-!!! question "The question to ask before choosing DynamoDB"
-    Can you enumerate every access pattern the application will need? If yes, DynamoDB will serve them at any scale. If no, and the query patterns will be discovered through use, a relational database will absorb that uncertainty far more gracefully.
+---
 
 ## AWS Best Practices
 
 ### Operational Excellence
 
-- Define databases as code with CloudFormation, the CDK, or Terraform, and manage schema changes with a migration tool such as Flyway, Liquibase, or Alembic executed from the CI/CD pipeline rather than by hand.
-- Set explicit maintenance and backup windows aligned to genuine low-traffic periods.
-- Enable Performance Insights on RDS and Aurora, and Contributor Insights on DynamoDB, before an incident rather than during one.
-- Practise failover. An untested failover is an assumption, not a capability. Aurora and RDS both support forced failover for exactly this purpose.
-- Tag every database resource with owner, environment, and cost centre so that cost attribution and lifecycle policy are possible.
+- Define the entire network in CloudFormation, CDK, or Terraform. Networking is the least frequently changed and most catastrophic-to-lose layer, which makes it the highest-value candidate for Infrastructure as Code.
+- Separate the network stack from the application stack, and export values (VPC ID, subnet IDs, security group IDs) through CloudFormation exports, SSM Parameter Store, or Terraform remote state. Application deployments should never be able to modify subnets.
+- Tag every network resource with owner, environment, cost centre, and data classification. Cost allocation for data transfer is impossible without tags.
+- Use Reachability Analyzer in CI to assert that a path exists (or does not exist) before merging a change.
 
 ### Security
 
-- Place every database in private subnets with no route to an Internet Gateway. A publicly accessible RDS instance is almost never justified.
-- Restrict access with security groups referencing the application tier's security group rather than CIDR ranges.
-- Use IAM database authentication or Secrets Manager with automatic rotation instead of static credentials in configuration files or environment variables.
-- Enable encryption at rest at creation time and encryption in transit through TLS, and enforce TLS at the engine level with a parameter such as `rds.force_ssl`.
-- Apply least privilege inside the database as well as in IAM. Application accounts should not own schemas or hold administrative rights.
+- Default deny. Private subnets by default; a public subnet is an exception that needs justification.
+- Security groups reference security groups, not CIDRs, wherever both ends are in AWS.
+- Restrict endpoint policies and use `aws:SourceVpce` conditions in resource policies so that even valid credentials cannot be used from outside your network.
+- Enable VPC Flow Logs everywhere, in a custom format that includes the flow direction and TCP flags, and centralise them.
+- Use AWS Network Firewall or Route 53 Resolver DNS Firewall for egress filtering when the threat model includes data exfiltration.
 
 ### Reliability
 
-- Enable Multi-AZ for every production relational database and deletion protection for every database whose loss would be material.
-- Set backup retention deliberately; a retention of zero silently disables point-in-time recovery.
-- Enable point-in-time recovery on DynamoDB tables holding business data.
-- Design the application to tolerate cache absence, replica lag, and transient failover errors, with bounded retries using exponential backoff and jitter.
-- Test restores, not just backups. A backup that has never been restored is an untested hypothesis.
+- Three Availability Zones where the Region offers them; two is the minimum for production.
+- One NAT Gateway per zone, per-zone private route tables.
+- Health checks at every layer, and failover paths tested by deliberately breaking things (game days).
+- Avoid recovery procedures that depend on control-plane APIs in the impaired Region.
 
 ### Performance Efficiency
 
-- Match the data store to the access pattern rather than defaulting to a single technology across the estate.
-- Cache the hot working set, and set TTLs from the tolerable-staleness requirement.
-- Use `Query` rather than `Scan`; a full-table `Scan` in a request path is a defect.
-- Use RDS Proxy where a highly concurrent or serverless compute tier connects to a relational database.
-- Index deliberately. Every index accelerates reads and taxes writes and storage.
+- Put CloudFront in front of anything user-facing, cacheable or not.
+- Use Gateway endpoints for S3 and DynamoDB unconditionally; they are free and remove NAT from a very high-volume path.
+- Reuse connections: HTTP keep-alive, database connection pools, and, for Lambda, clients instantiated outside the handler.
+- Choose instance types with sufficient network bandwidth and enable enhanced networking.
 
 ### Cost Optimization
 
-- Right-size instances against observed utilisation rather than against peak-day guesses, and use Compute Optimizer and Trusted Advisor recommendations.
-- Purchase Reserved Instances or Savings Plans for steady baseline database capacity.
-- Move DynamoDB tables with predictable traffic from on-demand to provisioned with auto scaling once the pattern is established, and consider the Standard-Infrequent Access table class for large, rarely read tables.
-- Stop or downsize non-production databases outside working hours; an always-on development database is one of the most common sources of avoidable spend.
-- Set log retention. Unbounded CloudWatch Logs retention grows silently and indefinitely.
+- Audit NAT Gateway traffic with Flow Logs; move the top talkers to endpoints.
+- Release unused Elastic IPs and remove unnecessary public IPv4 addresses.
+- Consider dual-stack or IPv6-only subnets with an egress-only Internet Gateway to eliminate NAT entirely for outbound-only IPv6 workloads.
+- Keep chatty traffic within an Availability Zone where the availability requirement permits it.
+- Prefer HTTP APIs over REST APIs unless a REST-only feature is genuinely needed.
 
 ### Sustainability
 
-Serverless and on-demand capacity modes improve aggregate hardware utilisation, which reduces energy consumption per unit of work. Graviton-based instance classes deliver better performance per watt. Deleting unused snapshots, unattached storage, and idle replicas removes real physical resource consumption, not merely a line on an invoice.
+Reducing data transferred reduces energy consumed. Caching at the edge, compressing responses, choosing efficient serialisation formats, and eliminating unnecessary hops are sustainability measures as well as performance and cost measures. Right-sizing and consolidating idle NAT Gateways and endpoints in non-production environments has a real effect at organisational scale.
+
+---
 
 ## Security Considerations
 
-### Identity and Access Management
-
-Database security in AWS operates at two distinct layers that students routinely conflate. The **IAM layer** governs control-plane actions: who may create, modify, snapshot, or delete a database. The **engine layer** governs data-plane access: which database user may read which table. An IAM policy granting `rds:*` does not grant the ability to run a `SELECT`, and a database grant does not permit deleting the instance.
-
-DynamoDB is the exception that proves the rule, because its data plane *is* an AWS API. Every `GetItem` and `PutItem` is an IAM-authorised action, which allows remarkably fine-grained control.
-
-```json
-{
-  "Version": "2012-10-17",
-  "Statement": [{
-    "Sid": "TenantIsolationByLeadingKey",
-    "Effect": "Allow",
-    "Action": ["dynamodb:GetItem", "dynamodb:Query", "dynamodb:PutItem", "dynamodb:UpdateItem"],
-    "Resource": "arn:aws:dynamodb:us-east-1:111122223333:table/Orders",
-    "Condition": {
-      "ForAllValues:StringEquals": {
-        "dynamodb:LeadingKeys": ["${aws:PrincipalTag/tenantId}"]
-      }
-    }
-  }]
-}
-```
-
-!!! tip "Fine-grained access control in DynamoDB"
-    The `dynamodb:LeadingKeys` condition key restricts a principal to items whose partition key matches a value derived from their identity. This enforces multi-tenant isolation in IAM rather than in application code, which means a bug in the application cannot leak another tenant's data.
-
-### Least Privilege
-
-Application database accounts should hold only the privileges the application exercises. In practice this means separate accounts for migrations (which need DDL) and for runtime (which needs only DML), and separate read-only accounts for analytics and reporting consumers. For DynamoDB, grant specific actions on specific table and index ARNs rather than `dynamodb:*` on `*`.
-
-### Encryption and Key Management
-
-| Layer | RDS and Aurora | DynamoDB | ElastiCache |
-|---|---|---|---|
-| At rest | KMS-encrypted volumes, snapshots, and logs; must be enabled at creation | Always encrypted; choose AWS owned, AWS managed, or customer managed KMS key | KMS encryption at rest, enabled at creation |
-| In transit | TLS to the endpoint; enforce with `rds.force_ssl` or engine equivalent | TLS on all API endpoints by default | TLS in transit, enabled at creation |
-| Key control | Customer managed keys allow rotation policy, key deletion, and cross-account grants | Customer managed keys allow denying the service access by revoking the key | Customer managed keys supported |
-
-!!! danger "Encryption at rest cannot be enabled in place"
-    For RDS and ElastiCache, encryption at rest is set at creation. Converting an unencrypted database requires taking a snapshot, copying the snapshot with encryption enabled, and restoring from the copy — a migration with downtime. Decide before creation, not after an audit.
-
-### Secrets Management
-
-Store database credentials in AWS Secrets Manager with automatic rotation, and retrieve them at runtime through the SDK or through native integration such as ECS task-definition `secrets` blocks. For RDS and Aurora, IAM database authentication removes the password entirely, issuing a short-lived token derived from IAM credentials — an excellent fit for Lambda and containerised workloads because it eliminates the long-lived secret rather than merely protecting it.
-
-### Network Isolation
+### Defence in Depth Applied to the Network
 
 ```mermaid
 graph TD
-    IGW["Internet Gateway"] --> PUB["Public Subnets"]
-    PUB --> ALB["Application Load Balancer"]
-    ALB --> APPSG["App Security Group in Private Subnets"]
-    APPSG --> DBSG["Database Security Group"]
-    DBSG --> RDS["RDS Multi-AZ"]
-    APPSG --> CACHESG["Cache Security Group"]
-    CACHESG --> EC["ElastiCache Replication Group"]
-    APPSG --> VPCE["Gateway VPC Endpoint"]
-    VPCE --> DDB["Amazon DynamoDB"]
+    A["Layer 1 - AWS Shield absorbs volumetric DDoS at the edge"] --> B["Layer 2 - AWS WAF inspects HTTP for injection and bad bots"]
+    B --> C["Layer 3 - API Gateway authorizer verifies identity and scopes"]
+    C --> D["Layer 4 - Throttling limits blast radius of an abusive caller"]
+    D --> E["Layer 5 - Network ACL provides a coarse subnet guardrail"]
+    E --> F["Layer 6 - Security group allows only the required source and port"]
+    F --> G["Layer 7 - IAM and resource policies authorise the API action"]
+    G --> H["Layer 8 - Encryption in transit with TLS and at rest with KMS"]
+    H --> I["Layer 9 - VPC Flow Logs and CloudTrail record what happened"]
 ```
+Generate a professional with proper symbol in whie background image 
 
-The database security group should permit inbound traffic on the engine port **only** from the application security group, expressed as a security-group reference rather than a CIDR. DynamoDB, being a public AWS API endpoint, should be reached through a Gateway VPC endpoint so that traffic never traverses the public internet or a NAT Gateway — which is both a security improvement and a meaningful cost saving.
 
-### Logging, Auditing and Compliance
 
-- **AWS CloudTrail** records every control-plane action and, for DynamoDB, optionally data-plane events.
-- **Database logs** — PostgreSQL and MySQL error, slow-query, and audit logs — can be exported to CloudWatch Logs for retention and alerting.
-- **Amazon RDS Enhanced Monitoring** provides operating-system-level metrics at up to one-second granularity.
-- **AWS Config** rules detect publicly accessible instances, unencrypted storage, and disabled backups.
-- **Amazon Macie**, **GuardDuty RDS Protection**, and **Security Hub** provide anomaly and sensitive-data detection.
+### IAM and Least Privilege
 
-For regulated workloads, note that RDS and DynamoDB are in scope for common compliance programmes, but compliance is a shared outcome: AWS certifies the service, and the customer must still configure encryption, access control, retention, and audit logging correctly.
+Network permissions are among the most dangerous in AWS. `ec2:AuthorizeSecurityGroupIngress` allows an actor to open a database to the world; `ec2:CreateRoute` allows an actor to create an internet path from an isolated subnet. Separate these from application-deployment roles. Use IAM condition keys and Service Control Policies to prevent, for example, the creation of Internet Gateways in accounts that must remain isolated, or the modification of a security group rule to `0.0.0.0/0` on port 22 or 3389.
+
+### Encryption
+
+Traffic between Availability Zones and between Regions on the AWS backbone is encrypted at the physical layer by AWS, but that is not a substitute for application-level TLS. Terminate TLS at CloudFront or the load balancer, and re-encrypt to the backend when the data classification requires end-to-end encryption. Use ACM for certificate issuance and automatic renewal; ACM certificates used with CloudFront must be issued in `us-east-1`, while certificates for a Regional load balancer or Regional API Gateway must be in the same Region as the resource.
+
+### KMS and Secrets Manager
+
+Database credentials should never be in environment variables or images. Store them in Secrets Manager with automatic rotation, retrieve them at runtime over an **Interface endpoint** so the request never leaves the AWS network, and grant access through an IAM role scoped to a single secret. Encrypt with a customer-managed KMS key when you need key-level audit and revocation. The KMS key policy plus the `aws:SourceVpce` condition together mean that a leaked credential is unusable from outside your VPC.
+
+### Public Versus Private Resources
+
+The correct default is that nothing has a public IP address. Load balancers and NAT Gateways live in public subnets; everything else does not. Administrative access uses **AWS Systems Manager Session Manager**, which requires no inbound port, no bastion host, no SSH key management, and produces a full CloudTrail and session log. If Session Manager is used with Interface endpoints for `ssm`, `ssmmessages`, and `ec2messages`, administrative access works with no internet path at all.
+
+!!! danger "Port 22 Open to 0.0.0.0/0"
+    This is the single most common finding in AWS security assessments. It is also entirely avoidable: Session Manager removes the need for inbound SSH completely. If you must use SSH, use EC2 Instance Connect Endpoint, which provides SSH connectivity to private instances through an AWS-managed endpoint without a public IP or a bastion.
+
+### Logging and Compliance
+
+Enable VPC Flow Logs, CloudTrail (organisation trail, into a separate account, with log-file validation), Route 53 Resolver query logging, ALB and CloudFront access logs, and API Gateway access logs. Together these answer the questions an incident responder asks: who called what API, what resolved which name, what flows were attempted, and which were rejected. For regulated workloads, note that Flow Logs capture metadata only, not payloads; Traffic Mirroring is required when packet contents must be inspected.
+
+---
 
 ## Performance Optimization
 
 ### Caching
 
-The highest-leverage performance optimisation available is usually to avoid the database query entirely.
+- **CloudFront** for static assets and for cacheable API responses. Design the cache key deliberately: forwarding every header and cookie to the origin reduces the hit rate to nearly zero.
+- **API Gateway stage cache** for REST APIs where identical requests repeat, with the cache key derived from specific path and query parameters.
+- **Lambda authorizer caching**, keyed on the identity source, so that a token is validated once per TTL rather than once per request.
+- **ElastiCache** for application-level and database query caching inside the VPC.
+- **DNS TTL** is a cache too; a longer TTL reduces query cost and latency at the price of slower change propagation.
 
-```mermaid
-graph LR
-    C["Client"] --> CF["CloudFront edge cache"]
-    CF --> API["Application"]
-    API --> DAX["DynamoDB Accelerator"]
-    API --> EC["ElastiCache"]
-    DAX --> DDB["DynamoDB"]
-    EC --> RDS["RDS or Aurora"]
-```
+### Auto Scaling and Load Balancing
 
-Each layer removes work from the layer beneath it. A well-tuned cache hierarchy commonly serves 90 to 99 percent of reads before they reach the primary database, which allows that database to be provisioned for the residual rather than for the peak.
+Scale on a metric that reflects real load. For an ALB-fronted service, `RequestCountPerTarget` is usually a better signal than CPU utilisation, because it scales on demand rather than on symptom. Use target tracking rather than step scaling where possible. Enable connection draining long enough for in-flight requests to finish, and set the ALB idle timeout above your backend keep-alive so that the load balancer, not the backend, closes idle connections.
 
-### Read Scaling
+### Parallelism and Connection Reuse
 
-Add RDS or Aurora read replicas and direct read-only traffic to the reader endpoint. This is effective and cheap, but it introduces replica lag, and any read that must reflect the caller's own immediately preceding write must go to the writer. The pattern of routing "read your own writes" to the primary and everything else to replicas is a standard and worthwhile complication.
+Sequential dependent calls dominate tail latency in microservice architectures. Parallelise independent calls. Reuse connections at every layer: HTTP keep-alive between services, an SDK client created once outside a Lambda handler, and RDS Proxy so that thousands of Lambda invocations share a small pool of database connections rather than exhausting `max_connections`.
 
-### Connection Management
+!!! tip "The Single Highest-Value Lambda Networking Optimisation"
+    Instantiate SDK clients, database connections, and secret lookups **outside** the handler function. They are then created once per execution environment rather than once per invocation, removing TLS handshakes and credential fetches from the hot path. This routinely halves p50 latency in real services.
 
-Establishing a database connection is expensive — a TCP handshake, a TLS negotiation, and engine-side authentication and process or thread allocation. Connection pooling amortises this. In serverless and highly elastic architectures, where compute scales horizontally and each execution environment would otherwise hold its own connection, **Amazon RDS Proxy** is the correct answer: it maintains a warm pool, multiplexes many client connections onto few database connections, and improves failover behaviour by holding client connections open during a failover.
+### Lambda in a VPC
 
-!!! warning "The Lambda connection-exhaustion failure"
-    A Lambda function scaling to 1,000 concurrent executions against a `db.t3.medium` will exhaust `max_connections` and fail. The remedy is RDS Proxy, supported by reserved concurrency to bound the blast radius, and by opening connections outside the handler so that warm invocations reuse them.
+A Lambda function attached to a VPC uses **Hyperplane ENIs**, shared network interfaces created per unique combination of subnet and security group set. This design removed the multi-second cold-start penalty that VPC-attached Lambda functions suffered before 2019. Two consequences remain:
 
-### Query and Index Optimisation
+- A VPC-attached function has **no internet access** unless the subnet routes to a NAT Gateway. This surprises teams whose function calls a third-party API.
+- Function concurrency consumes subnet IP addresses; size the subnets accordingly.
+- Attach a function to a VPC only when it must reach a private resource. If it only calls DynamoDB and S3, keeping it outside the VPC is simpler and removes the NAT dependency.
 
-For relational engines, use `EXPLAIN` and `EXPLAIN ANALYZE` to confirm index usage, watch for sequential scans on large tables, and enable slow-query logging with a threshold that produces a usable signal. Index selectively: each index accelerates a read pattern and taxes every write.
+### Storage and Protocol Efficiency
 
-For DynamoDB, the equivalent discipline is to ensure every request-path operation is a `Query` or `GetItem` rather than a `Scan`, that the partition key spreads load, and that secondary indexes project only the attributes actually needed. Enable Contributor Insights to identify the most frequently accessed keys and confirm that no single key dominates.
+Enable compression at CloudFront and at the load balancer. Prefer HTTP/2 (supported by ALB and CloudFront) for multiplexing, and consider gRPC on ALB for internal service-to-service calls. Use S3 Transfer Acceleration or multipart uploads for large objects over long distances. For very large or latency-critical transfers, evaluate AWS Global Accelerator, which places traffic onto the AWS backbone at the nearest edge.
 
-### Parallelism and Batching
-
-Use `BatchGetItem` and `BatchWriteItem` to amortise request overhead, and `TransactWriteItems` only where atomicity across items is genuinely required, since transactions consume roughly twice the capacity. For large offline scans, use parallel `Scan` with distinct segments, but only outside the request path. For relational bulk loads, disable non-essential indexes, use `COPY` or `LOAD DATA`, and batch commits rather than committing per row.
-
-### Storage and Instance Optimisation
-
-Choose memory-optimised instance classes when the working set should be resident in the buffer pool, because a cache hit in `shared_buffers` or the InnoDB buffer pool is orders of magnitude cheaper than a disk read. Choose Provisioned IOPS storage when the workload requires sustained, predictable I/O with low latency variance. Aurora removes most of this decision by managing storage automatically.
+---
 
 ## Cost Optimization
 
-### Understanding the Pricing Dimensions
+| Dimension | Where it bites | Optimisation |
+|---|---|---|
+| NAT Gateway hours | One per Availability Zone in every environment | Consolidate in non-production; consider a single NAT Gateway in development only, never in production |
+| NAT Gateway data processing | Container image pulls, S3 traffic, log shipping | Gateway endpoints for S3 and DynamoDB; Interface endpoints for ECR, CloudWatch Logs, STS, Secrets Manager |
+| Cross-AZ data transfer | Charged in both directions | Zone-aware routing, per-zone NAT, and topology-aware service discovery |
+| Internet egress | Tiered per gigabyte | CloudFront reduces origin egress and has lower egress rates; compress everything |
+| Public IPv4 addresses | Per hour, per address | Remove public IPs from instances; release idle Elastic IPs; adopt IPv6 where possible |
+| Interface endpoints | Per endpoint per Availability Zone per hour | Only create endpoints for services you actually call at volume; share via a central endpoints VPC where sensible |
+| Transit Gateway | Per attachment hour plus per gigabyte | Justify against peering below roughly five VPCs |
+| Route 53 | Per zone and per million queries | Alias records to AWS resources are free; consolidate zones; avoid unnecessarily short TTLs on high-volume records |
+| API Gateway | Per million requests, plus cache hours | HTTP API instead of REST where features permit; caching only with a measured hit rate |
+| Load balancers | Per hour plus capacity units (LCU or NLCU) | Consolidate many small services behind one ALB using host and path rules |
 
-| Service | Primary cost dimensions |
-|---|---|
-| RDS | Instance hours by class, allocated storage and IOPS, backup storage beyond the database size, data transfer across AZs and Regions, licence costs for commercial engines |
-| Aurora | Instance hours or Aurora Capacity Unit hours, storage consumed, I/O operations on the standard configuration, backup storage, cross-Region replication |
-| DynamoDB | Read and write request units or provisioned capacity hours, storage per gigabyte-month, optional features such as Streams, Global Tables replicated writes, PITR, and backups |
-| ElastiCache | Node hours by node type, or serverless data and processing units, backup storage, cross-AZ and cross-Region data transfer |
+!!! example "A Real Cost Investigation"
+    A team saw a monthly NAT Gateway data-processing charge exceeding its entire ECS compute bill. Flow Logs analysed in Athena showed that 78 percent of NAT bytes were destined for S3 and Amazon ECR. Adding a Gateway endpoint for S3 (free) and Interface endpoints for `ecr.api`, `ecr.dkr`, and `logs` reduced the NAT charge by more than 80 percent, and the Interface endpoint hourly charges were a small fraction of the saving. The lesson is that you cannot optimise what you have not measured, and Flow Logs plus Athena is the measurement.
 
-!!! info "Verify current figures"
-    Every figure discussed here is a dimension and an order of magnitude only. Consult the current AWS pricing pages and the AWS Pricing Calculator before making a budgetary commitment.
+Use **AWS Cost Explorer** with the usage-type dimension to identify `NatGateway-Bytes`, `DataTransfer-Regional-Bytes`, and `PublicIPv4:InUseAddress` line items, and **AWS Trusted Advisor** for idle load balancers and unassociated Elastic IPs. Set AWS Budgets alerts on data-transfer usage types specifically, not only on total spend.
 
-### Levers That Actually Move the Number
-
-1. **Right-size before you optimise anything else.** Most database over-spend is an instance provisioned for an imagined peak. Use CloudWatch metrics over a representative period, and Compute Optimizer recommendations, to select the class.
-2. **Commit to the steady baseline.** Reserved Instances for RDS and ElastiCache, and DynamoDB reserved capacity, offer substantial discounts for one-year or three-year commitments. Commit only to the floor of observed usage, and cover the remainder on demand.
-3. **Choose the right capacity mode.** DynamoDB on-demand is excellent for unknown and spiky traffic and expensive for steady high throughput. Provisioned capacity with auto scaling is materially cheaper once traffic is predictable. Measure before switching.
-4. **Stop non-production databases outside working hours.** RDS instances can be stopped for up to seven days at a time; Aurora Serverless v2 can scale to a very low floor. An idle development database running continuously is pure waste.
-5. **Use a Gateway VPC endpoint for DynamoDB and S3.** Routing this traffic through a NAT Gateway incurs per-gigabyte processing charges for no benefit.
-6. **Control storage growth.** Enable DynamoDB TTL to expire aged items, use the Standard-Infrequent Access table class for large cold tables, archive old relational data to S3 with a lifecycle policy, and delete orphaned manual snapshots — which persist and bill long after the database they came from is gone.
-7. **Set retention on everything.** Backup retention, log retention, and Performance Insights retention all bill, and all default to values that are not necessarily the ones you want.
-8. **Cache aggressively.** A cache node is usually much cheaper than the larger database instance it makes unnecessary.
-9. **Minimise cross-AZ chatter.** Data transfer between Availability Zones is billable in both directions; a chatty application that reads from a replica in another zone on every request pays for it.
-
-!!! tip "Cost governance tooling"
-    Use AWS Cost Explorer with resource tags to attribute database spend to teams and services, AWS Budgets with alerts to catch runaway growth early, and Trusted Advisor to surface idle instances and unassociated resources.
+---
 
 ## Monitoring and Observability
 
-### The Four Questions Monitoring Must Answer
+### VPC Flow Logs
 
-Effective database observability answers: is it available, is it fast enough, is it approaching a limit, and did something change? Each service exposes a different set of signals for these questions.
+Flow Logs record metadata for IP flows: source and destination addresses and ports, protocol, packets, bytes, start and end time, action (`ACCEPT` or `REJECT`), and, in version 3 and later custom formats, fields such as `flow-direction`, `traffic-path`, `pkt-src-aws-service`, and `tcp-flags`.
 
-### Amazon CloudWatch Metrics
+They answer questions that nothing else can:
 
-| Service | Metrics that matter most | Why |
+- Which flows are being **rejected**, and by what? Repeated `REJECT` entries to your database port are either a misconfiguration or a probe.
+- What is actually traversing the NAT Gateway, and to where?
+- Is a service talking to a destination it should not be talking to?
+
+Deliver to S3 in Parquet format and query with Athena for cost-effective analysis, or to CloudWatch Logs when you need real-time metric filters and alarms.
+
+!!! info "What Flow Logs Do Not Capture"
+    Traffic to the Amazon DNS server, DHCP traffic, traffic to the instance metadata service and reserved addresses, Windows licence activation traffic, and mirrored traffic. They also capture no payload. If you need packet contents, use Traffic Mirroring; if you need DNS visibility, use Route 53 Resolver query logging.
+
+### CloudWatch Metrics That Matter
+
+| Metric | Source | Why it matters |
 |---|---|---|
-| RDS and Aurora | `CPUUtilization`, `DatabaseConnections`, `FreeableMemory`, `FreeStorageSpace`, `ReadLatency`, `WriteLatency`, `ReplicaLag`, `DiskQueueDepth`, `BurstBalance` | Connections approaching `max_connections` and storage approaching zero are the two most common causes of hard outage |
-| DynamoDB | `ConsumedReadCapacityUnits`, `ConsumedWriteCapacityUnits`, `ThrottledRequests`, `ReadThrottleEvents`, `WriteThrottleEvents`, `SuccessfulRequestLatency`, `UserErrors`, `SystemErrors`, `AgeOfOldestUnreplicatedRecord` | Throttling is the primary symptom of both under-provisioning and hot partitions and must be alarmed on |
-| ElastiCache | `CPUUtilization`, `EngineCPUUtilization`, `CacheHits`, `CacheMisses`, `Evictions`, `DatabaseMemoryUsagePercentage`, `CurrConnections`, `ReplicationLag` | A rising eviction rate with a falling hit rate means the cache is too small for the working set |
+| `ErrorPortAllocation`, `PacketsDropCount` | NAT Gateway | Port exhaustion and capacity problems |
+| `BytesOutToDestination` | NAT Gateway | Cost driver and exfiltration signal |
+| `HTTPCode_ELB_5XX_Count` versus `HTTPCode_Target_5XX_Count` | ALB | Distinguishes load balancer faults from application faults |
+| `TargetResponseTime` percentiles | ALB | Use p99, not average |
+| `UnHealthyHostCount` | ALB and NLB | Capacity loss before it becomes an outage |
+| `RejectedConnectionCount` | ALB | The load balancer hit a connection limit |
+| `ActiveFlowCount`, `TCP_Target_Reset_Count` | NLB | Flow volume and backend resets |
+| `4XXError`, `5XXError`, `Count`, `Latency`, `IntegrationLatency` | API Gateway | The gap between `Latency` and `IntegrationLatency` is API Gateway's own overhead |
+| `ThrottleCount` | API Gateway usage plans | Consumers hitting quota |
+| `HealthCheckStatus`, `HealthCheckPercentageHealthy` | Route 53 | Failover readiness |
+| `conntrack_allowance_exceeded`, `bw_in_allowance_exceeded` | ENA driver on EC2 | Instance-level network limits being hit |
 
-!!! warning "`EngineCPUUtilization` versus `CPUUtilization` on Redis"
-    Because Redis executes commands on a single thread, node-level `CPUUtilization` can look comfortable while the engine thread is saturated. `EngineCPUUtilization` is the metric that reveals command-execution saturation, and it is the one to alarm on.
+### CloudTrail
 
-### Deeper Diagnostic Tools
+CloudTrail records every control-plane call: who modified a security group, who created a route, who changed a DNS record. Create an EventBridge rule on `AuthorizeSecurityGroupIngress` where the CIDR is `0.0.0.0/0` and alert on it; this single detection catches a large fraction of accidental exposures. Route 53 control-plane events appear in `us-east-1`.
 
-- **Amazon RDS Performance Insights** visualises database load decomposed by wait event, SQL statement, host, and user, which converts "the database is slow" into "these three queries are waiting on lock acquisition".
-- **Enhanced Monitoring** exposes operating-system metrics — process list, memory breakdown, disk I/O — at up to one-second granularity, finer than the standard hypervisor-level CloudWatch metrics.
-- **DynamoDB Contributor Insights** identifies the most frequently accessed partition keys, which is the direct diagnostic for a hot partition.
-- **AWS X-Ray** traces a request across services and attributes latency to specific database calls, which is how you distinguish a slow database from a slow network path or a slow downstream dependency.
-- **Database Activity Streams** provide a near-real-time, protected stream of database activity for audit and compliance on Aurora and RDS for Oracle and SQL Server.
+### AWS X-Ray and Distributed Tracing
 
-### Alarms Worth Configuring
+X-Ray traces a request across API Gateway, Lambda, and downstream AWS calls, producing a service map and per-segment latency. It is how you discover that the 800-millisecond p99 is 40 milliseconds of API Gateway, 60 milliseconds of Lambda initialisation, and 700 milliseconds in a single unindexed database query. Instrument with the AWS Distro for OpenTelemetry if you need vendor-neutral traces across ECS, EKS, and Lambda.
 
-```mermaid
-stateDiagram-v2
-    [*] --> Healthy
-    Healthy --> Warning: "Storage below 20 percent or connections above 80 percent"
-    Warning --> Critical: "Storage below 10 percent or throttling sustained"
-    Warning --> Healthy: "Auto scaling or manual remediation applied"
-    Critical --> Incident: "Failover or write failure"
-    Incident --> Healthy: "Recovery and post-incident review"
-```
+### Reachability Analyzer and Network Access Analyzer
 
-At minimum, alarm on free storage space below a threshold expressed in days-of-growth rather than gigabytes, database connections above 80 percent of `max_connections`, replica lag above the application's staleness tolerance, DynamoDB throttled requests above zero on a sustained basis, and ElastiCache evictions rising while the hit rate falls. Route alarms to a notification channel through Amazon SNS and, for anything that requires action within minutes, to an on-call rotation.
+Reachability Analyzer answers "can resource A reach resource B on port 443?" by analysing configuration, without sending packets, and tells you the specific component that blocks the path. Network Access Analyzer answers the inverse and more valuable question: "is there *any* path from the internet to my database subnets?" Run it as a scheduled compliance check.
 
-### Logging and Tracing
-
-Export engine logs — error, slow query, general, and audit — to CloudWatch Logs with an explicit retention period, and use CloudWatch Logs Insights to query them. Emit structured application logs including the query identifier and the correlation identifier so that an application trace and a database log entry can be joined. Enable CloudTrail data events for DynamoDB tables holding sensitive data so that individual item access is auditable.
+---
 
 ## Integration with Other AWS Services
 
-```mermaid
-graph TD
-    subgraph Compute
-        LAM["AWS Lambda"]
-        ECS["Amazon ECS and EKS"]
-        EC2["Amazon EC2"]
-    end
-    subgraph Data
-        RDS["Amazon RDS and Aurora"]
-        DDB["Amazon DynamoDB"]
-        EC["Amazon ElastiCache"]
-    end
-    LAM --> PROXY["Amazon RDS Proxy"]
-    PROXY --> RDS
-    ECS --> RDS
-    ECS --> EC
-    LAM --> DDB
-    DDB --> STREAM["DynamoDB Streams"]
-    STREAM --> LAM2["Lambda Stream Consumer"]
-    LAM2 --> OS["Amazon OpenSearch Service"]
-    LAM2 --> SNS["Amazon SNS"]
-    RDS --> DMS["AWS DMS"]
-    DMS --> S3["Amazon S3 Data Lake"]
-    S3 --> ATH["Amazon Athena"]
-    SM["AWS Secrets Manager"] --> ECS
-    SM --> LAM
-    KMS["AWS KMS"] --> RDS
-    KMS --> DDB
-    CW["Amazon CloudWatch"] --> RDS
-    CW --> DDB
-    CW --> EC
-```
+### Compute
 
-| Integrating service | Why it integrates | Typical use |
-|---|---|---|
-| AWS Lambda | Event-driven compute needs a data store, and DynamoDB Streams needs a consumer | Serverless APIs, change-data processing, aggregation |
-| Amazon RDS Proxy | Bridges highly concurrent, ephemeral compute to connection-limited relational engines | Lambda and Fargate access to RDS and Aurora |
-| AWS Secrets Manager | Removes static credentials from code and configuration, with automatic rotation | Credential injection into ECS tasks and Lambda functions |
-| AWS KMS | Provides customer-controlled encryption keys and an auditable key usage trail | Encryption at rest for every data store |
-| Amazon S3 | Durable, cheap object storage for archives, exports, and analytics | DynamoDB export to S3, RDS snapshot export to Parquet, Aurora `SELECT INTO OUTFILE S3` |
-| Amazon Athena and AWS Glue | Query exported data without loading it into a database | Analytics over operational data without touching the production database |
-| Amazon OpenSearch Service | Provides full-text and complex ad hoc search, which DynamoDB deliberately does not | Search index maintained from DynamoDB Streams |
-| Amazon Kinesis Data Streams | Higher-fanout, longer-retention change streaming than DynamoDB Streams | Multiple independent consumers of the same change feed |
-| AWS Database Migration Service | Moves and continuously replicates data between heterogeneous engines | Migration to AWS, ongoing replication to a data lake |
-| Amazon EventBridge | Decouples database change events from downstream consumers | Event-driven microservice choreography |
-| AWS Step Functions | Coordinates multi-step workflows with built-in error handling | Saga orchestration across service-owned databases |
-| Amazon QuickSight and Redshift | Analytical query and visualisation over data unsuited to the operational store | Business intelligence without loading the production database |
-| AWS Backup | Centralised, policy-driven backup across RDS, Aurora, DynamoDB, and more | Compliance-driven retention and cross-Region copy |
+- **EC2** — instances receive ENIs in a subnet; instance type determines bandwidth; placement groups control physical proximity.
+- **ECS on Fargate and EC2** — `awsvpc` network mode gives each task its own ENI, private IP, and security groups. This is what makes per-service network policy possible, and it is why task density is bounded by ENI limits on EC2 launch type and by subnet IP availability everywhere.
+- **EKS** — the Amazon VPC CNI assigns real VPC IP addresses to pods, so pods are first-class VPC citizens reachable by security groups, load balancers, and Flow Logs. The trade-off is address consumption. Security groups for pods, custom networking with secondary CIDRs, and prefix delegation are the standard mitigations. The AWS Load Balancer Controller provisions ALBs from Ingress objects and NLBs from Service objects of type LoadBalancer.
+- **Lambda** — VPC attachment via Hyperplane ENIs, as described above.
 
-!!! note "Why DynamoDB and OpenSearch appear together so often"
-    DynamoDB is deliberately not a search engine: it can retrieve by key extremely efficiently and cannot answer "find every order containing the word *urgent* placed in the last week" without a scan. The idiomatic AWS answer is to stream changes into OpenSearch and route search queries there, keeping each store on the access pattern it is good at. This is polyglot persistence in practice.
+### Storage and Data
+
+- **S3** — Gateway endpoint, endpoint policies, Origin Access Control for CloudFront, and `aws:SourceVpce` conditions in bucket policies to enforce that objects are only reachable from your network.
+- **RDS and Aurora** — deployed into a DB subnet group spanning multiple Availability Zones; reached by a DNS endpoint that Multi-AZ failover repoints; protected by a security group referencing the application's security group; RDS Proxy for connection pooling.
+- **DynamoDB** — Gateway endpoint; no VPC placement because it is a regional service reached over an API.
+- **ElastiCache** — in-VPC, subnet group, security group.
+
+### Messaging and Integration
+
+- **SQS, SNS, EventBridge, Step Functions** — reachable through Interface endpoints and integrable directly from API Gateway with no compute in between. These are the components that convert a synchronous chain into a resilient asynchronous one.
+
+### Edge and Delivery
+
+- **CloudFront** with Origin Access Control, WAF, Shield, and Lambda@Edge or CloudFront Functions.
+- **AWS Global Accelerator** for anycast static IP addresses, sub-minute regional failover, and non-HTTP protocols.
+
+### Security and Governance
+
+- **AWS WAF, Shield Advanced, Network Firewall, GuardDuty** (which consumes VPC Flow Logs, DNS logs, and CloudTrail to detect crypto-mining, port scanning, and communication with known-malicious hosts), **Security Hub**, **Config** rules such as `vpc-sg-open-only-to-authorized-ports` and `restricted-ssh`.
+
+### CI/CD and Automation
+
+- **CloudFormation, CDK, Terraform** for the network itself.
+- **CodeBuild** projects can run inside a VPC to reach private resources, which requires a NAT path or endpoints for artifact and log access.
+- **CodeDeploy** blue-green deployments manipulate ALB target groups; **API Gateway canary deployments** shift a percentage of stage traffic. Both are network-layer expressions of a deployment strategy.
+
+---
 
 ## Common Architecture Patterns
 
-### Cache-Aside with a Read-Through Fallback
+### Three-Tier Web Application
 
-The default pattern for read-heavy applications. The application consults ElastiCache or DAX, falls back to the primary store on a miss, and populates the cache with a TTL. It is simple, degrades gracefully, and is the pattern students should reach for first.
+Public subnets with an internet-facing ALB, private subnets with an Auto Scaling group or ECS service, isolated subnets with Multi-AZ RDS. Route 53 alias to the ALB, CloudFront in front for static assets and TLS termination at the edge. This remains the correct answer for a large fraction of real workloads and should be your default until a requirement forces something else.
 
-### Database Per Service
+### Serverless API
 
-In a microservice architecture, each service owns its data store exclusively and no other service reads its tables directly. This preserves the ability to change schema and even to change database technology without coordinating across teams. The cost is that cross-service queries and cross-service transactions become distributed problems.
+Route 53 alias to a CloudFront distribution or directly to an API Gateway custom domain, an HTTP API with a JWT authorizer, Lambda proxy integration, DynamoDB via a Gateway endpoint if the function is in a VPC, and EventBridge for asynchronous fan-out. No subnets to size, no instances to patch — but note that if the functions do not need private resources, you may not need a VPC at all for the compute tier.
+
+### Private Microservices with Service Discovery
+
+ECS services in `awsvpc` mode registered in AWS Cloud Map, reached by internal DNS names in a private hosted zone, fronted internally by an internal ALB, and exposed externally only through an API Gateway HTTP API with a VPC Link. Each service has its own security group; policy is expressed as "the orders service may call the payments service on port 8443", which is exactly how the architecture diagram reads.
+
+### Hub-and-Spoke Multi-Account Network
+
+A network account owns a Transit Gateway and shares it via Resource Access Manager. Workload accounts attach their VPCs. An inspection VPC hosts AWS Network Firewall or a third-party appliance behind a Gateway Load Balancer, and Transit Gateway route tables force east-west and egress traffic through it. A shared-services VPC hosts centralised Interface endpoints and Resolver endpoints, so 50 accounts share one set of endpoints rather than paying for 50.
 
 ```mermaid
-graph LR
-    O["Order Service"] --> ODB["Aurora PostgreSQL"]
-    I["Inventory Service"] --> IDB["DynamoDB"]
-    S["Search Service"] --> SDB["OpenSearch"]
-    SESS["Session Service"] --> EC["ElastiCache Redis"]
-    O -.->|"events only"| EB["Amazon EventBridge"]
-    EB -.-> I
-    EB -.-> S
+graph TD
+    ONPREM["On Premises Data Centre"] --> DX["Direct Connect Gateway"]
+    DX --> TGW["Transit Gateway in the Network Account"]
+    TGW --> INSP["Inspection VPC with Network Firewall"]
+    INSP --> EGRESS["Egress VPC with NAT Gateways"]
+    EGRESS --> IGW["Internet Gateway"]
+    TGW --> SHARED["Shared Services VPC - Interface Endpoints and Resolver Endpoints"]
+    TGW --> PROD["Production VPC"]
+    TGW --> NONPROD["Non Production VPC"]
+    TGW --> DATA["Data Platform VPC"]
+    PROD -.->|"Blocked by a Transit Gateway route table"| NONPROD
 ```
+Generate a professional with proper symbol in whie background image 
 
-### Saga for Distributed Transactions
 
-Because a distributed transaction across service-owned databases is undesirable, a business transaction is modelled as a sequence of local transactions, each publishing an event that triggers the next, with a compensating transaction defined for each step to undo it on failure. AWS Step Functions is the idiomatic orchestrator, providing declarative retry, catch, and compensation.
 
-### CQRS with Change Data Capture
+### Centralised Egress
 
-Separate the write model from the read model. Writes go to DynamoDB or Aurora; DynamoDB Streams or a logical replication slot feeds a projection into a store optimised for reading — OpenSearch for search, a materialised view for reporting, ElastiCache for point lookups. The read model is eventually consistent by construction, which must be acceptable to the business.
+Rather than a NAT Gateway in every VPC, route all `0.0.0.0/0` traffic through the Transit Gateway to a dedicated egress VPC with one NAT Gateway set. This reduces NAT hourly charges substantially at scale, at the cost of Transit Gateway data-processing charges and an extra hop. The crossover point depends on the number of VPCs and the traffic volume; model it rather than assuming.
 
-### Event Sourcing
+### Event-Driven and Fan-Out
 
-Persist the sequence of state-changing events as the source of truth rather than the current state. DynamoDB models this well with the aggregate identifier as partition key and a monotonically increasing sequence number as sort key, using a conditional write on `attribute_not_exists` for optimistic concurrency. Current state is a fold over the event stream, usually snapshotted periodically for efficiency.
+API Gateway to EventBridge or SNS, fanning out to multiple SQS queues consumed by independent services. The network implication is that services no longer call each other synchronously, so a network partition or a slow dependency does not propagate.
 
-### Read Replica Fan-Out
+### Circuit Breaker, Retry, and Bulkhead
 
-A writer instance with multiple readers, with the application routing read-only traffic to the reader endpoint. Aurora makes this particularly attractive because replicas share the storage volume, so replica lag is typically in the tens of milliseconds rather than seconds.
+Retries must be bounded and use exponential backoff with jitter, or they synchronise and become a self-inflicted denial of service. Circuit breakers stop calling a failing dependency, converting slow failures into fast ones. Bulkheads — separate connection pools, separate Lambda reserved concurrency, separate target groups — prevent one misbehaving consumer from exhausting shared capacity. API Gateway per-route throttling is a bulkhead implemented at the network edge.
 
-### Sharding by Tenant
+### Blue-Green and Canary at the Network Layer
 
-For very large multi-tenant systems, partition tenants across multiple database instances or across partition-key prefixes. This bounds blast radius and permits per-tenant scaling, at the cost of a routing layer and cross-shard query complexity.
+Weighted Route 53 records shift traffic between whole stacks; ALB weighted target groups shift between versions behind one listener; API Gateway canary deployments shift a percentage within a stage. Each operates at a different granularity and rollback speed, and the right choice depends on how quickly you need to reverse and how much DNS caching you can tolerate.
 
-### Polyglot Persistence
-
-The overarching pattern: select the store per access pattern rather than per organisation. A single application legitimately uses Aurora for transactional integrity, DynamoDB for high-volume key-access, ElastiCache for hot reads and sessions, OpenSearch for search, S3 for large objects, and Redshift for analytics.
-
-!!! tip "The architect's question"
-    Do not ask "which database should we standardise on?" Ask "what are the access patterns, what are the consistency requirements, and what is the scale of each?" The answer usually names more than one store, and that is a sign of maturity rather than of sprawl.
+---
 
 ## Industry Use Cases
 
-| Organisation type | Workload | Typical data-store selection and rationale |
+| Industry | Requirement | Networking design |
 |---|---|---|
-| Streaming media | Viewing history, watch position, recommendations metadata | DynamoDB for the enormous, key-addressed, globally distributed write volume; ElastiCache for the hot catalogue; a relational store for billing |
-| E-commerce | Product catalogue, cart, orders, inventory | DynamoDB or ElastiCache for cart and session; Aurora for orders and payments where ACID transactions are non-negotiable; OpenSearch for product search |
-| Ride-hailing and delivery | Driver location, trip state, pricing | DynamoDB for high-frequency location writes with TTL; Redis geospatial structures for proximity search; Aurora for trip settlement and finance |
-| Financial services | Ledgers, transactions, positions, audit | Aurora or RDS with Multi-AZ, strict ACID guarantees, encryption, Database Activity Streams for audit; DynamoDB for high-volume idempotency keys and event logs |
-| Healthcare | Patient records, appointments, telemetry | Encrypted RDS or Aurora for the record of truth with strong compliance controls; DynamoDB for device telemetry; strict IAM and audit throughout |
-| Gaming | Player profiles, leaderboards, matchmaking, sessions | DynamoDB for player state at global scale with Global Tables; Redis sorted sets for leaderboards; ElastiCache for matchmaking queues |
-| Internet of Things | Device telemetry at very high ingest rates | DynamoDB with a well-distributed device-identifier partition key and TTL for expiry; Timestream where the workload is genuinely time-series; S3 for the long-term archive |
-| Government and public sector | Citizen services, registries, case management | Relational stores for referential integrity and auditability; Multi-AZ for availability requirements; encryption with customer managed keys for data-sovereignty controls |
-| Software as a Service | Multi-tenant application data | Pool model on DynamoDB with tenant-prefixed partition keys and `LeadingKeys` isolation, or silo model on separate Aurora clusters for regulated tenants |
-| Social platforms | Feeds, follower graphs, notifications | DynamoDB single-table design for feed fan-out; ElastiCache for hot timeline segments; OpenSearch for content search |
+| Media streaming | Global low latency, enormous egress | CloudFront with a large cache footprint, Route 53 latency routing, origin shielding to protect the origin |
+| Banking and payments | Regulatory isolation, auditability | Isolated data subnets, no Internet Gateway route, Interface endpoints for all AWS APIs, Network Firewall egress control, centralised Flow Logs |
+| Healthcare | Hybrid, data residency | Direct Connect plus Transit Gateway, Resolver endpoints for bidirectional DNS, geolocation routing for residency |
+| E-commerce | Traffic spikes, canary releases | ALB with target-tracking auto scaling, weighted Route 53 for canaries, API Gateway throttling to protect inventory services |
+| Ride hailing and logistics | Millions of persistent connections | NLB for connection scale and static IPs, WebSocket APIs for driver and rider updates, `awsvpc` per-service security |
+| Government | Strict segmentation, no public exposure | Private API Gateway endpoints reached via Interface endpoints, Transit Gateway route-table segmentation, Session Manager for administration |
+| IoT and utilities | Device firmware pins IP addresses | NLB with Elastic IPs per Availability Zone, multivalue answer routing, long-lived connections |
+| Software as a service | Deliver a service into customer VPCs privately | AWS PrivateLink endpoint services behind an NLB, avoiding peering and CIDR-overlap problems entirely |
+
+---
 
 ## Advantages
 
-### Managed Relational Databases
+- **Genuine network isolation with software agility.** You get the topology of a data centre with the provisioning speed of an API call, and the isolation is enforced in hardware at every host rather than by an appliance you must size.
+- **Distributed enforcement without chokepoints.** Security groups scale with your fleet because they are enforced at each ENI. There is no firewall pair to become a bottleneck or a single point of failure.
+- **Identity-based network policy.** Security groups referencing security groups produce firewall rules that remain correct through auto scaling, deployments, and IP churn — something traditional networks cannot do.
+- **Private access to managed services.** Endpoints and PrivateLink let you consume AWS and third-party services without any internet path, which collapses a whole class of exfiltration risk.
+- **DNS as a control plane.** Route 53 turns naming into traffic management, giving you global failover, canary releases, and geographic compliance without touching application code.
+- **Managed cross-cutting API concerns.** API Gateway removes authentication, throttling, validation, and observability from every service's codebase, reducing duplicated and divergent security-critical logic.
+- **Everything is an API, so everything is code.** The entire network is reproducible, reviewable, diffable, and destroyable — which changes disaster recovery from a documented procedure into a pipeline execution.
+- **Pay for what you use, with elasticity built in.** No capital expenditure on routers, firewalls, or load balancers, and no capacity planning for the fabric.
 
-Amazon RDS removes the operational burden that historically consumed a large fraction of a database administrator's time: provisioning, operating-system and engine patching, backup scheduling, failover configuration, and replica setup. Multi-AZ delivers automatic failover with no application-level implementation. Point-in-time recovery converts a class of catastrophic mistakes into a bounded recovery exercise. Crucially, none of this requires abandoning SQL, existing tooling, existing skills, or existing applications, which makes RDS the lowest-friction path to the cloud for the very large population of applications built on relational assumptions.
-
-Aurora extends these advantages by re-architecting the storage layer. Because the six-way replicated, self-healing storage volume is shared, adding a read replica does not copy data, failover does not require a data catch-up, and storage grows automatically. Backtrack and fast clone provide operational capabilities that have no on-premises equivalent at comparable cost.
-
-### DynamoDB
-
-The advantages are consistency of performance and absence of operational limits. Single-digit-millisecond latency is maintained as the table grows from megabytes to petabytes and from tens to millions of requests per second, because the architecture partitions rather than scales up. There are no instances to size, no version upgrades to schedule, no failover to configure, and no storage to provision. Encryption, multi-AZ replication, and continuous backup are service properties rather than configuration. On-demand capacity means a new application can be launched with no capacity forecast at all, and Global Tables extend the same properties across Regions with a single configuration change.
-
-### ElastiCache
-
-The advantage is a very large improvement in latency and a very large reduction in primary-database load for a comparatively small cost. Moving the hot working set into memory routinely reduces read latency by one to two orders of magnitude and allows the primary database to be provisioned far below the raw request rate. Redis additionally supplies data structures — sorted sets, streams, geospatial indexes, atomic counters — that solve problems such as leaderboards, rate limiting, and proximity search far more elegantly than a relational query would.
+---
 
 ## Limitations
 
-### Amazon RDS and Aurora
+- **Address planning is effectively irreversible.** VPC CIDRs cannot be changed and subnets cannot be resized. A poor initial plan constrains the architecture for years.
+- **Peering is non-transitive and forbids overlap**, which forces either Transit Gateway or PrivateLink at scale.
+- **Zonal components create hidden single points of failure**, notably NAT Gateways and single-zone Interface endpoints. AWS does not make these highly available for you.
+- **Data-transfer charges are opaque to developers.** Nothing in application code reveals that a call crossed an Availability Zone boundary or a NAT Gateway.
+- **DNS-based failover is bounded by caching.** Some resolvers and some client libraries ignore TTL entirely; sub-second failover requires a different mechanism.
+- **API Gateway timeouts and payload limits** constrain design; long-running and large-payload operations must be redesigned rather than configured around.
+- **HTTP APIs lack features** that regulated or monetised APIs need, and API type cannot be changed after creation.
+- **Managed means less control.** You cannot run arbitrary routing protocols inside a VPC, cannot use broadcast or multicast natively, and cannot inspect packets without deliberately architecting for mirroring or a firewall appliance.
+- **Complexity grows quickly in multi-account designs.** A Transit Gateway with multiple route tables, an inspection VPC, and centralised endpoints is powerful and genuinely difficult to reason about; it demands strong documentation and automated verification.
+- **Quotas bind at scale.** Routes per route table, security groups per interface, rules per group, and Transit Gateway attachment bandwidth all become real constraints in large estates.
 
-- Write throughput remains fundamentally vertical. Aurora raises the ceiling substantially but does not remove it; beyond that ceiling, sharding or a different data model is required.
-- Failover is not instantaneous. Applications must handle connection loss and retry, and in-flight transactions are lost.
-- Read replicas are asynchronous, so read-after-write consistency requires routing to the writer.
-- Managed does not mean unmanaged: schema design, index strategy, query tuning, connection management, and capacity planning remain entirely the customer's responsibility.
-- Engine version upgrades still require planning and a maintenance window, and major-version upgrades can require application testing.
-- Commercial engines carry licensing cost and, in some cases, feature restrictions relative to a self-managed installation, and superuser access is not granted.
-
-### Amazon DynamoDB
-
-- Query flexibility is deliberately constrained. There are no joins, no aggregations, and no ad hoc filtering that does not either use a key or scan.
-- Access patterns must be known in advance, because the key design encodes them. Late-discovered access patterns require new indexes or data migration.
-- The 400 KB item size limit forces large payloads into S3 with a pointer stored in the item.
-- A poorly chosen partition key produces hot partitions and throttling that no amount of provisioned capacity fixes.
-- Transactions are limited in scope and roughly double the capacity consumed.
-- Global Tables resolve conflicts by last-writer-wins, which silently discards a concurrent update and is unacceptable for some domains.
-- Cost can be surprising: high-volume small-item traffic, heavily projected indexes, and `Scan`-based access patterns each inflate consumption in ways that are invisible in a small test environment.
-
-### Amazon ElastiCache
-
-- It is not durable and must never be the system of record. Asynchronous replication means a failover can lose recent writes.
-- Redis command execution is largely single-threaded, so one expensive command degrades every client on the node.
-- Cache invalidation is genuinely difficult, and stale data is a correctness problem that TTLs bound rather than eliminate.
-- Memory is a hard constraint; exceeding it triggers eviction, and an inappropriate eviction policy causes write failures.
-- Adding a cache adds a component that can fail, adds a consistency question, and adds operational surface. It is not free complexity.
-
-### Cross-Cutting Trade-Offs
-
-!!! warning "There is no free scalability"
-    Every property gained is paid for somewhere. DynamoDB's unlimited horizontal scale is paid for with query inflexibility and up-front modelling effort. Aurora's rich query capability is paid for with a write ceiling. ElastiCache's microsecond latency is paid for with weak durability and a cache-invalidation problem. The architect's role is to choose which price the workload can afford.
+---
 
 ## Common Mistakes
 
 ### Beginner Mistakes
 
-| Mistake | Why it is wrong | Correct approach |
-|---|---|---|
-| Making an RDS instance publicly accessible for convenience | Exposes the database to the internet; a frequent cause of breaches | Private subnets, security-group references, access through a bastion or Session Manager |
-| Hard-coding database credentials in code or environment variables | Credentials leak through source control, logs, and task definitions | Secrets Manager with rotation, or IAM database authentication |
-| Using `Scan` in DynamoDB because it returns everything | Reads and bills for every item; latency and cost grow with table size | Design the key schema so the access pattern is a `Query` or `GetItem` |
-| Choosing a low-cardinality DynamoDB partition key such as `status` or `country` | Concentrates traffic on one partition, causing throttling | Choose a high-cardinality key; add a write-sharding suffix if necessary |
-| Leaving backup retention at zero | Silently disables point-in-time recovery | Set a deliberate retention period for every production database |
-| Treating ElastiCache as durable storage | Data is lost on failover or eviction | Cache only what can be recomputed; keep the system of record elsewhere |
-| Adding an index for every column "just in case" | Every index taxes writes and consumes storage | Index to serve identified query patterns, and remove unused indexes |
-| Not setting a TTL on cached entries | Stale data persists indefinitely | Derive the TTL from tolerable staleness and add jitter |
+- Believing a subnet is public because it is named "public". It is public only if its route table has an Internet Gateway route.
+- Launching an instance in a public subnet without a public IP address and then wondering why it is unreachable.
+- Forgetting that the security group's **outbound** rules matter when the instance is the client.
+- Using a NACL to express application policy, then discovering the stateless ephemeral-port problem.
+- Sizing subnets from instance counts and ignoring the five reserved addresses, load balancer requirements, and `awsvpc` per-task addresses.
+- Hard-coding a load balancer IP address instead of using its DNS name or an alias record.
+- Attaching a Lambda function to a VPC when it does not need private access, then being unable to call a public API.
+- Creating overlapping CIDRs across environments and discovering it only when peering is required.
 
 ### Production Mistakes
 
-| Mistake | Consequence | Remedy |
-|---|---|---|
-| Connecting Lambda directly to RDS at high concurrency | Connection exhaustion and cascading failures | RDS Proxy, reserved concurrency, connections created outside the handler |
-| Never testing failover or restore | Recovery capability is assumed rather than proven | Scheduled game days with forced failover and restore drills |
-| Running schema migrations manually during a deployment | Irreproducible state and no rollback path | Versioned migrations executed by the CI/CD pipeline, designed to be backward compatible |
-| Ignoring `ReadThrottleEvents` and `WriteThrottleEvents` because requests eventually succeed on retry | Latency degrades invisibly until it becomes an outage | Alarm on sustained throttling and investigate key distribution |
-| Deploying a schema change that is not backward compatible during a rolling deployment | Old and new application versions run concurrently against one schema | Expand-and-contract migration: add, backfill, switch reads, then remove |
-| Sizing the cache smaller than the working set | High eviction rate, low hit rate, and load pushed back onto the database | Monitor `Evictions` and `CacheHitRate`; scale the cache to the working set |
-| Failing to plan for cross-AZ data transfer | Unexpected and persistent cost | Keep chatty paths within an Availability Zone where possible; use VPC endpoints |
-| Retrying failed writes without exponential backoff and jitter | Retry storms amplify an incident | Use the SDK's adaptive retry mode with jitter and a bounded attempt count |
-| Leaving orphaned manual snapshots | Storage bills accrue indefinitely after the database is deleted | Lifecycle policy and periodic audit of snapshots |
+- One NAT Gateway for the whole VPC, creating both a correlated failure mode and cross-AZ charges.
+- No Gateway endpoint for S3, paying NAT data-processing charges on high-volume object traffic.
+- Health checks pointing at `/` rather than a real readiness endpoint, so a broken dependency is never detected — or, conversely, a health check that includes a non-critical dependency and removes all capacity when that dependency degrades.
+- ALB idle timeout shorter than backend keep-alive, causing intermittent unexplained 502 responses.
+- No deregistration delay, so deployments drop in-flight requests.
+- Security groups written with CIDR lists that drift as the fleet changes.
+- No VPC Flow Logs, making cost analysis and incident response guesswork.
+- Disaster-recovery plans that require control-plane calls in the failed Region.
+- Interface endpoints created in only one Availability Zone, silently making a "private" design zone-dependent.
+- Lambda authorizers without result caching, doubling the invocation count and the latency of every request.
 
 ### Certification Traps
 
-!!! danger "Frequently examined misconceptions"
-    - **Multi-AZ is for availability; read replicas are for scaling reads.** The standby in an RDS Multi-AZ instance deployment is not readable. A question asking to "improve read performance" is answered with read replicas, not Multi-AZ.
-    - **A Local Secondary Index can only be created when the table is created**, and shares the base table's partition key. A Global Secondary Index can be created at any time with any key.
-    - **DynamoDB transactions are limited in scope and cost roughly double.** They are not a general substitute for relational transactions.
-    - **DAX is a DynamoDB-specific cache**; ElastiCache is a general-purpose cache. A question specifying microsecond DynamoDB reads with minimal application change wants DAX.
-    - **Encryption at rest must be enabled at creation** for RDS and ElastiCache; it cannot be toggled on an existing instance.
-    - **Aurora replicas are for both read scaling and failover targets**; RDS read replicas require manual promotion unless they are part of a Multi-AZ DB cluster.
-    - **Global Tables use last-writer-wins**, which is eventual consistency across Regions and not a distributed transaction.
-    - **On-demand capacity is not always cheaper.** For steady, high, predictable throughput, provisioned capacity with auto scaling costs materially less.
-    - **A cache does not make an application consistent.** Any answer implying that adding ElastiCache provides strong consistency is wrong.
+- Security groups are **stateful**; NACLs are **stateless**. Almost every exam includes at least one question that turns on this.
+- Security groups have **no deny rules**; only NACLs do. If the question requires blocking a specific IP address, the answer is a NACL.
+- A NACL rule source cannot be a security group.
+- NACL rules are evaluated in **number order, first match wins**; security group rules are all evaluated and any allow permits.
+- Gateway endpoints work only for **S3 and DynamoDB**, and they do not work over peering, VPN, or Direct Connect. Interface endpoints do.
+- Peering is **not transitive** and does not permit **overlapping CIDRs**.
+- An IGW alone does not give an instance internet access: it also needs a public IP or Elastic IP, a route, and permissive security group and NACL rules.
+- NAT Gateway is **zonal**; NAT instance requires disabling the source/destination check.
+- **Latency** routing for performance, **geolocation** for compliance, **weighted** for canaries, **failover** for active-passive, **multivalue** for simple health-aware spreading.
+- Route 53 **health checks cannot probe private endpoints**; use a CloudWatch alarm health check.
+- ACM certificates for CloudFront must be in **us-east-1**.
+- **NLB for static IP addresses and extreme performance; ALB for content-based routing; API Gateway for managed API features.**
+- Only **REST APIs** support AWS WAF, API keys and usage plans, request validation, caching, and private endpoints.
+
+---
 
 ## Interview Questions
 
 ### Conceptual Questions
 
-**1. Explain the CAP theorem and how it applies to the AWS database portfolio.**
+**1. What actually makes a subnet "public"?**
+Its associated route table contains a route (typically `0.0.0.0/0`) whose target is an Internet Gateway. Nothing else — not the name, not the CIDR, not the auto-assign public IP setting, though a resource in it also needs a public IP or Elastic IP to be reachable from the internet.
 
-The CAP theorem states that in the presence of a network partition, a distributed system must choose between consistency and availability. It is not a claim that you pick two of three in normal operation; partition tolerance is mandatory for any distributed system, so the real choice is what to do when a partition occurs. RDS Multi-AZ chooses consistency: during failover the database is briefly unavailable rather than serving divergent data. DynamoDB offers the choice per read — an eventually consistent read favours availability and latency, a strongly consistent read favours correctness. DynamoDB Global Tables choose availability at the Region level and resolve the resulting conflicts with last-writer-wins. ElastiCache with asynchronous replication chooses availability and accepts the loss of recent writes.
+**2. Explain the difference between a security group and a network ACL, and when you would deliberately use a NACL.**
+Security groups attach to network interfaces, are stateful, allow-only, and evaluate all rules with any match permitting. NACLs attach to subnets, are stateless, support deny, and evaluate in rule-number order with first match winning. Use a NACL when you need to *deny* something specific (a malicious CIDR), when you need a subnet-wide guardrail that application teams cannot alter by editing their own security groups, or when a compliance framework requires two independent layers. Application intent belongs in security groups.
 
-**2. What is the practical difference between a Global Secondary Index and a Local Secondary Index?**
+**3. Why are five IP addresses unusable in every subnet?**
+The network address, the VPC router (base plus one), the Amazon DNS resolver (base plus two), an address reserved for future AWS use (base plus three), and the broadcast address. AWS does not support broadcast but still reserves the address.
 
-An LSI shares the base table's partition key and provides an alternative sort key. It can only be created at table creation, supports strongly consistent reads, shares the base table's provisioned throughput, and constrains any single item collection to 10 GB. A GSI has an entirely independent partition and sort key, may be created or deleted at any time, is always eventually consistent, has its own provisioned throughput, and has no item-collection size constraint. In practice GSIs are used far more often; LSIs are appropriate only when strong consistency on an alternative sort order within a partition is genuinely required.
+**4. What is the difference between a Gateway endpoint and an Interface endpoint?**
+A Gateway endpoint is a route-table entry to a prefix list, supports only S3 and DynamoDB, is free, and is not reachable from outside the VPC (no peering, VPN, or Direct Connect). An Interface endpoint is an ENI with a private IP in your subnet, supports most services plus partner and custom services via PrivateLink, has a security group, is reachable from connected networks, and is charged hourly per Availability Zone plus per gigabyte.
 
-**3. Why is Aurora's storage architecture significant?**
+**5. Why does Route 53 offer an Alias record when CNAME already exists?**
+CNAME cannot be used at a zone apex, requires a second resolution step, and cannot track an AWS resource's changing addresses. Alias records resolve inside Route 53 to the current addresses of an AWS resource, work at the apex, return A or AAAA answers directly, and are not charged when the target is an AWS resource.
 
-Aurora separates compute from a purpose-built distributed storage service that replicates six ways across three Availability Zones and accepts a write once four of six segments acknowledge it. Only redo log records are shipped to storage; the storage layer materialises pages itself. The consequences are architectural rather than incremental: adding a read replica copies no data because all instances read the same volume, failover does not require catch-up, storage grows and self-heals automatically, backups are continuous and do not affect performance, and a clone can be created almost instantly using copy-on-write. This is the clearest example in the AWS portfolio of re-architecting a component rather than merely managing it.
+**6. What is the practical difference between control plane and data plane, and why does it matter for disaster recovery?**
+The control plane changes configuration; the data plane carries traffic. Data planes are engineered for much higher availability. A recovery plan that requires control-plane calls (launching instances, changing DNS records) in an impaired Region may fail exactly when it is needed. Prefer pre-provisioned capacity and health-check-driven failover, whose recovery path is data-plane only.
 
-**4. Explain why a DynamoDB partition key choice determines scalability.**
-
-DynamoDB places an item by hashing its partition key and mapping the hash to a physical partition. Throughput and storage are distributed across partitions. If many requests share one partition-key value, they all target one partition, whose throughput is bounded regardless of table-level provisioning, and requests are throttled. Adaptive capacity redistributes some throughput toward hot partitions and isolates severe cases, but it cannot manufacture capacity for a single key. Therefore scalability is a property of key cardinality and access distribution, decided at design time and expensive to change afterwards.
-
-**5. When is caching the wrong answer?**
-
-When the workload is write-dominant, since a cache accelerates reads and adds work to writes. When every read must be strongly consistent, because a cache introduces a staleness window. When the access pattern has no locality — a uniform random read over a very large keyspace produces a low hit rate and the cache becomes pure overhead. When the underlying query is already fast and the latency budget is met, because the added component contributes failure modes and operational surface without benefit. And when the real problem is a missing index or an N+1 query pattern, in which case caching hides a defect rather than fixing it.
-
-**6. Distinguish RDS Multi-AZ from RDS read replicas.**
-
-Multi-AZ maintains a synchronous standby in a second Availability Zone for availability; in the classic instance deployment the standby is not readable and exists solely to be promoted. Read replicas are asynchronous copies used to scale read throughput, may be in the same Region or a different one, are readable, and require explicit promotion to become writable. Multi-AZ addresses availability; read replicas address performance. The Multi-AZ DB cluster deployment blurs this by providing two readable standbys, which is worth stating explicitly in an interview.
+**7. Why does an Internet Gateway not appear in an instance's network configuration?**
+The IGW performs one-to-one NAT outside the guest. The instance only ever sees its private address; the IGW rewrites source and destination addresses at the VPC boundary. This is why you must never configure a public address inside the operating system.
 
 ### Scenario Questions
 
-**1. A social application's feed query takes eight seconds under load. The team proposes a larger RDS instance. Evaluate.**
+**1. A regulator requires that a database be provably unreachable from the internet. How do you demonstrate this?**
+Place it in a subnet whose route table contains only the `local` route plus, at most, Gateway endpoints. Show the route table: with no Internet Gateway, NAT Gateway, or Transit Gateway route, there is no path in either direction regardless of security group configuration. Reinforce with a security group allowing only the application security group on the database port, Network Access Analyzer findings showing no internet path, and Flow Logs as evidence.
 
-A larger instance is a valid short-term mitigation and a poor diagnosis. The first step is to determine where the time is spent using Performance Insights and `EXPLAIN ANALYZE`. Common causes are a missing index producing a sequential scan, an N+1 query pattern issuing one query per feed item, a join that materialises far more rows than are returned, or lock contention. If the query is fundamentally a fan-out read of recent items per followed user, the correct architecture is often a precomputed feed: fan out on write into DynamoDB or into a Redis list per user, so the read becomes a single key lookup. Vertical scaling buys time; the redesign fixes the problem and costs less at steady state.
+**2. Fifteen VPCs across five accounts must communicate, plus on-premises connectivity. Peering or Transit Gateway?**
+Transit Gateway. Peering would require 105 connections and route entries in every subnet route table, and peering cannot carry on-premises traffic transitively. Transit Gateway gives 15 attachments, one summarised route per VPC, native Direct Connect and VPN attachment, and route tables for segmentation. Share it across accounts with Resource Access Manager.
 
-**2. An online store must guarantee that inventory never goes negative under concurrent purchase.**
+**3. Your API must return within 100 milliseconds for users worldwide, and some responses are cacheable for 30 seconds.**
+Regional API Gateway HTTP APIs in two or three Regions, fronted by CloudFront for edge TLS termination and caching, with Route 53 latency-based routing plus health checks between Regions. Use a deliberate cache key with only the parameters that vary the response, enable compression, and keep authorizer results cached.
 
-This is a concurrency-control question, not a database-selection question. In a relational store, use a transaction with `SELECT ... FOR UPDATE` or an atomic `UPDATE inventory SET qty = qty - 1 WHERE sku = ? AND qty > 0` and treat a zero-row result as out of stock. In DynamoDB, use `UpdateItem` with an `ADD` of minus one and a `ConditionExpression` of `qty > :zero`, which is atomic within a single item, or `TransactWriteItems` if the decrement must be atomic with order creation. The critical teaching point is that read-then-write in application code is a race condition, and correctness must come from an atomic conditional operation rather than from application logic.
+**4. A partner must call your service, but they refuse to expose it over the internet and their VPC uses the same CIDR as yours.**
+AWS PrivateLink. Put your service behind a Network Load Balancer, create a VPC endpoint service, and allow their account. They create an Interface endpoint in their VPC, reaching your service via an IP in *their* address space. Overlapping CIDRs are irrelevant because no routes are exchanged.
 
-**3. A team must migrate a 2 TB on-premises Oracle database to AWS with under fifteen minutes of downtime.**
+**5. During a deployment you want 5 percent of production traffic on a new version, with fast rollback.**
+For containers behind an ALB, use weighted target groups on the listener rule — rollback is a single API call and takes effect immediately with no DNS caching. For whole-stack changes, use Route 53 weighted records, accepting that rollback is bounded by TTL. For API Gateway, use a canary deployment on the stage. Choose based on how fast rollback must be and the granularity of the change.
 
-Use AWS Database Migration Service with the AWS Schema Conversion Tool if changing engines. DMS performs a full load followed by ongoing change data capture, so the bulk copy happens while the source remains live. The cutover is then a short window in which writes are quiesced, the remaining change backlog drains, the application's connection string is switched, and validation runs. Choose the target deliberately: Aurora PostgreSQL if the intent is to leave commercial licensing behind, RDS for Oracle if the application depends on Oracle-specific features. Plan and rehearse rollback, and validate row counts and checksums with DMS data validation before cutting over.
-
-**4. A DynamoDB table shows heavy throttling although consumed capacity is far below provisioned capacity.**
-
-This is the signature of a hot partition. Provisioned capacity is distributed across partitions, so a single key absorbing a disproportionate share of traffic throttles while the table-level metric looks healthy. Use Contributor Insights to identify the dominant keys. Remedies are to choose a higher-cardinality partition key, to apply write sharding by appending a calculated suffix to the key and scattering writes across the resulting keys, to introduce DAX or ElastiCache in front of a hot read key, or to switch to on-demand capacity, which handles bursts more gracefully although it does not eliminate a single-key limit.
-
-**5. An application must serve users in three continents with low read latency and cannot tolerate a full Regional outage.**
-
-DynamoDB Global Tables provide multi-active, multi-Region replication with local read and write latency and automatic conflict resolution by last-writer-wins, and Route 53 latency-based routing directs users to the nearest Region. If the workload is relational, Aurora Global Database provides a primary Region with read-only secondary Regions, typical cross-Region replication lag under a second, and promotion of a secondary in a disaster. The essential caveat to state is that last-writer-wins is not a distributed transaction, so any domain in which a lost concurrent update is unacceptable — a financial ledger, for example — requires a single writer Region and an explicit consistency design.
+**6. Costs have risen sharply and the largest line item is `NatGateway-Bytes`.**
+Enable Flow Logs, query in Athena grouped by destination, and identify the top talkers. Almost always this is S3, ECR image pulls, and CloudWatch Logs. Add a Gateway endpoint for S3 and DynamoDB (free) and Interface endpoints for `ecr.api`, `ecr.dkr`, `logs`, `sts`, and `secretsmanager`. Verify with Flow Logs that traffic has shifted, then confirm the reduction in Cost Explorer.
 
 ### Architecture Questions
 
-**1. Design the data layer for a ride-hailing platform.**
+**1. Design the network for a three-tier application requiring 99.99 percent availability in one Region.**
+A `/16` VPC across three Availability Zones. Public `/24` per zone containing only the internet-facing ALB and one NAT Gateway per zone. Private `/20` per zone for the ECS or EC2 tier, with per-zone route tables pointing at the NAT Gateway in the same zone. Isolated `/22` per zone for Multi-AZ RDS in a DB subnet group. Gateway endpoint for S3 and DynamoDB; Interface endpoints in all three zones for the AWS APIs used. Security groups chained by reference: ALB security group open on 443 from the internet, application security group allowing 8080 from the ALB security group, database security group allowing 5432 from the application security group. Route 53 alias to the ALB, CloudFront in front, WAF attached, Flow Logs to a central account.
 
-Driver location updates are extremely high-frequency, small, keyed by driver identifier, and ephemeral: DynamoDB with the driver identifier as partition key, a timestamp sort key, and TTL, or a Redis geospatial index if proximity search is required in the request path. Trip state during a ride is a small, hot, frequently updated item: DynamoDB with conditional writes for state transitions. Completed trips, fares, and settlements require ACID guarantees, reporting, and auditability: Aurora PostgreSQL. Surge pricing and matchmaking work from in-memory structures in ElastiCache. Analytics and machine-learning feature generation read from an S3 data lake fed by DynamoDB export and DMS, queried with Athena. Each store is chosen against a stated access pattern, and the services communicate through events on EventBridge rather than through shared tables.
+**2. How would you design network segmentation across 40 AWS accounts?**
+Transit Gateway in a network account shared via Resource Access Manager, with separate Transit Gateway route tables per environment so production and non-production attachments cannot route to each other. A shared-services VPC holding centralised Interface endpoints and Route 53 Resolver endpoints, with private hosted zones associated to workload VPCs. An inspection VPC with Network Firewall behind a Gateway Load Balancer for east-west and egress inspection. Service Control Policies preventing the creation of Internet Gateways in workload accounts. A single, centrally governed IPAM allocation so CIDRs never overlap.
 
-**2. Design a multi-tenant SaaS data architecture supporting both small and regulated enterprise tenants.**
+**3. An EKS cluster will run 20,000 pods. What is your networking plan?**
+The VPC CNI assigns a VPC address to every pod, so plan address space first: dedicate large subnets, and add a secondary CIDR from `100.64.0.0/10` with CNI custom networking so pod addresses do not consume routable space. Enable prefix delegation to allocate `/28` prefixes per ENI, which increases pod density per node and reduces API pressure. Use the AWS Load Balancer Controller in IP target mode so the ALB targets pods directly. Use security groups for pods where per-workload policy is needed, and a network policy engine for intra-cluster policy. Spread node groups across three Availability Zones and use topology-aware routing to keep traffic zonal.
 
-Use a hybrid of pool and silo. Small tenants share a DynamoDB table with `TENANT#id` as the partition-key prefix and IAM `dynamodb:LeadingKeys` conditions enforcing isolation, which gives near-linear cost scaling and one operational footprint. Regulated enterprise tenants receive a dedicated Aurora cluster with a customer managed KMS key, satisfying data-isolation and key-control requirements and bounding blast radius. A tenant routing layer resolves a tenant to its data plane. The trade-off to articulate is that the pool model minimises cost and operational effort while concentrating blast radius, and the silo model does the reverse; the hybrid places each tenant where its requirements and its revenue justify.
+**4. Design an API that accepts bursts of 50,000 requests per second but whose downstream can only handle 500 per second.**
+Do not let the burst reach the downstream. API Gateway integrates directly with SQS (an AWS service integration, no Lambda), returning `202 Accepted`. A consumer — Lambda with reserved concurrency, or an ECS service scaled on queue depth — drains the queue at a controlled rate. Add a dead-letter queue, idempotency keys so retries are safe, and per-route throttling as a second guardrail. The queue converts a scaling problem into a latency problem, which is almost always the right trade.
 
-**3. Design a read path targeting a p99 latency of 20 milliseconds at 100,000 reads per second.**
-
-Layer the caches. CloudFront handles cacheable public content at the edge. The application tier consults DAX or ElastiCache, sized to hold the working set, with a hit rate target above 95 percent. DynamoDB serves the residual with a partition key chosen for even distribution, and eventually consistent reads where the staleness is acceptable, halving the capacity cost. The database is provisioned for the miss rate, not the request rate. Instrument the hit rate, the miss latency, and the p99 at each layer, because a cache with a 95 percent hit rate and a slow miss path can still violate a p99 budget — the tail is dominated by misses, which is a point many candidates overlook.
+**5. When would you choose Global Accelerator over Route 53 latency routing?**
+When failover must be fast and independent of DNS caching, when clients pin IP addresses (device firmware, corporate allow-lists), when the protocol is not HTTP, or when you want traffic to enter the AWS backbone at the nearest edge for non-cacheable workloads. Global Accelerator gives two static anycast addresses and shifts traffic at the network layer in seconds. Route 53 is cheaper and sufficient when DNS TTL-bounded failover is acceptable.
 
 ### Troubleshooting Questions
 
-**1. An application intermittently reports "too many connections" against RDS.**
+**1. An instance in a private subnet cannot reach the internet. Diagnose systematically.**
+Check in this order: (a) the private subnet's route table has `0.0.0.0/0` pointing to a **NAT Gateway**, not an Internet Gateway; (b) the NAT Gateway is in a **public** subnet whose route table points `0.0.0.0/0` at an Internet Gateway; (c) the NAT Gateway has an Elastic IP and is in `available` state; (d) the instance's security group allows the required **outbound** traffic; (e) the NACLs on both the private and the public subnet allow outbound traffic and inbound **ephemeral ports** for the return path; (f) DNS is resolving — `enableDnsSupport` on the VPC; (g) NAT Gateway CloudWatch metrics show no `ErrorPortAllocation`. Confirm with Reachability Analyzer and Flow Logs, looking for `REJECT` entries.
 
-Check `DatabaseConnections` against the `max_connections` parameter, which on RDS is typically derived from instance memory. Causes include an application connection pool sized larger than the database allows multiplied by the number of application instances, connections leaked by code that fails to return them to the pool, a serverless tier scaling horizontally with one connection per execution environment, and long-running idle transactions. Remedies are RDS Proxy, correctly sized pools, connection timeouts, and a larger instance class only if the connection demand is genuinely justified.
+**2. You cannot SSH to an EC2 instance. Walk through it.**
+(a) Does the instance have a public IP or Elastic IP, and are you connecting to the right address? (b) Is it in a public subnet with an Internet Gateway route? (c) Does the security group allow inbound TCP 22 from your source address? (d) Does the NACL allow inbound 22 **and** outbound ephemeral ports 1024–65535? (e) Is the instance running, and did it pass both status checks? (f) Is `sshd` running and listening — check the system log or serial console? (g) Are the key pair and file permissions correct, and are you using the right username for the AMI? (h) Is a host-level firewall blocking? A **timeout** points at routing, security group, or NACL; **connection refused** means the packet reached the host and nothing was listening; a **key rejection** means the network is fine and the problem is credentials.
 
-**2. A read replica is reporting steadily increasing replica lag.**
+**3. ALB targets never become healthy.**
+The target's security group must allow the **health check port** from the ALB's security group — this is the single most common cause. Then confirm the health check path returns 200 (or matches the configured matcher), that the application listens on the configured port and on all interfaces rather than only `127.0.0.1`, that the health check protocol matches, that the target is registered in a subnet the ALB can reach, and that the health check timeout is longer than the application's response time. Check `TargetConnectionErrorCount` and the target group's health status reason string, which is usually explicit.
 
-Replication is single-threaded on some engines, so a heavy write burst on the primary, a long-running transaction, or a large `ALTER TABLE` will cause the replica to fall behind. Other causes are an undersized replica instance class relative to the primary, heavy read queries on the replica competing for its resources, and network saturation for a cross-Region replica. Diagnose with the `ReplicaLag` metric and the engine's replication status, then address the cause: size the replica at least as large as the primary, avoid long transactions, and consider Aurora, whose shared storage makes lag typically an order of magnitude smaller.
+**4. Inside the VPC, a service name resolves to a public IP address instead of the private endpoint.**
+Private DNS on the Interface endpoint is disabled, or `enableDnsSupport` or `enableDnsHostnames` is off on the VPC, or a private hosted zone is not associated with this VPC, or a Resolver rule is forwarding the query elsewhere. Confirm with `dig` from an instance against `169.254.169.253`, and check the endpoint's private DNS setting.
 
-**3. After deploying a new version, the application returns stale data for several minutes.**
+**5. Intermittent HTTP 502 responses from the ALB with no application errors.**
+Most commonly the backend closed a keep-alive connection that the ALB believed was still open, because the backend's keep-alive timeout is shorter than the ALB's idle timeout. Set the backend keep-alive above the ALB idle timeout. Other causes: the target returned a malformed response or headers exceeding the limit, or the target was deregistered while requests were in flight (increase the deregistration delay). Compare `HTTPCode_ELB_5XX_Count` with `HTTPCode_Target_5XX_Count` to determine whether the load balancer or the target generated the error, and inspect the ALB access logs' `elb_status_code` and `target_status_code` fields.
 
-The likely causes are reads being routed to a replica when read-after-write consistency is required, or cached entries with a TTL longer than the deployment window, or a cache not invalidated on write. Determine which by bypassing the cache and querying the writer directly. The fix is to route consistency-sensitive reads to the writer, to invalidate or version cache keys on write, and to include a version or build identifier in cache keys so that a deployment naturally invalidates entries whose shape has changed.
+**6. Two peered VPCs cannot communicate even though the peering connection is `active`.**
+Route tables on **both** sides must have a route to the other VPC's CIDR with the peering connection as target, and this must be present in every relevant subnet route table, not just one. Security groups must allow the traffic — and note that a security group in VPC A can reference a security group in VPC B only when the VPCs are peered and the reference is explicitly configured. NACLs on both sides must permit traffic in both directions. Finally, confirm the CIDRs do not overlap, and enable DNS resolution over the peering if you rely on private hosted-zone names.
 
-**4. A DynamoDB `Query` returns fewer items than expected, and the application misses records.**
+### Certification-Style Questions
 
-`Query` and `Scan` return at most 1 MB per call, and any filter expression is applied *after* the read, so a filtered query can return zero items while still consuming capacity and still having more pages. Application code that ignores `LastEvaluatedKey` processes only the first page. The fix is to paginate until `LastEvaluatedKey` is absent, or to use the SDK's paginator, and to prefer key conditions over filter expressions so that the read is selective rather than the filter.
+**1. A company needs to block a specific malicious IP address from reaching any resource in a subnet. What should they use?**
+A network ACL deny rule with a rule number lower than any allow rule that would match. Security groups cannot express deny.
 
-**5. ElastiCache hit rate has fallen from 96 percent to 40 percent with no application change.**
+**2. An application in a private subnet must access Amazon S3 without traversing the internet, at the lowest cost. What should the architect implement?**
+A Gateway VPC endpoint for S3, with the corresponding prefix-list route added to the private subnets' route tables. It carries no charge, unlike an Interface endpoint or a NAT Gateway.
 
-Look first at `Evictions` and `DatabaseMemoryUsagePercentage`. A growing dataset that has outgrown the node evicts entries before they are reused. Other causes are a change in key naming that fragmented the keyspace, a TTL set too short, a recent failover or node replacement that started with a cold cache, or a new access pattern with poor locality. Remedies are to scale the node or add shards, to review TTLs, and to warm the cache from a snapshot after a planned replacement.
+**3. A company runs an application in three Regions and wants users routed to the Region that gives them the best performance, with automatic removal of an unhealthy Region.**
+Route 53 latency-based routing records for each Region, each associated with a health check. Geolocation would route by location rather than performance; weighted would not adapt to latency.
 
-### Certification-style Questions
+**4. An API must be reachable only from within the corporate VPC and never from the internet.**
+A Private API Gateway REST API, accessed through an Interface endpoint for `execute-api`, with a resource policy that allows only the specific `aws:SourceVpce`. HTTP APIs do not support private endpoints.
 
-**1.** A company needs to improve read performance of an Amazon RDS for MySQL database that is CPU-bound on reads. Which action is MOST appropriate?
+**5. Instances in a private subnet suddenly cannot download operating system updates, while everything else works. The NAT Gateway shows increasing `ErrorPortAllocation`.**
+The NAT Gateway has exhausted source ports toward a small number of destinations. Reduce concurrent connections through connection reuse, spread traffic across additional NAT Gateways, or move the traffic off NAT via endpoints where the destination is an AWS service.
 
-- A. Enable Multi-AZ
-- B. Create read replicas and route read traffic to them
-- C. Increase the backup retention period
-- D. Enable storage auto scaling
+**6. Which combination provides static IP addresses and the ability to handle millions of requests per second with very low latency for a TCP-based protocol?**
+A Network Load Balancer with an Elastic IP in each Availability Zone. An ALB is layer 7 and offers no static IPs; API Gateway is HTTP-oriented and adds latency.
 
-**Answer: B.** The Multi-AZ standby in an instance deployment is not readable; read replicas exist precisely to scale reads.
+**7. A team needs to give an on-premises data centre access to an AWS service privately, and the on-premises network already reaches AWS over Direct Connect.**
+An Interface endpoint, because it presents an ENI with a routable private IP that on-premises networks can reach. A Gateway endpoint would not work — it is route-table scoped and unreachable from outside the VPC.
 
-**2.** An application requires microsecond read latency for an existing DynamoDB table with minimal application change. Which service should be used?
-
-- A. Amazon ElastiCache for Memcached
-- B. Amazon DynamoDB Accelerator (DAX)
-- C. Amazon CloudFront
-- D. Amazon RDS Proxy
-
-**Answer: B.** DAX is a write-through, DynamoDB-specific cache that is API-compatible, so the application change is limited to the client.
-
-**3.** Which DynamoDB feature allows an application to write an item only if it does not already exist?
-
-- A. A transaction
-- B. A conditional expression using `attribute_not_exists`
-- C. A global secondary index
-- D. Time to live
-
-**Answer: B.** Conditional writes provide optimistic concurrency without a transaction and at ordinary write cost.
-
-**4.** A Lambda function at high concurrency exhausts connections to an Aurora database. Which solution addresses this with the LEAST application change?
-
-- A. Increase the Aurora instance size
-- B. Use Amazon RDS Proxy
-- C. Migrate to DynamoDB
-- D. Add read replicas
-
-**Answer: B.** RDS Proxy pools and multiplexes connections and is designed for exactly this failure mode.
-
-**5.** Which statement about an Amazon DynamoDB Local Secondary Index is TRUE?
-
-- A. It can be created at any time after table creation
-- B. It uses a partition key different from the base table
-- C. It supports strongly consistent reads and must be created with the table
-- D. It has its own provisioned throughput separate from the table
-
-**Answer: C.** All the other statements describe a Global Secondary Index.
-
-**6.** A company must recover its database to any point within the last 20 days after an accidental deletion of rows. Which capability provides this?
-
-- A. Multi-AZ deployment
-- B. Read replicas
-- C. Automated backups with point-in-time recovery
-- D. Manual snapshots taken weekly
-
-**Answer: C.** Multi-AZ and replicas replicate the deletion faithfully; only PITR restores to a moment before it.
-
-**7.** Which is the MOST cost-effective DynamoDB configuration for a new application whose traffic pattern is entirely unknown?
-
-- A. Provisioned capacity sized for the expected peak
-- B. On-demand capacity mode
-- C. Provisioned capacity with reserved capacity purchased
-- D. Provisioned capacity with auto scaling and a high minimum
-
-**Answer: B.** On-demand requires no forecast and scales instantly; convert to provisioned once the pattern is established and measured.
+---
 
 ## Hands-on Lab
 
 ### Objective
 
-Build the data layer of a small order-management service that demonstrates polyglot persistence: an Amazon RDS for PostgreSQL Multi-AZ instance holding transactional order data, an Amazon DynamoDB table holding a high-volume event log with a global secondary index and TTL, and an Amazon ElastiCache for Redis replication group serving as a cache-aside layer. Measure the latency difference between a cache hit, a cache miss, and a DynamoDB `Query`, and demonstrate throttling by deliberately creating a hot partition.
+Build a production-shaped, multi-Availability-Zone VPC containing public, private, and isolated subnets; provide outbound internet access for private workloads through per-zone NAT Gateways; deploy a small application on private EC2 instances behind an internal Application Load Balancer; and expose it publicly through an API Gateway HTTP API using a VPC Link. Confirm that the application has **no public IP address** and that the database subnets have **no internet route**, then verify the security posture using Reachability Analyzer and VPC Flow Logs.
 
-!!! info "Environment"
-    Designed for the AWS Academy Learner Lab. The Learner Lab restricts IAM role creation, so reuse `LabRole` where a role is required, and place all resources in the default VPC's private subnets where possible. Delete every resource at the end; an idle RDS Multi-AZ instance and an ElastiCache node will consume the lab budget quickly.
+This lab is designed to complete within an AWS Academy Learner Lab session. Where the Learner Lab restricts an action, an alternative is noted.
 
 ### Architecture
 
 ```mermaid
 graph TD
-    CLI["Lab Client on EC2 or Cloud9"] --> APP["Python Application"]
-    APP --> EC["ElastiCache Redis Replication Group"]
-    APP --> RDS["RDS PostgreSQL Multi-AZ"]
-    APP --> DDB["DynamoDB Table OrderEvents"]
-    DDB --> GSI["GSI by customer id"]
-    DDB --> TTL["TTL attribute expires_at"]
-    SM["AWS Secrets Manager"] --> APP
-    CW["CloudWatch Metrics and Alarms"] --> RDS
-    CW --> DDB
-    CW --> EC
+    USER["Student Browser"] --> AGW["API Gateway HTTP API with a Custom Stage"]
+    AGW --> VL["VPC Link with ENIs in the Private Subnets"]
+    VL --> IALB["Internal Application Load Balancer"]
+
+    subgraph vpc["VPC dso303-vpc 10.20.0.0/16"]
+        subgraph az1["Availability Zone A"]
+            PUB1["Public Subnet 10.20.0.0/24 - NAT Gateway A"]
+            PRI1["Private Subnet 10.20.16.0/20 - App Instance A"]
+            ISO1["Isolated Subnet 10.20.64.0/22 - Reserved for RDS"]
+        end
+        subgraph az2["Availability Zone B"]
+            PUB2["Public Subnet 10.20.1.0/24 - NAT Gateway B"]
+            PRI2["Private Subnet 10.20.32.0/20 - App Instance B"]
+            ISO2["Isolated Subnet 10.20.68.0/22 - Reserved for RDS"]
+        end
+        IALB
+        VL
+        S3E["Gateway Endpoint for Amazon S3"]
+    end
+
+    PUB1 --> IGW["Internet Gateway"]
+    PUB2 --> IGW
+    PRI1 --> PUB1
+    PRI2 --> PUB2
+    IALB --> PRI1
+    IALB --> PRI2
+    PRI1 --> S3E
 ```
+Generate a professional with proper symbol in whie background image 
+
 
 ### AWS Services Used
 
-| Service | Role in the lab |
-|---|---|
-| Amazon VPC | Private subnets, DB subnet group, cache subnet group, security groups |
-| Amazon RDS for PostgreSQL | Transactional store with Multi-AZ and automated backups |
-| Amazon DynamoDB | Event log with a GSI, TTL, and Streams |
-| Amazon ElastiCache for Redis | Cache-aside layer with Multi-AZ |
-| AWS Secrets Manager | Database credential storage |
-| Amazon CloudWatch | Metrics, Contributor Insights, alarms |
+Amazon VPC (subnets, route tables, Internet Gateway, NAT Gateway, security groups, Gateway endpoint, Flow Logs), Amazon EC2, Elastic Load Balancing (internal ALB), Amazon API Gateway (HTTP API with VPC Link), AWS Systems Manager Session Manager, Amazon CloudWatch Logs, and VPC Reachability Analyzer.
 
 ### Implementation Steps
 
-**Step 1 — Create the network prerequisites.**
+**Part 1 — Network foundation**
+
+1. Create a VPC named `dso303-vpc` with CIDR `10.20.0.0/16`. Enable DNS resolution and DNS hostnames.
+2. Create six subnets across two Availability Zones:
+   - `public-a` `10.20.0.0/24`, `public-b` `10.20.1.0/24`
+   - `private-a` `10.20.16.0/20`, `private-b` `10.20.32.0/20`
+   - `isolated-a` `10.20.64.0/22`, `isolated-b` `10.20.68.0/22`
+3. Create and attach an Internet Gateway named `dso303-igw`.
+4. Create a route table `rt-public`, add `0.0.0.0/0` to the Internet Gateway, and associate both public subnets.
+5. Allocate two Elastic IPs and create one NAT Gateway in each public subnet.
+6. Create `rt-private-a` with `0.0.0.0/0` to NAT Gateway A, associated with `private-a`. Create `rt-private-b` similarly for zone B. **Do this per zone deliberately, and record why in your lab notes.**
+7. Create `rt-isolated` with **no** default route, and associate both isolated subnets.
+8. Create a Gateway endpoint for Amazon S3, associating it with `rt-private-a`, `rt-private-b`, and `rt-isolated`.
+
+**Part 2 — Security groups**
+
+9. `sg-alb-internal` — inbound TCP 80 from `10.20.0.0/16`; outbound all.
+10. `sg-app` — inbound TCP 80 **from `sg-alb-internal`** (reference the group, do not use a CIDR); outbound all.
+11. `sg-db` — inbound TCP 5432 **from `sg-app`**; no outbound rules beyond the default. Do not attach it to anything yet; it documents the intended data tier.
+
+**Part 3 — Application instances**
+
+12. Launch two `t3.micro` Amazon Linux 2023 instances, one in `private-a` and one in `private-b`, with **auto-assign public IP disabled**, security group `sg-app`, and an instance profile granting `AmazonSSMManagedInstanceCore` (in the Learner Lab, use the provided `LabInstanceProfile` or `LabRole`).
+13. Supply this user data so each instance serves a page identifying itself:
 
 ```bash
-aws rds create-db-subnet-group \
-  --db-subnet-group-name dso303-db-subnets \
-  --db-subnet-group-description "DSO303 private subnets" \
-  --subnet-ids "$PRIV_A" "$PRIV_B"
-
-aws elasticache create-cache-subnet-group \
-  --cache-subnet-group-name dso303-cache-subnets \
-  --cache-subnet-group-description "DSO303 private subnets" \
-  --subnet-ids "$PRIV_A" "$PRIV_B"
+#!/bin/bash
+dnf install -y nginx
+TOKEN=$(curl -sX PUT "http://169.254.169.254/latest/api/token" \
+  -H "X-aws-ec2-metadata-token-ttl-seconds: 300")
+AZ=$(curl -s -H "X-aws-ec2-metadata-token: $TOKEN" \
+  http://169.254.169.254/latest/meta-data/placement/availability-zone)
+IID=$(curl -s -H "X-aws-ec2-metadata-token: $TOKEN" \
+  http://169.254.169.254/latest/meta-data/instance-id)
+echo "{\"service\":\"dso303\",\"az\":\"$AZ\",\"instance\":\"$IID\"}" > /usr/share/nginx/html/index.html
+echo "ok" > /usr/share/nginx/html/health
+systemctl enable --now nginx
 ```
 
-Create two security groups: `dso303-app-sg` for the client, and `dso303-data-sg` permitting inbound TCP 5432 and 6379 **only** from `dso303-app-sg`.
+14. Connect to an instance using **Session Manager**, not SSH. Observe that no inbound port is open and no key pair is required. Run `curl -s http://checkip.amazonaws.com` and confirm it returns the NAT Gateway's Elastic IP, proving outbound-only internet access.
 
-**Step 2 — Store the database credential in Secrets Manager.**
+**Part 4 — Internal load balancer**
 
-```bash
-aws secretsmanager create-secret \
-  --name dso303/postgres \
-  --secret-string '{"username":"appuser","password":"REPLACE_WITH_STRONG_VALUE"}'
-```
+15. Create an **internal** Application Load Balancer `dso303-alb` in `private-a` and `private-b` with security group `sg-alb-internal`.
+16. Create a target group `tg-app` of type *instance*, protocol HTTP port 80, health check path `/health`, healthy threshold 2, interval 10 seconds. Register both instances.
+17. Create an HTTP:80 listener forwarding to `tg-app`. Wait for both targets to become `healthy`. If they do not, verify step 10 — the target security group must allow the health-check port from the ALB security group.
 
-**Step 3 — Create the RDS instance with Multi-AZ, encryption, and backups.**
+**Part 5 — Public exposure through API Gateway**
 
-```bash
-aws rds create-db-instance \
-  --db-instance-identifier dso303-pg \
-  --db-instance-class db.t3.micro \
-  --engine postgres \
-  --allocated-storage 20 --max-allocated-storage 100 \
-  --storage-type gp3 --storage-encrypted \
-  --master-username appuser \
-  --manage-master-user-password \
-  --db-subnet-group-name dso303-db-subnets \
-  --vpc-security-group-ids "$DATA_SG" \
-  --multi-az \
-  --backup-retention-period 7 \
-  --enable-performance-insights \
-  --no-publicly-accessible \
-  --deletion-protection
-```
+18. Create a **VPC Link for HTTP APIs**, placed in `private-a` and `private-b`, with a security group allowing outbound to `sg-alb-internal`.
+19. Create an **HTTP API** named `dso303-api`. Add a route `GET /app` with a **private integration** targeting the ALB listener through the VPC Link.
+20. Enable **access logging** on the stage to a CloudWatch Logs group, using a JSON format that includes `requestId`, `ip`, `routeKey`, `status`, `integrationLatency`, and `responseLatency`.
+21. Set a **route-level throttle** of 10 requests per second with a burst of 20.
+22. Invoke the API's invoke URL from your browser. You should receive JSON identifying the instance and its Availability Zone. Refresh repeatedly and observe alternation between zones.
 
-**Step 4 — Create the DynamoDB table with a GSI and TTL.**
+**Part 6 — Verification and observability**
 
-```bash
-aws dynamodb create-table \
-  --table-name OrderEvents \
-  --attribute-definitions \
-      AttributeName=pk,AttributeType=S \
-      AttributeName=sk,AttributeType=S \
-      AttributeName=customer_id,AttributeType=S \
-  --key-schema AttributeName=pk,KeyType=HASH AttributeName=sk,KeyType=RANGE \
-  --billing-mode PAY_PER_REQUEST \
-  --global-secondary-indexes '[{
-      "IndexName": "gsi-customer",
-      "KeySchema": [{"AttributeName":"customer_id","KeyType":"HASH"},
-                    {"AttributeName":"sk","KeyType":"RANGE"}],
-      "Projection": {"ProjectionType":"INCLUDE","NonKeyAttributes":["status","amount"]}
-  }]' \
-  --stream-specification StreamEnabled=true,StreamViewType=NEW_AND_OLD_IMAGES
+23. Enable **VPC Flow Logs** on the VPC, delivering to a CloudWatch Logs group with the default format.
+24. Attempt to reach an instance's private IP directly from your laptop. It will time out — this is the expected result and is the point of the exercise.
+25. Use **Reachability Analyzer** to test a path from the Internet Gateway to an application instance on TCP 80. The result should be **not reachable**, and the tool will name the blocking component.
+26. Run Reachability Analyzer from the VPC Link ENI (or the ALB) to an instance on TCP 80. The result should be **reachable**.
+27. In the Flow Logs group, search for `REJECT` entries and identify what was rejected and why.
+28. Exceed the throttle by sending more than 20 requests in a second (for example with `for i in $(seq 1 40); do curl -s -o /dev/null -w "%{http_code}\n" "$URL"; done`) and observe HTTP 429 responses.
 
-aws dynamodb update-time-to-live \
-  --table-name OrderEvents \
-  --time-to-live-specification "Enabled=true,AttributeName=expires_at"
-```
+**Part 7 — Cleanup (important in a Learner Lab)**
 
-**Step 5 — Create the ElastiCache replication group.**
-
-```bash
-aws elasticache create-replication-group \
-  --replication-group-id dso303-cache \
-  --replication-group-description "DSO303 cache-aside layer" \
-  --engine redis \
-  --cache-node-type cache.t3.micro \
-  --num-cache-clusters 2 \
-  --automatic-failover-enabled \
-  --multi-az-enabled \
-  --cache-subnet-group-name dso303-cache-subnets \
-  --security-group-ids "$DATA_SG" \
-  --at-rest-encryption-enabled \
-  --transit-encryption-enabled
-```
-
-**Step 6 — Create the relational schema and seed data.** Connect from the client instance and run the SQL in the Code Examples section, then insert approximately 50,000 order rows so that index behaviour is observable.
-
-**Step 7 — Run the measurement script.** Execute the Python program in the Code Examples section, which measures cache-miss latency, cache-hit latency, and DynamoDB `Query` latency over many iterations and prints the p50 and p99 for each.
-
-**Step 8 — Demonstrate a hot partition.** Write 5,000 items using a single constant partition key value, then repeat with a high-cardinality key. Enable Contributor Insights on the table and compare the key-distribution graphs and the `ThrottledRequests` metric.
-
-```bash
-aws dynamodb update-contributor-insights \
-  --table-name OrderEvents --contributor-insights-action ENABLE
-```
-
-**Step 9 — Force an RDS failover and observe application behaviour.**
-
-```bash
-aws rds reboot-db-instance --db-instance-identifier dso303-pg --force-failover
-```
-
-Observe that existing connections break, that the endpoint DNS resolves to the promoted standby, and that an application with bounded retry and reconnection logic recovers automatically while one without it does not.
-
-**Step 10 — Clean up.** Disable deletion protection, delete the RDS instance skipping the final snapshot, delete the DynamoDB table, delete the replication group, and delete the secret with a short recovery window.
+29. Delete in this order: API and VPC Link, load balancer and target group, EC2 instances, NAT Gateways, release Elastic IPs, endpoints, subnets and route tables, Internet Gateway, VPC. NAT Gateways and Elastic IPs are the components that continue to accrue charges if left behind.
 
 ### Expected Output
 
-| Measurement | Expected result |
-|---|---|
-| Cache hit latency (p50) | Well under one millisecond at the client, dominated by network round trip |
-| Cache miss latency including database read and cache population | Typically one to two orders of magnitude higher than a hit |
-| DynamoDB `Query` latency (p50) | Single-digit milliseconds, stable as the item count grows |
-| Hot-partition write test | `ThrottledRequests` rises and Contributor Insights shows one dominant key |
-| High-cardinality write test | No throttling; Contributor Insights shows an even key distribution |
-| RDS forced failover | Connection error followed by successful reconnection within one to two minutes; the endpoint resolves to a new address |
-| CloudWatch after the lab | `CacheHitRate` above 90 percent under the read loop; `Evictions` at zero while the working set fits |
+- A public HTTPS invoke URL returning JSON from an instance that has no public IP address.
+- Responses alternating between two Availability Zones, demonstrating multi-AZ distribution.
+- `checkip.amazonaws.com` from inside an instance returning a NAT Gateway Elastic IP.
+- Direct access from the internet to an instance timing out.
+- Reachability Analyzer reporting *not reachable* from the internet and *reachable* from the VPC Link.
+- HTTP 429 responses once the route throttle is exceeded.
+- Flow Log entries showing accepted flows from the ALB to the instances and rejected flows from any external probing.
 
-!!! tip "The lesson to take from the measurements"
-    The numbers make the abstraction concrete. Students who have personally measured a 100-fold latency difference between a memory hit and a disk read, and who have personally throttled a table by choosing a bad partition key, retain the design principle in a way that reading about it does not achieve.
+!!! tip "What to Write in Your Lab Report"
+    Explain **why** each control exists, not what you clicked. Why one NAT Gateway per Availability Zone? Why does `sg-app` reference `sg-alb-internal` rather than a CIDR? Why is the ALB internal rather than internet-facing? Why is the S3 Gateway endpoint associated with the isolated route table when nothing is deployed there yet? These questions are the assessment.
+
+---
 
 ## Code Examples
 
-### SQL — schema design with deliberate indexing
+### AWS CLI — Building the Core Network
 
-```sql
--- Orders are the system of record and require referential integrity.
-CREATE TABLE customers (
-    id           BIGSERIAL PRIMARY KEY,
-    email        TEXT NOT NULL UNIQUE,
-    created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-
-CREATE TABLE orders (
-    id           BIGSERIAL PRIMARY KEY,
-    customer_id  BIGINT NOT NULL REFERENCES customers(id),
-    status       TEXT NOT NULL CHECK (status IN ('PENDING','PAID','SHIPPED','CANCELLED')),
-    total_cents  BIGINT NOT NULL CHECK (total_cents >= 0),
-    created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-
--- Composite index supporting the dominant query: a customer's recent orders.
--- Column order matters: equality column first, range column second.
-CREATE INDEX idx_orders_customer_created
-    ON orders (customer_id, created_at DESC);
-
--- Partial index: most queries only care about live orders, so exclude the rest
--- and keep the index small.
-CREATE INDEX idx_orders_active
-    ON orders (created_at DESC)
-    WHERE status IN ('PENDING','PAID');
-
--- Atomic inventory decrement. The condition in the WHERE clause is what makes
--- this safe under concurrency; a read-then-write in application code is a race.
-UPDATE inventory
-   SET quantity = quantity - 1
- WHERE sku = 'SKU-123'
-   AND quantity > 0
-RETURNING quantity;
-```
-
-### AWS CLI — DynamoDB operations that illustrate the key concepts
+Creates a VPC, a public subnet with an internet path, and a private subnet whose outbound traffic uses a NAT Gateway. Each command emits an identifier used by the next; in practice you would capture these with `--query` and shell variables.
 
 ```bash
-# Query is selective: it reads only items under one partition key.
-aws dynamodb query \
-  --table-name OrderEvents \
-  --key-condition-expression "pk = :pk AND begins_with(sk, :prefix)" \
-  --expression-attribute-values '{":pk":{"S":"ORDER#1001"},":prefix":{"S":"EVENT#2026"}}' \
-  --no-scan-index-forward --limit 25
+#!/usr/bin/env bash
+set -euo pipefail
+REGION="us-east-1"
 
-# Conditional write: create only if absent. This is optimistic concurrency
-# control and costs the same as an ordinary write.
-aws dynamodb put-item \
-  --table-name OrderEvents \
-  --item '{"pk":{"S":"ORDER#1001"},"sk":{"S":"EVENT#001"},"status":{"S":"PENDING"}}' \
-  --condition-expression "attribute_not_exists(pk) AND attribute_not_exists(sk)"
+VPC_ID=$(aws ec2 create-vpc \
+  --cidr-block 10.20.0.0/16 \
+  --tag-specifications 'ResourceType=vpc,Tags=[{Key=Name,Value=dso303-vpc}]' \
+  --query 'Vpc.VpcId' --output text --region "$REGION")
 
-# Query the GSI for an alternative access pattern.
-aws dynamodb query \
-  --table-name OrderEvents --index-name gsi-customer \
-  --key-condition-expression "customer_id = :c" \
-  --expression-attribute-values '{":c":{"S":"CUST#42"}}'
+aws ec2 modify-vpc-attribute --vpc-id "$VPC_ID" --enable-dns-support '{"Value":true}'
+aws ec2 modify-vpc-attribute --vpc-id "$VPC_ID" --enable-dns-hostnames '{"Value":true}'
+
+PUB_SUBNET=$(aws ec2 create-subnet --vpc-id "$VPC_ID" \
+  --cidr-block 10.20.0.0/24 --availability-zone "${REGION}a" \
+  --query 'Subnet.SubnetId' --output text)
+
+PRIV_SUBNET=$(aws ec2 create-subnet --vpc-id "$VPC_ID" \
+  --cidr-block 10.20.16.0/20 --availability-zone "${REGION}a" \
+  --query 'Subnet.SubnetId' --output text)
+
+IGW_ID=$(aws ec2 create-internet-gateway \
+  --query 'InternetGateway.InternetGatewayId' --output text)
+aws ec2 attach-internet-gateway --vpc-id "$VPC_ID" --internet-gateway-id "$IGW_ID"
+
+RT_PUB=$(aws ec2 create-route-table --vpc-id "$VPC_ID" \
+  --query 'RouteTable.RouteTableId' --output text)
+aws ec2 create-route --route-table-id "$RT_PUB" \
+  --destination-cidr-block 0.0.0.0/0 --gateway-id "$IGW_ID"
+aws ec2 associate-route-table --route-table-id "$RT_PUB" --subnet-id "$PUB_SUBNET"
+
+EIP_ALLOC=$(aws ec2 allocate-address --domain vpc --query 'AllocationId' --output text)
+NAT_ID=$(aws ec2 create-nat-gateway --subnet-id "$PUB_SUBNET" \
+  --allocation-id "$EIP_ALLOC" --query 'NatGateway.NatGatewayId' --output text)
+aws ec2 wait nat-gateway-available --nat-gateway-ids "$NAT_ID"
+
+RT_PRIV=$(aws ec2 create-route-table --vpc-id "$VPC_ID" \
+  --query 'RouteTable.RouteTableId' --output text)
+aws ec2 create-route --route-table-id "$RT_PRIV" \
+  --destination-cidr-block 0.0.0.0/0 --nat-gateway-id "$NAT_ID"
+aws ec2 associate-route-table --route-table-id "$RT_PRIV" --subnet-id "$PRIV_SUBNET"
+
+# A Gateway endpoint for S3 costs nothing and removes S3 traffic from the NAT path.
+aws ec2 create-vpc-endpoint --vpc-id "$VPC_ID" \
+  --service-name "com.amazonaws.${REGION}.s3" \
+  --route-table-ids "$RT_PRIV"
+
+echo "VPC=$VPC_ID PUBLIC=$PUB_SUBNET PRIVATE=$PRIV_SUBNET NAT=$NAT_ID"
 ```
 
-### Python (boto3) — DynamoDB single-table access with pagination and retries
+### AWS CLI — Security Group Rules That Reference Other Groups
+
+The cloud-native idiom: the rule survives auto scaling because it names an identity, not an address.
+
+```bash
+ALB_SG=$(aws ec2 create-security-group --group-name sg-alb \
+  --description "Internet facing ALB" --vpc-id "$VPC_ID" --query 'GroupId' --output text)
+APP_SG=$(aws ec2 create-security-group --group-name sg-app \
+  --description "Application tier" --vpc-id "$VPC_ID" --query 'GroupId' --output text)
+DB_SG=$(aws ec2 create-security-group --group-name sg-db \
+  --description "Database tier" --vpc-id "$VPC_ID" --query 'GroupId' --output text)
+
+aws ec2 authorize-security-group-ingress --group-id "$ALB_SG" \
+  --ip-permissions 'IpProtocol=tcp,FromPort=443,ToPort=443,IpRanges=[{CidrIp=0.0.0.0/0,Description="Public HTTPS"}]'
+
+aws ec2 authorize-security-group-ingress --group-id "$APP_SG" \
+  --ip-permissions "IpProtocol=tcp,FromPort=8080,ToPort=8080,UserIdGroupPairs=[{GroupId=$ALB_SG,Description=\"From ALB only\"}]"
+
+aws ec2 authorize-security-group-ingress --group-id "$DB_SG" \
+  --ip-permissions "IpProtocol=tcp,FromPort=5432,ToPort=5432,UserIdGroupPairs=[{GroupId=$APP_SG,Description=\"From app tier only\"}]"
+```
+
+### Network ACL Rules — Stateless, Ordered, With the Ephemeral Return Path
+
+Demonstrates the rule that catches most people: the outbound rule must permit ephemeral destination ports so that responses can leave.
+
+```bash
+NACL_ID=$(aws ec2 create-network-acl --vpc-id "$VPC_ID" \
+  --query 'NetworkAcl.NetworkAclId' --output text)
+
+# Deny a known-bad network first; lower rule numbers are evaluated first.
+aws ec2 create-network-acl-entry --network-acl-id "$NACL_ID" --rule-number 90 \
+  --protocol tcp --port-range From=0,To=65535 \
+  --cidr-block 198.51.100.0/24 --rule-action deny --ingress
+
+# Allow inbound HTTPS from anywhere.
+aws ec2 create-network-acl-entry --network-acl-id "$NACL_ID" --rule-number 100 \
+  --protocol tcp --port-range From=443,To=443 \
+  --cidr-block 0.0.0.0/0 --rule-action allow --ingress
+
+# Allow inbound ephemeral ports so that responses to our own outbound calls return.
+aws ec2 create-network-acl-entry --network-acl-id "$NACL_ID" --rule-number 110 \
+  --protocol tcp --port-range From=1024,To=65535 \
+  --cidr-block 0.0.0.0/0 --rule-action allow --ingress
+
+# Allow outbound HTTPS for calls we initiate.
+aws ec2 create-network-acl-entry --network-acl-id "$NACL_ID" --rule-number 100 \
+  --protocol tcp --port-range From=443,To=443 \
+  --cidr-block 0.0.0.0/0 --rule-action allow --egress
+
+# THE CRITICAL RULE: responses to inbound requests leave from port 443 toward
+# the client's ephemeral port. Without this, every connection appears to hang.
+aws ec2 create-network-acl-entry --network-acl-id "$NACL_ID" --rule-number 110 \
+  --protocol tcp --port-range From=1024,To=65535 \
+  --cidr-block 0.0.0.0/0 --rule-action allow --egress
+```
+
+### Python (boto3) — Audit Security Groups for Dangerous Exposure
+
+A control that belongs in a CI pipeline or a scheduled Lambda function: it fails the build when a group exposes an administrative port to the world.
 
 ```python
-import boto3, time, os
-from boto3.dynamodb.conditions import Key, Attr
-from botocore.config import Config
+"""Detect security group rules exposing sensitive ports to the internet."""
+import boto3
 
-# Adaptive retry mode applies exponential backoff with jitter and respects
-# throttling responses. Never write a bare retry loop against a throttled API.
-cfg = Config(retries={"max_attempts": 10, "mode": "adaptive"})
-ddb = boto3.resource("dynamodb", config=cfg)
-table = ddb.Table(os.environ["TABLE_NAME"])
+SENSITIVE_PORTS = {22, 23, 3389, 3306, 5432, 6379, 27017, 9200, 1433}
+OPEN_CIDRS = {"0.0.0.0/0", "::/0"}
+
+ec2 = boto3.client("ec2")
 
 
-def put_event(order_id: str, seq: int, payload: dict, ttl_days: int = 30) -> None:
-    """Append an event, failing if this sequence number already exists.
-
-    The conditional expression provides optimistic concurrency: two writers
-    racing on the same sequence number cannot both succeed.
-    """
-    table.put_item(
-        Item={
-            "pk": f"ORDER#{order_id}",
-            "sk": f"EVENT#{seq:09d}",
-            "customer_id": payload["customer_id"],
-            "status": payload["status"],
-            "amount": payload["amount"],
-            "expires_at": int(time.time()) + ttl_days * 86400,
-        },
-        ConditionExpression=Attr("pk").not_exists() & Attr("sk").not_exists(),
-    )
+def rule_is_open(perm: dict) -> bool:
+    v4 = any(r.get("CidrIp") in OPEN_CIDRS for r in perm.get("IpRanges", []))
+    v6 = any(r.get("CidrIpv6") in OPEN_CIDRS for r in perm.get("Ipv6Ranges", []))
+    return v4 or v6
 
 
-def all_events(order_id: str):
-    """Query every event for an order, paginating correctly.
-
-    Query returns at most 1 MB per call. Ignoring LastEvaluatedKey is a defect
-    that passes small-data tests and silently truncates in production.
-    """
-    kwargs = {"KeyConditionExpression": Key("pk").eq(f"ORDER#{order_id}")}
-    while True:
-        resp = table.query(**kwargs)
-        yield from resp["Items"]
-        if "LastEvaluatedKey" not in resp:
-            return
-        kwargs["ExclusiveStartKey"] = resp["LastEvaluatedKey"]
+def covered_ports(perm: dict) -> set:
+    if perm.get("IpProtocol") == "-1":
+        return SENSITIVE_PORTS
+    lo, hi = perm.get("FromPort"), perm.get("ToPort")
+    if lo is None or hi is None:
+        return set()
+    return {p for p in SENSITIVE_PORTS if lo <= p <= hi}
 
 
-def atomic_decrement(sku: str) -> bool:
-    """Decrement stock only when it is positive, atomically, in one round trip."""
-    try:
-        table.update_item(
-            Key={"pk": f"SKU#{sku}", "sk": "STOCK"},
-            UpdateExpression="ADD quantity :neg",
-            ConditionExpression=Attr("quantity").gt(0),
-            ExpressionAttributeValues={":neg": -1},
+def audit() -> list:
+    findings = []
+    paginator = ec2.get_paginator("describe_security_groups")
+    for page in paginator.paginate():
+        for sg in page["SecurityGroups"]:
+            for perm in sg.get("IpPermissions", []):
+                if not rule_is_open(perm):
+                    continue
+                exposed = covered_ports(perm)
+                if exposed:
+                    findings.append({
+                        "GroupId": sg["GroupId"],
+                        "GroupName": sg["GroupName"],
+                        "VpcId": sg.get("VpcId"),
+                        "Protocol": perm.get("IpProtocol"),
+                        "ExposedPorts": sorted(exposed),
+                    })
+    return findings
+
+
+if __name__ == "__main__":
+    results = audit()
+    for f in results:
+        print(f"FAIL {f['GroupId']} ({f['GroupName']}) exposes {f['ExposedPorts']} to the internet")
+    raise SystemExit(1 if results else 0)
+```
+
+### Python (boto3) — Analyse What Is Traversing the NAT Gateway
+
+Reads NAT Gateway metrics to quantify the cost driver before optimising it.
+
+```python
+"""Report bytes processed by every NAT Gateway over the last seven days."""
+import datetime as dt
+import boto3
+
+ec2 = boto3.client("ec2")
+cw = boto3.client("cloudwatch")
+
+end = dt.datetime.utcnow()
+start = end - dt.timedelta(days=7)
+
+for nat in ec2.describe_nat_gateways()["NatGateways"]:
+    nat_id = nat["NatGatewayId"]
+    totals = {}
+    for metric in ("BytesOutToDestination", "BytesInFromDestination", "ErrorPortAllocation"):
+        resp = cw.get_metric_statistics(
+            Namespace="AWS/NATGateway",
+            MetricName=metric,
+            Dimensions=[{"Name": "NatGatewayId", "Value": nat_id}],
+            StartTime=start,
+            EndTime=end,
+            Period=86400,
+            Statistics=["Sum"],
         )
-        return True
-    except ddb.meta.client.exceptions.ConditionalCheckFailedException:
-        return False   # Out of stock; not an error, an expected outcome.
+        totals[metric] = sum(p["Sum"] for p in resp["Datapoints"])
+    gb = totals["BytesOutToDestination"] / (1024 ** 3)
+    print(f"{nat_id}: {gb:,.1f} GiB out, port allocation errors {totals['ErrorPortAllocation']:.0f}")
+    if totals["ErrorPortAllocation"] > 0:
+        print("  ACTION: port exhaustion detected. Reuse connections or add NAT capacity.")
 ```
 
-### Python — cache-aside with TTL jitter and a stampede guard
+### CloudFormation — A Complete Multi-AZ VPC
 
-```python
-import json, random, time
-import redis
-
-r = redis.Redis(host=CACHE_ENDPOINT, port=6379, ssl=True, decode_responses=True)
-
-TTL_BASE = 300          # five minutes of tolerable staleness
-TTL_JITTER = 60         # spread expiries so keys do not expire in lockstep
-LOCK_TTL = 5
-
-
-def get_customer(conn, customer_id: str) -> dict:
-    key = f"v1:customer:{customer_id}"          # version prefix invalidates on deploy
-    cached = r.get(key)
-    if cached is not None:
-        return json.loads(cached)
-
-    # Stampede guard: only the lock holder recomputes; others wait briefly and
-    # re-read rather than all hammering the database simultaneously.
-    lock_key = f"{key}:lock"
-    if r.set(lock_key, "1", nx=True, ex=LOCK_TTL):
-        try:
-            with conn.cursor() as cur:
-                cur.execute("SELECT id, email, created_at FROM customers WHERE id = %s",
-                            (customer_id,))
-                row = cur.fetchone()
-            value = {"id": row[0], "email": row[1], "created_at": str(row[2])}
-            r.setex(key, TTL_BASE + random.randint(0, TTL_JITTER), json.dumps(value))
-            return value
-        finally:
-            r.delete(lock_key)
-
-    time.sleep(0.05)
-    cached = r.get(key)
-    if cached is not None:
-        return json.loads(cached)
-    # Fall through to the database rather than failing the request.
-    with conn.cursor() as cur:
-        cur.execute("SELECT id, email, created_at FROM customers WHERE id = %s",
-                    (customer_id,))
-        row = cur.fetchone()
-    return {"id": row[0], "email": row[1], "created_at": str(row[2])}
-```
-
-### Python — retrieving credentials from Secrets Manager rather than embedding them
-
-```python
-import json, boto3, psycopg
-
-def connect():
-    """Fetch the rotating credential at connection time.
-
-    Caching the secret for the lifetime of the execution environment is
-    acceptable; embedding it in an environment variable is not, because
-    rotation would then require a redeploy.
-    """
-    sm = boto3.client("secretsmanager")
-    secret = json.loads(sm.get_secret_value(SecretId="dso303/postgres")["SecretString"])
-    return psycopg.connect(
-        host=secret["host"], port=secret.get("port", 5432),
-        dbname=secret.get("dbname", "postgres"),
-        user=secret["username"], password=secret["password"],
-        sslmode="require",              # enforce TLS to the database
-        connect_timeout=5,
-    )
-```
-
-### CloudFormation — RDS, DynamoDB and ElastiCache (abridged)
+A reusable network stack. Note the per-Availability-Zone NAT Gateways and route tables, the free S3 Gateway endpoint, and the exported outputs that application stacks consume without ever being able to modify the network.
 
 ```yaml
-AWSTemplateFormatVersion: '2010-09-09'
-Description: DSO303 polyglot data layer
+AWSTemplateFormatVersion: "2010-09-09"
+Description: DSO303 multi-AZ VPC with public, private, and isolated tiers.
 
 Parameters:
-  PrivateSubnets: {Type: List<AWS::EC2::Subnet::Id>}
-  DataSecurityGroup: {Type: AWS::EC2::SecurityGroup::Id}
+  EnvironmentName:
+    Type: String
+    Default: dso303
+  VpcCidr:
+    Type: String
+    Default: 10.20.0.0/16
+
+Mappings:
+  SubnetConfig:
+    PublicA:   { CIDR: 10.20.0.0/24 }
+    PublicB:   { CIDR: 10.20.1.0/24 }
+    PrivateA:  { CIDR: 10.20.16.0/20 }
+    PrivateB:  { CIDR: 10.20.32.0/20 }
+    IsolatedA: { CIDR: 10.20.64.0/22 }
+    IsolatedB: { CIDR: 10.20.68.0/22 }
 
 Resources:
-  DBSubnetGroup:
-    Type: AWS::RDS::DBSubnetGroup
+  Vpc:
+    Type: AWS::EC2::VPC
     Properties:
-      DBSubnetGroupDescription: DSO303 private subnets
-      SubnetIds: !Ref PrivateSubnets
+      CidrBlock: !Ref VpcCidr
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags: [{ Key: Name, Value: !Sub "${EnvironmentName}-vpc" }]
 
-  Postgres:
-    Type: AWS::RDS::DBInstance
-    DeletionPolicy: Snapshot
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+  IgwAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
     Properties:
-      DBInstanceIdentifier: dso303-pg
-      Engine: postgres
-      DBInstanceClass: db.t3.micro
-      AllocatedStorage: '20'
-      MaxAllocatedStorage: 100         # storage auto scaling prevents a full disk outage
-      StorageType: gp3
-      StorageEncrypted: true
-      MultiAZ: true
-      BackupRetentionPeriod: 7
-      DeletionProtection: true
-      PubliclyAccessible: false
-      EnablePerformanceInsights: true
-      ManageMasterUserPassword: true   # credential created and rotated in Secrets Manager
-      DBSubnetGroupName: !Ref DBSubnetGroup
-      VPCSecurityGroups: [!Ref DataSecurityGroup]
+      VpcId: !Ref Vpc
+      InternetGatewayId: !Ref InternetGateway
 
-  OrderEvents:
-    Type: AWS::DynamoDB::Table
+  PublicSubnetA:
+    Type: AWS::EC2::Subnet
     Properties:
-      TableName: OrderEvents
-      BillingMode: PAY_PER_REQUEST
-      AttributeDefinitions:
-        - {AttributeName: pk, AttributeType: S}
-        - {AttributeName: sk, AttributeType: S}
-        - {AttributeName: customer_id, AttributeType: S}
-      KeySchema:
-        - {AttributeName: pk, KeyType: HASH}
-        - {AttributeName: sk, KeyType: RANGE}
-      GlobalSecondaryIndexes:
-        - IndexName: gsi-customer
-          KeySchema:
-            - {AttributeName: customer_id, KeyType: HASH}
-            - {AttributeName: sk, KeyType: RANGE}
-          Projection:
-            ProjectionType: INCLUDE
-            NonKeyAttributes: [status, amount]
-      TimeToLiveSpecification: {AttributeName: expires_at, Enabled: true}
-      PointInTimeRecoverySpecification: {PointInTimeRecoveryEnabled: true}
-      StreamSpecification: {StreamViewType: NEW_AND_OLD_IMAGES}
-      SSESpecification: {SSEEnabled: true}
+      VpcId: !Ref Vpc
+      CidrBlock: !FindInMap [SubnetConfig, PublicA, CIDR]
+      AvailabilityZone: !Select [0, !GetAZs ""]
+      MapPublicIpOnLaunch: true
+      Tags: [{ Key: Name, Value: !Sub "${EnvironmentName}-public-a" }]
+  PublicSubnetB:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      CidrBlock: !FindInMap [SubnetConfig, PublicB, CIDR]
+      AvailabilityZone: !Select [1, !GetAZs ""]
+      MapPublicIpOnLaunch: true
+      Tags: [{ Key: Name, Value: !Sub "${EnvironmentName}-public-b" }]
 
-  CacheSubnetGroup:
-    Type: AWS::ElastiCache::SubnetGroup
+  PrivateSubnetA:
+    Type: AWS::EC2::Subnet
     Properties:
-      Description: DSO303 private subnets
-      SubnetIds: !Ref PrivateSubnets
+      VpcId: !Ref Vpc
+      CidrBlock: !FindInMap [SubnetConfig, PrivateA, CIDR]
+      AvailabilityZone: !Select [0, !GetAZs ""]
+      MapPublicIpOnLaunch: false
+      Tags: [{ Key: Name, Value: !Sub "${EnvironmentName}-private-a" }]
+  PrivateSubnetB:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      CidrBlock: !FindInMap [SubnetConfig, PrivateB, CIDR]
+      AvailabilityZone: !Select [1, !GetAZs ""]
+      MapPublicIpOnLaunch: false
+      Tags: [{ Key: Name, Value: !Sub "${EnvironmentName}-private-b" }]
 
-  Cache:
-    Type: AWS::ElastiCache::ReplicationGroup
+  IsolatedSubnetA:
+    Type: AWS::EC2::Subnet
     Properties:
-      ReplicationGroupId: dso303-cache
-      ReplicationGroupDescription: DSO303 cache-aside layer
-      Engine: redis
-      CacheNodeType: cache.t3.micro
-      NumCacheClusters: 2
-      AutomaticFailoverEnabled: true
-      MultiAZEnabled: true
-      AtRestEncryptionEnabled: true
-      TransitEncryptionEnabled: true
-      CacheSubnetGroupName: !Ref CacheSubnetGroup
-      SecurityGroupIds: [!Ref DataSecurityGroup]
+      VpcId: !Ref Vpc
+      CidrBlock: !FindInMap [SubnetConfig, IsolatedA, CIDR]
+      AvailabilityZone: !Select [0, !GetAZs ""]
+      Tags: [{ Key: Name, Value: !Sub "${EnvironmentName}-isolated-a" }]
+  IsolatedSubnetB:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      CidrBlock: !FindInMap [SubnetConfig, IsolatedB, CIDR]
+      AvailabilityZone: !Select [1, !GetAZs ""]
+      Tags: [{ Key: Name, Value: !Sub "${EnvironmentName}-isolated-b" }]
+
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref Vpc
+      Tags: [{ Key: Name, Value: !Sub "${EnvironmentName}-rt-public" }]
+  PublicDefaultRoute:
+    Type: AWS::EC2::Route
+    DependsOn: IgwAttachment
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+  PublicAssocA:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties: { RouteTableId: !Ref PublicRouteTable, SubnetId: !Ref PublicSubnetA }
+  PublicAssocB:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties: { RouteTableId: !Ref PublicRouteTable, SubnetId: !Ref PublicSubnetB }
+
+  NatEipA:
+    Type: AWS::EC2::EIP
+    Properties: { Domain: vpc }
+  NatEipB:
+    Type: AWS::EC2::EIP
+    Properties: { Domain: vpc }
+
+  # One NAT Gateway per Availability Zone. A single shared NAT Gateway would make a
+  # zonal failure VPC-wide and would add cross-AZ data transfer charges.
+  NatGatewayA:
+    Type: AWS::EC2::NatGateway
+    Properties:
+      AllocationId: !GetAtt NatEipA.AllocationId
+      SubnetId: !Ref PublicSubnetA
+  NatGatewayB:
+    Type: AWS::EC2::NatGateway
+    Properties:
+      AllocationId: !GetAtt NatEipB.AllocationId
+      SubnetId: !Ref PublicSubnetB
+
+  PrivateRouteTableA:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref Vpc
+      Tags: [{ Key: Name, Value: !Sub "${EnvironmentName}-rt-private-a" }]
+  PrivateDefaultRouteA:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref PrivateRouteTableA
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref NatGatewayA
+  PrivateAssocA:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties: { RouteTableId: !Ref PrivateRouteTableA, SubnetId: !Ref PrivateSubnetA }
+
+  PrivateRouteTableB:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref Vpc
+      Tags: [{ Key: Name, Value: !Sub "${EnvironmentName}-rt-private-b" }]
+  PrivateDefaultRouteB:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref PrivateRouteTableB
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref NatGatewayB
+  PrivateAssocB:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties: { RouteTableId: !Ref PrivateRouteTableB, SubnetId: !Ref PrivateSubnetB }
+
+  # Isolated tier: no default route at all. This is the auditable proof of isolation.
+  IsolatedRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref Vpc
+      Tags: [{ Key: Name, Value: !Sub "${EnvironmentName}-rt-isolated" }]
+  IsolatedAssocA:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties: { RouteTableId: !Ref IsolatedRouteTable, SubnetId: !Ref IsolatedSubnetA }
+  IsolatedAssocB:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties: { RouteTableId: !Ref IsolatedRouteTable, SubnetId: !Ref IsolatedSubnetB }
+
+  S3GatewayEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: !Ref Vpc
+      ServiceName: !Sub "com.amazonaws.${AWS::Region}.s3"
+      VpcEndpointType: Gateway
+      RouteTableIds:
+        - !Ref PrivateRouteTableA
+        - !Ref PrivateRouteTableB
+        - !Ref IsolatedRouteTable
+
+  FlowLogRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: vpc-flow-logs.amazonaws.com }
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: FlowLogsWrite
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                  - logs:DescribeLogGroups
+                  - logs:DescribeLogStreams
+                Resource: "*"
+
+  FlowLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/vpc/${EnvironmentName}/flowlogs"
+      RetentionInDays: 30
+
+  VpcFlowLog:
+    Type: AWS::EC2::FlowLog
+    Properties:
+      ResourceId: !Ref Vpc
+      ResourceType: VPC
+      TrafficType: ALL
+      LogDestinationType: cloud-watch-logs
+      LogGroupName: !Ref FlowLogGroup
+      DeliverLogsPermissionArn: !GetAtt FlowLogRole.Arn
 
 Outputs:
-  PostgresEndpoint: {Value: !GetAtt Postgres.Endpoint.Address}
-  CachePrimaryEndpoint: {Value: !GetAtt Cache.PrimaryEndPoint.Address}
-  StreamArn: {Value: !GetAtt OrderEvents.StreamArn}
+  VpcId:
+    Value: !Ref Vpc
+    Export: { Name: !Sub "${EnvironmentName}-VpcId" }
+  PrivateSubnets:
+    Value: !Join [",", [!Ref PrivateSubnetA, !Ref PrivateSubnetB]]
+    Export: { Name: !Sub "${EnvironmentName}-PrivateSubnets" }
+  PublicSubnets:
+    Value: !Join [",", [!Ref PublicSubnetA, !Ref PublicSubnetB]]
+    Export: { Name: !Sub "${EnvironmentName}-PublicSubnets" }
+  IsolatedSubnets:
+    Value: !Join [",", [!Ref IsolatedSubnetA, !Ref IsolatedSubnetB]]
+    Export: { Name: !Sub "${EnvironmentName}-IsolatedSubnets" }
 ```
 
-### Terraform — DynamoDB with auto scaling on provisioned capacity
+### Terraform — The Same Network, With Interface Endpoints
+
+Terraform's `for_each` makes the per-Availability-Zone pattern explicit, which is exactly the property you want visible in code.
 
 ```hcl
-resource "aws_dynamodb_table" "orders" {
-  name         = "Orders"
-  billing_mode = "PROVISIONED"
-  read_capacity  = 25
-  write_capacity = 25
-  hash_key     = "pk"
-  range_key    = "sk"
-
-  attribute { name = "pk" type = "S" }
-  attribute { name = "sk" type = "S" }
-
-  ttl {
-    attribute_name = "expires_at"
-    enabled        = true
-  }
-
-  point_in_time_recovery { enabled = true }
-  server_side_encryption { enabled = true }
-
-  lifecycle {
-    # Auto scaling changes capacity out of band; ignore it so Terraform does
-    # not fight the scaling policy on every plan.
-    ignore_changes = [read_capacity, write_capacity]
+terraform {
+  required_providers {
+    aws = { source = "hashicorp/aws", version = "~> 5.0" }
   }
 }
 
-resource "aws_appautoscaling_target" "read" {
-  service_namespace  = "dynamodb"
-  resource_id        = "table/${aws_dynamodb_table.orders.name}"
-  scalable_dimension = "dynamodb:table:ReadCapacityUnits"
-  min_capacity       = 25
-  max_capacity       = 500
+variable "name"     { default = "dso303" }
+variable "vpc_cidr" { default = "10.20.0.0/16" }
+
+data "aws_availability_zones" "available" {
+  state = "available"
 }
 
-resource "aws_appautoscaling_policy" "read" {
-  name               = "orders-read-target-70"
-  policy_type        = "TargetTrackingScaling"
-  service_namespace  = aws_appautoscaling_target.read.service_namespace
-  resource_id        = aws_appautoscaling_target.read.resource_id
-  scalable_dimension = aws_appautoscaling_target.read.scalable_dimension
+locals {
+  azs = slice(data.aws_availability_zones.available.names, 0, 2)
+  public_subnets   = { for i, az in local.azs : az => cidrsubnet(var.vpc_cidr, 8, i) }
+  private_subnets  = { for i, az in local.azs : az => cidrsubnet(var.vpc_cidr, 4, i + 1) }
+}
 
-  target_tracking_scaling_policy_configuration {
-    target_value = 70.0
-    predefined_metric_specification {
-      predefined_metric_type = "DynamoDBReadCapacityUtilization"
-    }
+resource "aws_vpc" "this" {
+  cidr_block           = var.vpc_cidr
+  enable_dns_support   = true
+  enable_dns_hostnames = true
+  tags                 = { Name = "${var.name}-vpc" }
+}
+
+resource "aws_internet_gateway" "this" {
+  vpc_id = aws_vpc.this.id
+}
+
+resource "aws_subnet" "public" {
+  for_each                = local.public_subnets
+  vpc_id                  = aws_vpc.this.id
+  cidr_block              = each.value
+  availability_zone       = each.key
+  map_public_ip_on_launch = true
+  tags = { Name = "${var.name}-public-${each.key}", Tier = "public" }
+}
+
+resource "aws_subnet" "private" {
+  for_each          = local.private_subnets
+  vpc_id            = aws_vpc.this.id
+  cidr_block        = each.value
+  availability_zone = each.key
+  tags = { Name = "${var.name}-private-${each.key}", Tier = "private" }
+}
+
+resource "aws_eip" "nat" {
+  for_each = local.public_subnets
+  domain   = "vpc"
+}
+
+# One NAT Gateway per AZ: availability and cross-AZ cost avoidance in three lines.
+resource "aws_nat_gateway" "this" {
+  for_each      = aws_subnet.public
+  allocation_id = aws_eip.nat[each.key].id
+  subnet_id     = each.value.id
+  depends_on    = [aws_internet_gateway.this]
+}
+
+resource "aws_route_table" "public" {
+  vpc_id = aws_vpc.this.id
+  route {
+    cidr_block = "0.0.0.0/0"
+    gateway_id = aws_internet_gateway.this.id
   }
+}
+
+resource "aws_route_table_association" "public" {
+  for_each       = aws_subnet.public
+  subnet_id      = each.value.id
+  route_table_id = aws_route_table.public.id
+}
+
+resource "aws_route_table" "private" {
+  for_each = aws_subnet.private
+  vpc_id   = aws_vpc.this.id
+  route {
+    cidr_block     = "0.0.0.0/0"
+    nat_gateway_id = aws_nat_gateway.this[each.key].id
+  }
+  tags = { Name = "${var.name}-rt-private-${each.key}" }
+}
+
+resource "aws_route_table_association" "private" {
+  for_each       = aws_subnet.private
+  subnet_id      = each.value.id
+  route_table_id = aws_route_table.private[each.key].id
+}
+
+resource "aws_vpc_endpoint" "s3" {
+  vpc_id            = aws_vpc.this.id
+  service_name      = "com.amazonaws.${data.aws_region.current.name}.s3"
+  vpc_endpoint_type = "Gateway"
+  route_table_ids   = [for rt in aws_route_table.private : rt.id]
+}
+
+data "aws_region" "current" {}
+
+resource "aws_security_group" "endpoints" {
+  name        = "${var.name}-endpoints"
+  description = "Allow HTTPS from the VPC to interface endpoints"
+  vpc_id      = aws_vpc.this.id
+  ingress {
+    from_port   = 443
+    to_port     = 443
+    protocol    = "tcp"
+    cidr_blocks = [var.vpc_cidr]
+  }
+}
+
+# Interface endpoints keep AWS API traffic off the NAT Gateway. Each is charged per
+# AZ per hour, so create only the services actually used at volume.
+resource "aws_vpc_endpoint" "interface" {
+  for_each            = toset(["ecr.api", "ecr.dkr", "logs", "sts", "secretsmanager", "ssm", "ssmmessages", "ec2messages"])
+  vpc_id              = aws_vpc.this.id
+  service_name        = "com.amazonaws.${data.aws_region.current.name}.${each.value}"
+  vpc_endpoint_type   = "Interface"
+  subnet_ids          = [for s in aws_subnet.private : s.id]
+  security_group_ids  = [aws_security_group.endpoints.id]
+  private_dns_enabled = true
 }
 ```
 
-### Lambda — consuming DynamoDB Streams to maintain a search projection
+### OpenAPI 3.0 — An API Gateway HTTP API With a JWT Authorizer
+
+Defining the API as OpenAPI makes it reviewable and importable in a pipeline. The `x-amazon-apigateway-*` extensions carry the AWS-specific integration and authorizer configuration.
+
+```yaml
+openapi: "3.0.1"
+info:
+  title: dso303-orders-api
+  version: "1.0.0"
+
+components:
+  securitySchemes:
+    CognitoJwt:
+      type: oauth2
+      flows: {}
+      x-amazon-apigateway-authorizer:
+        type: jwt
+        jwtConfiguration:
+          issuer: https://cognito-idp.us-east-1.amazonaws.com/us-east-1_EXAMPLE
+          audience:
+            - 4example5client6id
+        identitySource: "$request.header.Authorization"
+
+security:
+  - CognitoJwt: []
+
+paths:
+  /orders:
+    get:
+      summary: List orders for the authenticated user
+      x-amazon-apigateway-integration:
+        type: aws_proxy
+        httpMethod: POST
+        payloadFormatVersion: "2.0"
+        uri: arn:aws:apigateway:us-east-1:lambda:path/2015-03-31/functions/arn:aws:lambda:us-east-1:111122223333:function:ListOrders/invocations
+      responses:
+        "200": { description: A list of orders }
+    post:
+      summary: Submit an order for asynchronous processing
+      # Direct AWS service integration: the request is placed on an SQS queue with
+      # no Lambda in the path, so a traffic burst never reaches the backend.
+      x-amazon-apigateway-integration:
+        type: aws_proxy
+        subtype: SQS-SendMessage
+        credentials: arn:aws:iam::111122223333:role/ApiGatewaySqsRole
+        payloadFormatVersion: "1.0"
+        requestParameters:
+          QueueUrl: https://sqs.us-east-1.amazonaws.com/111122223333/orders
+          MessageBody: "$request.body"
+      responses:
+        "202": { description: Accepted for processing }
+
+  /internal/inventory/{proxy+}:
+    get:
+      summary: Proxy to a private service behind an internal ALB
+      x-amazon-apigateway-integration:
+        type: http_proxy
+        httpMethod: GET
+        connectionType: VPC_LINK
+        connectionId: abcd12
+        uri: arn:aws:elasticloadbalancing:us-east-1:111122223333:listener/app/internal-alb/50dc6c495c0c9188/0467ef3c8400ae65
+        payloadFormatVersion: "1.0"
+      responses:
+        "200": { description: Inventory data }
+```
+
+### Lambda Proxy Integration Handler (Python)
+
+Shows the payload format version 2.0 event shape, clients created outside the handler for connection reuse, and correct response construction.
 
 ```python
-import json, os, boto3
-from opensearchpy import OpenSearch, RequestsHttpConnection
+"""Lambda proxy integration for an API Gateway HTTP API (payload format 2.0)."""
+import json
+import os
+import boto3
 
-# CQRS in practice: DynamoDB is the write model, OpenSearch the read model
-# for search. The stream is the change-data-capture mechanism between them.
+# Created once per execution environment, not once per invocation. This removes a
+# TLS handshake and credential fetch from every request and is the single highest
+# value latency optimisation for Lambda.
+dynamodb = boto3.resource("dynamodb")
+TABLE = dynamodb.Table(os.environ["ORDERS_TABLE"])
+
+
+def _response(status: int, body: dict) -> dict:
+    return {
+        "statusCode": status,
+        "headers": {
+            "content-type": "application/json",
+            "cache-control": "no-store",
+        },
+        "body": json.dumps(body),
+    }
+
+
 def handler(event, context):
-    actions = []
-    for record in event["Records"]:
-        keys = record["dynamodb"]["Keys"]
-        doc_id = f'{keys["pk"]["S"]}#{keys["sk"]["S"]}'
+    # HTTP API payload 2.0 places the route in requestContext.
+    route = event["requestContext"]["http"]["path"]
+    method = event["requestContext"]["http"]["method"]
 
-        if record["eventName"] in ("INSERT", "MODIFY"):
-            new_image = record["dynamodb"]["NewImage"]
-            actions.append(("index", doc_id, _flatten(new_image)))
-        elif record["eventName"] == "REMOVE":
-            actions.append(("delete", doc_id, None))
+    # The JWT authorizer has already validated the token; claims arrive here.
+    claims = (
+        event.get("requestContext", {})
+        .get("authorizer", {})
+        .get("jwt", {})
+        .get("claims", {})
+    )
+    user_id = claims.get("sub")
+    if not user_id:
+        return _response(401, {"message": "Unauthenticated"})
 
-    _apply(actions)
-    # Returning normally acknowledges the batch. Raising causes the whole batch
-    # to be retried, so handlers must be idempotent.
-    return {"processed": len(actions)}
+    if method == "GET" and route == "/orders":
+        result = TABLE.query(
+            KeyConditionExpression=boto3.dynamodb.conditions.Key("userId").eq(user_id),
+            Limit=25,
+        )
+        return _response(200, {"orders": result.get("Items", []),
+                               "requestId": context.aws_request_id})
+
+    return _response(404, {"message": "Not found"})
 ```
+
+### Route 53 — Failover Records via change-resource-record-sets
+
+An active-passive pair. The primary is returned while its health check passes; otherwise the secondary is returned. TTL 60 bounds how quickly resolvers observe the change.
+
+```json
+{
+  "Comment": "Active-passive failover for api.example.com",
+  "Changes": [
+    {
+      "Action": "UPSERT",
+      "ResourceRecordSet": {
+        "Name": "api.example.com.",
+        "Type": "A",
+        "SetIdentifier": "primary-us-east-1",
+        "Failover": "PRIMARY",
+        "HealthCheckId": "abcdef12-3456-7890-abcd-ef1234567890",
+        "AliasTarget": {
+          "HostedZoneId": "Z35SXDOTRQ7X7K",
+          "DNSName": "dualstack.prod-alb-1234567890.us-east-1.elb.amazonaws.com.",
+          "EvaluateTargetHealth": true
+        }
+      }
+    },
+    {
+      "Action": "UPSERT",
+      "ResourceRecordSet": {
+        "Name": "api.example.com.",
+        "Type": "A",
+        "SetIdentifier": "secondary-eu-west-1",
+        "Failover": "SECONDARY",
+        "AliasTarget": {
+          "HostedZoneId": "Z32O12XQLNTSW2",
+          "DNSName": "dualstack.dr-alb-0987654321.eu-west-1.elb.amazonaws.com.",
+          "EvaluateTargetHealth": true
+        }
+      }
+    },
+    {
+      "Action": "UPSERT",
+      "ResourceRecordSet": {
+        "Name": "canary.example.com.",
+        "Type": "A",
+        "SetIdentifier": "v2-canary-5-percent",
+        "Weight": 5,
+        "TTL": 60,
+        "ResourceRecords": [{ "Value": "198.51.100.25" }]
+      }
+    },
+    {
+      "Action": "UPSERT",
+      "ResourceRecordSet": {
+        "Name": "canary.example.com.",
+        "Type": "A",
+        "SetIdentifier": "v1-stable-95-percent",
+        "Weight": 95,
+        "TTL": 60,
+        "ResourceRecords": [{ "Value": "198.51.100.24" }]
+      }
+    }
+  ]
+}
+```
+
+Apply and verify:
+
+```bash
+aws route53 change-resource-record-sets \
+  --hosted-zone-id Z1234567890ABC \
+  --change-batch file://failover.json
+
+# Verify what Route 53 itself would answer, bypassing resolver caches.
+dig +short @ns-123.awsdns-45.com api.example.com A
+```
+
+### Kubernetes — EKS Ingress Producing an ALB
+
+The AWS Load Balancer Controller translates this manifest into an internet-facing ALB with IP targets, so the load balancer forwards directly to pod IP addresses in the VPC.
+
+```yaml
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: orders-ingress
+  annotations:
+    alb.ingress.kubernetes.io/scheme: internet-facing
+    alb.ingress.kubernetes.io/target-type: ip
+    alb.ingress.kubernetes.io/listen-ports: '[{"HTTPS":443}]'
+    alb.ingress.kubernetes.io/certificate-arn: arn:aws:acm:us-east-1:111122223333:certificate/EXAMPLE
+    alb.ingress.kubernetes.io/healthcheck-path: /health
+    alb.ingress.kubernetes.io/subnets: subnet-public-a,subnet-public-b
+    alb.ingress.kubernetes.io/wafv2-acl-arn: arn:aws:wafv2:us-east-1:111122223333:regional/webacl/prod/EXAMPLE
+spec:
+  ingressClassName: alb
+  rules:
+    - host: orders.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: orders
+                port:
+                  number: 8080
+```
+
+### Athena — Find the Top NAT Gateway Destinations From Flow Logs
+
+The query that turns a cost surprise into a specific remediation.
+
+```sql
+SELECT
+  dstaddr,
+  dstport,
+  SUM(bytes) / 1024.0 / 1024.0 / 1024.0 AS gib,
+  COUNT(*) AS flows
+FROM vpc_flow_logs
+WHERE date_partition BETWEEN '2026/07/01' AND '2026/07/31'
+  AND action = 'ACCEPT'
+  AND srcaddr LIKE '10.20.%'
+  AND NOT regexp_like(dstaddr, '^10\.20\.')
+GROUP BY dstaddr, dstport
+ORDER BY gib DESC
+LIMIT 25;
+```
+
+---
 
 ## AWS Certification Tips
 
-### Exam tips
+### High-Yield Facts
 
-- Identify the discriminating requirement first. *Relational*, *ACID*, *joins*, *complex queries*, and *existing SQL application* point to RDS or Aurora. *Single-digit millisecond at any scale*, *key-value*, *serverless*, and *unpredictable traffic* point to DynamoDB. *Microsecond*, *in-memory*, *leaderboard*, and *session store* point to ElastiCache or DAX.
-- "Improve read performance" is answered by read replicas or a cache, never by Multi-AZ.
-- "Improve availability" or "automatic failover" is answered by Multi-AZ, never by read replicas.
-- "Recover from accidental deletion" is answered by point-in-time recovery or backups, never by replication, because replication faithfully reproduces the deletion.
-- "Least operational overhead" favours DynamoDB and Aurora Serverless over self-managed alternatives, and managed services over EC2-hosted databases.
-- Watch for a stated latency requirement. Microseconds means DAX or ElastiCache; single-digit milliseconds means DynamoDB; tens of milliseconds is comfortable for RDS.
-- Watch for a stated scale. Petabytes with millions of requests per second eliminates a single relational instance.
-
-### Frequently confused services and concepts
-
-| Pair | The distinguishing fact |
+| Fact | Why it appears |
 |---|---|
-| Multi-AZ versus read replica | Availability with an unreadable standby versus read scaling with a readable asynchronous copy |
-| RDS versus Aurora | Managed community engines on conventional storage versus an AWS-engineered engine with a distributed, shared, six-way replicated storage layer |
-| Aurora Serverless v2 versus provisioned Aurora | Fine-grained automatic capacity scaling versus fixed instance classes |
-| DAX versus ElastiCache | DynamoDB-specific, API-compatible, write-through cache versus a general-purpose cache requiring application integration |
-| Redis versus Memcached | Rich data structures with replication, persistence, and failover versus a simple multi-threaded object cache |
-| LSI versus GSI | Same partition key, created only with the table, strongly consistent versus any keys, created anytime, eventually consistent, own throughput |
-| Query versus Scan | Reads items under one partition key versus reading the entire table |
-| Filter expression versus key condition | Applied after the read and still billed versus applied to select what is read |
-| On-demand versus provisioned capacity | Per-request billing with no forecast versus committed throughput at lower unit cost |
-| DynamoDB Streams versus Kinesis Data Streams for DynamoDB | Twenty-four-hour retention with limited consumers versus longer retention and higher fan-out |
-| Global Tables versus Aurora Global Database | Multi-active, last-writer-wins versus single writer Region with read-only secondaries |
-| Automated backup versus manual snapshot | Retained for the configured window and deleted with the instance versus retained until explicitly deleted |
-| Parameter group versus option group | Engine configuration tuning versus enabling engine-specific features |
-| RDS Proxy versus a client-side connection pool | Managed, shared, failover-aware pool outside the application versus a pool per application process |
+| Security groups are stateful and allow-only; NACLs are stateless and support deny | The most examined discriminator in the entire networking domain |
+| NACL rules are evaluated lowest-number-first, first match wins | Distractors reverse this or claim all rules are evaluated |
+| Five addresses reserved per subnet; a `/28` gives 11 usable | Subnetting calculation questions |
+| Gateway endpoints support only S3 and DynamoDB and are free | Cost-optimisation questions almost always have this as the answer |
+| Gateway endpoints do not work over peering, VPN, or Direct Connect; Interface endpoints do | Hybrid-connectivity questions |
+| VPC peering is non-transitive and forbids overlapping CIDRs | Multi-VPC design questions |
+| NAT Gateway is zonal; deploy one per Availability Zone | High-availability questions |
+| NAT instance requires disabling the source/destination check | Legacy but still examined |
+| An IGW alone is insufficient; a public IP, a route, and permissive rules are all required | The "instance cannot reach the internet" archetype |
+| Route 53 health checks cannot reach private endpoints; use a CloudWatch alarm health check | Private-failover questions |
+| Alias records work at the zone apex and cost nothing; CNAME does neither | DNS questions |
+| ACM certificates for CloudFront must be issued in `us-east-1` | Certificate placement questions |
+| NLB gives static IPs and extreme performance; ALB gives content-based routing | Load balancer selection |
+| Only REST APIs support WAF, API keys and usage plans, caching, request validation, and private endpoints | API Gateway selection |
+| A Private API requires an Interface endpoint plus an allowing resource policy | Private API questions |
+| Global Accelerator provides static anycast IPs and fast failover independent of DNS caching | "Failover must not depend on DNS TTL" |
 
-### Memory aids
+### Frequently Confused Pairs
 
-- **"Replicate for reads, stand by for availability, back up for mistakes."** These three requirements map to three different features and are the most common source of confusion.
-- **"The partition key is the scalability decision."** Everything else in DynamoDB can be changed later; this cannot, cheaply.
-- **"Encryption at rest is a birth decision."** RDS and ElastiCache cannot be encrypted in place.
-- **"Cache for latency, replica for throughput, shard for volume."**
-- **RCU arithmetic:** one strongly consistent read of up to 4 KB, or two eventually consistent reads. WCU: one write of up to 1 KB. Round item size **up** to the block boundary before multiplying.
-- **"Managed is not unmanaged."** Schema, indexes, queries, and capacity remain the customer's responsibility on every managed database.
+| Pair | The distinguishing question to ask |
+|---|---|
+| Security group versus NACL | Do I need to *deny* something, or is this subnet-wide? Then NACL. Otherwise security group. |
+| Gateway endpoint versus Interface endpoint | Is it S3 or DynamoDB, and only from within this VPC? Gateway. Anything else, or reachable from on premises? Interface. |
+| Peering versus Transit Gateway | Do I need transitivity, hybrid, or more than a handful of VPCs? Transit Gateway. |
+| ALB versus NLB | Do I need layer 7 routing (ALB) or static IPs, non-HTTP protocols, or extreme scale (NLB)? |
+| API Gateway versus ALB | Do I need managed authorization, throttling, validation, and keys (API Gateway) or simple content routing to targets (ALB)? |
+| REST versus HTTP API | Do I need WAF, keys, caching, validation, private endpoints, or VTL? REST. Otherwise HTTP. |
+| Latency versus geolocation routing | Performance for global users (latency) or legal and compliance placement (geolocation)? |
+| Weighted versus multivalue answer | Deliberate proportional split (weighted) or simple health-aware spreading (multivalue)? |
+| Route 53 failover versus Global Accelerator | Is DNS-TTL-bounded failover acceptable (Route 53) or must failover be fast and DNS-independent (Global Accelerator)? |
+| CloudFront versus Global Accelerator | Cacheable HTTP content (CloudFront) or non-HTTP, static IPs, or pure network acceleration (Global Accelerator)? |
+| NAT Gateway versus egress-only Internet Gateway | IPv4 (NAT Gateway) or IPv6 (egress-only Internet Gateway)? |
+| Direct Connect versus Site-to-Site VPN | Consistent dedicated bandwidth and predictable latency (Direct Connect) or fast, cheap, encrypted-over-internet (VPN)? |
+| PrivateLink versus peering | Exposing one service without exchanging routes (PrivateLink) or full network-to-network reachability (peering)? |
 
-!!! danger "Frequently examined traps"
-    - The RDS Multi-AZ standby in an instance deployment is **not readable**.
-    - An LSI **cannot** be added after table creation.
-    - DynamoDB filter expressions consume capacity for **every item read**, not only for items returned.
-    - Global Tables use **last-writer-wins**; they are not a distributed transaction.
-    - A read replica does **not** protect against accidental data deletion.
-    - ElastiCache is **not durable** and must never be described as a system of record.
-    - Increasing provisioned capacity does **not** fix a hot partition.
-    - `Scan` with a filter is **not** an optimisation; it is a full read that discards results after billing for them.
+### Memory Aids
+
+- **"State is in the group."** Security **G**roups are stateful and **G**enerous only by allow; **N**ACLs are **N**umbered, **N**on-stateful, and can say **N**o.
+- **"Gateway is for the two G-scale stores."** Gateway endpoints serve S3 and DynamoDB only, and they are free.
+- **"Public is a route, not a name."**
+- **"Latency for speed, Geo for law, Weight for canaries, Failover for disaster."**
+- **"REST is rich, HTTP is fast and cheap, WebSocket is bidirectional."**
+- **"Timeout means path or filter; refused means the packet arrived."**
+
+### Scenario-Reading Technique
+
+Certification scenarios encode the answer in requirement keywords. Train yourself to extract them:
+
+| Keyword in the question | Almost always points to |
+|---|---|
+| "must not traverse the internet" | VPC endpoint or PrivateLink |
+| "lowest cost" with S3 or DynamoDB from a private subnet | Gateway endpoint |
+| "static IP addresses" or "allow-listed by the client firewall" | NLB or Global Accelerator |
+| "block a specific IP range" | NACL deny rule |
+| "must survive the loss of an Availability Zone" | Per-zone resources and multi-AZ targets |
+| "hundreds of VPCs" or "on-premises connectivity for many VPCs" | Transit Gateway |
+| "third party must consume our service privately" | PrivateLink endpoint service |
+| "no code changes" and "validate JWTs" | HTTP API JWT authorizer |
+| "throttle each customer differently" | REST API usage plans and API keys |
+| "minimise operational overhead" | The managed option, almost every time |
+
+!!! warning "The Cheapest-Answer Trap"
+    Many questions ask for the **most cost-effective** solution that meets the requirements. Read the requirements first: a single NAT Gateway is cheaper but fails the "must survive an Availability Zone failure" requirement, and is therefore wrong even though it is cheaper. Cost is a tie-breaker among solutions that all satisfy the stated constraints, never a reason to violate one.
+
+---
 
 ## Summary
 
-The AWS database portfolio is best understood as a deliberate rejection of the idea that one database technology should serve every access pattern. For decades the relational database was the default answer to every persistence question, and applications were bent to fit it. AWS instead offers purpose-built stores and asks the architect to characterise the access pattern first and select the store second.
+Networking in AWS is the discipline of controlling three things deliberately: **what a name resolves to**, **where a packet is allowed to travel**, and **who is permitted to send it**. Amazon VPC, Amazon Route 53, and Amazon API Gateway are the primary instruments for those three concerns, and the load balancing and content-delivery services sit between them in the request path.
 
-**Amazon RDS** removes the operational burden of running a relational engine — provisioning, patching, backups, failover, replicas — without asking the organisation to abandon SQL, transactions, referential integrity, or existing skills. **Amazon Aurora** goes further and re-architects the storage layer itself, decoupling compute from a six-way replicated, self-healing distributed volume, which is what makes near-instant replica addition, fast failover, automatic storage growth, continuous backup, and fast cloning possible. These services remain the correct default whenever the data is relational, the queries are complex or unknown in advance, and strong transactional guarantees matter.
+The architectural lessons worth carrying beyond this chapter:
 
-**Amazon DynamoDB** trades query flexibility for unbounded, predictable horizontal scale. Because it partitions by the hash of the partition key, its performance is a function of key design rather than of data volume, and single-digit-millisecond latency holds from megabytes to petabytes. The price is that access patterns must be known in advance and encoded into the key schema and secondary indexes; there are no joins, no aggregations, and no free ad hoc queries. This is not a deficiency but the deliberate exchange that makes the scale guarantee possible.
+- **A VPC is software, not wire.** Isolation comes from encapsulation and a distributed mapping service, with enforcement at every host's Nitro card. This is why security groups scale without a chokepoint, why broadcast does not exist, and why you cannot observe a neighbour's traffic.
+- **A subnet's tier is a property of its route table.** "Public", "private", and "isolated" are conclusions drawn from routing, and a route table is the artefact you show an auditor.
+- **Statefulness is the dividing line between the two filters.** Security groups carry application intent because they are stateful and can reference other groups; NACLs are coarse guardrails because they are stateless and ordered.
+- **Address planning is the one decision you cannot cheaply undo.** Plan hierarchically, leave headroom, never overlap, and account for container networking's appetite for addresses.
+- **Zonal components are where availability is won or lost.** NAT Gateways, Interface endpoint ENIs, and subnets are per-zone; AWS does not make them highly available on your behalf.
+- **Keep traffic on the AWS network.** Endpoints and PrivateLink simultaneously improve security, reduce latency, and cut cost — a rare alignment of all three, and the reason a Gateway endpoint for S3 should be considered mandatory.
+- **DNS is a control plane for traffic.** Route 53 routing policies and health checks turn naming into global failover, canary deployment, and compliance placement, subject always to the arithmetic of TTL and caching.
+- **Push cross-cutting concerns to the edge.** Authorization, validation, throttling, and caching in API Gateway are cheaper, more consistent, and more secure than the same logic repeated in every service.
+- **Prefer designs whose recovery path is data-plane only.** Pre-provisioned capacity plus health-check-driven failover is more resilient than any plan that must call a control-plane API during an incident.
+- **Decouple where you can.** A queue between the front door and the workers converts a scaling failure into a latency increase, and turns a chain of multiplied availabilities into independent ones.
+- **Express the whole network as code.** The network is the layer you change least and can least afford to lose; it is therefore the layer where Infrastructure as Code returns the most.
 
-**Amazon ElastiCache** exploits the fact that most workloads have strong locality, serving the hot fraction of data from memory in microseconds. It is the highest-leverage performance investment available in most architectures and simultaneously the component most likely to introduce subtle correctness problems, because cache invalidation and staleness are genuinely hard. It must never be treated as durable.
+For DSO303 specifically, these ideas recur throughout the module. The `awsvpc` mode that makes ECS tasks first-class network citizens, the VPC CNI that gives EKS pods real VPC addresses, Lambda's Hyperplane ENIs, CI/CD pipelines that need private access to build artefacts, and observability built on Flow Logs and X-Ray are all direct applications of the material in this chapter.
 
-Several architectural lessons generalise well beyond these three services.
-
-First, **the data model is the architecture**. A DynamoDB partition key, a relational index strategy, and a cache key scheme are not implementation details; they determine whether the system scales, and they are among the most expensive decisions to reverse.
-
-Second, **consistency is a requirement to be elicited, not a property to be maximised**. Strong consistency costs latency, availability during partitions, and money. The architect's job is to ask which reads genuinely require the most recent write and to route only those to the writer.
-
-Third, **replication, standby, and backup solve three different problems**. Read replicas scale reads, standbys provide availability, and backups recover from mistakes. Conflating them produces architectures that survive hardware failure and are destroyed by a mistaken `DELETE`.
-
-Fourth, **cost follows the access pattern**. Provisioned capacity rewards steady utilisation; on-demand rewards unpredictability; caching converts expensive database capacity into cheap memory. These are design-time decisions whose consequences appear months later on an invoice.
-
-Finally, **polyglot persistence is a sign of maturity rather than sprawl** — provided each store is chosen against a stated access pattern, each is owned by a single service, and the resulting eventual consistency between them is deliberate and understood. The mark of a competent cloud architect is not knowing the most services, but being able to justify each choice against the alternative that was rejected.
+---
 
 ## Practice Questions
 
 ### Beginner Questions
 
-1. Define ACID and explain what each property guarantees. Give one example of an application requirement that depends on each.
-2. Explain the difference between a partition key and a sort key in Amazon DynamoDB, and give an example of an access pattern that requires both.
-3. What is a read replica, and how does it differ from a Multi-AZ standby in an Amazon RDS instance deployment? State one requirement that each is designed to satisfy.
-4. Describe the cache-aside pattern in sequence. What happens on a cache hit, and what happens on a cache miss?
-5. An RDS instance is created with a backup retention period of zero. Explain precisely what capability is lost and why this is dangerous in production.
+**1.** Explain, in your own words, the difference between a public subnet, a private subnet, and an isolated subnet. For each, state exactly what appears in its route table.
+
+**2.** A subnet is created with CIDR `10.30.4.0/24`. List every address that cannot be assigned to a resource, and state the purpose of each. How many addresses remain usable?
+
+**3.** You create a new security group and attach it to an EC2 instance in a public subnet. The instance has a public IP address. Without adding any rules, can you (a) SSH to the instance from the internet, and (b) run `yum update` from the instance? Explain both answers in terms of default security group behaviour.
+
+**4.** State three differences between a security group and a network ACL, and give one situation in which only a network ACL can satisfy the requirement.
+
+**5.** An application in a private subnet must download objects from Amazon S3. Compare routing this traffic through a NAT Gateway with using a Gateway endpoint, in terms of cost, security, and the network path taken.
 
 ### Intermediate Questions
 
-1. A DynamoDB table stores events with `event_type` as the partition key across five possible values, and the application reports throttling despite generous provisioned capacity. Explain the cause in terms of DynamoDB's internal partitioning, then propose two distinct remedies and state the trade-off of each.
-2. Calculate the read and write capacity units required for the following workload, showing your reasoning: 1,200 strongly consistent reads per second of items averaging 7 KB, and 400 writes per second of items averaging 2.5 KB. Then state how the read requirement changes if eventually consistent reads are acceptable.
-3. Compare RDS Multi-AZ, RDS read replicas, and Aurora replicas across purpose, consistency, failover behaviour, replication mechanism, and typical lag. Identify the single most important architectural difference that Aurora's storage design produces.
-4. An AWS Lambda function scaling to 800 concurrent executions exhausts connections to an Aurora PostgreSQL cluster. Explain the mechanism of the failure and design a complete remedy addressing connection management, blast-radius containment, and failover behaviour.
-5. Explain the thundering-herd problem in caching. Describe three distinct mitigations and explain the circumstances under which each is preferable.
+**1.** A VPC is allocated `10.40.0.0/16`. Design a subnet plan for **three** Availability Zones containing a public tier (`/24` each), a private application tier (`/20` each), and an isolated data tier (`/22` each), leaving at least half the VPC unallocated for future growth. Write out every CIDR block, confirm that none overlap, and state how many usable addresses each private application subnet provides.
+
+**2.** A team enables a custom network ACL on a subnet with inbound allow for TCP 443 and outbound allow for TCP 443. All HTTPS requests to the web servers now time out. Explain precisely why, identify the missing rule including its port range and direction, and explain why the same problem does not occur with security groups.
+
+**3.** Compare the seven Route 53 routing policies. For each of the following requirements, choose one policy and justify it: (a) 10 percent of users should reach a new version; (b) European users must be served only from a European Region for data-protection reasons; (c) users worldwide should get the fastest response; (d) if the primary Region fails, serve a static maintenance page from S3.
+
+**4.** An HTTP API using a Lambda authorizer shows a p50 latency of 320 milliseconds, of which 140 milliseconds is the authorizer invocation. Describe three changes that would reduce this, and state the trade-off each one introduces.
+
+**5.** Your organisation has eight VPCs across three accounts, all of which must communicate, plus a requirement to reach an on-premises data centre. Compare VPC peering and Transit Gateway for this case quantitatively (number of connections, number of route entries, cost dimensions) and recommend one with justification.
 
 ### Advanced Questions
 
-1. Design the complete data architecture for a global e-commerce platform serving customers in North America, Europe, and Asia. It must guarantee that orders and payments are transactionally correct, serve product catalogue reads at under 20 milliseconds p99 in all three regions, support full-text product search, retain seven years of order history for audit, and survive the loss of an entire AWS Region. Specify every data store, justify each against a stated rejected alternative, identify precisely where eventual consistency is introduced, and explain how the design prevents that eventual consistency from producing an incorrect financial outcome.
-2. A DynamoDB single-table design must support the following access patterns: retrieve a customer by identifier; list a customer's orders newest first; retrieve an order with all its line items in one request; list all orders in a given status placed in the last 24 hours; and retrieve the ten highest-value orders for a customer. Design the complete key schema, including partition key, sort key, and any secondary indexes with their projections. Justify each index, identify which patterns are eventually consistent, and explain what you would do differently if a sixth pattern — arbitrary full-text search across order notes — were added.
-3. Critically evaluate the claim that "DynamoDB is cheaper than Aurora". Construct a quantitative comparison for a workload of 5,000 reads and 500 writes per second on items averaging 3 KB, with 2 TB of stored data. State every assumption explicitly, identify the conditions under which each service wins, and then explain why the financial comparison alone is insufficient grounds for the architectural decision.
-4. A financial institution requires a ledger that is auditable, tamper-evident, strictly ordered, and able to sustain 20,000 appends per second, with the ability to reconstruct account balances at any historical instant. Design the persistence layer using an event-sourcing approach. Address the choice of store, the key schema or table design, optimistic concurrency control, snapshotting strategy, the read model and how it is maintained, retention and archival to S3, encryption and key management, and the audit trail. Identify the specific failure modes your design accepts and explain why they are tolerable.
-5. An organisation operates 40 microservices, each with its own database, and finds that cross-service reporting has become impossible without querying production databases directly, which is degrading them. Design a solution that restores analytical capability without coupling services or affecting production performance. Address change-data capture, the landing and transformation layers, schema evolution across 40 independently versioned services, data freshness expectations, cost, governance, and how you would prevent the analytical layer from becoming a new form of coupling between the services.
+**1.** An EKS cluster must support 15,000 concurrent pods using the Amazon VPC CNI. The VPC is currently `10.50.0.0/16` with three private subnets of `/20` each. Calculate whether the current address space is sufficient, accounting for the CNI's warm-address behaviour and for cluster growth. If it is not, design a remediation using secondary CIDR blocks, CNI custom networking, and prefix delegation, and explain the trade-offs of each technique.
+
+**2.** Design a multi-Region active-active architecture for an API that must maintain availability during the complete loss of one Region, with a recovery time objective under 60 seconds. Specify the DNS strategy, the health-check strategy, the data-replication implication, and explain why your failover mechanism does not depend on any control plane in the failed Region. Justify your choice between Route 53 failover, Route 53 latency routing with health checks, and AWS Global Accelerator.
+
+**3.** A financial services organisation requires that (a) no workload subnet has any route to the internet, (b) all outbound traffic from 30 VPCs is inspected by a stateful firewall with domain-name filtering, (c) each business unit's VPCs cannot reach another business unit's VPCs, and (d) all of this must be auditable. Design the network. Name every component, describe the Transit Gateway route-table structure, explain how egress inspection is enforced, and describe the evidence you would produce for an auditor.
+
+**4.** Your API Gateway front end can accept 10,000 requests per second, but the downstream relational database supports 400 concurrent connections and the business requires that no request be lost. Design the complete request path including back-pressure, and calculate the queue-depth and worker-concurrency implications if a five-minute burst arrives at 10,000 requests per second while workers drain at 400 per second. State what the client experiences at each stage.
+
+**5.** An organisation's monthly bill shows large charges for `NatGateway-Bytes`, `DataTransfer-Regional-Bytes`, and `PublicIPv4:InUseAddress`. Describe a systematic investigation using VPC Flow Logs, Athena, and Cost Explorer, then propose a remediation for each of the three charges. For each remediation, state the new cost it introduces and the conditions under which the change would **not** be worthwhile.
+
+!!! question "Extension Exercise for the Ambitious"
+    Take the CloudFormation template from the Code Examples section and extend it to three Availability Zones, add Interface endpoints for `ssm`, `ssmmessages`, and `ec2messages`, remove all NAT Gateways, and demonstrate that you can still administer an instance and pull an image from Amazon ECR. Measure the cost difference. Then explain the circumstances under which removing NAT entirely is and is not viable.

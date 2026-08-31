@@ -1,2653 +1,1291 @@
-# Networking Services: Amazon VPC, Amazon Route 53, and Amazon API Gateway
-
-!!! info "Module Context"
-    This chapter belongs to DSO303 *Cloud Native Solution Design (AWS)*, unit 1.2.4 *Networking Services*. Networking is the substrate on which every other cloud-native concern rests. Compute (EC2, ECS, EKS, Lambda), storage (S3, EFS), and data services (RDS, DynamoDB) are all reached over a network path that an architect designs deliberately. If you do not understand the network, you cannot reason about latency, blast radius, cost, or security.
-
----
-
-## Learning Objectives
-
-After studying this chapter, you should be able to:
-
-- Explain what a Virtual Private Cloud is, and why AWS built a *software-defined* network rather than giving each customer physical network isolation.
-- Design a production-grade VPC CIDR plan that accommodates multi-Availability-Zone deployment, future growth, hybrid connectivity, and non-overlapping address space across accounts and environments.
-- Distinguish public, private, and isolated subnets by their **route table**, not by any property of the subnet itself.
-- Explain precisely how an Internet Gateway performs one-to-one NAT and why a NAT Gateway is required for outbound-only access from private subnets.
-- Compare security groups and network ACLs in terms of statefulness, evaluation order, scope, and appropriate use.
-- Choose between Gateway endpoints, Interface endpoints (AWS PrivateLink), VPC peering, and AWS Transit Gateway based on scale, topology, transitivity, and cost.
-- Explain Route 53's role as an authoritative DNS service, the difference between public and private hosted zones, and the behaviour of every routing policy.
-- Explain how Amazon API Gateway acts as a managed front door for APIs, and choose correctly between REST APIs, HTTP APIs, and WebSocket APIs.
-- Place Elastic Load Balancing (ALB and NLB) and Amazon CloudFront correctly in the request path, and justify the choice of one over another.
-- Trace an end-to-end request from a browser to a private database and back, naming every hop, every control-plane and data-plane component involved, and every security control applied.
-- Diagnose the classic network failures: an instance in a private subnet that cannot reach the internet, an SSH connection that hangs, a load balancer target that never becomes healthy, and DNS that resolves to a public address inside a VPC.
-- Express a complete multi-AZ network as Infrastructure as Code using CloudFormation and Terraform.
-
----
+# Cloud-Native Design Patterns: Serverless, Microservices, Event-Driven, API-First
 
 ## Definition
 
-**Amazon Virtual Private Cloud (Amazon VPC)** is a logically isolated, software-defined virtual network within an AWS Region, in which you provision AWS resources using an IP address range that you define. A VPC gives you control over IP addressing, subnetting, route tables, gateways, and both instance-level and subnet-level packet filtering. A VPC is a **regional** construct: it spans all Availability Zones in one Region and cannot cross Regions.
+A **cloud-native design pattern** is a reusable, named solution to a recurring architectural problem, expressed in a way that assumes the application runs on elastic, distributed, API-driven cloud infrastructure rather than on fixed on-premises servers.
 
-**Amazon Route 53** is a highly available and scalable authoritative Domain Name System (DNS) service, combined with domain registration, DNS health checking, traffic policy management, and application recovery controls. It is a **global** service with a **regional** control-plane anchor in `us-east-1`. Route 53 is what turns a human-readable name such as `api.example.com` into an IP address or an alias to an AWS-managed endpoint, and it is the first place where you can express traffic-steering and failover intent.
+Cloud-native applications are designed _for_ the cloud, not merely _moved to_ the cloud. The Cloud Native Computing Foundation (CNCF) characterises cloud-native systems as loosely coupled, resilient, manageable, observable, and combined with robust automation, allowing engineers to make high-impact changes frequently and predictably.
 
-**Amazon API Gateway** is a fully managed service for creating, publishing, securing, monitoring, and operating APIs at any scale. It sits in front of backend compute (Lambda, containers on ECS or EKS, EC2, or any HTTP endpoint including on-premises services) and provides authentication and authorization, request validation, throttling, caching, transformation, and observability as a managed capability rather than as application code.
+The four patterns in this lecture are the structural pillars of cloud-native design:
 
-### Where They Sit in AWS Architecture
+| Pattern           | One-Sentence Definition                                                                                                                      |
+| ----------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Serverless**    | Run code without provisioning or managing servers; the cloud provider allocates compute on demand and bills per use.                         |
+| **Microservices** | Decompose an application into small, independently deployable services, each owning its data and communicating over well-defined interfaces. |
+| **Event-Driven**  | Components communicate by producing and consuming events asynchronously, decoupling producers from consumers in time and topology.           |
+| **API-First**     | Design and agree on the API contract before writing implementation code, treating the API as the primary product interface.                  |
 
-```mermaid
-graph TD
-    U["End User Browser or Mobile App"] --> R53["Route 53 - Authoritative DNS"]
-    R53 --> CF["CloudFront - Global Edge Cache"]
-    CF --> APIGW["API Gateway - Managed API Front Door"]
-    CF --> ALB["Application Load Balancer"]
-    APIGW --> L["Lambda Function"]
-    APIGW --> VPCL["VPC Link to Private NLB or ALB"]
-    ALB --> ECS["ECS or EKS Tasks in Private Subnets"]
-    VPCL --> ECS
-    L --> DDB["DynamoDB via Gateway Endpoint"]
-    ECS --> RDS["Amazon RDS in Isolated Subnets"]
-    ECS --> S3["Amazon S3 via Gateway Endpoint"]
+!!! info "Patterns, not products"
 
-    subgraph vpcbox["Amazon VPC - Regional Software Defined Network"]
-        ALB
-        VPCL
-        ECS
-        RDS
-    end
-```
+     A pattern is a way of thinking; a service is a tool. You can build microservices badly on EKS and you can build a well-factored serverless system that violates every microservices principle. Examinations and interviews test whether you understand the _pattern_, not whether you can name the service.
 
-!!! note "The Three Layers of a Network Answer"
-    Almost every AWS networking question decomposes into three layers: **name resolution** (Route 53 — what address do I connect to?), **path** (VPC route tables, gateways, endpoints — can the packet get there?), and **permission** (security groups, NACLs, IAM policies, resource policies — is the packet allowed?). When something does not work, check all three, in that order.
 
----
+## Why These Patterns Exist
 
-## Why This Service or Concept Exists
+### The problem with the traditional approach
 
-### The Problem Before Amazon VPC
+The traditional enterprise application was a **monolith** deployed on long-lived servers:
 
-The original EC2 offering, retroactively called **EC2-Classic**, placed every customer's instances on a single flat shared network. Each instance received a public IP address from a shared pool and a private address from a shared `10.0.0.0/8` space. There were security groups, but there was no customer-defined address space, no subnetting, no route tables, no private-only instances, and no way to build a network topology that mirrored a traditional data centre.
+- All features compiled into one deployable artifact (a WAR file, a single binary, one large codebase).
+- One relational database shared by every feature.
+- Scaling meant buying a bigger server (vertical scaling) or cloning the entire application even if only one feature was under load.
+- A single bug could crash the entire application; a single deployment risked every feature.
+- Release cycles were measured in weeks or months because every team had to coordinate around one artifact.
+- Capacity was provisioned for _peak_ load, so servers sat idle most of the time — paid for 24/7, used at perhaps 15–20% average utilisation.
 
-This was unacceptable for enterprises for three reasons:
+### Why the cloud demanded new patterns
 
-1. **No network-level isolation.** Regulated workloads (finance, healthcare, government) require that a database be *unreachable* from the internet as a property of the network, not merely as a property of a firewall rule.
-2. **No address planning.** Enterprises extending an on-premises data centre into the cloud need to choose their own RFC 1918 addresses so that VPN or Direct Connect routing does not collide with existing addresses.
-3. **No architectural tiering.** The classic three-tier architecture — public web tier, private application tier, isolated database tier — depends on the ability to say "this subnet has no route to the internet."
+Cloud infrastructure changed three economic and technical assumptions:
 
-Amazon VPC, launched in 2009 and made the default in 2013, gave customers a network they could design.
+1. **Compute became elastic and metered.** If you can acquire capacity in seconds and pay per second, provisioning for peak is wasteful. Serverless takes this to its logical conclusion: pay per invocation.
+2. **Failure became normal, not exceptional.** In a fleet of thousands of commodity machines across Availability Zones, individual failures happen constantly. Architectures must isolate failure (microservices, bulkheads) and absorb it asynchronously (event-driven) rather than assume reliable hardware.
+3. **Software delivery velocity became a competitive weapon.** Organisations that deploy hundreds of times per day outlearn those that deploy quarterly. Independent deployability (microservices) and stable contracts (API-first) make high-frequency deployment safe.
 
-!!! info "Traditional Data Centre Versus VPC"
-    | Concern | Traditional Data Centre | Amazon VPC |
-    |---|---|---|
-    | Address space | Assigned by network team, changing it is a project | You choose the CIDR at creation; secondary CIDRs can be added later |
-    | Subnet creation | Physical VLAN, switch configuration, change window | An API call, seconds |
-    | Router | Physical device you buy, rack, patch, and licence | Implicit, built into the VPC, infinitely available, free |
-    | Firewall | Appliance pair, capacity-planned, a shared bottleneck | Security groups enforced distributed at every ENI, no chokepoint |
-    | NAT | An appliance or a pair of servers you maintain | NAT Gateway, managed, scales to tens of gigabits per second |
-    | Scaling the network | Buy more hardware, months of lead time | Bandwidth follows instance size; the fabric is already there |
-    | Cost model | Large capital expenditure, depreciated | Operating expenditure, per hour and per gigabyte processed |
+### Traditional vs cloud-native comparison
 
-### Why Route 53 Exists
+| Dimension            | Traditional Monolith        | Cloud-Native                         |
+| -------------------- | --------------------------- | ------------------------------------ |
+| Deployment unit      | One large artifact          | Many small services / functions      |
+| Scaling              | Vertical, whole-application | Horizontal, per-component, automatic |
+| Failure blast radius | Entire application          | Single service or function           |
+| Data ownership       | One shared database         | Database per service                 |
+| Communication        | In-process method calls     | Network calls: APIs and events       |
+| Capacity model       | Provision for peak          | Elastic, pay-per-use                 |
+| Release cadence      | Weeks to months             | Minutes to hours                     |
+| Team structure       | Layered (UI team, DB team)  | Cross-functional, service-aligned    |
 
-Running your own authoritative DNS is deceptively hard. It demands globally distributed anycast infrastructure, resistance to volumetric DDoS attacks (DNS is a favourite amplification target), sub-second propagation of record changes, and near-perfect availability — because when DNS fails, *everything* fails, and it fails in a way that caches make slow to recover from.
+!!! note "Conway's Law"
 
-Route 53 also solves a problem that classical DNS never addressed: **DNS as a traffic-management control plane**. Classic DNS answers "what is the address of this name?" Route 53 answers "what is the *best* address for *this particular* resolver, given health, latency, geography, and my declared weighting?" That converts DNS from a lookup table into a global load-balancing and disaster-recovery mechanism.
-
-The `Alias` record type is an AWS-specific innovation worth understanding: it lets you point the *apex* of a zone (`example.com`, which the DNS standards forbid from carrying a CNAME) at an AWS resource such as a CloudFront distribution or an ALB, with the resolution performed inside Route 53 at no query charge.
-
-### Why API Gateway Exists
-
-Before managed API front doors, every team re-implemented the same cross-cutting concerns inside the application: authentication, authorization, rate limiting, request validation, API keys and usage plans, versioning and stage management, CORS, request and response transformation, caching, and per-route metrics. This code was duplicated across microservices, drifted between them, and became the source of a disproportionate share of security incidents.
-
-API Gateway externalises those concerns into a managed, horizontally scaled tier that sits *before* your code. This is the **API Gateway pattern** from microservices literature, delivered as a service. It also enables true serverless HTTP: Lambda has no listening socket and no port, so something must terminate TLS, parse HTTP, and invoke the function. API Gateway (or a Lambda function URL, or an ALB) performs that role.
-
-!!! tip "Architect's Framing"
-    Do not ask "which AWS networking service should I use?" Ask "what is the smallest set of components that gets the packet to the right place, denies everything else by default, survives the loss of one Availability Zone, and can be described entirely in code?" The service choice usually falls out of that question.
-
----
-
-## Real-World Motivation
-
-!!! example "Financial Services — Regulated Isolation"
-    A payment processor must demonstrate to auditors that cardholder data never traverses the public internet and that the database tier has no route to an Internet Gateway. The design uses three subnet tiers per Availability Zone: public subnets containing only load balancers and NAT Gateways; private subnets containing application containers; and isolated subnets containing Amazon RDS, whose route table contains only the `local` route plus a Gateway endpoint for S3. Access to AWS APIs (KMS, Secrets Manager, CloudWatch) is provided by Interface endpoints so that no traffic leaves the AWS network. VPC Flow Logs are delivered to a separate logging account. The auditor's question — "prove that this database cannot reach the internet" — is answered by showing a route table, not by showing firewall configuration.
-
-!!! example "Netflix and Spotify — Global Traffic Steering"
-    A streaming service serves users in dozens of countries from a handful of Regions. Route 53 **latency-based routing** directs each resolver to the Region with the lowest measured network latency, while **health checks** withdraw a Region automatically when its health endpoint fails. During a regional deployment, **weighted routing** shifts 1 percent of traffic to the new stack, then 10 percent, then 50 percent — a canary release implemented in DNS. Content itself is served by CloudFront, so the origin sees only cache misses.
-
-!!! example "Uber-style Ride Hailing — Microservice Fan-Out"
-    A mobile client makes one HTTPS call to `api.example.com`. API Gateway authenticates the caller with a JWT authorizer, throttles abusive clients, and routes `/rides` to a Lambda function and `/drivers/*` through a VPC Link to a private NLB fronting an ECS service using `awsvpc` networking. Each ECS task has its own elastic network interface and therefore its own security group, so the driver-location service can be permitted to reach the geospatial datastore while the billing service cannot. Nothing in the driver tier has a public IP address.
-
-!!! example "Healthcare — Hybrid Connectivity"
-    A hospital system keeps its electronic medical record system on premises for regulatory reasons but runs analytics in AWS. AWS Direct Connect plus a Transit Gateway connects fifteen VPCs across four accounts to the on-premises network through a single hub, with route tables in the Transit Gateway enforcing that the research VPC can reach the analytics VPC but not the clinical VPC. Replacing the equivalent mesh of VPC peering connections would require 105 peering connections and 105 route-table entries per VPC, and would still not support transitive routing to on premises.
-
-!!! example "IoT and Public Sector"
-    A national utility ingests telemetry from two million smart meters. Devices resolve a Route 53 name with **multivalue answer routing** to spread connections across ingestion endpoints, connect to a Network Load Balancer for its ability to handle millions of concurrent flows at very low latency with static IP addresses per Availability Zone (which the device firmware allow-lists), and the ingestion fleet writes to a stream. Static IP addresses are the deciding requirement here, and they eliminate ALB from consideration.
-
----
+     Organisations design systems that mirror their communication structures. Microservices are as much an _organisational_ pattern as a technical one: small autonomous teams own small autonomous services. Amazon's "two-pizza team" rule is the organisational twin of the microservices pattern. 
 
 ## Core Concepts
 
-### The VPC as a Software-Defined Network
+### Coupling and cohesion
 
-The single most important conceptual leap is this: **a VPC is not a physical network**. Your instances are not on a dedicated switch. They share physical hosts and physical network fabric with other customers. Isolation is achieved in software, by encapsulation and by a distributed mapping and policy system. Understanding this explains many otherwise-arbitrary behaviours: why you cannot run a packet sniffer and see a neighbour's traffic, why broadcast and multicast do not work natively, why you cannot use a custom routing protocol between instances, and why a security group is not a chokepoint that can be overwhelmed.
+These two words underlie all four patterns.
 
-### CIDR and Address Planning
+- **Coupling** is the degree to which components depend on one another. Cloud-native design minimises coupling in three dimensions:
+  - **Technology coupling** — services should not care what language or database other services use.
+  - **Temporal coupling** — a producer should not need the consumer to be available _right now_ (event-driven breaks temporal coupling).
+  - **Location/topology coupling** — a producer should not need to know _who_ or _how many_ consumers exist.
+- **Cohesion** is the degree to which the responsibilities inside one component belong together. A well-designed microservice has high cohesion: it does one business capability completely.
 
-Classless Inter-Domain Routing (CIDR) notation expresses a network as `address/prefix-length`. The prefix length is the number of leading bits that are fixed; the remaining bits enumerate hosts. A `/16` fixes 16 bits and leaves 16 host bits, giving 65,536 addresses.
+### Serverless — core concepts
 
-| CIDR | Total addresses | Usable in an AWS subnet | Typical AWS use |
-|---|---|---|---|
-| `/16` | 65,536 | 65,531 | Maximum size of a VPC CIDR block |
-| `/17` | 32,768 | 32,763 | Very large subnet, rarely appropriate |
-| `/18` | 16,384 | 16,379 | Large container subnet for EKS with the VPC CNI |
-| `/19` | 8,192 | 8,187 | Application tier in a large VPC |
-| `/20` | 4,096 | 4,091 | Common private subnet size |
-| `/21` | 2,048 | 2,043 | Application tier, medium |
-| `/22` | 1,024 | 1,019 | Application tier, medium |
-| `/23` | 512 | 507 | Database tier |
-| `/24` | 256 | 251 | Public subnet for load balancers and NAT |
-| `/26` | 64 | 59 | Minimum practical for an ALB subnet |
-| `/27` | 32 | 27 | Endpoint or transit attachment subnet |
-| `/28` | 16 | 11 | Smallest subnet AWS permits |
+- **Function as a Service (FaaS):** Code packaged as functions triggered by events; AWS Lambda is the canonical FaaS.
+- **Serverless is broader than FaaS:** managed services with no capacity management — S3, DynamoDB on-demand, SQS, EventBridge, Fargate, Aurora Serverless, Step Functions — are all "serverless" in the sense that you never see a server.
+- **Scale-to-zero:** When there is no traffic, there is no cost (for the compute layer). This is the defining economic property.
+- **Ephemeral execution environments:** Lambda functions run in short-lived, stateless MicroVMs; state must live in external stores (DynamoDB, S3, ElastiCache).
+- **Cold start:** The latency of initialising a new execution environment when no warm one is available.
+- **Concurrency model:** Lambda scales by running one request per environment and adding environments, not by adding threads to a shared server.
 
-AWS permits VPC CIDR blocks between `/16` and `/28`, and subnet CIDR blocks between `/16` and `/28`. A VPC may have a primary CIDR plus additional secondary CIDRs, which is the standard remedy when a VPC runs out of address space.
+### How a serverless (Lambda) invocation works internally
 
-**Five addresses in every subnet are reserved** and are not assignable:
+Lambda separates a **control plane** (CreateFunction, UpdateFunctionCode, configuration APIs) from a **data plane** (Invoke). The data plane is engineered for massive horizontal scale.
 
-| Address in `10.0.1.0/24` | Reserved for |
-|---|---|
-| `10.0.1.0` | Network address |
-| `10.0.1.1` | VPC implicit router |
-| `10.0.1.2` | Amazon-provided DNS (the Route 53 Resolver, mapped from VPC base plus two) |
-| `10.0.1.3` | Reserved by AWS for future use |
-| `10.0.1.255` | Network broadcast address; AWS does not support broadcast but reserves it |
+1. An event source (API Gateway, S3, EventBridge, SQS) calls the Invoke API, or a poller fleet reads from a stream/queue on your behalf.
+2. The **Frontend Invoke service** authenticates the request (SigV4/IAM) and consults the **Assignment/Placement service** to find a warm execution environment.
+3. If a warm environment exists, the payload is routed to it (**warm start**, typically single-digit milliseconds of overhead).
+4. If not, a **cold start** occurs: Lambda's placement service selects a worker host, launches a new **Firecracker MicroVM** (a lightweight virtual machine providing hardware-level isolation in ~125 ms), downloads and mounts the code package or container image, starts the language runtime, and runs your initialisation code _outside the handler_.
+5. The handler executes with a configured memory size; CPU is allocated **proportionally to memory** (1,769 MB ≈ 1 vCPU).
+6. The environment is frozen after the response and kept warm for reuse; each environment processes **one request at a time**, so concurrency = number of active environments.
 
-!!! warning "The Reserved-Address Trap"
-    A `/28` subnet gives you 11 usable addresses, not 16, and an ALB requires at least 8 free addresses per subnet to scale. Sizing a subnet by dividing the expected instance count by 256 and rounding down is how teams end up with `InsufficientFreeAddressesInSubnet` errors during a traffic spike, precisely when scaling matters most.
+<figure markdown="span">
+    ![3layerglobalinfra](../img/U1/LambdaInvocation.png){width="80%"}
+    <figcaption>Lambda Invocation Example</figcaption>
+    <p align='right' style="font-size:0.8em"><i>Image Source: AI Generaed (Google Gemini)</i></p>
+</figure>
 
-#### A Reference CIDR Plan
+!!! tip "Why cold starts happen and how to reason about them"
+    Cold starts are the price of scale-to-zero. They are influenced by package size, runtime choice (interpreted runtimes such as Python start faster than JVM without SnapStart), VPC attachment (largely solved since Hyperplane ENIs), and initialisation code. Provisioned Concurrency pre-initialises environments for latency-critical paths.
 
-A disciplined plan allocates address space hierarchically so that ranges are summarisable and never collide across accounts, environments, and Regions.
 
-| Scope | CIDR | Rationale |
-|---|---|---|
-| Whole organisation | `10.0.0.0/8` | Reserve the entire RFC 1918 class A for AWS |
-| Production, Region A | `10.0.0.0/14` | Room for many VPCs, summarisable in one on-premises route |
-| Production VPC 1 | `10.0.0.0/16` | One VPC |
-| Public subnets (3 AZ) | `10.0.0.0/24`, `10.0.1.0/24`, `10.0.2.0/24` | Load balancers, NAT Gateways only |
-| Private app subnets | `10.0.16.0/20`, `10.0.32.0/20`, `10.0.48.0/20` | Containers and instances; large because `awsvpc` mode consumes one IP per task |
-| Isolated data subnets | `10.0.64.0/22`, `10.0.68.0/22`, `10.0.72.0/22` | RDS, ElastiCache; no internet route |
-| Reserved for growth | `10.0.128.0/17` | Never allocate the second half on day one |
-| Non-production, Region A | `10.4.0.0/14` | Distinct range so peering to production remains possible |
-| Disaster recovery Region | `10.8.0.0/14` | Distinct so cross-Region peering never overlaps |
+### Microservices — core concepts
 
-!!! danger "Overlapping CIDRs Are Permanent"
-    VPC peering and Transit Gateway attachments **cannot** connect networks with overlapping CIDR blocks. There is no cloud equivalent of source NAT on a peering connection. If two teams both use `10.0.0.0/16`, the only remedies are re-addressing an entire VPC (which means rebuilding every resource in it) or inserting a NAT layer in a middle VPC. Address planning is one of the few AWS decisions that is genuinely expensive to reverse.
+- **Bounded context (from Domain-Driven Design):** Each service maps to one business subdomain with its own vocabulary and model — Orders, Inventory, Payments.
+- **Independent deployability:** The single most important test. If deploying service A requires coordinating with service B's team, you have a distributed monolith.
+- **Database per service:** Each service owns its data store and exposes it only via its API. Shared databases recreate coupling at the data layer.
+- **Smart endpoints, dumb pipes:** Business logic lives in services; the network (ALB, SQS) merely transports messages, unlike heavyweight enterprise service buses.
+- **Service discovery:** Services find each other via DNS (AWS Cloud Map), load balancers, or a service mesh rather than hard-coded addresses.
+- **Decentralised governance:** Teams choose their own stacks (polyglot persistence, polyglot programming) within organisational guardrails.
 
-### Subnets and Availability Zones
+### How microservices work internally on AWS
 
-A subnet is a range of IP addresses within a VPC, bound to **exactly one Availability Zone**. This binding is the foundation of high availability in AWS: to survive the loss of an Availability Zone, you must have subnets — and running capacity — in at least two, and preferably three.
+A containerised microservice on ECS or EKS involves:
 
-A subnet is **public** if and only if its associated route table contains a route to an Internet Gateway. A subnet is **private** if it has a route to a NAT Gateway (outbound only). A subnet is **isolated** if it has neither. Nothing else about the subnet distinguishes these cases; "public subnet" is a statement about a route table.
+1. **Build:** CI pipeline builds a Docker image and pushes it to **Amazon ECR**.
+2. **Schedule:** The orchestrator's control plane (ECS control plane, or the EKS-managed Kubernetes control plane) decides _where_ to run task/pod replicas across Availability Zones, respecting CPU/memory requests and placement constraints.
+3. **Run:** The data plane executes containers — on EC2 instances you manage, or on **Fargate**, where AWS provisions an isolated MicroVM per task (serverless containers).
+4. **Register:** Tasks register with a target group (ALB) or Cloud Map for service discovery; health checks gate traffic.
+5. **Communicate:** Service-to-service calls flow through the VPC network, optionally through a service mesh sidecar/proxy layer for mTLS, retries, and traffic shaping.
+6. **Scale:** Metrics (CPU, request count per target, queue depth) drive horizontal scaling of task/pod counts; Cluster Autoscaler or Karpenter scales the underlying nodes on EKS.
 
-!!! note "Availability Zone IDs Versus Names"
-    The name `us-east-1a` is mapped to a different physical zone for different AWS accounts, deliberately, to spread load. The **AZ ID** (for example `use1-az2`) is consistent across accounts. When correlating placement across accounts — for example to keep a shared-services VPC in the same physical zone as a workload VPC and avoid cross-AZ data charges — compare AZ IDs, not names.
 
-### Route Tables and the Implicit Router
+### Event-driven — core concepts
 
-Every VPC has an **implicit router**, a distributed function rather than a device. Route tables tell it what to do. Every subnet is associated with exactly one route table; if you do not associate one explicitly, the subnet uses the VPC's **main** route table.
+- **Event:** An immutable record that _something happened_ — `OrderPlaced`, `PaymentCaptured`. Events describe the past; they are facts, not requests.
+- **Command vs event:** A command (`ChargeCard`) asks one specific recipient to do something and implies coupling; an event announces a fact to whoever cares.
+- **Producer / consumer:** Producers emit events with no knowledge of consumers; consumers subscribe with no knowledge of producers.
+- **Event router / broker:** The intermediary — EventBridge (rule-based routing), SNS (pub/sub fan-out), SQS (queue buffering), Kinesis (ordered streaming).
+- **Choreography vs orchestration:**
+  - _Choreography:_ services react to each other's events with no central coordinator — flexible, but the overall flow is implicit.
+  - _Orchestration:_ a central coordinator (Step Functions) explicitly directs the workflow — visible, auditable, but a central dependency.
+- **Delivery semantics:** At-least-once delivery is the practical default; consumers must therefore be **idempotent** (safe to process the same event twice).
+- **Eventual consistency:** Because consumers process events after the fact, different services' views of the world converge over time rather than instantly.
 
-Routing uses **longest prefix match**: the most specific matching route wins, regardless of the order rules appear in the table. Every route table implicitly contains a `local` route for the VPC's CIDR (and each secondary CIDR), which cannot be removed and always wins for intra-VPC traffic.
+### How event-driven systems work internally
 
-```mermaid
-flowchart TD
-    P["Packet leaves an ENI"] --> Q{"Destination matches the local VPC CIDR"}
-    Q -->|"Yes"| L["Delivered inside the VPC via the mapping service"]
-    Q -->|"No"| R{"Longest prefix match in the subnet route table"}
-    R -->|"0.0.0.0/0 to igw"| IGW["Internet Gateway"]
-    R -->|"0.0.0.0/0 to nat"| NAT["NAT Gateway in a public subnet"]
-    R -->|"pl-xxxx to vpce"| GWE["Gateway Endpoint for S3 or DynamoDB"]
-    R -->|"10.1.0.0/16 to pcx"| PCX["VPC Peering Connection"]
-    R -->|"10.0.0.0/8 to tgw"| TGW["Transit Gateway"]
-    R -->|"No match"| D["Packet is dropped silently"]
-```
-
-!!! warning "Silent Drops"
-    When no route matches, the packet is discarded without an ICMP unreachable message in most cases. This is why a missing route presents to the application as a **timeout**, whereas a security group or NACL denial also presents as a timeout, but a rejected TCP connection (RST) usually means the packet arrived and something at the destination refused it. Learning to read *timeout versus connection refused* is the single most useful troubleshooting reflex in AWS networking.
-
-### Internet Gateway
-
-An Internet Gateway (IGW) is a horizontally scaled, redundant, highly available VPC component attached to a VPC (one IGW per VPC). It performs two functions:
-
-1. It provides a target in route tables for internet-routable traffic.
-2. It performs **one-to-one network address translation** between an instance's private address and its associated public IPv4 address or Elastic IP.
-
-The second point is frequently misunderstood. An EC2 instance with a public IP address does *not* see that address on its network interface. `ip addr` inside the instance shows only the private address. The IGW rewrites the source address on the way out and the destination address on the way in. This is why the instance's operating system must never be configured with the public address, and why an Elastic IP that is disassociated does not require any change inside the guest.
-
-An IGW is free, imposes no bandwidth constraint of its own, and adds no measurable latency.
-
-For IPv6, the analogue of a NAT Gateway is the **egress-only Internet Gateway**, which allows outbound IPv6 traffic and stateful return traffic but blocks inbound connections. IPv6 addresses in AWS are globally routable, so there is no NAT; the egress-only gateway provides the outbound-only semantic without address translation.
-
-### NAT Gateway
-
-A NAT Gateway allows instances in a private subnet to initiate outbound connections to the internet (for operating system patches, container image pulls from public registries, third-party API calls) while preventing the internet from initiating connections to them.
-
-Key architectural facts:
-
-- A NAT Gateway lives **in a public subnet** and requires an Elastic IP. It is a zonal resource; it does not fail over across Availability Zones.
-- Instances in private subnets route `0.0.0.0/0` to the NAT Gateway.
-- For high availability you deploy **one NAT Gateway per Availability Zone**, with each Availability Zone's private route table pointing at the NAT Gateway in its own zone. A single shared NAT Gateway is both a single point of failure and a source of cross-AZ data transfer charges.
-- It scales automatically from 5 Gbps up to 100 Gbps and supports up to 55,000 simultaneous connections **to each unique destination** (destination IP, destination port, protocol). Exceeding that produces `ErrorPortAllocation` errors.
-- It is stateful and supports TCP, UDP, and ICMP. It does not support inbound-initiated connections and cannot be used to publish a service.
-
-!!! tip "The Most Common Avoidable AWS Networking Cost"
-    NAT Gateways charge both an hourly rate and a per-gigabyte data-processing rate. A workload that pulls container images and writes logs and objects to S3 through a NAT Gateway can spend more on NAT data processing than on compute. Adding a **Gateway endpoint for S3** costs nothing and removes that traffic from the NAT path entirely. Always audit what is actually traversing NAT using VPC Flow Logs before accepting the bill.
-
-### Security Groups Versus Network ACLs
-
-These are the two packet-filtering layers in a VPC, and the difference between them is examined constantly.
-
-| Dimension | Security Group | Network ACL |
-|---|---|---|
-| Attaches to | Elastic network interfaces (so, effectively, instances, tasks, load balancer nodes, RDS instances, endpoints) | Subnets |
-| Statefulness | **Stateful** — return traffic for an allowed flow is automatically permitted | **Stateless** — return traffic must be explicitly allowed by a rule in the opposite direction |
-| Rule types | Allow rules only; there is no deny | Allow **and** deny rules |
-| Evaluation | All rules are evaluated; if any rule allows the traffic, it is permitted | Rules are evaluated in ascending rule-number order; the first match wins and evaluation stops |
-| Default behaviour | Default security group allows all outbound and allows inbound from itself; a newly created security group allows all outbound and nothing inbound | Default NACL allows all inbound and outbound; a custom NACL denies everything until you add rules |
-| Source or destination can be | CIDR, another security group, a prefix list | CIDR and prefix list only — **not** a security group |
-| Typical use | Primary control; expresses application intent ("the web tier may talk to the app tier") | Coarse subnet-wide guardrail; blocking a specific malicious CIDR; regulatory requirement for a second layer |
-| Ephemeral ports | Not a concern, statefulness handles it | **Must** be allowed outbound (or inbound for responses), typically `1024-65535` |
-| Quota | Default 5 security groups per network interface (adjustable to 16), 60 inbound and 60 outbound rules per group by default | 1 NACL per subnet; 20 rules per direction by default, adjustable to 40 |
-
-```mermaid
-stateDiagram-v2
-    [*] --> Inbound
-    Inbound --> NaclIn : Packet enters the subnet
-    NaclIn --> SgIn : Stateless allow rule matched by lowest rule number
-    NaclIn --> DroppedA : Deny rule or implicit deny
-    SgIn --> Delivered : Any inbound allow rule matches
-    SgIn --> DroppedB : No inbound rule matches
-    Delivered --> Response : Application replies
-    Response --> SgOut : Security group is stateful so the reply is permitted automatically
-    SgOut --> NaclOut : NACL is stateless and must allow the ephemeral source port range
-    NaclOut --> [*] : Reply leaves the subnet
-    NaclOut --> DroppedC : Missing outbound ephemeral port rule
-```
-
-!!! danger "The Classic NACL Failure"
-    A team adds a custom NACL allowing inbound TCP 443 and outbound TCP 443, and every HTTPS request hangs. The reason: a client connecting to your server on port 443 uses a random **ephemeral source port**. Your server's reply is sourced from port 443 but *destined* for that ephemeral port. Because NACLs are stateless, the outbound rule for port 443 does not cover it. The outbound rule must allow destination ports `1024-65535`. This is why security groups should carry your real policy and NACLs should stay coarse.
-
-### Security Group Referencing — the Cloud-Native Idiom
-
-The most important cloud-native property of security groups is that a rule's source can be **another security group**, not a CIDR. `sg-app` allows inbound TCP 8080 from `sg-alb`. As the ALB scales out and its nodes acquire new addresses, and as tasks are replaced with new IP addresses, the rule remains correct without modification. You have expressed *identity-based* rather than *address-based* policy — a firewall rule that survives elasticity. Address-based rules in an auto-scaling environment are a maintenance defect.
-
-### VPC Endpoints
-
-By default, calling `s3.amazonaws.com` or `kinesis.us-east-1.amazonaws.com` from a private subnet sends the request out through a NAT Gateway and across the public internet path (though within the AWS backbone in many cases) to a public service endpoint. VPC endpoints keep that traffic on the AWS private network and remove the dependency on a NAT Gateway.
-
-| Aspect | Gateway Endpoint | Interface Endpoint (AWS PrivateLink) |
-|---|---|---|
-| Services supported | Amazon S3 and Amazon DynamoDB only | Most AWS services, plus Marketplace and your own services |
-| Mechanism | A **route** in the route table pointing at a prefix list | An **elastic network interface** with a private IP in your subnet |
-| DNS | Uses the normal public service DNS name, resolved to the public IP but routed via the endpoint | Provides endpoint-specific DNS names, plus optional **private DNS** which overrides the public name inside the VPC |
-| Cross-VPC or on-premises reachability | No — route-table scoped, does not work over peering, VPN, or Direct Connect | Yes — an ENI has an IP address reachable from anywhere that can route to it |
-| Security control | Endpoint policy (a resource policy) plus route table | Endpoint policy plus a **security group** on the ENI |
-| Cost | **No charge** | Hourly charge per endpoint per Availability Zone, plus a per-gigabyte data-processing charge |
-| High availability | Managed, regional | You create one ENI per Availability Zone; you own the redundancy decision |
-
-```mermaid
-graph LR
-    subgraph vpc["Amazon VPC"]
-        subgraph priv["Private Subnet"]
-            APP["Application Instance or Task"]
-            ENI["Interface Endpoint ENI 10.0.16.25"]
-        end
-        RT["Route Table"]
-    end
-    APP -->|"Route to prefix list pl-xxxx"| RT
-    RT --> GWE["Gateway Endpoint"]
-    GWE --> S3["Amazon S3"]
-    APP -->|"Private DNS resolves to the ENI address"| ENI
-    ENI --> PL["AWS PrivateLink Fabric"]
-    PL --> KMS["AWS KMS"]
-    PL --> SM["AWS Secrets Manager"]
-    PL --> ECR["Amazon ECR"]
-```
-
-!!! note "Interface Endpoints Are Also How You Publish a Service"
-    AWS PrivateLink is bidirectional in concept. A software vendor can place a Network Load Balancer in front of its service, create a **VPC endpoint service**, and allow named AWS accounts to create Interface endpoints into it. The consumer reaches the provider's service using an address in the *consumer's* own VPC, with no peering, no route exchange, and no CIDR-overlap constraint. This is the correct pattern for software-as-a-service delivered privately, and it is far more scalable than peering.
-
-### VPC Peering Versus Transit Gateway
-
-**VPC peering** creates a one-to-one networking connection between two VPCs, in the same or different Regions and accounts. Traffic uses the AWS backbone, never the internet. Crucially, peering is **non-transitive**: if A peers with B and B peers with C, A cannot reach C. Each pair needs its own connection and a route-table entry in every subnet route table on both sides.
-
-**AWS Transit Gateway** is a regional network transit hub. Each VPC, VPN, or Direct Connect gateway attaches once to the Transit Gateway, and the Transit Gateway performs transitive routing between attachments according to its own route tables. This converts an O(n²) mesh into an O(n) hub-and-spoke.
-
-```mermaid
-graph TD
-    subgraph mesh["Full Mesh with VPC Peering - n times n minus 1 over 2 connections"]
-        A1["VPC A"] --- B1["VPC B"]
-        A1 --- C1["VPC C"]
-        A1 --- D1["VPC D"]
-        B1 --- C1
-        B1 --- D1
-        C1 --- D1
-    end
-    subgraph hub["Hub and Spoke with Transit Gateway - n attachments"]
-        TGW["Transit Gateway"]
-        TGW --- A2["VPC A"]
-        TGW --- B2["VPC B"]
-        TGW --- C2["VPC C"]
-        TGW --- D2["VPC D"]
-        TGW --- VPN["Site to Site VPN"]
-        TGW --- DX["Direct Connect Gateway"]
-    end
-```
-
-| Criterion | VPC Peering | Transit Gateway |
-|---|---|---|
-| Topology | Point to point | Hub and spoke |
-| Transitive routing | No | Yes |
-| Connections for *n* VPCs | *n(n−1)/2* | *n* |
-| Route table entries | Per peering, in every subnet route table | One summarised route per VPC toward the Transit Gateway |
-| Bandwidth | No aggregate limit imposed by peering itself | Up to 50 Gbps per VPC attachment (burst); design around it |
-| On-premises integration | Not supported; a peer cannot use another VPC's VPN | Native; VPN and Direct Connect attach directly |
-| Segmentation | Implicit through which peerings exist | Explicit through multiple Transit Gateway route tables |
-| Cost | No hourly charge; data transfer charges apply | Hourly charge per attachment plus a per-gigabyte data-processing charge |
-| Latency | Marginally lower — one fewer hop | One additional hop, typically sub-millisecond |
-| When to choose | Two to roughly five VPCs, stable topology, latency and cost sensitive | More than a handful of VPCs, hybrid connectivity, multi-account, segmentation requirements |
-
-!!! tip "The Decision Rule"
-    Below roughly five VPCs with no on-premises requirement, peering is cheaper and simpler. Above that, or the moment you need Direct Connect, VPN, or account segmentation, Transit Gateway wins decisively — and the crossover is reached faster than teams expect, because peering's operational cost is in route-table churn, not in the connection itself.
-
-### Elastic Load Balancing in the Request Path
-
-Elastic Load Balancing distributes incoming traffic across multiple targets in multiple Availability Zones. Load balancer nodes themselves live in the subnets you nominate, scale horizontally, and are addressed by a DNS name whose underlying addresses change — which is why you must never hard-code a load balancer's IP address (for ALB) and must always use its DNS name or a Route 53 alias.
-
-| Dimension | Application Load Balancer | Network Load Balancer |
-|---|---|---|
-| OSI layer | 7 (HTTP and HTTPS, gRPC) | 4 (TCP, UDP, TLS) |
-| Routing decisions | Host header, path, HTTP header, query string, source IP, HTTP method | Flow hash of the 5-tuple only |
-| Latency added | Low, but the request is parsed | Ultra low, roughly tens of microseconds |
-| Static IP | No — use the DNS name | Yes — one Elastic IP per Availability Zone |
-| TLS termination | Yes, with SNI and multiple certificates | Yes with a TLS listener, or pass through with a TCP listener |
-| Preserves client source IP | No — use the `X-Forwarded-For` header | Yes, by default for instance and IP targets in many modes |
-| Target types | Instance, IP, Lambda | Instance, IP, Application Load Balancer |
-| WebSockets | Supported | Supported at layer 4 |
-| WAF integration | Yes, AWS WAF attaches directly | No, not directly |
-| Sticky sessions | Yes, cookie based | Yes, source-IP based |
-| Typical use | Microservices behind one entry point, host and path routing, containers | Extreme throughput, static IP requirements, non-HTTP protocols, PrivateLink providers |
-
-### Amazon CloudFront in the Request Path
-
-CloudFront is a global content delivery network with hundreds of points of presence. It terminates the client TLS connection at the edge closest to the user, serves cached content directly, and forwards cache misses to the origin over AWS's optimised backbone rather than the public internet — which usually reduces latency even for entirely dynamic, uncacheable content.
-
-CloudFront also provides the natural attachment point for AWS WAF and AWS Shield, supports **Origin Access Control** so that a private S3 bucket can be served without ever being public, and can execute logic at the edge through CloudFront Functions (lightweight, viewer-facing, sub-millisecond) and Lambda@Edge (heavier, supports origin-facing triggers and network access).
-
-!!! note "CloudFront Is Not Only for Static Content"
-    Placing CloudFront in front of an API reduces TCP and TLS handshake latency (the handshake terminates at the edge, tens of milliseconds away, rather than at a Region thousands of kilometres away), absorbs volumetric attacks before they reach your origin, and lets you cache safely at the route level with a well-designed cache key. Treating CloudFront as "only for images" leaves substantial performance on the table.
-
-### DNS Fundamentals and Route 53 Concepts
-
-DNS is a distributed, hierarchical, cached database. Resolution proceeds from the root, to the top-level domain, to the authoritative name servers for the zone.
-
-- **Domain and zone.** A *domain* is a name in the hierarchy. A *hosted zone* in Route 53 is the container of records for a domain and its subdomains, and it corresponds to a DNS zone file.
-- **Public hosted zone** answers queries from the public internet. **Private hosted zone** answers queries only from the VPCs you associate with it, which is how you give internal names to internal resources without publishing them.
-- **Name server (NS) records** delegate authority. When you create a public hosted zone, Route 53 assigns four name servers drawn from different top-level domains for resilience; you must place these NS records at the registrar for delegation to work.
-- **Start of Authority (SOA)** carries zone metadata including the negative-caching TTL.
-- **TTL (time to live)** is how long a resolver may cache an answer. It is the single most important operational parameter in DNS: a long TTL reduces query cost and improves resilience to Route 53 unavailability, while a short TTL shortens failover time. Sixty seconds is a common compromise for records participating in failover; 300 to 3600 seconds suits stable records.
-- **Alias record** is Route 53-specific. It maps a name directly to an AWS resource (CloudFront distribution, ALB or NLB, API Gateway custom domain, S3 website endpoint, Global Accelerator, another record in the same zone). Unlike a CNAME it may be used at the zone apex, it returns an A or AAAA answer rather than a second lookup, it automatically tracks the resource's changing addresses, and queries to alias targets that are AWS resources are not charged.
-- **Health check** is an active probe from a fleet of Route 53 checkers in many locations. Health checks can monitor an endpoint, monitor a CloudWatch alarm, or compute a boolean over other health checks (a *calculated* health check). Only records with certain routing policies can be associated with health checks.
-- **Route 53 Resolver** is the VPC-internal recursive resolver at `VPC base plus two`, along with inbound and outbound **Resolver endpoints** that allow DNS to be forwarded between a VPC and on-premises networks in either direction.
-
-!!! warning "Route 53 Health Checks Cannot See Private Resources"
-    The Route 53 health-checking fleet lives on the public internet. It cannot probe an endpoint in a private subnet. To fail over on the health of a private resource, publish a CloudWatch metric and use a **CloudWatch alarm health check**, which reads the alarm state rather than probing the network.
-
-### API Gateway Concepts
-
-- **API** — the top-level container. Choose REST, HTTP, or WebSocket at creation; the type cannot be changed afterwards.
-- **Resource and method** (REST) or **route** (HTTP and WebSocket) — the path and verb that a request matches.
-- **Integration** — what API Gateway calls: Lambda proxy, Lambda custom, HTTP proxy, HTTP custom, AWS service integration (call DynamoDB, SQS, Step Functions, or S3 directly with no compute in between), VPC Link (to a private ALB, NLB, or Cloud Map service), or MOCK.
-- **Stage** — a named deployment of an API, such as `dev`, `test`, `prod`. Stages carry their own throttling, caching, logging, and **stage variables**, which lets one API definition point at different backends per environment.
-- **Authorizer** — IAM (SigV4), Amazon Cognito user pools, a Lambda authorizer (token or request based, with policy caching), or, for HTTP APIs, a built-in JWT authorizer that validates OIDC and OAuth 2.0 tokens without any code.
-- **Usage plan and API key** — quota and rate limiting per consumer, for monetised or partner APIs (REST APIs only).
-- **Mapping template** — Velocity Template Language transformation of request or response bodies (REST APIs only). Powerful, but application logic in a template is difficult to test and version; prefer proxy integration and keep transformation in code.
-- **Endpoint type** — Edge-optimized (fronted by a CloudFront distribution AWS manages), Regional (clients in one Region, or you want to attach your own CloudFront distribution), or Private (accessible only through an Interface endpoint in your VPC, controlled by a resource policy).
-
-!!! tip "Direct Service Integration Is an Underused Architecture"
-    An API Gateway AWS-service integration can put a message on an SQS queue or start a Step Functions execution with **no Lambda function at all**. That removes a whole compute tier from the critical path: no cold starts, no runtime patching, no concurrency limits, and no per-invocation charge. When the API's job is to accept and enqueue, this is often the correct design.
-
----
-
-## Internal Working
-
-### The VPC Is Implemented by a Mapping Service and Encapsulation
-
-A VPC is realised by AWS's network virtualisation layer. When an instance sends a packet to another instance's private IP address, the following happens:
-
-1. The packet leaves the guest operating system to the elastic network interface, which on modern instance families is presented by the **AWS Nitro card** — a dedicated hardware device on the host that offloads networking and storage from the main CPUs.
-2. The Nitro card consults the **Mapping Service**, a distributed lookup that translates *(VPC identifier, destination private IP)* into *(physical host address, destination interface)*. Mappings are cached locally and refreshed; the Mapping Service is the authoritative store.
-3. The packet is **encapsulated** — wrapped in an outer header addressed to the physical host — and sent across the physical substrate network. Because the customer's addresses appear only in the inner header, two customers may both use `10.0.0.0/16` with no conflict.
-4. At the destination host, the Nitro card decapsulates the packet and delivers it to the correct interface, after enforcing that host's security group rules.
-
-This design explains a family of otherwise puzzling behaviours:
-
-- **You cannot sniff a neighbour's traffic**, because packets are only ever delivered to the interface identified in the mapping. Promiscuous mode has no effect.
-- **Broadcast and multicast do not work natively**, because there is no shared layer 2 segment to broadcast onto. (Transit Gateway offers a multicast feature that reimplements the semantic in software.)
-- **Source and destination checking** is enforced by default: an interface will not forward packets whose source or destination address is not its own. Building a NAT instance or a virtual router requires explicitly disabling the source/destination check on that interface.
-- **Security groups do not become a bottleneck**, because enforcement happens on the Nitro card of each host, in a distributed fashion, at line rate. There is no appliance to size.
-
-```mermaid
-sequenceDiagram
-    autonumber
-    participant G as Guest OS on Instance A
-    participant NA as Nitro Card Host A
-    participant MS as Mapping Service
-    participant SUB as Physical Substrate Network
-    participant NB as Nitro Card Host B
-    participant GB as Guest OS on Instance B
-
-    G->>NA: IP packet to 10.0.16.25
-    NA->>NA: Evaluate outbound security group rules
-    NA->>MS: Look up VPC id plus 10.0.16.25
-    MS-->>NA: Physical host B and interface id
-    NA->>SUB: Encapsulated packet addressed to host B
-    SUB->>NB: Deliver encapsulated packet
-    NB->>NB: Decapsulate and evaluate inbound security group rules
-    NB->>GB: Original IP packet delivered
-    GB-->>NB: Reply
-    NB-->>NA: Return flow permitted by connection tracking
-```
-
-### Control Plane Versus Data Plane
-
-This distinction governs how failures manifest and how you should design.
-
-| Layer | Examples | Characteristics | Failure behaviour |
-|---|---|---|---|
-| **Control plane** | `CreateSubnet`, `AuthorizeSecurityGroupIngress`, `ChangeResourceRecordSets`, `CreateDeployment` on an API | Lower request rate, strongly consistent, propagates configuration | If the control plane is impaired you cannot *change* the network, but existing traffic continues to flow |
-| **Data plane** | Packet forwarding, security group enforcement, DNS query answering, API Gateway request handling, load balancer forwarding | Extremely high request rate, designed for far higher availability than the control plane | Impairment means traffic actually stops |
-
-!!! tip "A Design Principle That Comes Directly From This"
-    Build systems whose **recovery path depends only on data planes**. A disaster-recovery plan that requires launching new instances (a control-plane action) during a regional event is more fragile than one that requires only shifting DNS weights against pre-provisioned capacity. This is the reasoning behind pre-warmed standby stacks and behind Route 53 Application Recovery Controller, whose data-plane-only routing controls are explicitly designed to be usable when control planes are degraded.
-
-### Security Group Connection Tracking
-
-Security groups are stateful because the Nitro card maintains a **connection-tracking table**. When an allowed outbound flow is created, an entry keyed by the 5-tuple (protocol, source IP, source port, destination IP, destination port) is recorded, and return packets matching that entry are permitted regardless of inbound rules.
-
-Two refinements matter in production:
-
-- **Untracked flows.** If a security group rule allows all traffic (`0.0.0.0/0` on all ports) in both directions for a given flow, AWS may treat the flow as *untracked* and skip the tracking table entirely, which improves performance. Consequently, an existing connection can be interrupted immediately when rules change for tracked flows, whereas untracked flows behave differently. This is a subtle but real operational difference.
-- **Connection-tracking capacity.** Each instance type has a maximum number of tracked connections. Extremely high-connection-count workloads (a proxy or an ingestion tier) can exhaust it, which appears as packet loss under load. The `conntrack_allowance_exceeded` metric exposed by the ENA driver is the diagnostic.
-
-Because tracking is per-flow, **changing a security group rule takes effect on new flows within seconds and can also terminate existing tracked flows** whose permission has been revoked. NACL changes, by contrast, apply to every packet immediately because there is no state to consult.
-
-### Why NACLs Are Evaluated by Rule Number
-
-A NACL is an ordered list. Evaluation walks rules in ascending numeric order and stops at the first match — allow or deny. The implicit final rule, numbered `*`, denies everything. This ordered-first-match model is what makes deny rules meaningful: a deny at rule 90 blocks traffic that an allow at rule 100 would otherwise permit. Conventionally you leave gaps (100, 200, 300) so rules can be inserted later without renumbering.
-
-### NAT Gateway Internals and Port Allocation
-
-A NAT Gateway performs **port address translation**. For every outbound flow it rewrites the source address to its Elastic IP and the source port to a port it allocates from its own pool, recording the mapping so that return traffic can be reversed.
-
-The 55,000-connection figure is per unique destination tuple, because the constraint is the source-port space available for a given *(NAT EIP, destination IP, destination port, protocol)* combination — roughly the ephemeral port range. Consequences:
-
-- 55,000 connections to `api.partner.com:443` will exhaust allocation; 55,000 connections spread across many destinations will not.
-- Adding a second Elastic IP is not possible on a NAT Gateway; the remedy is multiple NAT Gateways, or, better, connection reuse (HTTP keep-alive, connection pools) so that the flow count stays low.
-- The `ErrorPortAllocation` CloudWatch metric is the direct signal; alarm on it.
-
-```mermaid
-sequenceDiagram
-    autonumber
-    participant T as Task in Private Subnet 10.0.16.40
-    participant RT as Private Route Table
-    participant NAT as NAT Gateway EIP 52.x.x.x
-    participant IGW as Internet Gateway
-    participant EXT as External API 203.0.113.10 port 443
-
-    T->>RT: TCP SYN to 203.0.113.10:443 source port 41022
-    RT->>NAT: Longest prefix match on 0.0.0.0/0
-    NAT->>NAT: Allocate source port 30015 and record the mapping
-    NAT->>IGW: SYN with source 52.x.x.x port 30015
-    IGW->>EXT: One to one NAT already applied, packet leaves
-    EXT-->>IGW: SYN ACK to 52.x.x.x port 30015
-    IGW-->>NAT: Delivered to the NAT Gateway
-    NAT->>NAT: Reverse the mapping
-    NAT-->>T: SYN ACK to 10.0.16.40 port 41022
-```
-
-### DNS Resolution Inside a VPC
-
-Each VPC has an Amazon-provided DNS server, the **Route 53 Resolver**, reachable at the VPC's base address plus two (for `10.0.0.0/16` that is `10.0.0.2`) and also at the link-local address `169.254.169.253`. Two VPC attributes govern its behaviour:
-
-- `enableDnsSupport` — whether the resolver answers queries at all. Turning it off breaks almost everything, including Interface endpoint private DNS.
-- `enableDnsHostnames` — whether instances receive public DNS hostnames.
-
-Resolution order inside a VPC is, in effect: Route 53 Resolver rules and outbound endpoints, then associated **private hosted zones**, then the VPC's internal names, then public DNS.
-
-A behaviour worth internalising: a public DNS name for an AWS resource that has both a public and a private address (a classic example is an EC2 public hostname) resolves to the **private** address when queried from inside the VPC and the **public** address when queried from outside. This is deliberate; it keeps intra-VPC traffic on the private path and avoids the hairpin through an Internet Gateway, which would otherwise incur charges and break for instances without public addresses.
-
-!!! warning "The Interface Endpoint Private DNS Trap"
-    Enabling **private DNS** on an Interface endpoint causes the standard service name (for example `secretsmanager.eu-west-1.amazonaws.com`) to resolve to the endpoint's private ENI address *inside the VPC*. If `enableDnsSupport` or `enableDnsHostnames` is disabled, private DNS cannot be enabled, and your applications will silently continue using the public endpoint through NAT — which works, so nobody notices, until the security review asks why traffic is leaving through the NAT Gateway.
-
-### Route 53 Internals
-
-Route 53's authoritative name servers are deployed across a global fleet of edge locations using **anycast**: the same IP addresses are advertised from many locations, and internet routing delivers each query to the topologically nearest instance. This yields low latency, high resilience, and natural absorption of volumetric attacks.
-
-- **Shuffle sharding** is applied to name-server assignment. Each hosted zone is assigned four name servers out of a much larger pool, chosen so that two customers rarely share the same complete set. If one shard is degraded, only a small fraction of zones are affected, and those zones still have other functioning name servers.
-- The four name servers deliberately span multiple top-level domains (`.com`, `.net`, `.org`, `.co.uk`) so that a failure confined to one TLD's infrastructure does not remove all delegation paths.
-- **Health checkers** run from many AWS locations. Each checker independently evaluates the endpoint, and the health state is computed from the proportion of checkers reporting healthy, against a configurable threshold. This avoids treating a single regional internet problem as an application failure. Because checks originate from many public addresses, an endpoint that filters by source IP must allow the published Route 53 health-checker ranges.
-- The **control plane** for Route 53 (creating and modifying records) is hosted in `us-east-1`, while the **data plane** (answering queries) is global and designed for extremely high availability. Failover that depends on calling `ChangeResourceRecordSets` therefore has a control-plane dependency; failover that depends on an already-configured health check is data-plane only and is the more resilient design.
-
-```mermaid
-graph TD
-    C["Client Application"] --> SR["Stub Resolver on the Device"]
-    SR --> RR["Recursive Resolver at the ISP or a Public Resolver"]
-    RR -->|"Cached answer available"| ANS["Answer returned immediately"]
-    RR -->|"Cache miss"| ROOT["Root Name Servers"]
-    ROOT --> TLD["Top Level Domain Servers for .com"]
-    TLD --> NS["Route 53 Authoritative Name Servers via Anycast"]
-    NS --> POL{"Routing Policy Evaluation"}
-    POL --> HC["Health Check State"]
-    POL --> GEO["Geolocation and Latency Data"]
-    POL --> RESULT["Selected record returned with a TTL"]
-    RESULT --> RR
-    RR --> ANS
-```
-
-### API Gateway Internals
-
-API Gateway is a managed, multi-tenant, horizontally scaled front end. A request passes through a fixed pipeline:
-
-1. **TLS termination and endpoint routing.** For an Edge-optimized API this happens at a CloudFront edge location; for a Regional API it happens in the Region; for a Private API the request arrives via an Interface endpoint ENI in your VPC.
-2. **Resource policy evaluation.** For Private APIs and for source-IP or VPC-endpoint restrictions, the resource policy is evaluated before anything else. A Private API without an allowing resource policy rejects every request.
-3. **Route or method matching.** The path and method are matched to a route (HTTP API) or resource and method (REST API). Greedy path variables (`{proxy+}`) match remaining segments.
-4. **Authorization.** IAM SigV4 verification, a Cognito user-pool token check, a JWT authorizer, or an invocation of a Lambda authorizer. Lambda authorizer results — the returned IAM policy or simple allow response — are **cached** by the identity source for a configurable TTL, which is essential for performance because otherwise every request would pay a Lambda invocation.
-5. **Request validation** (REST APIs). Required headers, query parameters, and a JSON Schema model can be validated at the gateway, so malformed requests never reach the backend and never cost a Lambda invocation.
-6. **Throttling.** Account-level, stage-level, per-method, and per-usage-plan limits are applied using a **token bucket**: a steady-state rate plus a burst capacity. Exceeding it returns HTTP 429 with `Too Many Requests`.
-7. **Caching** (REST APIs). If a stage cache is enabled, a cache key derived from the configured request parameters is looked up; a hit returns immediately without invoking the backend.
-8. **Integration request.** Mapping templates transform the request if configured; the backend is invoked. Timeouts apply — historically 29 seconds maximum for REST and HTTP APIs, now adjustable upward for REST APIs in many Regions, but the practical guidance remains that synchronous APIs should complete quickly and long work should be made asynchronous.
-9. **Integration response and method response.** Status-code mapping, response transformation, and CORS headers are applied.
-10. **Logging and metrics.** Execution logs, access logs, CloudWatch metrics, and optional X-Ray traces are emitted.
-
-```mermaid
-flowchart TD
-    IN["Incoming HTTPS Request"] --> TLS["TLS Termination at Edge or Region"]
-    TLS --> RP{"Resource Policy Allows"}
-    RP -->|"No"| R403["403 Forbidden"]
-    RP -->|"Yes"| MATCH{"Route Matched"}
-    MATCH -->|"No"| R404["403 Missing Authentication Token or 404"]
-    MATCH -->|"Yes"| AUTH{"Authorizer Result"}
-    AUTH -->|"Deny"| R401["401 or 403"]
-    AUTH -->|"Allow, result cached by identity source"| VAL{"Request Validation Passes"}
-    VAL -->|"No"| R400["400 Bad Request"]
-    VAL -->|"Yes"| THR{"Within Throttle Token Bucket"}
-    THR -->|"No"| R429["429 Too Many Requests"]
-    THR -->|"Yes"| CACHE{"Stage Cache Hit"}
-    CACHE -->|"Yes"| OUT["Cached Response Returned"]
-    CACHE -->|"No"| INTEG["Integration - Lambda, HTTP, VPC Link, or AWS Service"]
-    INTEG --> XFORM["Response Mapping and CORS Headers"]
-    XFORM --> LOG["Access Logs, Metrics, and X-Ray Segment"]
-    LOG --> OUT
-```
-
-!!! note "Why VPC Link Exists"
-    API Gateway runs in an AWS-managed network, not in your VPC. To reach a service that has only private addresses, it needs a bridge. A **VPC Link** is that bridge: for REST APIs it targets a Network Load Balancer; for HTTP APIs it creates ENIs in your subnets and can target an ALB, an NLB, or an AWS Cloud Map service directly. This is what lets a public API front a container fleet that has no public IP addresses at all.
-
----
+- **SQS (queue):** Producers write messages to a distributed, replicated store across multiple AZs. Consumers **poll**; a received message becomes invisible for the _visibility timeout_; the consumer must explicitly delete it after successful processing, otherwise it reappears — this is how at-least-once delivery and automatic retry are implemented. Failed messages exceeding `maxReceiveCount` move to a **dead-letter queue (DLQ)**.
+- **SNS (topic):** Producers publish once; SNS **pushes** copies to every subscription (Lambda, SQS, HTTPS, email, mobile push). Fan-out is achieved by subscribing multiple SQS queues to one topic.
+- **EventBridge (event bus):** Producers put events onto a bus; **rules** pattern-match on event content (JSON structure) and route matching events to targets, with input transformation, archive/replay, and a **schema registry**. EventBridge is the natural hub for cross-service and SaaS integration.
+- **Kinesis Data Streams:** An ordered, partitioned log. Records with the same partition key land on the same shard, preserving order per key; consumers track their own position (checkpointing), enabling replay — fundamentally different from a queue, where consumption removes the message.
+
+<figure markdown="span">
+    ![3layerglobalinfra](../img/U1/EventDriven.png){width="80%"}
+    <figcaption>EvenDriven  Example</figcaption>
+    <p align='right' style="font-size:0.8em"><i>Image Source: AI Generaed (Google Gemini)</i></p>
+</figure>
+
+!!! warning "At-least-once means duplicates will happen"
+  SQS standard queues, SNS, and EventBridge all deliver at-least-once. Network retries and visibility-timeout expiry produce duplicates in production. Consumers must be idempotent — for example, by recording processed event IDs in DynamoDB with a conditional write.
+
+
+### API-first — core concepts
+
+- **Contract-first design:** The API specification (OpenAPI for REST, GraphQL schema, AsyncAPI or EventBridge schemas for events) is authored, reviewed, and agreed _before_ implementation.
+- **API as product:** APIs have consumers, documentation, versioning, SLAs, and lifecycle management — they are products, not by-products.
+- **Consumer-driven design:** The contract is shaped by what consumers need, not by what the internal data model happens to look like.
+- **Versioning and backward compatibility:** Contracts evolve additively; breaking changes require new versions and deprecation timelines.
+- **Mocking and parallel development:** Once the contract exists, frontend and backend teams build in parallel against mock servers generated from the specification.
+- **Governance:** Style guides, linting (e.g., Spectral), and review boards keep hundreds of APIs consistent.
+
+
+### How API-first works in practice
+
+1. Architects and consumers co-author an **OpenAPI 3.x specification** (paths, schemas, status codes, auth).
+2. The spec is reviewed like code (pull requests, linting against a style guide).
+3. Mock servers are generated; frontend teams integrate immediately.
+4. The spec is **imported into API Gateway**, which becomes the enforcing runtime: request validation against JSON Schema, authentication (Cognito, IAM, Lambda authorizers), throttling, usage plans, and stage-based versioning.
+5. Server stubs and typed client SDKs are generated from the same spec, keeping implementation and contract synchronised.
+6. Contract tests in CI verify the implementation never drifts from the published contract.
+
+
+### How the four patterns interlock
+
+<figure markdown="span">
+    ![3layerglobalinfra](../img/U1/interconnection.png){width="80%"}
+    <figcaption>Modern Application Architecture Pattern</figcaption>
+    <p align='right' style="font-size:0.8em"><i>Image Source: AI Generaed (Google Gemini)</i></p>
+</figure>
+
+API-first defines _what_ services promise; microservices define _how the system is decomposed_; event-driven defines _how parts communicate without coupling_; serverless defines _how compute is provisioned and billed_. Real systems combine all four.
+
 
 ## Architecture Components
 
-| Component | Layer | Responsibility | Failure domain |
-|---|---|---|---|
-| Client (browser, mobile, device) | — | Initiates the request, caches DNS answers according to TTL | — |
-| Route 53 | Global DNS | Resolves the name; applies routing policy and health checks | Global, anycast |
-| AWS WAF | Edge or regional | Inspects HTTP requests, blocks injection, bad bots, and rate-abusive sources | Attached to CloudFront, ALB, API Gateway, AppSync |
-| AWS Shield | Edge | Absorbs volumetric and protocol DDoS attacks | Global |
-| CloudFront | Edge | Terminates TLS near the user, caches, forwards misses over the AWS backbone | Hundreds of points of presence |
-| API Gateway | Regional or edge | Authentication, validation, throttling, transformation, routing to integrations | Regional, multi-AZ |
-| Application Load Balancer | Regional, layer 7 | Content-based routing across targets and Availability Zones | Nodes per subnet, multi-AZ |
-| Network Load Balancer | Regional, layer 4 | Ultra-low-latency flow distribution, static IPs, PrivateLink provider endpoint | Nodes per subnet, multi-AZ |
-| VPC | Regional | The address space and the boundary of the software-defined network | Regional |
-| Subnet | Zonal | An address range bound to one Availability Zone | Single Availability Zone |
-| Route table | Subnet-scoped | Declares where non-local traffic is sent | Follows the subnet |
-| Internet Gateway | VPC-scoped | Internet path plus one-to-one NAT for public addresses | Highly available by design |
-| NAT Gateway | Zonal | Outbound-only internet access for private subnets | Single Availability Zone; deploy one per zone |
-| Egress-only Internet Gateway | VPC-scoped | Outbound-only IPv6 access | Highly available |
-| Security group | ENI-scoped | Stateful allow-list expressing application intent | Distributed, no chokepoint |
-| Network ACL | Subnet-scoped | Stateless ordered allow and deny guardrail | Follows the subnet |
-| Gateway endpoint | Route-table-scoped | Private path to S3 and DynamoDB with no charge | Regional |
-| Interface endpoint | Zonal ENI | Private path to AWS services or partner services via PrivateLink | One ENI per Availability Zone |
-| VPC peering | VPC pair | Non-transitive private connectivity between two VPCs | Managed, no bandwidth bottleneck |
-| Transit Gateway | Regional | Hub for transitive routing between VPCs, VPN, and Direct Connect | Regional, multi-AZ |
-| Site-to-Site VPN | Regional | Encrypted tunnels over the internet to on premises | Two tunnels per connection |
-| Direct Connect | Location-based | Dedicated private circuit to AWS | Requires a second circuit for resilience |
-| Elastic IP | Regional | A static public IPv4 address you own and can remap | Remappable within a Region |
-| Elastic network interface | Zonal | The actual virtual NIC, carrying addresses and security groups | Bound to one subnet |
-| EC2, ECS, EKS, Lambda | Compute | The workload that terminates the connection | Placement determines resilience |
-| RDS, ElastiCache, DynamoDB | Data | The persistence tier reached over the network | Multi-AZ or regional |
-| VPC Flow Logs | Observability | Records accepted and rejected flow metadata | Per VPC, subnet, or ENI |
-| CloudWatch, CloudTrail, X-Ray | Observability | Metrics and alarms, API audit trail, distributed traces | Regional |
+The following components appear across all four patterns. Understanding each component's _responsibility_ matters more than memorising features.
+
+| Component                                  | Responsibility in Cloud-Native Architecture                                                                                                             |
+| ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Client**                                 | Browser, mobile app, or machine consumer; initiates requests against published API contracts.                                                           |
+| **Route 53**                               | DNS resolution and routing policies (latency, failover, weighted) — the global entry point.                                                             |
+| **CloudFront**                             | Edge caching and TLS termination close to users; fronts API Gateway/ALB to cut latency.                                                                 |
+| **API Gateway**                            | The API-first enforcement point: contract validation, authN/authZ, throttling, versioning, and routing to Lambda, HTTP backends, or other AWS services. |
+| **ALB (Application Load Balancer)**        | Layer-7 routing (path/host based) to microservice target groups; health checks; commonly fronts ECS/EKS services.                                       |
+| **NLB (Network Load Balancer)**            | Layer-4, ultra-low-latency TCP/UDP load balancing; static IPs; used for non-HTTP protocols and PrivateLink.                                             |
+| **VPC / Subnets**                          | Network isolation boundary; public subnets for ingress, private subnets for services and data stores.                                                   |
+| **Security Groups**                        | Stateful, instance/ENI-level virtual firewalls — the micro-segmentation tool between microservices.                                                     |
+| **Lambda**                                 | Serverless compute: event-triggered, stateless functions; the unit of serverless deployment.                                                            |
+| **ECS / Fargate**                          | AWS-native container orchestration; Fargate removes node management (serverless containers).                                                            |
+| **EKS**                                    | Managed Kubernetes control plane for teams standardising on the Kubernetes ecosystem.                                                                   |
+| **Docker / ECR**                           | Container packaging and the private image registry feeding ECS/EKS deployments.                                                                         |
+| **DynamoDB**                               | Serverless NoSQL key-value store; single-digit-millisecond reads; the default microservice/serverless database.                                         |
+| **RDS / Aurora**                           | Managed relational databases where transactions and SQL are required; Aurora Serverless v2 for elastic capacity.                                        |
+| **SQS**                                    | Durable point-to-point queue: buffering, load levelling, retry, DLQ.                                                                                    |
+| **SNS**                                    | Pub/sub topic: one-to-many push fan-out.                                                                                                                |
+| **EventBridge**                            | Content-based event router with rules, schema registry, archive/replay; the backbone of event-driven integration.                                       |
+| **Step Functions**                         | Serverless workflow orchestration: explicit state machines with retries, error handling, and human-visible execution history.                           |
+| **IAM**                                    | Identity and least-privilege authorisation for every service-to-service call.                                                                           |
+| **Cognito**                                | End-user identity (sign-up/sign-in, OAuth2/OIDC tokens) consumed by API Gateway authorizers.                                                            |
+| **CloudWatch**                             | Metrics, logs, alarms, dashboards — the observability substrate.                                                                                        |
+| **X-Ray**                                  | Distributed tracing across API Gateway, Lambda, and microservices.                                                                                      |
+| **CloudFormation / Terraform / SAM / CDK** | Infrastructure as Code: the automation pillar that makes all patterns repeatable.                                                                       |
 
 ---
 
 ## Request Lifecycle
 
-Consider a user in Mumbai loading a single-page application hosted on S3 and CloudFront, which then calls `api.example.com/orders/42`, served by API Gateway, backed by an ECS service in a private subnet, reading from Amazon RDS in an isolated subnet.
+### Reference architecture: e-commerce order placement
 
-```mermaid
-sequenceDiagram
-    autonumber
-    participant B as Browser in Mumbai
-    participant RES as Recursive Resolver
-    participant R53 as Route 53 Authoritative
-    participant CFE as CloudFront Edge - Mumbai
-    participant WAF as AWS WAF
-    participant AGW as API Gateway Regional Endpoint
-    participant AUTHZ as Lambda or JWT Authorizer
-    participant VL as VPC Link and Private NLB
-    participant TASK as ECS Task in Private Subnet
-    participant EP as Interface Endpoint for Secrets Manager
-    participant DB as Amazon RDS in Isolated Subnet
+The lifecycle below combines all four patterns: an API-first contract at the edge, a serverless synchronous path for the user-facing action, and event-driven fan-out to microservices for everything that can happen asynchronously.
 
-    B->>RES: Query api.example.com type A
-    RES->>R53: Cache miss, recurse to authoritative
-    R53->>R53: Evaluate latency routing and health check state
-    R53-->>RES: Alias answer, CloudFront addresses, TTL 60
-    RES-->>B: A record answer
-    B->>CFE: TLS handshake and HTTPS GET /orders/42
-    CFE->>WAF: Evaluate web ACL rules
-    WAF-->>CFE: Allow
-    CFE->>CFE: Cache lookup on the configured cache key
-    CFE->>AGW: Cache miss forwarded over the AWS backbone
-    AGW->>AGW: Resource policy and route matching
-    AGW->>AUTHZ: Validate bearer token, result may be cached
-    AUTHZ-->>AGW: Allow with principal and scopes
-    AGW->>AGW: Request validation and throttle token bucket
-    AGW->>VL: Integration request over the VPC Link ENI
-    VL->>TASK: Forward to a healthy target, security group permits port 8080 from the link
-    TASK->>EP: Retrieve the database credential privately
-    EP-->>TASK: Secret value
-    TASK->>DB: SQL query, security group permits 5432 from the task security group only
-    DB-->>TASK: Result set
-    TASK-->>VL: HTTP 200 JSON
-    VL-->>AGW: Integration response
-    AGW->>AGW: Response mapping, CORS headers, access log, X-Ray segment
-    AGW-->>CFE: HTTP 200
-    CFE->>CFE: Store in cache if the policy permits
-    CFE-->>B: HTTP 200 over the already established TLS connection
-```
+<figure markdown="span">
+    ![3layerglobalinfra](../img/U1/ordermangmentExample.png){width="80%"}
+    <figcaption>AWS Serverless Order Management Architecture</figcaption>
+    <p align='right' style="font-size:0.8em"><i>Image Source: AI Generaed (Google Gemini)</i></p>
+</figure>
 
-### Narrating the Path
+**Synchronous segment (steps 1–13):** The user waits only for authentication, validation, order persistence, and event emission — a minimal, fast, highly available path.
 
-**Name resolution.** The browser consults its stub resolver, then a recursive resolver. If the answer is cached anywhere along that chain the query never reaches Route 53 — which is why TTL, not Route 53's own speed, dominates how quickly a change takes effect. Route 53 evaluates the routing policy and health checks at answer time, and returns an alias answer directly containing addresses.
+**Asynchronous segment (after the response):** Inventory reservation, payment capture, email confirmation, analytics, and fraud checks all proceed in parallel, each with its own retry policy and DLQ. If the email service is down for an hour, orders still succeed; messages wait in the queue.
 
-**Edge.** The browser opens a TCP and TLS connection to the nearest CloudFront edge. The handshake completes in a few milliseconds rather than the hundreds of milliseconds a cross-ocean handshake would take. AWS Shield Standard is already absorbing network-layer attacks; AWS WAF inspects the HTTP request.
+!!! tip "Architectural rule of thumb"
+Keep the synchronous path as short as the business allows. Everything the user does not need to see _in the response_ should be an event. This single decision drives most of a system's resilience and latency characteristics.
 
-**Regional entry.** On a cache miss, CloudFront forwards over AWS's private backbone. API Gateway performs its pipeline. Note that authorization happens *before* the backend is invoked — an unauthorised request costs you a fraction of a cent and never touches your code.
+### Synchronous vs asynchronous communication
 
-**Into the VPC.** The VPC Link is the boundary crossing from the AWS-managed network into your address space. From here on, every hop is governed by route tables and security groups you wrote.
-
-**Data tier.** The task retrieves credentials from Secrets Manager over an Interface endpoint — no NAT Gateway, no internet path — and queries RDS. The database's security group permits port 5432 only from the task's security group, so an attacker who compromises a different service in the same subnet still cannot reach the database.
-
-**Return path.** Because security groups are stateful, no return rules are needed. The response travels back through the same components. If a NACL were in play, its outbound ephemeral-port rule would matter here.
-
-### Synchronous Versus Asynchronous
-
-The path above is entirely **synchronous**: the browser waits, and every component's latency and every component's failure is in the user's critical path. Cloud-native design pushes work out of that path:
-
-- API Gateway integrates directly with SQS or EventBridge; the API returns `202 Accepted` immediately and a worker processes the message.
-- Long-running operations become Step Functions executions with a status endpoint the client polls, or a WebSocket API pushes completion to the client.
-- This changes the availability arithmetic. A synchronous chain of five components each at 99.9 percent yields roughly 99.5 percent. Decoupling with a durable queue means the front end can succeed even when the worker tier is entirely down.
-
-```mermaid
-flowchart LR
-    subgraph sync["Synchronous - User Waits"]
-        C1["Client"] --> A1["API Gateway"] --> L1["Lambda"] --> D1["DynamoDB"]
-    end
-    subgraph async["Asynchronous - Decoupled"]
-        C2["Client"] --> A2["API Gateway"] --> Q["SQS Queue"]
-        A2 -.->|"202 Accepted returned at once"| C2
-        Q --> W["Worker on ECS or Lambda"] --> D2["DynamoDB"]
-        W --> N["EventBridge Event"] --> WS["WebSocket API pushes completion"]
-    end
-```
+| Aspect                    | Synchronous (REST/gRPC via ALB or API Gateway) | Asynchronous (SQS/SNS/EventBridge)           |
+| ------------------------- | ---------------------------------------------- | -------------------------------------------- |
+| Caller behaviour          | Blocks waiting for a response                  | Fire-and-forget; response via callback/event |
+| Temporal coupling         | High — callee must be up now                   | None — broker buffers                        |
+| Failure propagation       | Cascades up the call chain                     | Absorbed by queue; retried later             |
+| Latency perceived by user | Sum of the whole chain                         | Only the enqueue time                        |
+| Consistency               | Immediate                                      | Eventual                                     |
+| Debugging                 | Simpler (one trace)                            | Harder (correlation IDs, tracing required)   |
+| Typical use               | Queries, user-facing reads                     | Side effects, integrations, heavy work       |
 
 ---
 
 ## AWS Service Deep Dive
 
-### Amazon VPC
+This topic spans several services; the deep dive focuses on the four services that most directly embody each pattern.
 
-**Purpose.** To provide a customer-defined, logically isolated network in which AWS resources are placed, with full control over addressing, routing, and packet filtering.
+### AWS Lambda (serverless compute)
 
-**Architecture.** A VPC is regional and spans every Availability Zone in the Region. Within it, subnets are zonal. An implicit, infinitely available router forwards according to per-subnet route tables. Gateways (Internet Gateway, NAT Gateway, virtual private gateway, Transit Gateway attachment, endpoints) are the exits. Enforcement is distributed to the Nitro card at every elastic network interface.
+| Attribute                 | Details                                                                                                                                                                                            |
+| ------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Purpose**               | Run code in response to events without managing servers.                                                                                                                                           |
+| **Architecture**          | Firecracker MicroVMs on a multi-tenant worker fleet; frontend/placement services route invocations; poller fleets consume streams/queues.                                                          |
+| **Key features**          | 20+ runtimes and container image support (up to 10 GB images), layers, versions and aliases, destinations, Function URLs, SnapStart (JVM/.NET/Python), response streaming.                         |
+| **Limitations**           | 15-minute maximum execution; 128 MB–10,240 MB memory; 512 MB–10 GB ephemeral `/tmp`; 6 MB synchronous payload (20 MB with streaming responses in supported configurations); stateless.             |
+| **Pricing**               | Per request + GB-second of duration; Provisioned Concurrency billed while enabled; free tier of 1M requests/month.                                                                                 |
+| **Performance**           | Warm invocations add single-digit ms; CPU scales with memory; cold starts range from tens of ms (Python/Node) to seconds (large JVM apps without SnapStart).                                       |
+| **Scaling**               | Each function scales up to the account/Region concurrency pool (default 1,000, raisable); burst scaling of 1,000 new environments per 10 seconds per function.                                     |
+| **Availability**          | Regional service automatically spread across multiple AZs — multi-AZ HA with zero configuration.                                                                                                   |
+| **Security**              | Execution role (IAM) per function; resource-based policies control who may invoke; optional VPC attachment; environment variables encrypted with KMS.                                              |
+| **Common configurations** | Memory tuning (use AWS Lambda Power Tuning), reserved concurrency to protect downstream databases, DLQ/destinations for async failures, SQS event source with batch size and `maximumConcurrency`. |
 
-**Important features.**
+### Amazon API Gateway (API-first)
 
-- Multiple CIDR blocks per VPC (a primary plus secondary blocks), IPv4 and dual-stack IPv6, and IPv6-only subnets.
-- Amazon-provided DNS with private hosted zones, Resolver rules, and inbound and outbound Resolver endpoints for hybrid DNS.
-- VPC Flow Logs at VPC, subnet, or ENI granularity, in a customisable format, delivered to CloudWatch Logs, S3, or Kinesis Data Firehose.
-- Traffic Mirroring for packet-level inspection by intrusion-detection appliances.
-- Security groups, network ACLs, and **AWS Network Firewall** for stateful deep inspection, domain filtering, and Suricata-compatible rules.
-- VPC Sharing through AWS Resource Access Manager, so a network team owns the VPC and application accounts deploy into shared subnets.
-- Prefix lists (customer-managed and AWS-managed) so that rules and routes reference a named set of CIDRs rather than a list of literals.
-- Reachability Analyzer and Network Access Analyzer for static, configuration-based path analysis without sending a packet.
+| Attribute                  | Details                                                                                                                                                                                    |
+| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **Purpose**                | Fully managed front door for APIs: publish, secure, throttle, version, and monitor.                                                                                                        |
+| **Architecture**           | Regional fleets behind CloudFront (edge-optimised endpoints); integrates with Lambda, HTTP backends, VPC Link (private ALB/NLB), and direct AWS service integrations.                      |
+| **API types**              | **REST API** (full features: API keys, usage plans, request validation, caching), **HTTP API** (cheaper, lower latency, JWT auth, subset of features), **WebSocket API** (bidirectional).  |
+| **Key features**           | OpenAPI import/export, request/response validation and mapping, Cognito/IAM/Lambda authorizers, per-client throttling via usage plans, stage variables, canary releases, response caching. |
+| **Limitations**            | 29-second integration timeout (extendable in some Regions with quota changes for REST APIs); 10 MB payload; regional throttle defaults (10,000 RPS, burst 5,000 — raisable).               |
+| **Pricing**                | Per million requests (HTTP API significantly cheaper than REST API) + data transfer + optional cache.                                                                                      |
+| **Scaling / availability** | Fully managed, multi-AZ, scales automatically to account limits.                                                                                                                           |
+| **Security**               | TLS enforced, WAF integration, mutual TLS, resource policies (e.g., restrict to a VPC or IP range), private APIs via interface VPC endpoints.                                              |
 
-**Limitations.**
+### Amazon EventBridge (event-driven)
 
-- A VPC cannot span Regions. Cross-Region connectivity requires inter-Region peering, Transit Gateway peering, or a VPN.
-- The CIDR block of a VPC cannot be changed after creation; only additional blocks can be added, and blocks can only be removed if unused.
-- Subnets cannot be resized after creation.
-- Peering is non-transitive and does not permit overlapping CIDRs.
-- No native broadcast or multicast on the VPC data path (Transit Gateway multicast is a separate feature).
-- Only five reserved addresses per subnet are unavailable, but load balancers and container networking consume addresses faster than most teams predict.
+| Attribute        | Details                                                                                                                                                                                                                           |
+| ---------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Purpose**      | Serverless event bus routing events between AWS services, your applications, and SaaS providers based on content rules.                                                                                                           |
+| **Architecture** | Default bus (AWS service events), custom buses, partner buses; rules pattern-match JSON and forward to up to 5 targets each; Pipes connect a single source to a single target with filtering/enrichment; Scheduler replaces cron. |
+| **Key features** | Schema registry with code bindings, archive and replay, input transformers, cross-account/cross-Region routing, DLQs per target, API destinations (call external HTTPS APIs with auth).                                           |
+| **Limitations**  | At-least-once delivery, no ordering guarantees, 256 KB event size, default 10,000 PutEvents/sec (Region-dependent, raisable); latency typically ~0.5 s (higher than SNS).                                                         |
+| **Pricing**      | Per million events published (AWS service events on the default bus are free to receive).                                                                                                                                         |
+| **Availability** | Regional, multi-AZ, with global endpoints for cross-Region failover.                                                                                                                                                              |
+| **Security**     | IAM for publish/manage, resource policies for cross-account buses, KMS encryption at rest.                                                                                                                                        |
 
-**Pricing model.** The VPC itself, subnets, route tables, Internet Gateways, security groups, and NACLs carry **no charge**. Costs arise from:
+### Amazon ECS with AWS Fargate (microservices runtime)
 
-| Dimension | Charged as |
-|---|---|
-| NAT Gateway | Per hour, plus per gigabyte processed |
-| Interface endpoint (PrivateLink) | Per hour per endpoint per Availability Zone, plus per gigabyte processed |
-| Gateway endpoint (S3, DynamoDB) | No charge |
-| Transit Gateway | Per attachment hour, plus per gigabyte processed |
-| VPC peering | No hourly charge; data transfer charges apply, higher across Availability Zones and Regions |
-| Public IPv4 addresses | Per hour for every public IPv4 address, whether attached or idle |
-| Data transfer out to the internet | Per gigabyte, tiered |
-| Cross-AZ data transfer | Per gigabyte in each direction |
-| Site-to-Site VPN, Direct Connect | Per connection hour plus data transfer |
-| VPC Flow Logs | Charged by the destination service (CloudWatch Logs or S3 ingestion and storage) |
+| Attribute        | Details                                                                                                                                                                                        |
+| ---------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Purpose**      | Orchestrate containerised microservices; Fargate provides serverless container execution.                                                                                                      |
+| **Architecture** | Control plane (AWS-managed) schedules **tasks** (from task definitions) into **services** that maintain desired count behind ALB target groups; Fargate runs each task in an isolated MicroVM. |
+| **Key features** | Blue/green deployments via CodeDeploy, circuit-breaker rollback, Service Connect / Cloud Map discovery, capacity providers (Fargate, Fargate Spot, EC2), task-level IAM roles.                 |
+| **Limitations**  | Fargate task sizes up to 16 vCPU / 120 GB; no GPU on classic Fargate; no privileged containers; less ecosystem flexibility than Kubernetes.                                                    |
+| **Pricing**      | Fargate: per vCPU-second and GB-second; EC2 launch type: you pay for instances; Fargate Spot up to ~70% discount for interruption-tolerant tasks.                                              |
+| **Scaling**      | Service Auto Scaling on CloudWatch metrics (CPU, memory, ALB request count per target, custom/queue-depth metrics).                                                                            |
+| **Availability** | Spread tasks across AZs via the service scheduler; ALB health checks replace failed tasks automatically.                                                                                       |
+| **Security**     | Task execution role (pull image, write logs) vs task role (application permissions); security groups per task with `awsvpc` networking; images scanned in ECR.                                 |
 
-!!! warning "Public IPv4 Addresses Are Now Metered"
-    Since 2024 every public IPv4 address in AWS carries an hourly charge, including addresses attached to running instances. This changed cost architecture materially: idle Elastic IPs, one public IP per instance in a large fleet, and NAT Gateways all now have a visible line item. It is also a deliberate incentive toward IPv6 and toward keeping workloads private behind load balancers.
-
-**Performance characteristics.** Network bandwidth is a function of instance type, not of the VPC. Within an Availability Zone, latency between instances is typically a few hundred microseconds; between Availability Zones in a Region, single-digit milliseconds. Enhanced networking (ENA) and, for the most demanding workloads, Elastic Fabric Adapter provide high packets-per-second and low jitter. Cluster placement groups reduce inter-node latency for tightly coupled workloads at the cost of correlated failure risk.
-
-**Scaling behaviour.** The network fabric is already provisioned; there is no capacity to plan for the VPC itself. What you must plan is **address space**, because address exhaustion is the practical scaling limit. NAT Gateways scale automatically to 100 Gbps. Interface endpoints scale but are per-Availability-Zone resources you must place deliberately.
-
-**Availability.** Internet Gateways and the implicit router are designed to be highly available with no single point of failure. **NAT Gateways, Interface endpoint ENIs, and subnets are zonal** and are the components where your architecture, not AWS, determines availability.
-
-**Security features.** Security groups, network ACLs, AWS Network Firewall, endpoint policies, VPC Flow Logs, Traffic Mirroring, private subnets with no internet route, and integration with IAM condition keys such as `aws:SourceVpce` and `aws:SourceVpc` for resource policies.
-
-**Service limits (defaults; most are adjustable quotas — verify current values in Service Quotas).**
-
-| Quota | Default |
-|---|---|
-| VPCs per Region | 5 |
-| Subnets per VPC | 200 |
-| IPv4 CIDR blocks per VPC | 5 (up to 50) |
-| Route tables per VPC | 200 |
-| Routes per route table | 50 (up to 1000, with caveats for propagated routes) |
-| Security groups per VPC | 2,500 |
-| Rules per security group | 60 inbound and 60 outbound |
-| Security groups per network interface | 5 (up to 16) |
-| Network ACLs per VPC | 200 |
-| Rules per network ACL | 20 per direction (up to 40) |
-| Active VPC peering connections per VPC | 50 (up to 125) |
-| Internet Gateways per Region | Matches the VPC quota |
-| NAT Gateways per Availability Zone | 5 |
-| Elastic IPs per Region | 5 |
-
-**Common configurations.** A three-tier, three-Availability-Zone VPC with a `/16` CIDR, one public `/24` per zone containing only load balancers and NAT Gateways, one private `/20` per zone for compute, one isolated `/22` per zone for data, one NAT Gateway per zone, a Gateway endpoint for S3 and DynamoDB, Interface endpoints for the AWS APIs actually used, and Flow Logs enabled to a central logging account.
-
-### Amazon Route 53
-
-**Purpose.** Authoritative DNS, domain registration, health checking, and DNS-based traffic management and failover.
-
-**Architecture.** Globally distributed anycast authoritative name servers, a global health-checker fleet, a control plane anchored in `us-east-1`, and a per-VPC Route 53 Resolver for private DNS. Hosted zones are global objects; private hosted zones are associated with specific VPCs.
-
-**Important features.**
-
-- Public and private hosted zones, with the same zone name permitted in both (**split-horizon DNS**), so `api.example.com` can resolve to an internal load balancer inside the VPC and to a public endpoint outside.
-- Alias records to AWS resources, usable at the zone apex, resolved internally, and not charged.
-- Seven routing policies, described below.
-- Health checks against endpoints, CloudWatch alarms, or other health checks, with configurable failure thresholds, request intervals, string matching in the response body, and latency measurement.
-- Traffic Flow — a visual policy editor that composes routing policies into a reusable traffic policy with versioning.
-- Route 53 Resolver endpoints and forwarding rules for hybrid DNS in both directions.
-- Route 53 Resolver DNS Firewall for blocking queries to known-malicious or disallowed domains — an effective data-exfiltration control.
-- Route 53 Application Recovery Controller with **routing controls** whose data plane is deliberately independent of control planes, plus readiness checks and safety rules.
-- DNSSEC signing for public hosted zones, and domain registration with DNSSEC support.
-
-**Routing policies.**
-
-| Policy | What it does | Health checks | Typical use | Key caution |
-|---|---|---|---|---|
-| **Simple** | Returns a single record; multiple values in one record are returned in random order to the client | Not supported | A single endpoint, static mappings | No failover at all; the client picks arbitrarily |
-| **Weighted** | Distributes answers across records in proportion to assigned weights, from 0 to 255 | Supported | Canary and blue-green releases, gradual migration, splitting between Regions | Weight 0 removes a record unless all are 0; caching means the split is statistical, not exact |
-| **Latency-based** | Returns the record for the Region with the lowest measured network latency to the *resolver* | Supported | Multi-Region active-active for performance | It optimises latency, not geography or compliance; measurement is to the resolver, not the user |
-| **Failover** | Active-passive; returns the primary while healthy, otherwise the secondary | Required for the primary | Disaster recovery, static maintenance page in S3 | Failover speed is bounded by TTL plus health-check detection time |
-| **Geolocation** | Returns a record based on the *user's* inferred location, by continent, country, or subdivision | Supported | Data-residency and licensing compliance, localised content | Always configure a **default** record for unmatched locations, or those users get no answer |
-| **Geoproximity** | Routes by geographic distance between user and resource, with a **bias** that expands or shrinks a resource's effective region | Supported | Shifting traffic gradually toward or away from a Region | Requires a traffic policy (Traffic Flow); more complex to reason about |
-| **Multivalue answer** | Returns up to eight healthy records at random, each optionally health-checked | Supported | Cheap client-side load spreading with health awareness | Not a load balancer; no connection draining, no capacity awareness |
-| **IP-based** | Routes based on the client subnet using CIDR collections you define | Supported | Steering specific ISPs or corporate networks to specific endpoints | Requires accurate, maintained CIDR data |
-
-!!! question "Weighted Versus Latency — a Classic Exam Discriminator"
-    If the requirement mentions **performance for globally distributed users**, choose latency-based. If it mentions **percentages, canaries, gradual shifts, or A/B testing**, choose weighted. If it mentions **legal or compliance restrictions on which country serves which user**, choose geolocation. If it mentions **active-passive disaster recovery**, choose failover.
-
-**Limitations.**
-
-- DNS-based failover is bounded by TTL and by resolvers that ignore TTL. It is a coarse instrument; for sub-second failover use a load balancer or AWS Global Accelerator, which shifts traffic at the network layer using anycast addresses and does not depend on client DNS caching.
-- Health checks cannot reach private endpoints directly; use CloudWatch alarm health checks.
-- The control plane is `us-east-1`-dependent for record changes.
-- Route 53 does not perform load balancing in any capacity-aware sense; it only chooses which answer to return.
-
-**Pricing model.** Per hosted zone per month (with a lower rate beyond the first 25 zones); per million queries, with different rates for standard queries, latency-based, geo, and IP-based queries; per health check per month, with additional charges for optional features such as string matching and HTTPS; domain registration priced per TLD per year. **Alias queries to AWS resources are not charged.** Traffic Flow policy records carry an additional monthly charge.
-
-**Performance characteristics.** Query latency is typically a few milliseconds from anycast edge locations. Record changes propagate to all Route 53 name servers within about 60 seconds, but *visible* propagation to end users is governed entirely by TTL and by intermediate resolver behaviour.
-
-**Scaling behaviour.** Effectively unbounded from the customer's perspective; Route 53 answers many trillions of queries and is engineered to absorb attack traffic.
-
-**Availability.** Route 53 carries a 100 percent availability service-level agreement for its DNS data plane — unique among AWS services — reflecting anycast, shuffle sharding, and multi-TLD name-server distribution.
-
-**Security features.** DNSSEC signing and validation, Resolver DNS Firewall, query logging (public zones and Resolver query logs), IAM policies on hosted-zone operations, domain transfer lock, and private hosted zones so internal names are never published.
-
-**Service limits (defaults, adjustable unless stated).** 500 hosted zones per account; 10,000 records per hosted zone; 200 health checks per account; 100 VPC associations per private hosted zone; 50 domains per account for registration.
-
-**Common configurations.** A public hosted zone with alias records to CloudFront and to Regional API Gateway custom domains; a private hosted zone associated with the workload VPCs giving internal service names; failover records with health checks for a disaster-recovery Region; weighted records for canary deployments; Resolver outbound endpoints and forwarding rules for on-premises name resolution.
-
-### Amazon API Gateway
-
-**Purpose.** A fully managed front door for APIs, providing routing, authorization, validation, throttling, transformation, caching, and observability without application code.
-
-**Architecture.** A multi-tenant, regionally distributed managed service. Edge-optimized APIs are fronted by an AWS-managed CloudFront distribution; Regional APIs are reached directly in the Region; Private APIs are reachable only through Interface endpoints inside a VPC. Backend integration happens over AWS-internal paths, or through a VPC Link into your private subnets.
-
-**API type comparison.**
-
-| Dimension | REST API | HTTP API | WebSocket API |
-|---|---|---|---|
-| Protocol | Request-response over HTTP | Request-response over HTTP | Persistent bidirectional connection |
-| Relative cost | Highest | Roughly 70 percent cheaper than REST for the same request volume | Charged per message and per connection minute |
-| Relative latency | Higher | Lower — a leaner pipeline | Low, connection is already established |
-| Authorizers | IAM, Cognito user pools, Lambda (token and request) | IAM, JWT (OIDC and OAuth 2.0 built in), Lambda | IAM, Lambda on the connect route |
-| Request validation | Yes, with JSON Schema models | No built-in body validation | No |
-| Mapping templates (VTL) | Yes | No — parameter mapping only | No |
-| Caching | Yes, per stage, configurable size | No | Not applicable |
-| Usage plans and API keys | Yes | No | No |
-| Endpoint types | Edge-optimized, Regional, Private | Regional only | Regional only |
-| AWS WAF integration | Yes | No | No |
-| Direct AWS service integrations | Yes, extensive | Yes, for a set of services including SQS, SNS, EventBridge, Step Functions, Kinesis | Yes |
-| Private integrations | VPC Link to an NLB | VPC Link to an ALB, NLB, or Cloud Map | VPC Link |
-| Certificates for backend mutual TLS | Yes | Yes | Yes |
-| X-Ray tracing | Yes | Limited | Limited |
-| Best for | Regulated or monetised APIs needing validation, keys, WAF, and caching | Most new serverless APIs — simpler, faster, cheaper | Chat, live dashboards, notifications, multiplayer, streaming progress |
-
-!!! tip "Choosing the API Type"
-    Start with **HTTP API**. Move to **REST API** only when you specifically need one of: AWS WAF, API keys and usage plans, request validation with models, response caching, edge-optimized endpoints, private endpoints, or VTL transformation. Choose **WebSocket API** only when the server must push to the client without the client polling.
-
-**Important features.** Custom domain names with ACM certificates and base-path mapping; mutual TLS for client authentication; canary release deployments that split a percentage of stage traffic to a new deployment; stage variables; usage plans; request and response transformation; SDK and OpenAPI export; direct integrations with more than a hundred AWS services on REST APIs; access logging with a customisable format; and per-route throttling.
-
-**Limitations.**
-
-- Default integration timeout of 29 seconds for both REST and HTTP APIs; REST APIs now support raising this quota in many Regions, but the architectural guidance remains that synchronous APIs should be fast and long work should be asynchronous.
-- Maximum payload of 10 MB for REST APIs; large uploads should use pre-signed S3 URLs instead of passing bytes through the API.
-- API type cannot be changed after creation.
-- HTTP APIs lack WAF, caching, usage plans, and request validation.
-- Caching, when enabled on a REST API, is charged per hour by cache size regardless of hit rate.
-- Header and query-string manipulation in REST APIs through VTL is powerful but hard to test; treat it as a last resort.
-
-**Pricing model.** REST APIs and HTTP APIs are charged per million requests, with HTTP APIs substantially cheaper and both offering volume tiers. Caching on REST APIs is charged per hour by cache size. WebSocket APIs are charged per million messages plus connection minutes. Data transfer out is charged separately. Edge-optimized APIs incur CloudFront data-transfer pricing. Always confirm current figures on the AWS pricing pages; the ratios between types are stable but the absolute numbers change.
-
-**Performance characteristics.** Added latency is typically in the low tens of milliseconds for HTTP APIs and somewhat higher for REST APIs with transformation and validation. Lambda authorizer caching, stage caching, and connection reuse to backends are the main levers. Edge-optimized endpoints reduce handshake latency for globally distributed clients but add a hop for clients already in the Region.
-
-**Scaling behaviour.** Scales automatically. The relevant limits are the **account-level throttle** (a steady-state requests-per-second rate with a burst capacity, per Region, adjustable) and, more often in practice, the **backend's** capacity — Lambda reserved concurrency, ECS task count, or database connections. API Gateway will happily accept more traffic than your backend can serve, which is precisely why per-route throttling is a design tool, not an afterthought.
-
-**Availability.** Regional, multi-Availability-Zone, managed. Edge-optimized APIs additionally benefit from the CloudFront edge network. For multi-Region availability, deploy Regional APIs in each Region behind Route 53 failover or latency records, or behind AWS Global Accelerator.
-
-**Security features.** IAM authorization with SigV4, Cognito user pools, JWT authorizers, Lambda authorizers, resource policies (including restriction by source VPC endpoint or source IP), mutual TLS, AWS WAF (REST APIs), throttling as a denial-of-service mitigation, private endpoints, and full CloudTrail coverage of management actions.
-
-**Service limits (defaults; most are adjustable).** Account-level throttle of 10,000 requests per second with a 5,000-request burst per Region; 600 APIs per account per type; 300 routes or resources per API; 10 stages per API; 29-second integration timeout; 10 MB payload for REST; 32 KB WebSocket frame size; Lambda authorizer result cache TTL up to 3600 seconds.
-
-**Common configurations.** An HTTP API with a JWT authorizer validating Cognito or an external identity provider, `$default` stage with auto-deploy, Lambda proxy integration for business logic, a VPC Link to a private ALB for containerised services, a custom domain with an ACM certificate, access logging to CloudWatch Logs in JSON, and per-route throttling protecting an expensive downstream.
+!!! note "ECS vs EKS decision"
+ECS is simpler, deeply AWS-integrated, and has no control-plane fee; EKS provides Kubernetes portability and its ecosystem (Helm, operators, service meshes) at the cost of a per-cluster hourly fee and greater operational complexity. Choose EKS when the organisation is committed to Kubernetes skills or multi-cloud portability; otherwise ECS/Fargate is the pragmatic default for AWS-native microservices.
 
 ---
 
 ## Important AWS Terminology
 
-| Term | Meaning |
-|---|---|
-| Region | A geographic area containing multiple isolated Availability Zones; the scope of most AWS services |
-| Availability Zone | One or more discrete data centres with independent power, cooling, and networking within a Region |
-| AZ ID | A stable identifier for a physical zone (for example `use1-az1`), consistent across accounts unlike zone names |
-| VPC | A logically isolated, customer-defined virtual network within one Region |
-| CIDR block | An IP range expressed as address and prefix length, for example `10.0.0.0/16` |
-| Secondary CIDR | An additional address range added to an existing VPC when the primary is exhausted |
-| Subnet | A CIDR range within a VPC, bound to exactly one Availability Zone |
-| Public subnet | A subnet whose route table has a route to an Internet Gateway |
-| Private subnet | A subnet with outbound internet access via a NAT Gateway but no inbound path |
-| Isolated subnet | A subnet with no route to the internet in either direction |
-| Route table | The set of routes applied to traffic leaving a subnet |
-| Main route table | The default route table used by any subnet without an explicit association |
-| Local route | The immutable route for the VPC's own CIDR blocks; always present and always wins for intra-VPC traffic |
-| Longest prefix match | The rule that the most specific matching route is chosen |
-| Implicit router | The distributed forwarding function inside a VPC, addressed at the second IP of each subnet |
-| Internet Gateway | The VPC component providing an internet path and one-to-one NAT for public addresses |
-| NAT Gateway | A managed zonal component providing outbound-only internet access via port address translation |
-| Egress-only Internet Gateway | The IPv6 equivalent of outbound-only access, with no address translation |
-| Elastic IP | A static public IPv4 address allocated to your account and remappable between resources |
-| Elastic network interface (ENI) | A virtual network interface carrying private and public addresses, MAC address, and security groups |
-| Security group | A stateful, allow-only packet filter attached to network interfaces |
-| Network ACL | A stateless, ordered allow and deny filter attached to subnets |
-| Ephemeral port | The short-lived high-numbered source port a client uses, typically 1024 to 65535 |
-| Connection tracking | The per-flow state that makes security groups stateful |
-| Prefix list | A named, reusable set of CIDR blocks usable in routes and security group rules |
-| Gateway endpoint | A route-table-based private path to Amazon S3 or DynamoDB, at no charge |
-| Interface endpoint | An ENI in your subnet providing a private path to a service via AWS PrivateLink |
-| AWS PrivateLink | The technology behind Interface endpoints and endpoint services, exposing a service by private IP |
-| VPC endpoint service | A service you publish behind an NLB or GWLB for others to consume via PrivateLink |
-| VPC peering | A non-transitive one-to-one private connection between two VPCs |
-| Transit Gateway | A regional hub providing transitive routing between VPCs, VPNs, and Direct Connect |
-| Transit Gateway route table | A routing domain within a Transit Gateway used to segment which attachments can reach which |
-| Direct Connect | A dedicated physical network circuit between a customer location and AWS |
-| Site-to-Site VPN | Encrypted IPsec tunnels between a customer gateway and AWS over the internet |
-| VPC Flow Logs | Records of accepted and rejected IP flow metadata for a VPC, subnet, or ENI |
-| Traffic Mirroring | Copying packets from an ENI to a monitoring appliance for deep inspection |
-| Reachability Analyzer | A static configuration analysis tool that determines whether a path exists between two resources |
-| Route 53 Resolver | The VPC-internal recursive DNS resolver, at the VPC base address plus two |
-| Hosted zone | A container for DNS records for a domain; public or private |
-| Split-horizon DNS | The same domain name resolving differently inside a VPC and on the public internet |
-| Alias record | A Route 53 record type pointing to an AWS resource, usable at the zone apex and not charged |
-| TTL | The duration for which a resolver may cache a DNS answer |
-| Routing policy | The Route 53 rule determining which record is returned for a query |
-| Health check | A Route 53 probe of an endpoint, a CloudWatch alarm, or a combination of other checks |
-| Traffic Flow | The Route 53 visual editor that composes routing policies into versioned traffic policies |
-| DNSSEC | Cryptographic signing of DNS records to prevent spoofing and cache poisoning |
-| Resolver endpoint | Inbound or outbound endpoints enabling DNS forwarding between a VPC and on-premises networks |
-| Listener | The load balancer component defining the protocol and port on which client connections are accepted |
-| Target group | The set of registered targets a load balancer forwards to, with its own health check |
-| Connection draining | Deregistration delay, allowing in-flight requests to complete before a target is removed |
-| Cross-zone load balancing | Distributing traffic evenly across all targets in all zones rather than per zone |
-| Origin Access Control | The CloudFront mechanism allowing access to a private S3 bucket without making it public |
-| Stage | A named deployment of an API Gateway API with its own settings and URL |
-| Integration | The backend that API Gateway invokes for a route or method |
-| VPC Link | The API Gateway construct that reaches private resources in a VPC |
-| Authorizer | The API Gateway component that authenticates and authorizes a request |
-| Usage plan | A REST API construct binding API keys to throttle and quota limits |
-| Token bucket | The throttling algorithm using a steady refill rate plus a burst allowance |
-| Mapping template | A Velocity Template Language transformation of an API Gateway request or response |
-| awsvpc mode | The ECS networking mode giving each task its own ENI, private IP, and security groups |
-| Amazon VPC CNI | The EKS networking plugin that assigns VPC IP addresses directly to pods |
-| Control plane | The APIs that create and change configuration |
-| Data plane | The path that actually carries traffic |
+| Term                              | Meaning                                                                                                                                  |
+| --------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| **Cloud-native**                  | Applications designed to exploit elastic, managed, distributed cloud infrastructure — loosely coupled, resilient, observable, automated. |
+| **FaaS**                          | Function as a Service; event-triggered, provider-managed code execution (Lambda).                                                        |
+| **Cold start**                    | Latency of creating and initialising a new Lambda execution environment.                                                                 |
+| **Execution environment**         | The Firecracker MicroVM plus runtime in which a Lambda invocation runs; handles one request at a time.                                   |
+| **Concurrency (Lambda)**          | Number of simultaneous execution environments; reserved concurrency caps it, provisioned concurrency pre-warms it.                       |
+| **Bounded context**               | A DDD term: the boundary within which a domain model applies; the natural seam for a microservice.                                       |
+| **Distributed monolith**          | Anti-pattern: services that are physically separate but must be deployed or changed together.                                            |
+| **Database per service**          | Each microservice exclusively owns its data store; others access data only via its API or events.                                        |
+| **Event**                         | Immutable record of a fact that occurred; past tense (`OrderPlaced`).                                                                    |
+| **Command**                       | A directed request for a specific action (`ChargeCard`); implies one handler.                                                            |
+| **Choreography**                  | Event-driven coordination without a central controller.                                                                                  |
+| **Orchestration**                 | Central workflow coordination (Step Functions) with explicit state.                                                                      |
+| **Fan-out**                       | One event delivered to many consumers (SNS→multiple SQS).                                                                                |
+| **Dead-letter queue (DLQ)**       | Queue receiving messages that repeatedly failed processing, isolating poison messages.                                                   |
+| **Visibility timeout**            | Period during which a received SQS message is hidden from other consumers pending deletion.                                              |
+| **Idempotency**                   | Property that processing the same message/request multiple times yields the same result.                                                 |
+| **Eventual consistency**          | Distributed replicas converge over time; reads may briefly see stale data.                                                               |
+| **At-least-once delivery**        | Broker guarantees delivery but may duplicate; the consumer handles duplicates.                                                           |
+| **OpenAPI**                       | Standard, machine-readable specification format for REST API contracts.                                                                  |
+| **Contract testing**              | Automated verification that a service implementation conforms to its published API contract.                                             |
+| **Throttling**                    | Rejecting excess requests (HTTP 429) to protect backends; configured per stage/client in API Gateway.                                    |
+| **Sidecar / service mesh**        | Proxy deployed beside each service instance handling mTLS, retries, and traffic policy (e.g., Envoy).                                    |
+| **Saga**                          | Pattern managing a distributed transaction as a sequence of local transactions with compensating actions.                                |
+| **Backpressure / load levelling** | Using a queue to smooth bursts so consumers process at a sustainable rate.                                                               |
 
 ---
 
 ## Configuration Options
 
-### VPC and Subnet Configuration
+### Serverless configuration decisions (Lambda)
 
-| Setting | Options | Guidance |
-|---|---|---|
-| VPC CIDR | `/16` to `/28`, plus secondary blocks | Choose `/16` unless you have a strong reason; unused address space is free |
-| Tenancy | Default or dedicated | Dedicated tenancy is expensive and rarely required; it cannot be reverted for the VPC |
-| DNS support and hostnames | Enabled or disabled | Enable both; Interface endpoint private DNS depends on them |
-| Subnet auto-assign public IPv4 | On or off | Off for private and isolated subnets; on only for genuinely public subnets, and prefer explicit Elastic IPs |
-| IPv6 | Amazon-provided `/56`, or bring your own | Consider dual stack to reduce IPv4 address charges and avoid NAT for outbound |
-| Route table association | Explicit or main | Always associate explicitly; relying on the main route table causes accidents |
-| NAT | NAT Gateway or self-managed NAT instance | NAT Gateway unless you need a very low-traffic development environment at minimal cost |
-| DHCP option set | Amazon-provided or custom | Custom sets are used to point at on-premises DNS servers in hybrid designs |
+| Setting                  | Options                                                                          | Architectural Implication                                                                                           |
+| ------------------------ | -------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| **Memory size**          | 128 MB – 10,240 MB                                                               | CPU scales with memory; more memory often _reduces_ cost by finishing faster. Tune empirically.                     |
+| **Packaging**            | ZIP archive (250 MB unzipped) or container image (10 GB)                         | Container images suit large ML dependencies and unify CI with container workflows.                                  |
+| **Concurrency**          | Unreserved (shared pool), Reserved (cap), Provisioned (pre-warmed)               | Reserved protects downstream RDS from connection storms; Provisioned removes cold starts for latency-critical APIs. |
+| **Networking**           | No VPC (default) or VPC-attached                                                 | VPC attachment is required to reach private RDS/ElastiCache; needs NAT Gateway or VPC endpoints for AWS API access. |
+| **Invocation model**     | Synchronous, Asynchronous, Event source mapping (poll-based)                     | Determines retry semantics: async retries twice then DLQ; poll-based retries per queue configuration.               |
+| **Event source mapping** | Batch size, batch window, `maximumConcurrency`, filter criteria, bisect on error | Filtering at the source avoids paying for invocations that would immediately discard the event.                     |
+| **Architecture**         | x86_64 or arm64 (Graviton2)                                                      | Graviton typically offers ~20% better price-performance.                                                            |
 
-### Endpoint, Peering, and Transit Configuration
+### Microservices runtime configuration
 
-| Setting | Options | Guidance |
-|---|---|---|
-| Endpoint type | Gateway or Interface | Gateway for S3 and DynamoDB always; Interface for everything else you use frequently |
-| Interface endpoint private DNS | Enabled or disabled | Enable so existing code needs no change; disable when you must reach both the endpoint and the public service |
-| Endpoint policy | Full access or restricted | Restrict to your own buckets and accounts to prevent exfiltration to third-party buckets |
-| Peering DNS resolution | Enabled or disabled | Enable so private hosted-zone names resolve across the peering |
-| Transit Gateway route tables | Single shared or multiple segmented | Use separate route tables to build production, non-production, and shared-services segments |
-| Transit Gateway appliance mode | On or off | Enable when traffic must remain on the same appliance across Availability Zones, for stateful inspection |
-| Route propagation | Static or propagated (BGP) | Propagation reduces manual routes for VPN and Direct Connect but obscures intent; document it |
+| Setting                             | Options                                                        | Architectural Implication                                                                                                           |
+| ----------------------------------- | -------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| **Launch type / capacity provider** | Fargate, Fargate Spot, EC2                                     | Fargate for operational simplicity; EC2 for GPU, custom AMIs, or high steady-state density; Spot for interruption-tolerant workers. |
+| **Network mode (ECS)**              | `awsvpc`, `bridge`, `host`                                     | `awsvpc` gives each task its own ENI and security group — required for Fargate and for per-service micro-segmentation.              |
+| **Deployment type**                 | Rolling update, Blue/Green (CodeDeploy), Canary                | Blue/green enables instant rollback; canary limits blast radius of a bad release.                                                   |
+| **Service discovery**               | ALB target groups, ECS Service Connect, Cloud Map DNS          | Internal service-to-service traffic usually avoids the ALB hop for latency and cost.                                                |
+| **Scaling policy**                  | Target tracking, step scaling, scheduled                       | Target tracking on _request count per target_ or _queue depth_ is usually superior to CPU for request-driven services.              |
+| **EKS node provisioning**           | Managed node groups, self-managed, Fargate profiles, Karpenter | Karpenter provisions right-sized nodes just-in-time, improving bin-packing and cost.                                                |
 
-### Load Balancer Configuration
+### Event-driven configuration
 
-| Setting | Options | Guidance |
-|---|---|---|
-| Scheme | Internet-facing or internal | Internal for anything behind an API Gateway VPC Link or another service |
-| Target type | Instance, IP, Lambda, ALB | IP targets are required for `awsvpc` ECS tasks and for on-premises targets |
-| Health check | Protocol, path, interval, thresholds, matcher | Point at a real dependency-aware health endpoint, not at `/` |
-| Deregistration delay | 0 to 3600 seconds | Set it to slightly longer than your longest request to avoid dropping in-flight work |
-| Cross-zone load balancing | On by default for ALB; off by default for NLB | Enabling on NLB improves distribution but incurs cross-AZ data charges |
-| Idle timeout | Default 60 seconds on ALB | Must exceed the client and backend keep-alive settings, or you will see intermittent 502 responses |
-| TLS policy | Predefined security policies | Choose the most restrictive policy your clients support; review annually |
+| Setting                         | Options                                               | Architectural Implication                                                                                                                                                            |
+| ------------------------------- | ----------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **Queue type**                  | SQS Standard vs FIFO                                  | FIFO guarantees ordering and exactly-once _processing_ within a message group but caps throughput (3,000 msg/s with batching per group); Standard is nearly unlimited but unordered. |
+| **Visibility timeout**          | Seconds to 12 hours                                   | Must exceed the consumer's worst-case processing time, otherwise duplicate processing occurs.                                                                                        |
+| **`maxReceiveCount` / redrive** | Integer + DLQ target                                  | Prevents poison messages from blocking the queue indefinitely.                                                                                                                       |
+| **Long polling**                | `ReceiveMessageWaitTimeSeconds` 0–20                  | Long polling reduces empty receives and cost, and lowers latency.                                                                                                                    |
+| **Message retention**           | 1 minute – 14 days                                    | Longer retention buys recovery time during extended consumer outages.                                                                                                                |
+| **EventBridge rule targets**    | Up to 5 targets, input transformer, DLQ, retry policy | Always configure a target DLQ; otherwise failed deliveries are silently lost after retries.                                                                                          |
+| **Kinesis shards / on-demand**  | Provisioned shards vs on-demand                       | Ordering is per shard; shard count determines throughput and consumer parallelism.                                                                                                   |
 
-### API Gateway Configuration
+### API-first configuration
 
-| Setting | Options | Guidance |
-|---|---|---|
-| API type | REST, HTTP, WebSocket | Default to HTTP; choose REST for WAF, keys, caching, validation, or private endpoints |
-| Endpoint type | Edge-optimized, Regional, Private | Regional plus your own CloudFront gives the most control; Private for internal-only APIs |
-| Integration | Lambda proxy, HTTP proxy, AWS service, VPC Link, MOCK | Prefer proxy integrations; use AWS service integrations to remove compute entirely |
-| Authorizer | IAM, Cognito, JWT, Lambda | JWT on HTTP APIs is zero-code; Lambda authorizers need result caching to perform |
-| Throttling | Account, stage, route, usage plan | Set per-route limits to protect fragile downstreams, not just to control cost |
-| Caching | Off, or 0.5 GB to 237 GB per stage | Only for REST APIs; charged by size per hour, so justify it with a measured hit rate |
-| Logging | Access logs, execution logs, X-Ray | Enable structured JSON access logs always; execution logs are verbose and expensive |
-| CORS | Per-API or per-route | Configure at the gateway rather than in every handler |
+| Setting                 | Options                                               | Architectural Implication                                                                                                         |
+| ----------------------- | ----------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| **API type**            | REST, HTTP, WebSocket                                 | HTTP API for simple, cost-sensitive Lambda proxies; REST API when you need API keys, usage plans, request validation, or caching. |
+| **Endpoint type**       | Edge-optimised, Regional, Private                     | Private APIs (via interface VPC endpoints) for internal-only microservice contracts.                                              |
+| **Authorisation**       | IAM, Cognito user pools, Lambda authorizer, JWT, mTLS | Cognito for end users; IAM for service-to-service; Lambda authorizers for custom/legacy token schemes.                            |
+| **Throttling**          | Account, stage, method, and usage-plan level          | Per-client usage plans prevent one tenant from exhausting shared capacity.                                                        |
+| **Caching**             | 0.5 GB – 237 GB, per-stage TTL                        | Cuts backend invocations and cost for read-heavy endpoints; must handle cache invalidation.                                       |
+| **Versioning strategy** | Path (`/v1`), header, or stage-based                  | Path versioning is explicit and cache-friendly; never break an existing version.                                                  |
 
 ---
 
 ## Design Considerations
 
-### The Entry-Point Decision Framework
+| Quality                    | Serverless                                                         | Microservices                                                        | Event-Driven                                                        | API-First                                                                     |
+| -------------------------- | ------------------------------------------------------------------ | -------------------------------------------------------------------- | ------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
+| **Scalability**            | Automatic, per-invocation, to thousands of concurrent environments | Per-service horizontal scaling; scale the hot service only           | Broker absorbs bursts; consumers scale independently                | Gateway throttling protects backends and enables graceful degradation         |
+| **Availability**           | Multi-AZ by default, no configuration                              | Requires multi-AZ task placement and health checks                   | Broker is multi-AZ and durable; buffers consumer outages            | Managed gateway is multi-AZ; contracts enable failover to alternate backends  |
+| **Reliability**            | Built-in retries; must design for idempotency                      | Failure isolated per service; requires circuit breakers and timeouts | Retries + DLQ give at-least-once durability                         | Validation rejects malformed input before it reaches services                 |
+| **Durability**             | Compute is ephemeral — state must be externalised                  | Persist to DynamoDB/RDS/S3, never to container disk                  | Messages replicated across AZs; EventBridge archive enables replay  | Contracts version data schemas, protecting stored payloads                    |
+| **Latency**                | Cold starts on the tail; warm path is fast                         | Predictable warm containers; extra network hop per call              | Adds broker latency but removes it from the user path               | Extra hop through the gateway (single-digit ms) plus optional caching benefit |
+| **Cost**                   | Zero when idle; can exceed containers at sustained high volume     | Pay for running capacity, idle included                              | Per-message cost, trivially small; saves compute by smoothing peaks | Per-request gateway cost; caching reduces backend spend                       |
+| **Performance**            | CPU tied to memory; concurrency model avoids thread contention     | Full control over runtime tuning and connection pooling              | Throughput-oriented rather than latency-oriented                    | Request validation and caching offload work from services                     |
+| **Maintainability**        | Small functions are easy to read, hard to navigate at scale        | Small codebases per team; clear ownership                            | Loose coupling eases change; flows become implicit                  | Contract is the durable, documented source of truth                           |
+| **Operational complexity** | Lowest infrastructure burden; highest observability burden         | Highest: orchestration, networking, deployment pipelines per service | Debugging distributed async flows is genuinely hard                 | Governance overhead: style guides, versioning, deprecation                    |
 
-```mermaid
-flowchart TD
-    START["A client must reach my workload"] --> Q1{"Is it an API needing auth, throttling, and validation as managed capability"}
-    Q1 -->|"Yes"| Q2{"Do I need WAF, API keys, caching, or private endpoints"}
-    Q2 -->|"Yes"| REST["API Gateway REST API"]
-    Q2 -->|"No"| HTTP["API Gateway HTTP API"]
-    Q1 -->|"No"| Q3{"Is the protocol HTTP or HTTPS"}
-    Q3 -->|"No, it is TCP, UDP, or TLS passthrough"| NLB["Network Load Balancer"]
-    Q3 -->|"Yes"| Q4{"Do I need static IP addresses or extreme throughput at minimal latency"}
-    Q4 -->|"Yes"| NLB
-    Q4 -->|"No"| Q5{"Do I need host, path, or header based routing to many services"}
-    Q5 -->|"Yes"| ALB["Application Load Balancer"]
-    Q5 -->|"No"| Q6{"Is the backend a single Lambda function with simple needs"}
-    Q6 -->|"Yes"| FURL["Lambda Function URL"]
-    Q6 -->|"No"| ALB
-    REST --> CDN{"Are users globally distributed or is content cacheable"}
-    HTTP --> CDN
-    ALB --> CDN
-    NLB --> GA{"Do I need anycast static IPs with fast regional failover"}
-    CDN -->|"Yes"| CF["Place CloudFront in front"]
-    GA -->|"Yes"| AGA["Place AWS Global Accelerator in front"]
-```
+!!! warning "The complexity conservation principle"
+These patterns do not remove complexity; they _relocate_ it. Complexity moves out of the codebase and into the network, the deployment pipeline, and the observability stack. A team without CI/CD maturity and distributed tracing will find microservices slower and less reliable than the monolith they replaced.
 
-### Scalability
+### When to choose which pattern
 
-The VPC fabric does not need to be scaled, but three things do: **address space**, **NAT capacity**, and **downstream capacity**. Address exhaustion is the most common hard wall, especially with EKS and the Amazon VPC CNI, where every pod consumes a VPC IP address. A 300-node cluster running 30 pods per node needs roughly 9,000 addresses in the pod subnets alone, plus warm-pool headroom the CNI keeps per node. Mitigations include large secondary CIDRs dedicated to pods, custom networking to place pods in a secondary `100.64.0.0/10` range, or prefix delegation to allocate `/28` blocks per ENI.
-
-For API Gateway, scaling is automatic but must be **bounded**: unbounded scaling simply relocates the failure to your database. Per-route throttling plus Lambda reserved concurrency plus RDS Proxy for connection pooling constitute a coherent back-pressure chain.
-
-### Availability and Fault Tolerance
-
-Enumerate the zonal components: subnets, NAT Gateways, Interface endpoint ENIs, EC2 instances, ECS tasks, single-AZ RDS instances. Each one is a component whose loss must be survivable.
-
-| Component | Zonal or regional | Availability design |
-|---|---|---|
-| Internet Gateway | Highly available by design | Nothing to do |
-| NAT Gateway | Zonal | One per Availability Zone, with per-zone route tables |
-| Interface endpoint | ENI per Availability Zone | Create in every zone the workload uses |
-| ALB and NLB | Nodes per subnet | Enable at least two, preferably three, subnets |
-| ECS or EKS workload | Task or pod placement | Spread across zones with placement or topology constraints |
-| RDS | Single-AZ or Multi-AZ | Multi-AZ for production; Multi-AZ cluster for faster failover and readable standbys |
-| Route 53 | Global | Health checks plus failover records |
-| API Gateway | Regional, multi-AZ | Multi-Region only if the requirement justifies it |
-
-!!! danger "The Single NAT Gateway Anti-Pattern"
-    A very common cost-saving decision is to deploy one NAT Gateway and route all private subnets to it. This creates two problems at once. First, if that Availability Zone fails, **every** private subnet in the VPC loses outbound internet access, including the zones that are still healthy — a zonal failure has become a VPC-wide failure. Second, all traffic from other zones crosses an Availability Zone boundary and incurs cross-AZ data-transfer charges in addition to NAT processing charges. The saving is one NAT Gateway's hourly rate; the cost is a correlated failure mode and a per-gigabyte surcharge.
-
-### Reliability
-
-Prefer designs whose failure recovery uses only data planes. Pre-provision standby capacity rather than planning to create it during an incident. Use health checks that reflect the ability to serve real requests, including critical dependencies, but be careful: a health check that fails when a non-critical dependency is degraded will remove healthy capacity and turn a partial outage into a total one. Distinguish **shallow** health checks (is the process alive?) used for load-balancer target health from **deep** checks used for alarms.
-
-### Durability
-
-Networking components hold little state, but two exceptions matter: DNS records, which are configuration whose loss is an outage and which should therefore live in version-controlled Infrastructure as Code, and VPC Flow Logs, which are evidence and should be delivered to an S3 bucket in a separate, restricted logging account with object lock where compliance demands it.
-
-### Latency
-
-Every hop costs. A request path of CloudFront, API Gateway, Lambda, RDS Proxy, RDS has five network legs, and each adds latency and a failure mode. Reduce by: terminating TLS at the edge (large win for distant users), keeping components in the same Availability Zone when consistent with availability requirements, using connection reuse everywhere, and deleting components that exist only out of habit. Cross-AZ latency is single-digit milliseconds — negligible for a web request, significant for a chatty service making 50 sequential calls per request.
-
-### Cost
-
-Networking is where cloud bills surprise people, because the charges are per gigabyte and invisible in application code. The dominant dimensions are NAT Gateway processing, cross-AZ data transfer, internet egress, Interface endpoint hours, Transit Gateway attachment hours and processing, and public IPv4 address hours.
-
-### Maintainability and Operational Complexity
-
-Prefer fewer moving parts. A Transit Gateway is more complex than one peering connection but far simpler than fifteen. Security groups referencing other security groups are dramatically more maintainable than CIDR lists. Everything should be defined in code; a network built by console clicking cannot be reviewed, cannot be reproduced in another Region, and cannot be recovered quickly.
+| Scenario                                                          | Recommended Approach                                | Reasoning                                                                                                    |
+| ----------------------------------------------------------------- | --------------------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
+| New product, small team, unclear domain boundaries                | Modular monolith on Fargate, API-first from day one | Avoid distributed complexity before you understand the domain; keep clean module seams for later extraction. |
+| Spiky, unpredictable traffic (marketing campaigns, tax season)    | Serverless (Lambda + DynamoDB on-demand)            | Scale-to-zero economics and automatic burst scaling.                                                         |
+| Sustained high throughput, steady load, long-running processes    | Containers on ECS/EKS with Savings Plans or Spot    | Predictable cost per unit of compute beats per-invocation pricing at scale.                                  |
+| Many downstream systems reacting to the same business fact        | Event-driven with EventBridge fan-out               | Adding a consumer requires no change to the producer.                                                        |
+| Multi-step business process needing auditability and compensation | Step Functions orchestration (Saga)                 | Explicit state, visible execution history, built-in retries and compensations.                               |
+| Public or partner-facing integration                              | API-first with API Gateway                          | Contract stability, throttling, authentication, and monetisation via usage plans.                            |
+| Strict sub-10 ms latency at high, constant RPS                    | Containers with warm connection pools, possibly NLB | Avoids cold starts and gateway overhead.                                                                     |
+| Legacy migration with limited cloud skills                        | Rehost, then strangle incrementally                 | The Strangler Fig pattern reduces risk versus a big-bang rewrite.                                            |
 
 ---
 
 ## AWS Best Practices
 
+Mapped to the six pillars of the **AWS Well-Architected Framework**, plus the **Serverless Application Lens**.
+
 ### Operational Excellence
 
-- Define the entire network in CloudFormation, CDK, or Terraform. Networking is the least frequently changed and most catastrophic-to-lose layer, which makes it the highest-value candidate for Infrastructure as Code.
-- Separate the network stack from the application stack, and export values (VPC ID, subnet IDs, security group IDs) through CloudFormation exports, SSM Parameter Store, or Terraform remote state. Application deployments should never be able to modify subnets.
-- Tag every network resource with owner, environment, cost centre, and data classification. Cost allocation for data transfer is impossible without tags.
-- Use Reachability Analyzer in CI to assert that a path exists (or does not exist) before merging a change.
+- Define all infrastructure as code (SAM, CDK, CloudFormation, or Terraform); no console-created production resources.
+- Deploy small changes frequently through automated pipelines with automated rollback (CodeDeploy canary, ECS deployment circuit breaker).
+- Instrument structured JSON logging with correlation IDs propagated across every service hop.
+- Run game days: deliberately fail a service, an AZ, or a consumer and verify the system degrades as designed.
+- Maintain runbooks per service and per alarm; alarms without runbooks generate noise, not action.
 
 ### Security
 
-- Default deny. Private subnets by default; a public subnet is an exception that needs justification.
-- Security groups reference security groups, not CIDRs, wherever both ends are in AWS.
-- Restrict endpoint policies and use `aws:SourceVpce` conditions in resource policies so that even valid credentials cannot be used from outside your network.
-- Enable VPC Flow Logs everywhere, in a custom format that includes the flow direction and TCP flags, and centralise them.
-- Use AWS Network Firewall or Route 53 Resolver DNS Firewall for egress filtering when the threat model includes data exfiltration.
+- One IAM role per function, per task, per service — never a shared "application role".
+- Enforce least privilege with resource-level ARNs and condition keys; avoid `"Resource": "*"`.
+- Authenticate at the edge (Cognito/OIDC at API Gateway) _and_ authorise between services (IAM SigV4, mTLS in the mesh) — do not rely on the network perimeter alone.
+- Encrypt everywhere: TLS in transit, KMS at rest for DynamoDB, S3, SQS, EventBridge; Secrets Manager for credentials with automatic rotation.
+- Place compute in private subnets; expose only load balancers and gateways publicly; use VPC endpoints to keep AWS API traffic off the internet.
+- Validate all input at the gateway against JSON Schema; attach AWS WAF for injection and bot protection.
 
 ### Reliability
 
-- Three Availability Zones where the Region offers them; two is the minimum for production.
-- One NAT Gateway per zone, per-zone private route tables.
-- Health checks at every layer, and failover paths tested by deliberately breaking things (game days).
-- Avoid recovery procedures that depend on control-plane APIs in the impaired Region.
+- Design every consumer to be idempotent; assume duplicate delivery.
+- Configure DLQs on every asynchronous target and alarm on DLQ depth greater than zero.
+- Apply timeouts, retries with exponential backoff and jitter, and circuit breakers on every synchronous call.
+- Isolate resources with the bulkhead pattern: reserved concurrency per function, separate queues per consumer, separate connection pools.
+- Spread tasks and data across at least three Availability Zones; test AZ failure.
+- Prefer static stability: the system should keep serving during a dependency's control-plane outage rather than needing to change state to survive.
 
 ### Performance Efficiency
 
-- Put CloudFront in front of anything user-facing, cacheable or not.
-- Use Gateway endpoints for S3 and DynamoDB unconditionally; they are free and remove NAT from a very high-volume path.
-- Reuse connections: HTTP keep-alive, database connection pools, and, for Lambda, clients instantiated outside the handler.
-- Choose instance types with sufficient network bandwidth and enable enhanced networking.
+- Choose the right compute for the workload profile: Lambda for bursty and event-driven, Fargate for steady request/response, EC2/EKS for specialised or GPU workloads.
+- Tune Lambda memory using AWS Lambda Power Tuning rather than defaulting to 128 MB.
+- Cache aggressively at every layer: CloudFront for static and cacheable API responses, API Gateway cache, ElastiCache/DAX for hot data.
+- Initialise SDK clients and database connections _outside_ the Lambda handler to reuse them across invocations.
+- Use event filtering (Lambda event source filters, EventBridge patterns) so compute is only invoked for relevant events.
+- Adopt Graviton (arm64) where the runtime supports it.
 
 ### Cost Optimization
 
-- Audit NAT Gateway traffic with Flow Logs; move the top talkers to endpoints.
-- Release unused Elastic IPs and remove unnecessary public IPv4 addresses.
-- Consider dual-stack or IPv6-only subnets with an egress-only Internet Gateway to eliminate NAT entirely for outbound-only IPv6 workloads.
-- Keep chatty traffic within an Availability Zone where the availability requirement permits it.
-- Prefer HTTP APIs over REST APIs unless a REST-only feature is genuinely needed.
+- Right-size continuously: Lambda memory, Fargate task CPU/memory, and container requests/limits.
+- Use Fargate Spot and EC2 Spot for fault-tolerant, interruptible work; Compute Savings Plans for steady baseline load.
+- Batch messages (SQS batch size, Kinesis batching) to reduce invocation counts.
+- Prefer HTTP APIs over REST APIs when advanced features are unnecessary — a substantial per-request saving.
+- Use DynamoDB on-demand for unpredictable traffic and provisioned with auto scaling for predictable traffic.
+- Apply S3 lifecycle policies and log retention limits; CloudWatch Logs with infinite retention is a common silent cost.
+- Tag every resource by service, team, and environment to enable cost allocation and accountability.
 
 ### Sustainability
 
-Reducing data transferred reduces energy consumed. Caching at the edge, compressing responses, choosing efficient serialisation formats, and eliminating unnecessary hops are sustainability measures as well as performance and cost measures. Right-sizing and consolidating idle NAT Gateways and endpoints in non-production environments has a real effect at organisational scale.
+- Scale-to-zero architectures consume no energy when idle — serverless is the sustainability-optimal choice for intermittent workloads.
+- Improved bin-packing (Fargate right-sizing, Karpenter consolidation) reduces the physical footprint per unit of work.
+- Move infrequently accessed data to cooler storage classes; delete data that has no retention requirement.
+- Graviton processors deliver more work per watt.
 
 ---
 
 ## Security Considerations
 
-### Defence in Depth Applied to the Network
-
 ```mermaid
-graph TD
-    A["Layer 1 - AWS Shield absorbs volumetric DDoS at the edge"] --> B["Layer 2 - AWS WAF inspects HTTP for injection and bad bots"]
-    B --> C["Layer 3 - API Gateway authorizer verifies identity and scopes"]
-    C --> D["Layer 4 - Throttling limits blast radius of an abusive caller"]
-    D --> E["Layer 5 - Network ACL provides a coarse subnet guardrail"]
-    E --> F["Layer 6 - Security group allows only the required source and port"]
-    F --> G["Layer 7 - IAM and resource policies authorise the API action"]
-    G --> H["Layer 8 - Encryption in transit with TLS and at rest with KMS"]
-    H --> I["Layer 9 - VPC Flow Logs and CloudTrail record what happened"]
+flowchart TD
+    subgraph Edge
+        WAF[AWS WAF] --> CFD[CloudFront]
+        CFD --> GW[API Gateway<br/>Cognito authorizer + schema validation]
+    end
+    subgraph Private VPC
+        GW --> LMB[Lambda<br/>execution role]
+        GW --> VL[VPC Link] --> ALBI[Internal ALB] --> SVC[ECS Tasks<br/>task role + SG]
+        LMB --> DDB[(DynamoDB<br/>KMS encrypted)]
+        SVC --> RDS[(RDS in private subnet<br/>Secrets Manager rotation)]
+        SVC --> VPE[VPC Endpoints] --> S3[(S3)]
+    end
+    LMB -.IAM SigV4.-> EB[(EventBridge)]
+    CT[CloudTrail] -.audits all API calls.-> Edge
 ```
 
-### IAM and Least Privilege
+- **IAM and least privilege.** Every Lambda function has its own execution role; every ECS task has its own task role, distinct from the task _execution_ role used only to pull images and write logs. Scope policies to specific resource ARNs and use condition keys (`aws:SourceArn`, `aws:PrincipalOrgID`) to prevent the confused-deputy problem.
+- **Service-to-service authorisation.** In event-driven systems, control who may `PutEvents` on a bus and which targets a rule may invoke. Resource policies on SQS queues, SNS topics, and Lambda functions restrict cross-account access explicitly.
+- **Encryption.** TLS 1.2+ in transit everywhere, including internal service calls. KMS customer-managed keys where key rotation policy, cross-account grants, or auditability are required; AWS-managed keys otherwise.
+- **Secrets.** Never place credentials in environment variables in plaintext or in container images. Use Secrets Manager (automatic rotation) or SSM Parameter Store SecureString, fetched at initialisation and cached.
+- **Security groups vs NACLs.** Security groups are stateful and are the primary micro-segmentation tool between microservices (allow the Orders service SG to reach the Orders database SG on 5432 only). NACLs are stateless, subnet-level, and used for coarse deny rules such as blocking known-bad CIDRs.
+- **Public vs private resources.** Only ALBs, NLBs, CloudFront, and API Gateway should be internet-facing. Compute and data live in private subnets. Private APIs and PrivateLink keep partner integrations off the public internet entirely.
+- **Logging and audit.** CloudTrail records every control-plane API call (who created that queue, who changed that IAM policy) and is the foundation of forensic investigation. Enable it organisation-wide with log file validation and a separate, restricted logging account.
+- **Compliance.** The shared responsibility model applies: AWS secures the cloud, you secure what you build in it. Serverless narrows _your_ share (no OS patching) but never eliminates application-layer responsibility for authorisation, input validation, and data handling.
 
-Network permissions are among the most dangerous in AWS. `ec2:AuthorizeSecurityGroupIngress` allows an actor to open a database to the world; `ec2:CreateRoute` allows an actor to create an internet path from an isolated subnet. Separate these from application-deployment roles. Use IAM condition keys and Service Control Policies to prevent, for example, the creation of Internet Gateways in accounts that must remain isolated, or the modification of a security group rule to `0.0.0.0/0` on port 22 or 3389.
-
-### Encryption
-
-Traffic between Availability Zones and between Regions on the AWS backbone is encrypted at the physical layer by AWS, but that is not a substitute for application-level TLS. Terminate TLS at CloudFront or the load balancer, and re-encrypt to the backend when the data classification requires end-to-end encryption. Use ACM for certificate issuance and automatic renewal; ACM certificates used with CloudFront must be issued in `us-east-1`, while certificates for a Regional load balancer or Regional API Gateway must be in the same Region as the resource.
-
-### KMS and Secrets Manager
-
-Database credentials should never be in environment variables or images. Store them in Secrets Manager with automatic rotation, retrieve them at runtime over an **Interface endpoint** so the request never leaves the AWS network, and grant access through an IAM role scoped to a single secret. Encrypt with a customer-managed KMS key when you need key-level audit and revocation. The KMS key policy plus the `aws:SourceVpce` condition together mean that a leaked credential is unusable from outside your VPC.
-
-### Public Versus Private Resources
-
-The correct default is that nothing has a public IP address. Load balancers and NAT Gateways live in public subnets; everything else does not. Administrative access uses **AWS Systems Manager Session Manager**, which requires no inbound port, no bastion host, no SSH key management, and produces a full CloudTrail and session log. If Session Manager is used with Interface endpoints for `ssm`, `ssmmessages`, and `ec2messages`, administrative access works with no internet path at all.
-
-!!! danger "Port 22 Open to 0.0.0.0/0"
-    This is the single most common finding in AWS security assessments. It is also entirely avoidable: Session Manager removes the need for inbound SSH completely. If you must use SSH, use EC2 Instance Connect Endpoint, which provides SSH connectivity to private instances through an AWS-managed endpoint without a public IP or a bastion.
-
-### Logging and Compliance
-
-Enable VPC Flow Logs, CloudTrail (organisation trail, into a separate account, with log-file validation), Route 53 Resolver query logging, ALB and CloudFront access logs, and API Gateway access logs. Together these answer the questions an incident responder asks: who called what API, what resolved which name, what flows were attempted, and which were rejected. For regulated workloads, note that Flow Logs capture metadata only, not payloads; Traffic Mirroring is required when packet contents must be inspected.
+!!! danger "Common security failure in event-driven systems"
+Teams often authenticate rigorously at the API edge and then treat the internal event bus as trusted. Any component that can publish to the bus can then trigger privileged downstream actions. Authorise _publishing_ and _consuming_ explicitly, validate event payloads against registered schemas, and never let an event carry an unverified `userId` that downstream services trust implicitly.
 
 ---
 
 ## Performance Optimization
 
-### Caching
-
-- **CloudFront** for static assets and for cacheable API responses. Design the cache key deliberately: forwarding every header and cookie to the origin reduces the hit rate to nearly zero.
-- **API Gateway stage cache** for REST APIs where identical requests repeat, with the cache key derived from specific path and query parameters.
-- **Lambda authorizer caching**, keyed on the identity source, so that a token is validated once per TTL rather than once per request.
-- **ElastiCache** for application-level and database query caching inside the VPC.
-- **DNS TTL** is a cache too; a longer TTL reduces query cost and latency at the price of slower change propagation.
-
-### Auto Scaling and Load Balancing
-
-Scale on a metric that reflects real load. For an ALB-fronted service, `RequestCountPerTarget` is usually a better signal than CPU utilisation, because it scales on demand rather than on symptom. Use target tracking rather than step scaling where possible. Enable connection draining long enough for in-flight requests to finish, and set the ALB idle timeout above your backend keep-alive so that the load balancer, not the backend, closes idle connections.
-
-### Parallelism and Connection Reuse
-
-Sequential dependent calls dominate tail latency in microservice architectures. Parallelise independent calls. Reuse connections at every layer: HTTP keep-alive between services, an SDK client created once outside a Lambda handler, and RDS Proxy so that thousands of Lambda invocations share a small pool of database connections rather than exhausting `max_connections`.
-
-!!! tip "The Single Highest-Value Lambda Networking Optimisation"
-    Instantiate SDK clients, database connections, and secret lookups **outside** the handler function. They are then created once per execution environment rather than once per invocation, removing TLS handshakes and credential fetches from the hot path. This routinely halves p50 latency in real services.
-
-### Lambda in a VPC
-
-A Lambda function attached to a VPC uses **Hyperplane ENIs**, shared network interfaces created per unique combination of subnet and security group set. This design removed the multi-second cold-start penalty that VPC-attached Lambda functions suffered before 2019. Two consequences remain:
-
-- A VPC-attached function has **no internet access** unless the subnet routes to a NAT Gateway. This surprises teams whose function calls a third-party API.
-- Function concurrency consumes subnet IP addresses; size the subnets accordingly.
-- Attach a function to a VPC only when it must reach a private resource. If it only calls DynamoDB and S3, keeping it outside the VPC is simpler and removes the NAT dependency.
-
-### Storage and Protocol Efficiency
-
-Enable compression at CloudFront and at the load balancer. Prefer HTTP/2 (supported by ALB and CloudFront) for multiplexing, and consider gRPC on ALB for internal service-to-service calls. Use S3 Transfer Acceleration or multipart uploads for large objects over long distances. For very large or latency-critical transfers, evaluate AWS Global Accelerator, which places traffic onto the AWS backbone at the nearest edge.
+- **Caching.** CloudFront for static assets and cacheable GET responses; API Gateway stage cache keyed on path and selected headers; DAX in front of DynamoDB for microsecond reads; ElastiCache (Redis) for session and computed data. Every cache layer removes both latency and cost.
+- **Auto scaling.** Prefer demand-proportional signals: ALB `RequestCountPerTarget` for web tiers, `ApproximateNumberOfMessagesVisible` (or backlog per task) for queue workers, and Application Auto Scaling target tracking rather than manual step policies.
+- **Load balancing.** ALB for HTTP with path/host routing and least-outstanding-requests; NLB for extreme throughput and non-HTTP protocols; cross-zone load balancing enabled to avoid hot AZs.
+- **Parallelism.** Fan out with SNS/EventBridge so independent work happens concurrently; use Step Functions `Map` state (including distributed map for very large datasets) for parallel batch processing; increase Kinesis shards or SQS consumer concurrency to raise throughput.
+- **Connection reuse.** In Lambda, create clients and pool connections in the initialisation phase. For relational databases behind Lambda, use **RDS Proxy** to prevent connection exhaustion when concurrency spikes.
+- **Storage optimisation.** Design DynamoDB partition keys for even distribution to avoid hot partitions; use single-table design where access patterns justify it; use S3 Transfer Acceleration or multipart uploads for large objects; choose the appropriate storage class per access pattern.
+- **Payload discipline.** Keep events small; use the **claim-check pattern** — store the large payload in S3 and put only the pointer in the event — to stay within 256 KB message limits and reduce transfer cost.
+- **Monitoring for performance.** Track p50, p90, and p99 latency, not averages. Tail latency is where cold starts, GC pauses, and retries reveal themselves.
 
 ---
 
 ## Cost Optimization
 
-| Dimension | Where it bites | Optimisation |
-|---|---|---|
-| NAT Gateway hours | One per Availability Zone in every environment | Consolidate in non-production; consider a single NAT Gateway in development only, never in production |
-| NAT Gateway data processing | Container image pulls, S3 traffic, log shipping | Gateway endpoints for S3 and DynamoDB; Interface endpoints for ECR, CloudWatch Logs, STS, Secrets Manager |
-| Cross-AZ data transfer | Charged in both directions | Zone-aware routing, per-zone NAT, and topology-aware service discovery |
-| Internet egress | Tiered per gigabyte | CloudFront reduces origin egress and has lower egress rates; compress everything |
-| Public IPv4 addresses | Per hour, per address | Remove public IPs from instances; release idle Elastic IPs; adopt IPv6 where possible |
-| Interface endpoints | Per endpoint per Availability Zone per hour | Only create endpoints for services you actually call at volume; share via a central endpoints VPC where sensible |
-| Transit Gateway | Per attachment hour plus per gigabyte | Justify against peering below roughly five VPCs |
-| Route 53 | Per zone and per million queries | Alias records to AWS resources are free; consolidate zones; avoid unnecessarily short TTLs on high-volume records |
-| API Gateway | Per million requests, plus cache hours | HTTP API instead of REST where features permit; caching only with a measured hit rate |
-| Load balancers | Per hour plus capacity units (LCU or NLCU) | Consolidate many small services behind one ALB using host and path rules |
+| Lever                                 | How It Applies to These Patterns                                                                                                                 |
+| ------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **Pay-as-you-go**                     | Lambda, API Gateway, SQS, SNS, EventBridge, DynamoDB on-demand, and Fargate all bill per unit of work or per second — no idle capacity charges.  |
+| **Reserved capacity / Savings Plans** | Compute Savings Plans cover Lambda, Fargate, and EC2 with 1- or 3-year commitments; apply to the steady baseline, leave the peak on-demand.      |
+| **Spot**                              | Fargate Spot and EC2 Spot for queue consumers, batch jobs, and CI runners — workloads that tolerate a two-minute interruption notice.            |
+| **Storage classes**                   | S3 Intelligent-Tiering for unpredictable access; Glacier tiers for archives; EBS gp3 over gp2 for cheaper baseline IOPS.                         |
+| **Lifecycle policies**                | Expire S3 objects, transition logs, and set CloudWatch Logs retention (commonly 30–90 days) instead of the default "never expire".               |
+| **Rightsizing**                       | Lambda Power Tuning for memory; Compute Optimizer for EC2/Fargate/Lambda recommendations; remove over-provisioned container CPU/memory requests. |
+| **Architectural levers**              | Filter events before invoking compute; batch SQS/Kinesis records; choose HTTP API over REST API; use ARM/Graviton; cache to avoid recomputation. |
+| **Cost Explorer**                     | Analyse spend by tag, service, and account; identify month-over-month anomalies; forecast.                                                       |
+| **AWS Budgets & Anomaly Detection**   | Alert before overspend rather than after the invoice.                                                                                            |
+| **Trusted Advisor**                   | Flags idle load balancers, unattached EIPs, underutilised instances, and missing Savings Plan coverage.                                          |
 
-!!! example "A Real Cost Investigation"
-    A team saw a monthly NAT Gateway data-processing charge exceeding its entire ECS compute bill. Flow Logs analysed in Athena showed that 78 percent of NAT bytes were destined for S3 and Amazon ECR. Adding a Gateway endpoint for S3 (free) and Interface endpoints for `ecr.api`, `ecr.dkr`, and `logs` reduced the NAT charge by more than 80 percent, and the Interface endpoint hourly charges were a small fraction of the saving. The lesson is that you cannot optimise what you have not measured, and Flow Logs plus Athena is the measurement.
-
-Use **AWS Cost Explorer** with the usage-type dimension to identify `NatGateway-Bytes`, `DataTransfer-Regional-Bytes`, and `PublicIPv4:InUseAddress` line items, and **AWS Trusted Advisor** for idle load balancers and unassociated Elastic IPs. Set AWS Budgets alerts on data-transfer usage types specifically, not only on total spend.
+!!! tip "The serverless cost crossover"
+Lambda is dramatically cheaper than containers at low and bursty volume, and can become more expensive at very high, constant volume. Model the crossover with real numbers rather than dogma: estimate requests per month, average duration, and memory, then compare against an equivalently sized Fargate service with Savings Plans. Include _engineering time saved_ — operational cost is a real cost.
 
 ---
 
 ## Monitoring and Observability
 
-### VPC Flow Logs
+Distributed systems fail in ways that are invisible from any single component. Observability is not optional in cloud-native architecture; it is a first-class design requirement.
 
-Flow Logs record metadata for IP flows: source and destination addresses and ports, protocol, packets, bytes, start and end time, action (`ACCEPT` or `REJECT`), and, in version 3 and later custom formats, fields such as `flow-direction`, `traffic-path`, `pkt-src-aws-service`, and `tcp-flags`.
+| Tool                                     | Role                                                                                                                                                                                                                 |
+| ---------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **CloudWatch Metrics**                   | Time-series data: Lambda `Invocations`, `Errors`, `Throttles`, `Duration`, `ConcurrentExecutions`; SQS `ApproximateAgeOfOldestMessage`; ALB `TargetResponseTime`, `HTTPCode_Target_5XX`; ECS CPU/memory utilisation. |
+| **CloudWatch Logs & Logs Insights**      | Centralised structured logs; query across services with a SQL-like language; use metric filters to turn log patterns into alarms.                                                                                    |
+| **CloudWatch Alarms**                    | Threshold and anomaly-detection alarms feeding SNS, on-call paging, or automated remediation.                                                                                                                        |
+| **CloudWatch Dashboards**                | Per-service and per-journey views combining metrics, logs, and alarms.                                                                                                                                               |
+| **AWS X-Ray**                            | Distributed tracing: a single trace shows the API Gateway hop, the Lambda cold start, the DynamoDB call, and the downstream service, with timing for each segment.                                                   |
+| **CloudTrail**                           | Control-plane audit: who changed configuration, when, and from where.                                                                                                                                                |
+| **AWS Distro for OpenTelemetry (ADOT)**  | Vendor-neutral instrumentation for traces and metrics across ECS, EKS, and Lambda.                                                                                                                                   |
+| **Container Insights / Lambda Insights** | Deeper runtime metrics for containers and functions.                                                                                                                                                                 |
+| **EventBridge Archive & Replay**         | Operational recovery tool: replay historical events after fixing a consumer bug.                                                                                                                                     |
 
-They answer questions that nothing else can:
+### The three pillars applied
 
-- Which flows are being **rejected**, and by what? Repeated `REJECT` entries to your database port are either a misconfiguration or a probe.
-- What is actually traversing the NAT Gateway, and to where?
-- Is a service talking to a destination it should not be talking to?
+- **Metrics** answer _is something wrong?_ — Alarm on business-meaningful signals (orders per minute dropping), not only infrastructure signals.
+- **Logs** answer _what exactly happened?_ — Emit structured JSON with `correlationId`, `service`, `version`, and `eventId` on every line.
+- **Traces** answer _where is the time going, and which hop failed?_ — Essential once a request crosses three or more services.
 
-Deliver to S3 in Parquet format and query with Athena for cost-effective analysis, or to CloudWatch Logs when you need real-time metric filters and alarms.
+!!! warning "The asynchronous debugging problem"
+In event-driven systems the user-facing request succeeds while the real work fails silently in a consumer twenty seconds later. Without DLQ alarms, correlation IDs, and tracing, this failure is invisible until a customer complains. Instrument asynchronous paths _more_ heavily than synchronous ones, and always alarm on `ApproximateAgeOfOldestMessage` and DLQ depth.
 
-!!! info "What Flow Logs Do Not Capture"
-    Traffic to the Amazon DNS server, DHCP traffic, traffic to the instance metadata service and reserved addresses, Windows licence activation traffic, and mirrored traffic. They also capture no payload. If you need packet contents, use Traffic Mirroring; if you need DNS visibility, use Route 53 Resolver query logging.
+### Key alarms every cloud-native system should have
 
-### CloudWatch Metrics That Matter
-
-| Metric | Source | Why it matters |
-|---|---|---|
-| `ErrorPortAllocation`, `PacketsDropCount` | NAT Gateway | Port exhaustion and capacity problems |
-| `BytesOutToDestination` | NAT Gateway | Cost driver and exfiltration signal |
-| `HTTPCode_ELB_5XX_Count` versus `HTTPCode_Target_5XX_Count` | ALB | Distinguishes load balancer faults from application faults |
-| `TargetResponseTime` percentiles | ALB | Use p99, not average |
-| `UnHealthyHostCount` | ALB and NLB | Capacity loss before it becomes an outage |
-| `RejectedConnectionCount` | ALB | The load balancer hit a connection limit |
-| `ActiveFlowCount`, `TCP_Target_Reset_Count` | NLB | Flow volume and backend resets |
-| `4XXError`, `5XXError`, `Count`, `Latency`, `IntegrationLatency` | API Gateway | The gap between `Latency` and `IntegrationLatency` is API Gateway's own overhead |
-| `ThrottleCount` | API Gateway usage plans | Consumers hitting quota |
-| `HealthCheckStatus`, `HealthCheckPercentageHealthy` | Route 53 | Failover readiness |
-| `conntrack_allowance_exceeded`, `bw_in_allowance_exceeded` | ENA driver on EC2 | Instance-level network limits being hit |
-
-### CloudTrail
-
-CloudTrail records every control-plane call: who modified a security group, who created a route, who changed a DNS record. Create an EventBridge rule on `AuthorizeSecurityGroupIngress` where the CIDR is `0.0.0.0/0` and alert on it; this single detection catches a large fraction of accidental exposures. Route 53 control-plane events appear in `us-east-1`.
-
-### AWS X-Ray and Distributed Tracing
-
-X-Ray traces a request across API Gateway, Lambda, and downstream AWS calls, producing a service map and per-segment latency. It is how you discover that the 800-millisecond p99 is 40 milliseconds of API Gateway, 60 milliseconds of Lambda initialisation, and 700 milliseconds in a single unindexed database query. Instrument with the AWS Distro for OpenTelemetry if you need vendor-neutral traces across ECS, EKS, and Lambda.
-
-### Reachability Analyzer and Network Access Analyzer
-
-Reachability Analyzer answers "can resource A reach resource B on port 443?" by analysing configuration, without sending packets, and tells you the specific component that blocks the path. Network Access Analyzer answers the inverse and more valuable question: "is there *any* path from the internet to my database subnets?" Run it as a scheduled compliance check.
+| Alarm                                            | Why                                                     |
+| ------------------------------------------------ | ------------------------------------------------------- |
+| Lambda `Errors` > 0 (per function, sustained)    | Functional failure.                                     |
+| Lambda `Throttles` > 0                           | Concurrency limit reached; requests are being rejected. |
+| SQS DLQ `ApproximateNumberOfMessagesVisible` > 0 | Messages permanently failed processing.                 |
+| SQS `ApproximateAgeOfOldestMessage` > SLA        | Consumers cannot keep up; backlog growing.              |
+| ALB `HTTPCode_ELB_5XX` / `UnHealthyHostCount`    | Service instances failing health checks.                |
+| API Gateway `4XXError` spike                     | Contract violation, auth failure, or client bug.        |
+| API Gateway `Latency` p99 breach                 | Backend degradation.                                    |
+| EventBridge `FailedInvocations`                  | Rule target could not be invoked.                       |
 
 ---
 
 ## Integration with Other AWS Services
 
-### Compute
-
-- **EC2** — instances receive ENIs in a subnet; instance type determines bandwidth; placement groups control physical proximity.
-- **ECS on Fargate and EC2** — `awsvpc` network mode gives each task its own ENI, private IP, and security groups. This is what makes per-service network policy possible, and it is why task density is bounded by ENI limits on EC2 launch type and by subnet IP availability everywhere.
-- **EKS** — the Amazon VPC CNI assigns real VPC IP addresses to pods, so pods are first-class VPC citizens reachable by security groups, load balancers, and Flow Logs. The trade-off is address consumption. Security groups for pods, custom networking with secondary CIDRs, and prefix delegation are the standard mitigations. The AWS Load Balancer Controller provisions ALBs from Ingress objects and NLBs from Service objects of type LoadBalancer.
-- **Lambda** — VPC attachment via Hyperplane ENIs, as described above.
-
-### Storage and Data
-
-- **S3** — Gateway endpoint, endpoint policies, Origin Access Control for CloudFront, and `aws:SourceVpce` conditions in bucket policies to enforce that objects are only reachable from your network.
-- **RDS and Aurora** — deployed into a DB subnet group spanning multiple Availability Zones; reached by a DNS endpoint that Multi-AZ failover repoints; protected by a security group referencing the application's security group; RDS Proxy for connection pooling.
-- **DynamoDB** — Gateway endpoint; no VPC placement because it is a regional service reached over an API.
-- **ElastiCache** — in-VPC, subnet group, security group.
-
-### Messaging and Integration
-
-- **SQS, SNS, EventBridge, Step Functions** — reachable through Interface endpoints and integrable directly from API Gateway with no compute in between. These are the components that convert a synchronous chain into a resilient asynchronous one.
-
-### Edge and Delivery
-
-- **CloudFront** with Origin Access Control, WAF, Shield, and Lambda@Edge or CloudFront Functions.
-- **AWS Global Accelerator** for anycast static IP addresses, sub-minute regional failover, and non-HTTP protocols.
-
-### Security and Governance
-
-- **AWS WAF, Shield Advanced, Network Firewall, GuardDuty** (which consumes VPC Flow Logs, DNS logs, and CloudTrail to detect crypto-mining, port scanning, and communication with known-malicious hosts), **Security Hub**, **Config** rules such as `vpc-sg-open-only-to-authorized-ports` and `restricted-ssh`.
-
-### CI/CD and Automation
-
-- **CloudFormation, CDK, Terraform** for the network itself.
-- **CodeBuild** projects can run inside a VPC to reach private resources, which requires a NAT path or endpoints for artifact and log access.
-- **CodeDeploy** blue-green deployments manipulate ALB target groups; **API Gateway canary deployments** shift a percentage of stage traffic. Both are network-layer expressions of a deployment strategy.
+| Service                                                  | Why It Integrates With These Patterns                                                                                          |
+| -------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| **API Gateway → Lambda**                                 | The canonical serverless API-first pairing: contract enforcement at the gateway, business logic in functions.                  |
+| **Lambda → DynamoDB**                                    | Both scale horizontally and serverlessly; DynamoDB Streams turn table changes into events, closing the loop into event-driven. |
+| **S3 → Lambda**                                          | Object-created events trigger processing pipelines (image resizing, ETL) with no polling.                                      |
+| **EventBridge → Step Functions**                         | Events start orchestrated workflows that need retries, branching, and compensation.                                            |
+| **SNS → SQS → Lambda**                                   | The classic durable fan-out: SNS distributes, SQS buffers and retries per consumer, Lambda processes.                          |
+| **DynamoDB Streams / Kinesis → Lambda**                  | Change-data-capture for materialised views, CQRS read models, and audit trails.                                                |
+| **ECS/EKS → ALB → API Gateway (VPC Link)**               | Containerised microservices published through a governed API front door.                                                       |
+| **Cognito → API Gateway**                                | Managed user identity issuing JWTs validated at the edge.                                                                      |
+| **Secrets Manager / Parameter Store → Lambda & ECS**     | Runtime credential injection with rotation.                                                                                    |
+| **CodePipeline / CodeBuild / CodeDeploy → ECS & Lambda** | CI/CD for independent service deployment, canary releases, and automatic rollback.                                             |
+| **ECR → ECS/EKS/Lambda**                                 | Single image registry serving both container orchestrators and container-packaged functions.                                   |
+| **X-Ray / CloudWatch → everything**                      | Cross-cutting observability spanning synchronous and asynchronous hops.                                                        |
+| **AWS Cloud Map / Service Connect**                      | Service discovery for dynamic microservice endpoints.                                                                          |
+| **Step Functions → Lambda, ECS, SNS, SQS, DynamoDB**     | Direct SDK integrations remove "glue" Lambdas entirely, reducing cost and failure modes.                                       |
 
 ---
 
 ## Common Architecture Patterns
 
-### Three-Tier Web Application
+### Serverless web application
 
-Public subnets with an internet-facing ALB, private subnets with an Auto Scaling group or ECS service, isolated subnets with Multi-AZ RDS. Route 53 alias to the ALB, CloudFront in front for static assets and TLS termination at the edge. This remains the correct answer for a large fraction of real workloads and should be your default until a requirement forces something else.
 
-### Serverless API
+<figure markdown="span">
+    ![3layerglobalinfra](../img/U1/Statisitedelivery.png){width="80%"}
+    <figcaption>Example : AWS Serverless Archiecture with static Site Delivery and Secure API</figcaption>
+    <p align='right' style="font-size:0.8em"><i>Image Source: AI Generaed (Google Gemini)</i></p>
+</figure>
 
-Route 53 alias to a CloudFront distribution or directly to an API Gateway custom domain, an HTTP API with a JWT authorizer, Lambda proxy integration, DynamoDB via a Gateway endpoint if the function is in a VPC, and EventBridge for asynchronous fan-out. No subnets to size, no instances to patch — but note that if the functions do not need private resources, you may not need a VPC at all for the compute tier.
 
-### Private Microservices with Service Discovery
+### Microservices with an API gateway
 
-ECS services in `awsvpc` mode registered in AWS Cloud Map, reached by internal DNS names in a private hosted zone, fronted internally by an internal ALB, and exposed externally only through an API Gateway HTTP API with a VPC Link. Each service has its own security group; policy is expressed as "the orders service may call the payments service on port 8443", which is exactly how the architecture diagram reads.
+Each service is independently deployable, owns its data, and is reachable only through the gateway or an internal ALB.
 
-### Hub-and-Spoke Multi-Account Network
+<figure markdown="span">
+    ![3layerglobalinfra](../img/U1/APIArchitcture.png){width="80%"}
+    <figcaption>Example: Serverless Microservice Architecture with Event Driven Integrations</figcaption>
+    <p align='right' style="font-size:0.8em"><i>Image Source: AI Generaed (Google Gemini)</i></p>
+</figure>
 
-A network account owns a Transit Gateway and shares it via Resource Access Manager. Workload accounts attach their VPCs. An inspection VPC hosts AWS Network Firewall or a third-party appliance behind a Gateway Load Balancer, and Transit Gateway route tables force east-west and egress traffic through it. A shared-services VPC hosts centralised Interface endpoints and Resolver endpoints, so 50 accounts share one set of endpoints rather than paying for 50.
+### Event-driven fan-out (Pub/Sub)
 
-```mermaid
-graph TD
-    ONPREM["On Premises Data Centre"] --> DX["Direct Connect Gateway"]
-    DX --> TGW["Transit Gateway in the Network Account"]
-    TGW --> INSP["Inspection VPC with Network Firewall"]
-    INSP --> EGRESS["Egress VPC with NAT Gateways"]
-    EGRESS --> IGW["Internet Gateway"]
-    TGW --> SHARED["Shared Services VPC - Interface Endpoints and Resolver Endpoints"]
-    TGW --> PROD["Production VPC"]
-    TGW --> NONPROD["Non Production VPC"]
-    TGW --> DATA["Data Platform VPC"]
-    PROD -.->|"Blocked by a Transit Gateway route table"| NONPROD
-```
+One producer, many independent consumers, each with its own queue, retry policy, and DLQ — adding a consumer never modifies the producer.
 
-### Centralised Egress
+### CQRS with event sourcing
 
-Rather than a NAT Gateway in every VPC, route all `0.0.0.0/0` traffic through the Transit Gateway to a dedicated egress VPC with one NAT Gateway set. This reduces NAT hourly charges substantially at scale, at the cost of Transit Gateway data-processing charges and an extra hop. The crossover point depends on the number of VPCs and the traffic volume; model it rather than assuming.
+Commands write to a normalised store; DynamoDB Streams project changes into read-optimised views (OpenSearch, a denormalised table, or a cache). Reads and writes then scale independently.
+<figure markdown="span">
+    ![3layerglobalinfra](../img/U1/cqrs.png){width="80%"}
+    <figcaption>Example: Event Source Read Model Architecture(CQRS)</figcaption>
+    <p align='right' style="font-size:0.8em"><i>Image Source: AI Generaed (Google Gemini)</i></p>
+</figure>
 
-### Event-Driven and Fan-Out
+### Saga (distributed transaction)
 
-API Gateway to EventBridge or SNS, fanning out to multiple SQS queues consumed by independent services. The network implication is that services no longer call each other synchronously, so a network partition or a slow dependency does not propagate.
+There are no ACID transactions across microservices. A saga executes a sequence of local transactions, each with a **compensating action** if a later step fails.
+<figure markdown="span">
+    ![3layerglobalinfra](../img/U1/MicroserviceArchitecure.png){width="80%"}
+    <figcaption>Example: Order Processing State Diagram</figcaption>
+    <p align='right' style="font-size:0.8em"><i>Image Source: AI Generaed (Google Gemini)</i></p>
+</figure>
 
-### Circuit Breaker, Retry, and Bulkhead
+Step Functions implements orchestrated sagas natively with `Catch` blocks invoking compensation states.
 
-Retries must be bounded and use exponential backoff with jitter, or they synchronise and become a self-inflicted denial of service. Circuit breakers stop calling a failing dependency, converting slow failures into fast ones. Bulkheads — separate connection pools, separate Lambda reserved concurrency, separate target groups — prevent one misbehaving consumer from exhausting shared capacity. API Gateway per-route throttling is a bulkhead implemented at the network edge.
+### Resilience patterns
 
-### Blue-Green and Canary at the Network Layer
+| Pattern                           | Purpose                                                         | AWS Implementation                                                                              |
+| --------------------------------- | --------------------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
+| **Circuit breaker**               | Stop calling a failing dependency; fail fast and recover        | Application libraries; App Mesh outlier detection; ECS deployment circuit breaker for rollbacks |
+| **Retry with backoff and jitter** | Recover from transient faults without synchronised retry storms | AWS SDK adaptive retry mode; SQS redrive; Step Functions `Retry`                                |
+| **Bulkhead**                      | Contain failure to one compartment                              | Reserved concurrency per Lambda; separate queues, connection pools, and clusters per consumer   |
+| **Queue-based load levelling**    | Protect a slow downstream from bursts                           | SQS between producer and consumer, with `maximumConcurrency` on the event source mapping        |
+| **Claim check**                   | Move large payloads out of messages                             | Store in S3, pass the key in the event                                                          |
+| **Strangler fig**                 | Incrementally replace a monolith                                | Route selected paths at API Gateway/ALB to new services while the monolith serves the rest      |
+| **Idempotent consumer**           | Tolerate duplicate delivery                                     | Conditional writes on an idempotency key in DynamoDB; Powertools idempotency utility            |
+| **Outbox**                        | Guarantee the database write and the event publication agree    | Write the event to the same table transactionally, then publish from DynamoDB Streams           |
 
-Weighted Route 53 records shift traffic between whole stacks; ALB weighted target groups shift between versions behind one listener; API Gateway canary deployments shift a percentage within a stage. Each operates at a different granularity and rollback speed, and the right choice depends on how quickly you need to reverse and how much DNS caching you can tolerate.
+!!! note "Fan-out versus fan-in"
+_Fan-out_ distributes one event to many consumers (SNS/EventBridge). _Fan-in_ aggregates many results into one (Step Functions `Map` with a final aggregation state, or a Kinesis aggregator). Both appear frequently in certification scenarios about parallel processing.
 
 ---
 
 ## Industry Use Cases
 
-| Industry | Requirement | Networking design |
-|---|---|---|
-| Media streaming | Global low latency, enormous egress | CloudFront with a large cache footprint, Route 53 latency routing, origin shielding to protect the origin |
-| Banking and payments | Regulatory isolation, auditability | Isolated data subnets, no Internet Gateway route, Interface endpoints for all AWS APIs, Network Firewall egress control, centralised Flow Logs |
-| Healthcare | Hybrid, data residency | Direct Connect plus Transit Gateway, Resolver endpoints for bidirectional DNS, geolocation routing for residency |
-| E-commerce | Traffic spikes, canary releases | ALB with target-tracking auto scaling, weighted Route 53 for canaries, API Gateway throttling to protect inventory services |
-| Ride hailing and logistics | Millions of persistent connections | NLB for connection scale and static IPs, WebSocket APIs for driver and rider updates, `awsvpc` per-service security |
-| Government | Strict segmentation, no public exposure | Private API Gateway endpoints reached via Interface endpoints, Transit Gateway route-table segmentation, Session Manager for administration |
-| IoT and utilities | Device firmware pins IP addresses | NLB with Elastic IPs per Availability Zone, multivalue answer routing, long-lived connections |
-| Software as a service | Deliver a service into customer VPCs privately | AWS PrivateLink endpoint services behind an NLB, avoiding peering and CIDR-overlap problems entirely |
+| Sector / Company Type               | Pattern Combination              | Application                                                                                                                                         |
+| ----------------------------------- | -------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Media streaming (Netflix-style)** | Microservices + event-driven     | Independent playback, recommendation, billing, and licensing services; viewing events stream to analytics and personalisation engines.              |
+| **Ride-hailing (Uber-style)**       | Event-driven + microservices     | Trip lifecycle events (requested, matched, started, completed) drive pricing, ETA, driver payouts, and fraud detection concurrently.                |
+| **E-commerce (Amazon-style)**       | All four                         | API-first storefront APIs, microservices per domain, serverless for bursty flows (flash sales, image processing), events for order fulfilment.      |
+| **Music streaming (Spotify-style)** | Microservices + event-driven     | Playback and skip events feed real-time recommendation models and royalty accounting.                                                               |
+| **Financial services**              | Event-driven + saga + serverless | Immutable event ledgers for audit; sagas for cross-account transfers with compensation; Lambda for fraud scoring bursts.                            |
+| **Healthcare**                      | API-first + microservices        | Standardised interoperability APIs (e.g., FHIR) with strict contracts; PHI encrypted with KMS; per-service access boundaries for compliance.        |
+| **Government digital services**     | API-first + serverless           | Published contracts allow departments and third parties to integrate; serverless absorbs deadline-driven spikes (tax filing, benefit applications). |
+| **IoT and smart cities**            | Event-driven + serverless        | Millions of device telemetry events routed via IoT Core to Kinesis, Lambda, and time-series stores.                                                 |
+| **SaaS multi-tenant platforms**     | API-first + microservices        | Usage plans and per-tenant throttling in API Gateway; tenant isolation at the IAM and data layers.                                                  |
+| **Gaming**                          | Serverless + event-driven        | Leaderboards on DynamoDB, matchmaking events, and serverless backends that scale with unpredictable player counts.                                  |
+| **Logistics and supply chain**      | Event-driven + saga              | Shipment state changes propagate to tracking, customs, billing, and customer notification systems.                                                  |
 
 ---
 
 ## Advantages
 
-- **Genuine network isolation with software agility.** You get the topology of a data centre with the provisioning speed of an API call, and the isolation is enforced in hardware at every host rather than by an appliance you must size.
-- **Distributed enforcement without chokepoints.** Security groups scale with your fleet because they are enforced at each ENI. There is no firewall pair to become a bottleneck or a single point of failure.
-- **Identity-based network policy.** Security groups referencing security groups produce firewall rules that remain correct through auto scaling, deployments, and IP churn — something traditional networks cannot do.
-- **Private access to managed services.** Endpoints and PrivateLink let you consume AWS and third-party services without any internet path, which collapses a whole class of exfiltration risk.
-- **DNS as a control plane.** Route 53 turns naming into traffic management, giving you global failover, canary releases, and geographic compliance without touching application code.
-- **Managed cross-cutting API concerns.** API Gateway removes authentication, throttling, validation, and observability from every service's codebase, reducing duplicated and divergent security-critical logic.
-- **Everything is an API, so everything is code.** The entire network is reproducible, reviewable, diffable, and destroyable — which changes disaster recovery from a documented procedure into a pipeline execution.
-- **Pay for what you use, with elasticity built in.** No capital expenditure on routers, firewalls, or load balancers, and no capacity planning for the fabric.
+**Serverless**
+
+- No server provisioning, patching, or capacity planning — operational burden shifts to AWS.
+- Automatic, fine-grained scaling from zero to thousands of concurrent executions.
+- True pay-per-use: idle costs nothing, making experimentation and low-traffic services economically viable.
+- Multi-AZ high availability with no configuration.
+- Faster time to market: a function plus an event source is a complete production deployment.
+
+**Microservices**
+
+- Independent deployability enables high release frequency without cross-team coordination.
+- Failure isolation: one service degrading does not take down the system.
+- Independent, targeted scaling of the components that are actually under load.
+- Technology heterogeneity: the right language and datastore per problem.
+- Clear ownership boundaries aligned to small autonomous teams.
+- Easier comprehension: a new engineer can understand one service in days rather than a monolith in months.
+
+**Event-driven**
+
+- Extreme loose coupling: new consumers are added without touching producers.
+- Natural resilience: brokers buffer during downstream outages instead of cascading failures.
+- Load levelling: queues absorb bursts that would otherwise overwhelm databases.
+- Real-time responsiveness across the enterprise.
+- Auditability and replay: an event log is both an audit trail and a recovery mechanism.
+
+**API-first**
+
+- Parallel development against a mocked contract compresses delivery timelines.
+- Stable contracts prevent integration breakage and allow internal refactoring without consumer impact.
+- Reusability: one well-designed API serves web, mobile, partners, and internal systems.
+- Automatic, accurate documentation and generated SDKs.
+- A governance point for security, throttling, monetisation, and analytics.
 
 ---
 
 ## Limitations
 
-- **Address planning is effectively irreversible.** VPC CIDRs cannot be changed and subnets cannot be resized. A poor initial plan constrains the architecture for years.
-- **Peering is non-transitive and forbids overlap**, which forces either Transit Gateway or PrivateLink at scale.
-- **Zonal components create hidden single points of failure**, notably NAT Gateways and single-zone Interface endpoints. AWS does not make these highly available for you.
-- **Data-transfer charges are opaque to developers.** Nothing in application code reveals that a call crossed an Availability Zone boundary or a NAT Gateway.
-- **DNS-based failover is bounded by caching.** Some resolvers and some client libraries ignore TTL entirely; sub-second failover requires a different mechanism.
-- **API Gateway timeouts and payload limits** constrain design; long-running and large-payload operations must be redesigned rather than configured around.
-- **HTTP APIs lack features** that regulated or monetised APIs need, and API type cannot be changed after creation.
-- **Managed means less control.** You cannot run arbitrary routing protocols inside a VPC, cannot use broadcast or multicast natively, and cannot inspect packets without deliberately architecting for mirroring or a firewall appliance.
-- **Complexity grows quickly in multi-account designs.** A Transit Gateway with multiple route tables, an inspection VPC, and centralised endpoints is powerful and genuinely difficult to reason about; it demands strong documentation and automated verification.
-- **Quotas bind at scale.** Routes per route table, security groups per interface, rules per group, and Transit Gateway attachment bandwidth all become real constraints in large estates.
+**Serverless**
+
+- Cold-start latency on the tail; problematic for strict low-latency SLAs without Provisioned Concurrency.
+- Hard execution limits: 15 minutes, payload sizes, memory ceiling — unsuitable for long-running or very heavy jobs.
+- Stateless by design; state externalisation adds latency and cost.
+- Relational database connection pressure requires RDS Proxy or a rethink toward DynamoDB.
+- Cost can exceed containers at sustained high throughput.
+- Vendor lock-in is highest here; portability requires deliberate abstraction.
+- Local testing and debugging are harder than with containers.
+
+**Microservices**
+
+- Distributed systems complexity: partial failure, network latency, retries, and clock skew become application concerns.
+- Operational overhead multiplies: pipelines, dashboards, alarms, and on-call rotations per service.
+- No cross-service ACID transactions; sagas and eventual consistency add design and testing burden.
+- Data duplication across services and the challenge of keeping projections consistent.
+- End-to-end testing is significantly harder than for a monolith.
+- Premature decomposition with wrong boundaries is expensive to correct.
+
+**Event-driven**
+
+- Debugging and tracing asynchronous flows is genuinely difficult without disciplined observability.
+- Eventual consistency confuses users and stakeholders ("I placed the order but it does not appear yet").
+- Duplicate and out-of-order delivery must be handled explicitly in every consumer.
+- The overall business process is implicit and undocumented under pure choreography.
+- Event schema evolution requires versioning discipline; a careless change breaks unknown consumers.
+- Poison messages can stall processing without correct DLQ configuration.
+
+**API-first**
+
+- Upfront design effort delays the first line of implementation code.
+- Governance overhead: style guides, review boards, versioning, and deprecation processes.
+- Contracts can ossify: a poorly designed public API is extremely expensive to change.
+- Risk of designing contracts around internal data models rather than consumer needs.
+- Version proliferation if deprecation is not enforced.
+
+!!! warning "The distributed monolith"
+The most common and most damaging failure mode: services are split physically but remain logically coupled — they share a database, must be released together, and call each other synchronously in long chains. This delivers every cost of microservices and none of the benefits. The diagnostic question is simple: _can this service be deployed to production, right now, without coordinating with any other team?_ If not, it is not a microservice.
 
 ---
 
 ## Common Mistakes
 
-### Beginner Mistakes
-
-- Believing a subnet is public because it is named "public". It is public only if its route table has an Internet Gateway route.
-- Launching an instance in a public subnet without a public IP address and then wondering why it is unreachable.
-- Forgetting that the security group's **outbound** rules matter when the instance is the client.
-- Using a NACL to express application policy, then discovering the stateless ephemeral-port problem.
-- Sizing subnets from instance counts and ignoring the five reserved addresses, load balancer requirements, and `awsvpc` per-task addresses.
-- Hard-coding a load balancer IP address instead of using its DNS name or an alias record.
-- Attaching a Lambda function to a VPC when it does not need private access, then being unable to call a public API.
-- Creating overlapping CIDRs across environments and discovering it only when peering is required.
-
-### Production Mistakes
-
-- One NAT Gateway for the whole VPC, creating both a correlated failure mode and cross-AZ charges.
-- No Gateway endpoint for S3, paying NAT data-processing charges on high-volume object traffic.
-- Health checks pointing at `/` rather than a real readiness endpoint, so a broken dependency is never detected — or, conversely, a health check that includes a non-critical dependency and removes all capacity when that dependency degrades.
-- ALB idle timeout shorter than backend keep-alive, causing intermittent unexplained 502 responses.
-- No deregistration delay, so deployments drop in-flight requests.
-- Security groups written with CIDR lists that drift as the fleet changes.
-- No VPC Flow Logs, making cost analysis and incident response guesswork.
-- Disaster-recovery plans that require control-plane calls in the failed Region.
-- Interface endpoints created in only one Availability Zone, silently making a "private" design zone-dependent.
-- Lambda authorizers without result caching, doubling the invocation count and the latency of every request.
-
-### Certification Traps
-
-- Security groups are **stateful**; NACLs are **stateless**. Almost every exam includes at least one question that turns on this.
-- Security groups have **no deny rules**; only NACLs do. If the question requires blocking a specific IP address, the answer is a NACL.
-- A NACL rule source cannot be a security group.
-- NACL rules are evaluated in **number order, first match wins**; security group rules are all evaluated and any allow permits.
-- Gateway endpoints work only for **S3 and DynamoDB**, and they do not work over peering, VPN, or Direct Connect. Interface endpoints do.
-- Peering is **not transitive** and does not permit **overlapping CIDRs**.
-- An IGW alone does not give an instance internet access: it also needs a public IP or Elastic IP, a route, and permissive security group and NACL rules.
-- NAT Gateway is **zonal**; NAT instance requires disabling the source/destination check.
-- **Latency** routing for performance, **geolocation** for compliance, **weighted** for canaries, **failover** for active-passive, **multivalue** for simple health-aware spreading.
-- Route 53 **health checks cannot probe private endpoints**; use a CloudWatch alarm health check.
-- ACM certificates for CloudFront must be in **us-east-1**.
-- **NLB for static IP addresses and extreme performance; ALB for content-based routing; API Gateway for managed API features.**
-- Only **REST APIs** support AWS WAF, API keys and usage plans, request validation, caching, and private endpoints.
-
----
-
-## Interview Questions
-
-### Conceptual Questions
-
-**1. What actually makes a subnet "public"?**
-Its associated route table contains a route (typically `0.0.0.0/0`) whose target is an Internet Gateway. Nothing else — not the name, not the CIDR, not the auto-assign public IP setting, though a resource in it also needs a public IP or Elastic IP to be reachable from the internet.
-
-**2. Explain the difference between a security group and a network ACL, and when you would deliberately use a NACL.**
-Security groups attach to network interfaces, are stateful, allow-only, and evaluate all rules with any match permitting. NACLs attach to subnets, are stateless, support deny, and evaluate in rule-number order with first match winning. Use a NACL when you need to *deny* something specific (a malicious CIDR), when you need a subnet-wide guardrail that application teams cannot alter by editing their own security groups, or when a compliance framework requires two independent layers. Application intent belongs in security groups.
-
-**3. Why are five IP addresses unusable in every subnet?**
-The network address, the VPC router (base plus one), the Amazon DNS resolver (base plus two), an address reserved for future AWS use (base plus three), and the broadcast address. AWS does not support broadcast but still reserves the address.
-
-**4. What is the difference between a Gateway endpoint and an Interface endpoint?**
-A Gateway endpoint is a route-table entry to a prefix list, supports only S3 and DynamoDB, is free, and is not reachable from outside the VPC (no peering, VPN, or Direct Connect). An Interface endpoint is an ENI with a private IP in your subnet, supports most services plus partner and custom services via PrivateLink, has a security group, is reachable from connected networks, and is charged hourly per Availability Zone plus per gigabyte.
-
-**5. Why does Route 53 offer an Alias record when CNAME already exists?**
-CNAME cannot be used at a zone apex, requires a second resolution step, and cannot track an AWS resource's changing addresses. Alias records resolve inside Route 53 to the current addresses of an AWS resource, work at the apex, return A or AAAA answers directly, and are not charged when the target is an AWS resource.
-
-**6. What is the practical difference between control plane and data plane, and why does it matter for disaster recovery?**
-The control plane changes configuration; the data plane carries traffic. Data planes are engineered for much higher availability. A recovery plan that requires control-plane calls (launching instances, changing DNS records) in an impaired Region may fail exactly when it is needed. Prefer pre-provisioned capacity and health-check-driven failover, whose recovery path is data-plane only.
-
-**7. Why does an Internet Gateway not appear in an instance's network configuration?**
-The IGW performs one-to-one NAT outside the guest. The instance only ever sees its private address; the IGW rewrites source and destination addresses at the VPC boundary. This is why you must never configure a public address inside the operating system.
-
-### Scenario Questions
-
-**1. A regulator requires that a database be provably unreachable from the internet. How do you demonstrate this?**
-Place it in a subnet whose route table contains only the `local` route plus, at most, Gateway endpoints. Show the route table: with no Internet Gateway, NAT Gateway, or Transit Gateway route, there is no path in either direction regardless of security group configuration. Reinforce with a security group allowing only the application security group on the database port, Network Access Analyzer findings showing no internet path, and Flow Logs as evidence.
-
-**2. Fifteen VPCs across five accounts must communicate, plus on-premises connectivity. Peering or Transit Gateway?**
-Transit Gateway. Peering would require 105 connections and route entries in every subnet route table, and peering cannot carry on-premises traffic transitively. Transit Gateway gives 15 attachments, one summarised route per VPC, native Direct Connect and VPN attachment, and route tables for segmentation. Share it across accounts with Resource Access Manager.
-
-**3. Your API must return within 100 milliseconds for users worldwide, and some responses are cacheable for 30 seconds.**
-Regional API Gateway HTTP APIs in two or three Regions, fronted by CloudFront for edge TLS termination and caching, with Route 53 latency-based routing plus health checks between Regions. Use a deliberate cache key with only the parameters that vary the response, enable compression, and keep authorizer results cached.
-
-**4. A partner must call your service, but they refuse to expose it over the internet and their VPC uses the same CIDR as yours.**
-AWS PrivateLink. Put your service behind a Network Load Balancer, create a VPC endpoint service, and allow their account. They create an Interface endpoint in their VPC, reaching your service via an IP in *their* address space. Overlapping CIDRs are irrelevant because no routes are exchanged.
-
-**5. During a deployment you want 5 percent of production traffic on a new version, with fast rollback.**
-For containers behind an ALB, use weighted target groups on the listener rule — rollback is a single API call and takes effect immediately with no DNS caching. For whole-stack changes, use Route 53 weighted records, accepting that rollback is bounded by TTL. For API Gateway, use a canary deployment on the stage. Choose based on how fast rollback must be and the granularity of the change.
-
-**6. Costs have risen sharply and the largest line item is `NatGateway-Bytes`.**
-Enable Flow Logs, query in Athena grouped by destination, and identify the top talkers. Almost always this is S3, ECR image pulls, and CloudWatch Logs. Add a Gateway endpoint for S3 and DynamoDB (free) and Interface endpoints for `ecr.api`, `ecr.dkr`, `logs`, `sts`, and `secretsmanager`. Verify with Flow Logs that traffic has shifted, then confirm the reduction in Cost Explorer.
-
-### Architecture Questions
-
-**1. Design the network for a three-tier application requiring 99.99 percent availability in one Region.**
-A `/16` VPC across three Availability Zones. Public `/24` per zone containing only the internet-facing ALB and one NAT Gateway per zone. Private `/20` per zone for the ECS or EC2 tier, with per-zone route tables pointing at the NAT Gateway in the same zone. Isolated `/22` per zone for Multi-AZ RDS in a DB subnet group. Gateway endpoint for S3 and DynamoDB; Interface endpoints in all three zones for the AWS APIs used. Security groups chained by reference: ALB security group open on 443 from the internet, application security group allowing 8080 from the ALB security group, database security group allowing 5432 from the application security group. Route 53 alias to the ALB, CloudFront in front, WAF attached, Flow Logs to a central account.
-
-**2. How would you design network segmentation across 40 AWS accounts?**
-Transit Gateway in a network account shared via Resource Access Manager, with separate Transit Gateway route tables per environment so production and non-production attachments cannot route to each other. A shared-services VPC holding centralised Interface endpoints and Route 53 Resolver endpoints, with private hosted zones associated to workload VPCs. An inspection VPC with Network Firewall behind a Gateway Load Balancer for east-west and egress inspection. Service Control Policies preventing the creation of Internet Gateways in workload accounts. A single, centrally governed IPAM allocation so CIDRs never overlap.
-
-**3. An EKS cluster will run 20,000 pods. What is your networking plan?**
-The VPC CNI assigns a VPC address to every pod, so plan address space first: dedicate large subnets, and add a secondary CIDR from `100.64.0.0/10` with CNI custom networking so pod addresses do not consume routable space. Enable prefix delegation to allocate `/28` prefixes per ENI, which increases pod density per node and reduces API pressure. Use the AWS Load Balancer Controller in IP target mode so the ALB targets pods directly. Use security groups for pods where per-workload policy is needed, and a network policy engine for intra-cluster policy. Spread node groups across three Availability Zones and use topology-aware routing to keep traffic zonal.
-
-**4. Design an API that accepts bursts of 50,000 requests per second but whose downstream can only handle 500 per second.**
-Do not let the burst reach the downstream. API Gateway integrates directly with SQS (an AWS service integration, no Lambda), returning `202 Accepted`. A consumer — Lambda with reserved concurrency, or an ECS service scaled on queue depth — drains the queue at a controlled rate. Add a dead-letter queue, idempotency keys so retries are safe, and per-route throttling as a second guardrail. The queue converts a scaling problem into a latency problem, which is almost always the right trade.
-
-**5. When would you choose Global Accelerator over Route 53 latency routing?**
-When failover must be fast and independent of DNS caching, when clients pin IP addresses (device firmware, corporate allow-lists), when the protocol is not HTTP, or when you want traffic to enter the AWS backbone at the nearest edge for non-cacheable workloads. Global Accelerator gives two static anycast addresses and shifts traffic at the network layer in seconds. Route 53 is cheaper and sufficient when DNS TTL-bounded failover is acceptable.
-
-### Troubleshooting Questions
-
-**1. An instance in a private subnet cannot reach the internet. Diagnose systematically.**
-Check in this order: (a) the private subnet's route table has `0.0.0.0/0` pointing to a **NAT Gateway**, not an Internet Gateway; (b) the NAT Gateway is in a **public** subnet whose route table points `0.0.0.0/0` at an Internet Gateway; (c) the NAT Gateway has an Elastic IP and is in `available` state; (d) the instance's security group allows the required **outbound** traffic; (e) the NACLs on both the private and the public subnet allow outbound traffic and inbound **ephemeral ports** for the return path; (f) DNS is resolving — `enableDnsSupport` on the VPC; (g) NAT Gateway CloudWatch metrics show no `ErrorPortAllocation`. Confirm with Reachability Analyzer and Flow Logs, looking for `REJECT` entries.
-
-**2. You cannot SSH to an EC2 instance. Walk through it.**
-(a) Does the instance have a public IP or Elastic IP, and are you connecting to the right address? (b) Is it in a public subnet with an Internet Gateway route? (c) Does the security group allow inbound TCP 22 from your source address? (d) Does the NACL allow inbound 22 **and** outbound ephemeral ports 1024–65535? (e) Is the instance running, and did it pass both status checks? (f) Is `sshd` running and listening — check the system log or serial console? (g) Are the key pair and file permissions correct, and are you using the right username for the AMI? (h) Is a host-level firewall blocking? A **timeout** points at routing, security group, or NACL; **connection refused** means the packet reached the host and nothing was listening; a **key rejection** means the network is fine and the problem is credentials.
-
-**3. ALB targets never become healthy.**
-The target's security group must allow the **health check port** from the ALB's security group — this is the single most common cause. Then confirm the health check path returns 200 (or matches the configured matcher), that the application listens on the configured port and on all interfaces rather than only `127.0.0.1`, that the health check protocol matches, that the target is registered in a subnet the ALB can reach, and that the health check timeout is longer than the application's response time. Check `TargetConnectionErrorCount` and the target group's health status reason string, which is usually explicit.
-
-**4. Inside the VPC, a service name resolves to a public IP address instead of the private endpoint.**
-Private DNS on the Interface endpoint is disabled, or `enableDnsSupport` or `enableDnsHostnames` is off on the VPC, or a private hosted zone is not associated with this VPC, or a Resolver rule is forwarding the query elsewhere. Confirm with `dig` from an instance against `169.254.169.253`, and check the endpoint's private DNS setting.
-
-**5. Intermittent HTTP 502 responses from the ALB with no application errors.**
-Most commonly the backend closed a keep-alive connection that the ALB believed was still open, because the backend's keep-alive timeout is shorter than the ALB's idle timeout. Set the backend keep-alive above the ALB idle timeout. Other causes: the target returned a malformed response or headers exceeding the limit, or the target was deregistered while requests were in flight (increase the deregistration delay). Compare `HTTPCode_ELB_5XX_Count` with `HTTPCode_Target_5XX_Count` to determine whether the load balancer or the target generated the error, and inspect the ALB access logs' `elb_status_code` and `target_status_code` fields.
-
-**6. Two peered VPCs cannot communicate even though the peering connection is `active`.**
-Route tables on **both** sides must have a route to the other VPC's CIDR with the peering connection as target, and this must be present in every relevant subnet route table, not just one. Security groups must allow the traffic — and note that a security group in VPC A can reference a security group in VPC B only when the VPCs are peered and the reference is explicitly configured. NACLs on both sides must permit traffic in both directions. Finally, confirm the CIDRs do not overlap, and enable DNS resolution over the peering if you rely on private hosted-zone names.
-
-### Certification-Style Questions
-
-**1. A company needs to block a specific malicious IP address from reaching any resource in a subnet. What should they use?**
-A network ACL deny rule with a rule number lower than any allow rule that would match. Security groups cannot express deny.
-
-**2. An application in a private subnet must access Amazon S3 without traversing the internet, at the lowest cost. What should the architect implement?**
-A Gateway VPC endpoint for S3, with the corresponding prefix-list route added to the private subnets' route tables. It carries no charge, unlike an Interface endpoint or a NAT Gateway.
-
-**3. A company runs an application in three Regions and wants users routed to the Region that gives them the best performance, with automatic removal of an unhealthy Region.**
-Route 53 latency-based routing records for each Region, each associated with a health check. Geolocation would route by location rather than performance; weighted would not adapt to latency.
-
-**4. An API must be reachable only from within the corporate VPC and never from the internet.**
-A Private API Gateway REST API, accessed through an Interface endpoint for `execute-api`, with a resource policy that allows only the specific `aws:SourceVpce`. HTTP APIs do not support private endpoints.
-
-**5. Instances in a private subnet suddenly cannot download operating system updates, while everything else works. The NAT Gateway shows increasing `ErrorPortAllocation`.**
-The NAT Gateway has exhausted source ports toward a small number of destinations. Reduce concurrent connections through connection reuse, spread traffic across additional NAT Gateways, or move the traffic off NAT via endpoints where the destination is an AWS service.
-
-**6. Which combination provides static IP addresses and the ability to handle millions of requests per second with very low latency for a TCP-based protocol?**
-A Network Load Balancer with an Elastic IP in each Availability Zone. An ALB is layer 7 and offers no static IPs; API Gateway is HTTP-oriented and adds latency.
-
-**7. A team needs to give an on-premises data centre access to an AWS service privately, and the on-premises network already reaches AWS over Direct Connect.**
-An Interface endpoint, because it presents an ENI with a routable private IP that on-premises networks can reach. A Gateway endpoint would not work — it is route-table scoped and unreachable from outside the VPC.
-
----
-
-## Hands-on Lab
-
-### Objective
-
-Build a production-shaped, multi-Availability-Zone VPC containing public, private, and isolated subnets; provide outbound internet access for private workloads through per-zone NAT Gateways; deploy a small application on private EC2 instances behind an internal Application Load Balancer; and expose it publicly through an API Gateway HTTP API using a VPC Link. Confirm that the application has **no public IP address** and that the database subnets have **no internet route**, then verify the security posture using Reachability Analyzer and VPC Flow Logs.
-
-This lab is designed to complete within an AWS Academy Learner Lab session. Where the Learner Lab restricts an action, an alternative is noted.
-
-### Architecture
-
-```mermaid
-graph TD
-    USER["Student Browser"] --> AGW["API Gateway HTTP API with a Custom Stage"]
-    AGW --> VL["VPC Link with ENIs in the Private Subnets"]
-    VL --> IALB["Internal Application Load Balancer"]
-
-    subgraph vpc["VPC dso303-vpc 10.20.0.0/16"]
-        subgraph az1["Availability Zone A"]
-            PUB1["Public Subnet 10.20.0.0/24 - NAT Gateway A"]
-            PRI1["Private Subnet 10.20.16.0/20 - App Instance A"]
-            ISO1["Isolated Subnet 10.20.64.0/22 - Reserved for RDS"]
-        end
-        subgraph az2["Availability Zone B"]
-            PUB2["Public Subnet 10.20.1.0/24 - NAT Gateway B"]
-            PRI2["Private Subnet 10.20.32.0/20 - App Instance B"]
-            ISO2["Isolated Subnet 10.20.68.0/22 - Reserved for RDS"]
-        end
-        IALB
-        VL
-        S3E["Gateway Endpoint for Amazon S3"]
-    end
-
-    PUB1 --> IGW["Internet Gateway"]
-    PUB2 --> IGW
-    PRI1 --> PUB1
-    PRI2 --> PUB2
-    IALB --> PRI1
-    IALB --> PRI2
-    PRI1 --> S3E
-```
-
-### AWS Services Used
-
-Amazon VPC (subnets, route tables, Internet Gateway, NAT Gateway, security groups, Gateway endpoint, Flow Logs), Amazon EC2, Elastic Load Balancing (internal ALB), Amazon API Gateway (HTTP API with VPC Link), AWS Systems Manager Session Manager, Amazon CloudWatch Logs, and VPC Reachability Analyzer.
-
-### Implementation Steps
-
-**Part 1 — Network foundation**
-
-1. Create a VPC named `dso303-vpc` with CIDR `10.20.0.0/16`. Enable DNS resolution and DNS hostnames.
-2. Create six subnets across two Availability Zones:
-   - `public-a` `10.20.0.0/24`, `public-b` `10.20.1.0/24`
-   - `private-a` `10.20.16.0/20`, `private-b` `10.20.32.0/20`
-   - `isolated-a` `10.20.64.0/22`, `isolated-b` `10.20.68.0/22`
-3. Create and attach an Internet Gateway named `dso303-igw`.
-4. Create a route table `rt-public`, add `0.0.0.0/0` to the Internet Gateway, and associate both public subnets.
-5. Allocate two Elastic IPs and create one NAT Gateway in each public subnet.
-6. Create `rt-private-a` with `0.0.0.0/0` to NAT Gateway A, associated with `private-a`. Create `rt-private-b` similarly for zone B. **Do this per zone deliberately, and record why in your lab notes.**
-7. Create `rt-isolated` with **no** default route, and associate both isolated subnets.
-8. Create a Gateway endpoint for Amazon S3, associating it with `rt-private-a`, `rt-private-b`, and `rt-isolated`.
-
-**Part 2 — Security groups**
-
-9. `sg-alb-internal` — inbound TCP 80 from `10.20.0.0/16`; outbound all.
-10. `sg-app` — inbound TCP 80 **from `sg-alb-internal`** (reference the group, do not use a CIDR); outbound all.
-11. `sg-db` — inbound TCP 5432 **from `sg-app`**; no outbound rules beyond the default. Do not attach it to anything yet; it documents the intended data tier.
-
-**Part 3 — Application instances**
-
-12. Launch two `t3.micro` Amazon Linux 2023 instances, one in `private-a` and one in `private-b`, with **auto-assign public IP disabled**, security group `sg-app`, and an instance profile granting `AmazonSSMManagedInstanceCore` (in the Learner Lab, use the provided `LabInstanceProfile` or `LabRole`).
-13. Supply this user data so each instance serves a page identifying itself:
-
-```bash
-#!/bin/bash
-dnf install -y nginx
-TOKEN=$(curl -sX PUT "http://169.254.169.254/latest/api/token" \
-  -H "X-aws-ec2-metadata-token-ttl-seconds: 300")
-AZ=$(curl -s -H "X-aws-ec2-metadata-token: $TOKEN" \
-  http://169.254.169.254/latest/meta-data/placement/availability-zone)
-IID=$(curl -s -H "X-aws-ec2-metadata-token: $TOKEN" \
-  http://169.254.169.254/latest/meta-data/instance-id)
-echo "{\"service\":\"dso303\",\"az\":\"$AZ\",\"instance\":\"$IID\"}" > /usr/share/nginx/html/index.html
-echo "ok" > /usr/share/nginx/html/health
-systemctl enable --now nginx
-```
-
-14. Connect to an instance using **Session Manager**, not SSH. Observe that no inbound port is open and no key pair is required. Run `curl -s http://checkip.amazonaws.com` and confirm it returns the NAT Gateway's Elastic IP, proving outbound-only internet access.
-
-**Part 4 — Internal load balancer**
-
-15. Create an **internal** Application Load Balancer `dso303-alb` in `private-a` and `private-b` with security group `sg-alb-internal`.
-16. Create a target group `tg-app` of type *instance*, protocol HTTP port 80, health check path `/health`, healthy threshold 2, interval 10 seconds. Register both instances.
-17. Create an HTTP:80 listener forwarding to `tg-app`. Wait for both targets to become `healthy`. If they do not, verify step 10 — the target security group must allow the health-check port from the ALB security group.
-
-**Part 5 — Public exposure through API Gateway**
-
-18. Create a **VPC Link for HTTP APIs**, placed in `private-a` and `private-b`, with a security group allowing outbound to `sg-alb-internal`.
-19. Create an **HTTP API** named `dso303-api`. Add a route `GET /app` with a **private integration** targeting the ALB listener through the VPC Link.
-20. Enable **access logging** on the stage to a CloudWatch Logs group, using a JSON format that includes `requestId`, `ip`, `routeKey`, `status`, `integrationLatency`, and `responseLatency`.
-21. Set a **route-level throttle** of 10 requests per second with a burst of 20.
-22. Invoke the API's invoke URL from your browser. You should receive JSON identifying the instance and its Availability Zone. Refresh repeatedly and observe alternation between zones.
-
-**Part 6 — Verification and observability**
-
-23. Enable **VPC Flow Logs** on the VPC, delivering to a CloudWatch Logs group with the default format.
-24. Attempt to reach an instance's private IP directly from your laptop. It will time out — this is the expected result and is the point of the exercise.
-25. Use **Reachability Analyzer** to test a path from the Internet Gateway to an application instance on TCP 80. The result should be **not reachable**, and the tool will name the blocking component.
-26. Run Reachability Analyzer from the VPC Link ENI (or the ALB) to an instance on TCP 80. The result should be **reachable**.
-27. In the Flow Logs group, search for `REJECT` entries and identify what was rejected and why.
-28. Exceed the throttle by sending more than 20 requests in a second (for example with `for i in $(seq 1 40); do curl -s -o /dev/null -w "%{http_code}\n" "$URL"; done`) and observe HTTP 429 responses.
-
-**Part 7 — Cleanup (important in a Learner Lab)**
-
-29. Delete in this order: API and VPC Link, load balancer and target group, EC2 instances, NAT Gateways, release Elastic IPs, endpoints, subnets and route tables, Internet Gateway, VPC. NAT Gateways and Elastic IPs are the components that continue to accrue charges if left behind.
-
-### Expected Output
-
-- A public HTTPS invoke URL returning JSON from an instance that has no public IP address.
-- Responses alternating between two Availability Zones, demonstrating multi-AZ distribution.
-- `checkip.amazonaws.com` from inside an instance returning a NAT Gateway Elastic IP.
-- Direct access from the internet to an instance timing out.
-- Reachability Analyzer reporting *not reachable* from the internet and *reachable* from the VPC Link.
-- HTTP 429 responses once the route throttle is exceeded.
-- Flow Log entries showing accepted flows from the ALB to the instances and rejected flows from any external probing.
-
-!!! tip "What to Write in Your Lab Report"
-    Explain **why** each control exists, not what you clicked. Why one NAT Gateway per Availability Zone? Why does `sg-app` reference `sg-alb-internal` rather than a CIDR? Why is the ALB internal rather than internet-facing? Why is the S3 Gateway endpoint associated with the isolated route table when nothing is deployed there yet? These questions are the assessment.
-
----
+### Beginner mistakes
+
+- Treating "cloud-native" as "running on EC2 in AWS" — lift-and-shift is not cloud-native.
+- Starting with microservices before the domain boundaries are understood, producing services that constantly need to change together.
+- Building a "Lambda monolith" with a single function containing a large `if/else` router over every route, then justifying it as serverless.
+- Assuming Lambda is stateless-but-fresh: relying on `/tmp` or global variables persisting (or _not_ persisting) between invocations.
+- Placing SDK client creation and connection setup _inside_ the handler, paying initialisation cost on every invocation.
+- Forgetting that SQS requires explicit message deletion; assuming receiving is consuming.
+- Ignoring idempotency and being surprised by duplicate charges or duplicate emails.
+- Using CPU utilisation to scale a queue worker instead of queue depth.
+- Hard-coding endpoints and secrets instead of using Cloud Map, Parameter Store, or Secrets Manager.
+- Building through the console with no Infrastructure as Code, then being unable to recreate the environment.
+
+### Production mistakes
+
+- No DLQ, or a DLQ with no alarm — silent, permanent data loss.
+- Visibility timeout shorter than processing time, causing the same message to be processed repeatedly and concurrently.
+- Unbounded Lambda concurrency in front of a small RDS instance, exhausting the connection pool during a traffic spike.
+- Synchronous call chains four or five services deep: latency compounds and any single failure fails the whole request.
+- Retries without exponential backoff and jitter, converting a brief blip into a self-inflicted denial of service.
+- Missing correlation IDs, making incident investigation across services nearly impossible.
+- Shared database across "microservices", so a schema change requires a coordinated multi-team release.
+- Breaking API changes shipped without a new version, silently breaking mobile clients that cannot be force-upgraded.
+- CloudWatch Logs retention left at "never expire", producing a large and entirely avoidable bill.
+- Over-permissive IAM roles copied between services because narrowing them "takes too long".
+- No load testing of the asynchronous path; the API scales but consumers fall permanently behind.
 
 ## Code Examples
 
-### AWS CLI — Building the Core Network
-
-Creates a VPC, a public subnet with an internet path, and a private subnet whose outbound traffic uses a NAT Gateway. Each command emits an identifier used by the next; in practice you would capture these with `--query` and shell variables.
-
-```bash
-#!/usr/bin/env bash
-set -euo pipefail
-REGION="us-east-1"
-
-VPC_ID=$(aws ec2 create-vpc \
-  --cidr-block 10.20.0.0/16 \
-  --tag-specifications 'ResourceType=vpc,Tags=[{Key=Name,Value=dso303-vpc}]' \
-  --query 'Vpc.VpcId' --output text --region "$REGION")
-
-aws ec2 modify-vpc-attribute --vpc-id "$VPC_ID" --enable-dns-support '{"Value":true}'
-aws ec2 modify-vpc-attribute --vpc-id "$VPC_ID" --enable-dns-hostnames '{"Value":true}'
-
-PUB_SUBNET=$(aws ec2 create-subnet --vpc-id "$VPC_ID" \
-  --cidr-block 10.20.0.0/24 --availability-zone "${REGION}a" \
-  --query 'Subnet.SubnetId' --output text)
-
-PRIV_SUBNET=$(aws ec2 create-subnet --vpc-id "$VPC_ID" \
-  --cidr-block 10.20.16.0/20 --availability-zone "${REGION}a" \
-  --query 'Subnet.SubnetId' --output text)
-
-IGW_ID=$(aws ec2 create-internet-gateway \
-  --query 'InternetGateway.InternetGatewayId' --output text)
-aws ec2 attach-internet-gateway --vpc-id "$VPC_ID" --internet-gateway-id "$IGW_ID"
-
-RT_PUB=$(aws ec2 create-route-table --vpc-id "$VPC_ID" \
-  --query 'RouteTable.RouteTableId' --output text)
-aws ec2 create-route --route-table-id "$RT_PUB" \
-  --destination-cidr-block 0.0.0.0/0 --gateway-id "$IGW_ID"
-aws ec2 associate-route-table --route-table-id "$RT_PUB" --subnet-id "$PUB_SUBNET"
-
-EIP_ALLOC=$(aws ec2 allocate-address --domain vpc --query 'AllocationId' --output text)
-NAT_ID=$(aws ec2 create-nat-gateway --subnet-id "$PUB_SUBNET" \
-  --allocation-id "$EIP_ALLOC" --query 'NatGateway.NatGatewayId' --output text)
-aws ec2 wait nat-gateway-available --nat-gateway-ids "$NAT_ID"
-
-RT_PRIV=$(aws ec2 create-route-table --vpc-id "$VPC_ID" \
-  --query 'RouteTable.RouteTableId' --output text)
-aws ec2 create-route --route-table-id "$RT_PRIV" \
-  --destination-cidr-block 0.0.0.0/0 --nat-gateway-id "$NAT_ID"
-aws ec2 associate-route-table --route-table-id "$RT_PRIV" --subnet-id "$PRIV_SUBNET"
-
-# A Gateway endpoint for S3 costs nothing and removes S3 traffic from the NAT path.
-aws ec2 create-vpc-endpoint --vpc-id "$VPC_ID" \
-  --service-name "com.amazonaws.${REGION}.s3" \
-  --route-table-ids "$RT_PRIV"
-
-echo "VPC=$VPC_ID PUBLIC=$PUB_SUBNET PRIVATE=$PRIV_SUBNET NAT=$NAT_ID"
-```
-
-### AWS CLI — Security Group Rules That Reference Other Groups
-
-The cloud-native idiom: the rule survives auto scaling because it names an identity, not an address.
-
-```bash
-ALB_SG=$(aws ec2 create-security-group --group-name sg-alb \
-  --description "Internet facing ALB" --vpc-id "$VPC_ID" --query 'GroupId' --output text)
-APP_SG=$(aws ec2 create-security-group --group-name sg-app \
-  --description "Application tier" --vpc-id "$VPC_ID" --query 'GroupId' --output text)
-DB_SG=$(aws ec2 create-security-group --group-name sg-db \
-  --description "Database tier" --vpc-id "$VPC_ID" --query 'GroupId' --output text)
-
-aws ec2 authorize-security-group-ingress --group-id "$ALB_SG" \
-  --ip-permissions 'IpProtocol=tcp,FromPort=443,ToPort=443,IpRanges=[{CidrIp=0.0.0.0/0,Description="Public HTTPS"}]'
-
-aws ec2 authorize-security-group-ingress --group-id "$APP_SG" \
-  --ip-permissions "IpProtocol=tcp,FromPort=8080,ToPort=8080,UserIdGroupPairs=[{GroupId=$ALB_SG,Description=\"From ALB only\"}]"
-
-aws ec2 authorize-security-group-ingress --group-id "$DB_SG" \
-  --ip-permissions "IpProtocol=tcp,FromPort=5432,ToPort=5432,UserIdGroupPairs=[{GroupId=$APP_SG,Description=\"From app tier only\"}]"
-```
-
-### Network ACL Rules — Stateless, Ordered, With the Ephemeral Return Path
-
-Demonstrates the rule that catches most people: the outbound rule must permit ephemeral destination ports so that responses can leave.
-
-```bash
-NACL_ID=$(aws ec2 create-network-acl --vpc-id "$VPC_ID" \
-  --query 'NetworkAcl.NetworkAclId' --output text)
-
-# Deny a known-bad network first; lower rule numbers are evaluated first.
-aws ec2 create-network-acl-entry --network-acl-id "$NACL_ID" --rule-number 90 \
-  --protocol tcp --port-range From=0,To=65535 \
-  --cidr-block 198.51.100.0/24 --rule-action deny --ingress
-
-# Allow inbound HTTPS from anywhere.
-aws ec2 create-network-acl-entry --network-acl-id "$NACL_ID" --rule-number 100 \
-  --protocol tcp --port-range From=443,To=443 \
-  --cidr-block 0.0.0.0/0 --rule-action allow --ingress
-
-# Allow inbound ephemeral ports so that responses to our own outbound calls return.
-aws ec2 create-network-acl-entry --network-acl-id "$NACL_ID" --rule-number 110 \
-  --protocol tcp --port-range From=1024,To=65535 \
-  --cidr-block 0.0.0.0/0 --rule-action allow --ingress
-
-# Allow outbound HTTPS for calls we initiate.
-aws ec2 create-network-acl-entry --network-acl-id "$NACL_ID" --rule-number 100 \
-  --protocol tcp --port-range From=443,To=443 \
-  --cidr-block 0.0.0.0/0 --rule-action allow --egress
-
-# THE CRITICAL RULE: responses to inbound requests leave from port 443 toward
-# the client's ephemeral port. Without this, every connection appears to hang.
-aws ec2 create-network-acl-entry --network-acl-id "$NACL_ID" --rule-number 110 \
-  --protocol tcp --port-range From=1024,To=65535 \
-  --cidr-block 0.0.0.0/0 --rule-action allow --egress
-```
-
-### Python (boto3) — Audit Security Groups for Dangerous Exposure
-
-A control that belongs in a CI pipeline or a scheduled Lambda function: it fails the build when a group exposes an administrative port to the world.
-
-```python
-"""Detect security group rules exposing sensitive ports to the internet."""
-import boto3
-
-SENSITIVE_PORTS = {22, 23, 3389, 3306, 5432, 6379, 27017, 9200, 1433}
-OPEN_CIDRS = {"0.0.0.0/0", "::/0"}
-
-ec2 = boto3.client("ec2")
-
-
-def rule_is_open(perm: dict) -> bool:
-    v4 = any(r.get("CidrIp") in OPEN_CIDRS for r in perm.get("IpRanges", []))
-    v6 = any(r.get("CidrIpv6") in OPEN_CIDRS for r in perm.get("Ipv6Ranges", []))
-    return v4 or v6
-
-
-def covered_ports(perm: dict) -> set:
-    if perm.get("IpProtocol") == "-1":
-        return SENSITIVE_PORTS
-    lo, hi = perm.get("FromPort"), perm.get("ToPort")
-    if lo is None or hi is None:
-        return set()
-    return {p for p in SENSITIVE_PORTS if lo <= p <= hi}
-
-
-def audit() -> list:
-    findings = []
-    paginator = ec2.get_paginator("describe_security_groups")
-    for page in paginator.paginate():
-        for sg in page["SecurityGroups"]:
-            for perm in sg.get("IpPermissions", []):
-                if not rule_is_open(perm):
-                    continue
-                exposed = covered_ports(perm)
-                if exposed:
-                    findings.append({
-                        "GroupId": sg["GroupId"],
-                        "GroupName": sg["GroupName"],
-                        "VpcId": sg.get("VpcId"),
-                        "Protocol": perm.get("IpProtocol"),
-                        "ExposedPorts": sorted(exposed),
-                    })
-    return findings
-
-
-if __name__ == "__main__":
-    results = audit()
-    for f in results:
-        print(f"FAIL {f['GroupId']} ({f['GroupName']}) exposes {f['ExposedPorts']} to the internet")
-    raise SystemExit(1 if results else 0)
-```
-
-### Python (boto3) — Analyse What Is Traversing the NAT Gateway
-
-Reads NAT Gateway metrics to quantify the cost driver before optimising it.
-
-```python
-"""Report bytes processed by every NAT Gateway over the last seven days."""
-import datetime as dt
-import boto3
-
-ec2 = boto3.client("ec2")
-cw = boto3.client("cloudwatch")
-
-end = dt.datetime.utcnow()
-start = end - dt.timedelta(days=7)
-
-for nat in ec2.describe_nat_gateways()["NatGateways"]:
-    nat_id = nat["NatGatewayId"]
-    totals = {}
-    for metric in ("BytesOutToDestination", "BytesInFromDestination", "ErrorPortAllocation"):
-        resp = cw.get_metric_statistics(
-            Namespace="AWS/NATGateway",
-            MetricName=metric,
-            Dimensions=[{"Name": "NatGatewayId", "Value": nat_id}],
-            StartTime=start,
-            EndTime=end,
-            Period=86400,
-            Statistics=["Sum"],
-        )
-        totals[metric] = sum(p["Sum"] for p in resp["Datapoints"])
-    gb = totals["BytesOutToDestination"] / (1024 ** 3)
-    print(f"{nat_id}: {gb:,.1f} GiB out, port allocation errors {totals['ErrorPortAllocation']:.0f}")
-    if totals["ErrorPortAllocation"] > 0:
-        print("  ACTION: port exhaustion detected. Reuse connections or add NAT capacity.")
-```
-
-### CloudFormation — A Complete Multi-AZ VPC
-
-A reusable network stack. Note the per-Availability-Zone NAT Gateways and route tables, the free S3 Gateway endpoint, and the exported outputs that application stacks consume without ever being able to modify the network.
+### AWS SAM template (serverless, event-driven, API-first)
 
 ```yaml
 AWSTemplateFormatVersion: "2010-09-09"
-Description: DSO303 multi-AZ VPC with public, private, and isolated tiers.
+Transform: AWS::Serverless-2016-10-31
+Description: Cloud-native order system demonstrating serverless, event-driven and API-first patterns
 
-Parameters:
-  EnvironmentName:
-    Type: String
-    Default: dso303
-  VpcCidr:
-    Type: String
-    Default: 10.20.0.0/16
-
-Mappings:
-  SubnetConfig:
-    PublicA:   { CIDR: 10.20.0.0/24 }
-    PublicB:   { CIDR: 10.20.1.0/24 }
-    PrivateA:  { CIDR: 10.20.16.0/20 }
-    PrivateB:  { CIDR: 10.20.32.0/20 }
-    IsolatedA: { CIDR: 10.20.64.0/22 }
-    IsolatedB: { CIDR: 10.20.68.0/22 }
+Globals:
+  Function:
+    Runtime: python3.12
+    Architectures: [arm64]
+    Timeout: 15
+    MemorySize: 512
+    Tracing: Active
+    Environment:
+      Variables:
+        POWERTOOLS_SERVICE_NAME: orders
 
 Resources:
-  Vpc:
-    Type: AWS::EC2::VPC
+  OrdersTable:
+    Type: AWS::DynamoDB::Table
     Properties:
-      CidrBlock: !Ref VpcCidr
-      EnableDnsSupport: true
-      EnableDnsHostnames: true
-      Tags: [{ Key: Name, Value: !Sub "${EnvironmentName}-vpc" }]
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: orderId
+          AttributeType: S
+      KeySchema:
+        - AttributeName: orderId
+          KeyType: HASH
+      SSESpecification:
+        SSEEnabled: true
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
 
-  InternetGateway:
-    Type: AWS::EC2::InternetGateway
-  IgwAttachment:
-    Type: AWS::EC2::VPCGatewayAttachment
+  OrdersBus:
+    Type: AWS::Events::EventBus
     Properties:
-      VpcId: !Ref Vpc
-      InternetGatewayId: !Ref InternetGateway
+      Name: orders-bus
 
-  PublicSubnetA:
-    Type: AWS::EC2::Subnet
+  InventoryDLQ:
+    Type: AWS::SQS::Queue
     Properties:
-      VpcId: !Ref Vpc
-      CidrBlock: !FindInMap [SubnetConfig, PublicA, CIDR]
-      AvailabilityZone: !Select [0, !GetAZs ""]
-      MapPublicIpOnLaunch: true
-      Tags: [{ Key: Name, Value: !Sub "${EnvironmentName}-public-a" }]
-  PublicSubnetB:
-    Type: AWS::EC2::Subnet
-    Properties:
-      VpcId: !Ref Vpc
-      CidrBlock: !FindInMap [SubnetConfig, PublicB, CIDR]
-      AvailabilityZone: !Select [1, !GetAZs ""]
-      MapPublicIpOnLaunch: true
-      Tags: [{ Key: Name, Value: !Sub "${EnvironmentName}-public-b" }]
+      MessageRetentionPeriod: 1209600 # 14 days
 
-  PrivateSubnetA:
-    Type: AWS::EC2::Subnet
+  InventoryQueue:
+    Type: AWS::SQS::Queue
     Properties:
-      VpcId: !Ref Vpc
-      CidrBlock: !FindInMap [SubnetConfig, PrivateA, CIDR]
-      AvailabilityZone: !Select [0, !GetAZs ""]
-      MapPublicIpOnLaunch: false
-      Tags: [{ Key: Name, Value: !Sub "${EnvironmentName}-private-a" }]
-  PrivateSubnetB:
-    Type: AWS::EC2::Subnet
-    Properties:
-      VpcId: !Ref Vpc
-      CidrBlock: !FindInMap [SubnetConfig, PrivateB, CIDR]
-      AvailabilityZone: !Select [1, !GetAZs ""]
-      MapPublicIpOnLaunch: false
-      Tags: [{ Key: Name, Value: !Sub "${EnvironmentName}-private-b" }]
+      VisibilityTimeout: 90 # >= 6x function timeout
+      ReceiveMessageWaitTimeSeconds: 20 # long polling
+      RedrivePolicy:
+        deadLetterTargetArn: !GetAtt InventoryDLQ.Arn
+        maxReceiveCount: 3
 
-  IsolatedSubnetA:
-    Type: AWS::EC2::Subnet
+  PlaceOrderFunction:
+    Type: AWS::Serverless::Function
     Properties:
-      VpcId: !Ref Vpc
-      CidrBlock: !FindInMap [SubnetConfig, IsolatedA, CIDR]
-      AvailabilityZone: !Select [0, !GetAZs ""]
-      Tags: [{ Key: Name, Value: !Sub "${EnvironmentName}-isolated-a" }]
-  IsolatedSubnetB:
-    Type: AWS::EC2::Subnet
-    Properties:
-      VpcId: !Ref Vpc
-      CidrBlock: !FindInMap [SubnetConfig, IsolatedB, CIDR]
-      AvailabilityZone: !Select [1, !GetAZs ""]
-      Tags: [{ Key: Name, Value: !Sub "${EnvironmentName}-isolated-b" }]
-
-  PublicRouteTable:
-    Type: AWS::EC2::RouteTable
-    Properties:
-      VpcId: !Ref Vpc
-      Tags: [{ Key: Name, Value: !Sub "${EnvironmentName}-rt-public" }]
-  PublicDefaultRoute:
-    Type: AWS::EC2::Route
-    DependsOn: IgwAttachment
-    Properties:
-      RouteTableId: !Ref PublicRouteTable
-      DestinationCidrBlock: 0.0.0.0/0
-      GatewayId: !Ref InternetGateway
-  PublicAssocA:
-    Type: AWS::EC2::SubnetRouteTableAssociation
-    Properties: { RouteTableId: !Ref PublicRouteTable, SubnetId: !Ref PublicSubnetA }
-  PublicAssocB:
-    Type: AWS::EC2::SubnetRouteTableAssociation
-    Properties: { RouteTableId: !Ref PublicRouteTable, SubnetId: !Ref PublicSubnetB }
-
-  NatEipA:
-    Type: AWS::EC2::EIP
-    Properties: { Domain: vpc }
-  NatEipB:
-    Type: AWS::EC2::EIP
-    Properties: { Domain: vpc }
-
-  # One NAT Gateway per Availability Zone. A single shared NAT Gateway would make a
-  # zonal failure VPC-wide and would add cross-AZ data transfer charges.
-  NatGatewayA:
-    Type: AWS::EC2::NatGateway
-    Properties:
-      AllocationId: !GetAtt NatEipA.AllocationId
-      SubnetId: !Ref PublicSubnetA
-  NatGatewayB:
-    Type: AWS::EC2::NatGateway
-    Properties:
-      AllocationId: !GetAtt NatEipB.AllocationId
-      SubnetId: !Ref PublicSubnetB
-
-  PrivateRouteTableA:
-    Type: AWS::EC2::RouteTable
-    Properties:
-      VpcId: !Ref Vpc
-      Tags: [{ Key: Name, Value: !Sub "${EnvironmentName}-rt-private-a" }]
-  PrivateDefaultRouteA:
-    Type: AWS::EC2::Route
-    Properties:
-      RouteTableId: !Ref PrivateRouteTableA
-      DestinationCidrBlock: 0.0.0.0/0
-      NatGatewayId: !Ref NatGatewayA
-  PrivateAssocA:
-    Type: AWS::EC2::SubnetRouteTableAssociation
-    Properties: { RouteTableId: !Ref PrivateRouteTableA, SubnetId: !Ref PrivateSubnetA }
-
-  PrivateRouteTableB:
-    Type: AWS::EC2::RouteTable
-    Properties:
-      VpcId: !Ref Vpc
-      Tags: [{ Key: Name, Value: !Sub "${EnvironmentName}-rt-private-b" }]
-  PrivateDefaultRouteB:
-    Type: AWS::EC2::Route
-    Properties:
-      RouteTableId: !Ref PrivateRouteTableB
-      DestinationCidrBlock: 0.0.0.0/0
-      NatGatewayId: !Ref NatGatewayB
-  PrivateAssocB:
-    Type: AWS::EC2::SubnetRouteTableAssociation
-    Properties: { RouteTableId: !Ref PrivateRouteTableB, SubnetId: !Ref PrivateSubnetB }
-
-  # Isolated tier: no default route at all. This is the auditable proof of isolation.
-  IsolatedRouteTable:
-    Type: AWS::EC2::RouteTable
-    Properties:
-      VpcId: !Ref Vpc
-      Tags: [{ Key: Name, Value: !Sub "${EnvironmentName}-rt-isolated" }]
-  IsolatedAssocA:
-    Type: AWS::EC2::SubnetRouteTableAssociation
-    Properties: { RouteTableId: !Ref IsolatedRouteTable, SubnetId: !Ref IsolatedSubnetA }
-  IsolatedAssocB:
-    Type: AWS::EC2::SubnetRouteTableAssociation
-    Properties: { RouteTableId: !Ref IsolatedRouteTable, SubnetId: !Ref IsolatedSubnetB }
-
-  S3GatewayEndpoint:
-    Type: AWS::EC2::VPCEndpoint
-    Properties:
-      VpcId: !Ref Vpc
-      ServiceName: !Sub "com.amazonaws.${AWS::Region}.s3"
-      VpcEndpointType: Gateway
-      RouteTableIds:
-        - !Ref PrivateRouteTableA
-        - !Ref PrivateRouteTableB
-        - !Ref IsolatedRouteTable
-
-  FlowLogRole:
-    Type: AWS::IAM::Role
-    Properties:
-      AssumeRolePolicyDocument:
-        Version: "2012-10-17"
-        Statement:
-          - Effect: Allow
-            Principal: { Service: vpc-flow-logs.amazonaws.com }
-            Action: sts:AssumeRole
+      Handler: place_order.handler
+      CodeUri: src/
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref OrdersTable
+          BUS_NAME: !Ref OrdersBus
       Policies:
-        - PolicyName: FlowLogsWrite
-          PolicyDocument:
-            Version: "2012-10-17"
-            Statement:
-              - Effect: Allow
-                Action:
-                  - logs:CreateLogStream
-                  - logs:PutLogEvents
-                  - logs:DescribeLogGroups
-                  - logs:DescribeLogStreams
-                Resource: "*"
+        - DynamoDBCrudPolicy:
+            TableName: !Ref OrdersTable
+        - EventBridgePutEventsPolicy:
+            EventBusName: !Ref OrdersBus
+      Events:
+        CreateOrder:
+          Type: HttpApi
+          Properties:
+            Path: /v1/orders
+            Method: POST
 
-  FlowLogGroup:
-    Type: AWS::Logs::LogGroup
+  ReserveInventoryFunction:
+    Type: AWS::Serverless::Function
     Properties:
-      LogGroupName: !Sub "/aws/vpc/${EnvironmentName}/flowlogs"
-      RetentionInDays: 30
+      Handler: reserve_inventory.handler
+      CodeUri: src/
+      ReservedConcurrentExecutions: 20 # bulkhead: protect downstream
+      Events:
+        FromQueue:
+          Type: SQS
+          Properties:
+            Queue: !GetAtt InventoryQueue.Arn
+            BatchSize: 10
+            FunctionResponseTypes: [ReportBatchItemFailures]
 
-  VpcFlowLog:
-    Type: AWS::EC2::FlowLog
+  OrderPlacedRule:
+    Type: AWS::Events::Rule
     Properties:
-      ResourceId: !Ref Vpc
-      ResourceType: VPC
-      TrafficType: ALL
-      LogDestinationType: cloud-watch-logs
-      LogGroupName: !Ref FlowLogGroup
-      DeliverLogsPermissionArn: !GetAtt FlowLogRole.Arn
+      EventBusName: !Ref OrdersBus
+      EventPattern:
+        source: ["orders.service"]
+        detail-type: ["OrderPlaced"]
+      Targets:
+        - Id: InventoryTarget
+          Arn: !GetAtt InventoryQueue.Arn
 
 Outputs:
-  VpcId:
-    Value: !Ref Vpc
-    Export: { Name: !Sub "${EnvironmentName}-VpcId" }
-  PrivateSubnets:
-    Value: !Join [",", [!Ref PrivateSubnetA, !Ref PrivateSubnetB]]
-    Export: { Name: !Sub "${EnvironmentName}-PrivateSubnets" }
-  PublicSubnets:
-    Value: !Join [",", [!Ref PublicSubnetA, !Ref PublicSubnetB]]
-    Export: { Name: !Sub "${EnvironmentName}-PublicSubnets" }
-  IsolatedSubnets:
-    Value: !Join [",", [!Ref IsolatedSubnetA, !Ref IsolatedSubnetB]]
-    Export: { Name: !Sub "${EnvironmentName}-IsolatedSubnets" }
+  ApiEndpoint:
+    Value: !Sub "https://${ServerlessHttpApi}.execute-api.${AWS::Region}.amazonaws.com"
 ```
 
-### Terraform — The Same Network, With Interface Endpoints
-
-Terraform's `for_each` makes the per-Availability-Zone pattern explicit, which is exactly the property you want visible in code.
-
-```hcl
-terraform {
-  required_providers {
-    aws = { source = "hashicorp/aws", version = "~> 5.0" }
-  }
-}
-
-variable "name"     { default = "dso303" }
-variable "vpc_cidr" { default = "10.20.0.0/16" }
-
-data "aws_availability_zones" "available" {
-  state = "available"
-}
-
-locals {
-  azs = slice(data.aws_availability_zones.available.names, 0, 2)
-  public_subnets   = { for i, az in local.azs : az => cidrsubnet(var.vpc_cidr, 8, i) }
-  private_subnets  = { for i, az in local.azs : az => cidrsubnet(var.vpc_cidr, 4, i + 1) }
-}
-
-resource "aws_vpc" "this" {
-  cidr_block           = var.vpc_cidr
-  enable_dns_support   = true
-  enable_dns_hostnames = true
-  tags                 = { Name = "${var.name}-vpc" }
-}
-
-resource "aws_internet_gateway" "this" {
-  vpc_id = aws_vpc.this.id
-}
-
-resource "aws_subnet" "public" {
-  for_each                = local.public_subnets
-  vpc_id                  = aws_vpc.this.id
-  cidr_block              = each.value
-  availability_zone       = each.key
-  map_public_ip_on_launch = true
-  tags = { Name = "${var.name}-public-${each.key}", Tier = "public" }
-}
-
-resource "aws_subnet" "private" {
-  for_each          = local.private_subnets
-  vpc_id            = aws_vpc.this.id
-  cidr_block        = each.value
-  availability_zone = each.key
-  tags = { Name = "${var.name}-private-${each.key}", Tier = "private" }
-}
-
-resource "aws_eip" "nat" {
-  for_each = local.public_subnets
-  domain   = "vpc"
-}
-
-# One NAT Gateway per AZ: availability and cross-AZ cost avoidance in three lines.
-resource "aws_nat_gateway" "this" {
-  for_each      = aws_subnet.public
-  allocation_id = aws_eip.nat[each.key].id
-  subnet_id     = each.value.id
-  depends_on    = [aws_internet_gateway.this]
-}
-
-resource "aws_route_table" "public" {
-  vpc_id = aws_vpc.this.id
-  route {
-    cidr_block = "0.0.0.0/0"
-    gateway_id = aws_internet_gateway.this.id
-  }
-}
-
-resource "aws_route_table_association" "public" {
-  for_each       = aws_subnet.public
-  subnet_id      = each.value.id
-  route_table_id = aws_route_table.public.id
-}
-
-resource "aws_route_table" "private" {
-  for_each = aws_subnet.private
-  vpc_id   = aws_vpc.this.id
-  route {
-    cidr_block     = "0.0.0.0/0"
-    nat_gateway_id = aws_nat_gateway.this[each.key].id
-  }
-  tags = { Name = "${var.name}-rt-private-${each.key}" }
-}
-
-resource "aws_route_table_association" "private" {
-  for_each       = aws_subnet.private
-  subnet_id      = each.value.id
-  route_table_id = aws_route_table.private[each.key].id
-}
-
-resource "aws_vpc_endpoint" "s3" {
-  vpc_id            = aws_vpc.this.id
-  service_name      = "com.amazonaws.${data.aws_region.current.name}.s3"
-  vpc_endpoint_type = "Gateway"
-  route_table_ids   = [for rt in aws_route_table.private : rt.id]
-}
-
-data "aws_region" "current" {}
-
-resource "aws_security_group" "endpoints" {
-  name        = "${var.name}-endpoints"
-  description = "Allow HTTPS from the VPC to interface endpoints"
-  vpc_id      = aws_vpc.this.id
-  ingress {
-    from_port   = 443
-    to_port     = 443
-    protocol    = "tcp"
-    cidr_blocks = [var.vpc_cidr]
-  }
-}
-
-# Interface endpoints keep AWS API traffic off the NAT Gateway. Each is charged per
-# AZ per hour, so create only the services actually used at volume.
-resource "aws_vpc_endpoint" "interface" {
-  for_each            = toset(["ecr.api", "ecr.dkr", "logs", "sts", "secretsmanager", "ssm", "ssmmessages", "ec2messages"])
-  vpc_id              = aws_vpc.this.id
-  service_name        = "com.amazonaws.${data.aws_region.current.name}.${each.value}"
-  vpc_endpoint_type   = "Interface"
-  subnet_ids          = [for s in aws_subnet.private : s.id]
-  security_group_ids  = [aws_security_group.endpoints.id]
-  private_dns_enabled = true
-}
-```
-
-### OpenAPI 3.0 — An API Gateway HTTP API With a JWT Authorizer
-
-Defining the API as OpenAPI makes it reviewable and importable in a pipeline. The `x-amazon-apigateway-*` extensions carry the AWS-specific integration and authorizer configuration.
-
-```yaml
-openapi: "3.0.1"
-info:
-  title: dso303-orders-api
-  version: "1.0.0"
-
-components:
-  securitySchemes:
-    CognitoJwt:
-      type: oauth2
-      flows: {}
-      x-amazon-apigateway-authorizer:
-        type: jwt
-        jwtConfiguration:
-          issuer: https://cognito-idp.us-east-1.amazonaws.com/us-east-1_EXAMPLE
-          audience:
-            - 4example5client6id
-        identitySource: "$request.header.Authorization"
-
-security:
-  - CognitoJwt: []
-
-paths:
-  /orders:
-    get:
-      summary: List orders for the authenticated user
-      x-amazon-apigateway-integration:
-        type: aws_proxy
-        httpMethod: POST
-        payloadFormatVersion: "2.0"
-        uri: arn:aws:apigateway:us-east-1:lambda:path/2015-03-31/functions/arn:aws:lambda:us-east-1:111122223333:function:ListOrders/invocations
-      responses:
-        "200": { description: A list of orders }
-    post:
-      summary: Submit an order for asynchronous processing
-      # Direct AWS service integration: the request is placed on an SQS queue with
-      # no Lambda in the path, so a traffic burst never reaches the backend.
-      x-amazon-apigateway-integration:
-        type: aws_proxy
-        subtype: SQS-SendMessage
-        credentials: arn:aws:iam::111122223333:role/ApiGatewaySqsRole
-        payloadFormatVersion: "1.0"
-        requestParameters:
-          QueueUrl: https://sqs.us-east-1.amazonaws.com/111122223333/orders
-          MessageBody: "$request.body"
-      responses:
-        "202": { description: Accepted for processing }
-
-  /internal/inventory/{proxy+}:
-    get:
-      summary: Proxy to a private service behind an internal ALB
-      x-amazon-apigateway-integration:
-        type: http_proxy
-        httpMethod: GET
-        connectionType: VPC_LINK
-        connectionId: abcd12
-        uri: arn:aws:elasticloadbalancing:us-east-1:111122223333:listener/app/internal-alb/50dc6c495c0c9188/0467ef3c8400ae65
-        payloadFormatVersion: "1.0"
-      responses:
-        "200": { description: Inventory data }
-```
-
-### Lambda Proxy Integration Handler (Python)
-
-Shows the payload format version 2.0 event shape, clients created outside the handler for connection reuse, and correct response construction.
+### Lambda producer with idempotency (Python, boto3)
 
 ```python
-"""Lambda proxy integration for an API Gateway HTTP API (payload format 2.0)."""
 import json
 import os
+import uuid
+from datetime import datetime, timezone
+
 import boto3
+from botocore.exceptions import ClientError
 
-# Created once per execution environment, not once per invocation. This removes a
-# TLS handshake and credential fetch from every request and is the single highest
-# value latency optimisation for Lambda.
+# Initialised OUTSIDE the handler: reused across warm invocations
 dynamodb = boto3.resource("dynamodb")
-TABLE = dynamodb.Table(os.environ["ORDERS_TABLE"])
-
-
-def _response(status: int, body: dict) -> dict:
-    return {
-        "statusCode": status,
-        "headers": {
-            "content-type": "application/json",
-            "cache-control": "no-store",
-        },
-        "body": json.dumps(body),
-    }
+events = boto3.client("events")
+table = dynamodb.Table(os.environ["TABLE_NAME"])
+BUS_NAME = os.environ["BUS_NAME"]
 
 
 def handler(event, context):
-    # HTTP API payload 2.0 places the route in requestContext.
-    route = event["requestContext"]["http"]["path"]
-    method = event["requestContext"]["http"]["method"]
+    body = json.loads(event["body"])
+    idempotency_key = body["idempotencyKey"]
+    order_id = str(uuid.uuid5(uuid.NAMESPACE_OID, idempotency_key))
 
-    # The JWT authorizer has already validated the token; claims arrive here.
-    claims = (
-        event.get("requestContext", {})
-        .get("authorizer", {})
-        .get("jwt", {})
-        .get("claims", {})
-    )
-    user_id = claims.get("sub")
-    if not user_id:
-        return _response(401, {"message": "Unauthenticated"})
+    item = {
+        "orderId": order_id,
+        "customerId": body["customerId"],
+        "items": body["items"],
+        "status": "PLACED",
+        "createdAt": datetime.now(timezone.utc).isoformat(),
+    }
 
-    if method == "GET" and route == "/orders":
-        result = TABLE.query(
-            KeyConditionExpression=boto3.dynamodb.conditions.Key("userId").eq(user_id),
-            Limit=25,
+    try:
+        # Conditional write: the idempotency guarantee
+        table.put_item(
+            Item=item,
+            ConditionExpression="attribute_not_exists(orderId)",
         )
-        return _response(200, {"orders": result.get("Items", []),
-                               "requestId": context.aws_request_id})
+        created = True
+    except ClientError as exc:
+        if exc.response["Error"]["Code"] != "ConditionalCheckFailedException":
+            raise
+        created = False  # Duplicate request; do not re-emit the event
 
-    return _response(404, {"message": "Not found"})
+    if created:
+        events.put_events(
+            Entries=[{
+                "EventBusName": BUS_NAME,
+                "Source": "orders.service",
+                "DetailType": "OrderPlaced",
+                "Detail": json.dumps({
+                    "orderId": order_id,
+                    "customerId": item["customerId"],
+                    "items": item["items"],
+                    "correlationId": context.aws_request_id,
+                }),
+            }]
+        )
+
+    return {
+        "statusCode": 201,
+        "headers": {"Content-Type": "application/json"},
+        "body": json.dumps({"orderId": order_id, "status": "PLACED"}),
+    }
 ```
 
-### Route 53 — Failover Records via change-resource-record-sets
+### Lambda consumer with partial batch failure reporting
 
-An active-passive pair. The primary is returned while its health check passes; otherwise the secondary is returned. TTL 60 bounds how quickly resolvers observe the change.
+```python
+import json
 
-```json
-{
-  "Comment": "Active-passive failover for api.example.com",
-  "Changes": [
-    {
-      "Action": "UPSERT",
-      "ResourceRecordSet": {
-        "Name": "api.example.com.",
-        "Type": "A",
-        "SetIdentifier": "primary-us-east-1",
-        "Failover": "PRIMARY",
-        "HealthCheckId": "abcdef12-3456-7890-abcd-ef1234567890",
-        "AliasTarget": {
-          "HostedZoneId": "Z35SXDOTRQ7X7K",
-          "DNSName": "dualstack.prod-alb-1234567890.us-east-1.elb.amazonaws.com.",
-          "EvaluateTargetHealth": true
-        }
-      }
-    },
-    {
-      "Action": "UPSERT",
-      "ResourceRecordSet": {
-        "Name": "api.example.com.",
-        "Type": "A",
-        "SetIdentifier": "secondary-eu-west-1",
-        "Failover": "SECONDARY",
-        "AliasTarget": {
-          "HostedZoneId": "Z32O12XQLNTSW2",
-          "DNSName": "dualstack.dr-alb-0987654321.eu-west-1.elb.amazonaws.com.",
-          "EvaluateTargetHealth": true
-        }
-      }
-    },
-    {
-      "Action": "UPSERT",
-      "ResourceRecordSet": {
-        "Name": "canary.example.com.",
-        "Type": "A",
-        "SetIdentifier": "v2-canary-5-percent",
-        "Weight": 5,
-        "TTL": 60,
-        "ResourceRecords": [{ "Value": "198.51.100.25" }]
-      }
-    },
-    {
-      "Action": "UPSERT",
-      "ResourceRecordSet": {
-        "Name": "canary.example.com.",
-        "Type": "A",
-        "SetIdentifier": "v1-stable-95-percent",
-        "Weight": 95,
-        "TTL": 60,
-        "ResourceRecords": [{ "Value": "198.51.100.24" }]
-      }
-    }
-  ]
+
+def handler(event, context):
+    failures = []
+
+    for record in event["Records"]:
+        try:
+            envelope = json.loads(record["body"])       # EventBridge envelope
+            detail = envelope["detail"]                  # business payload
+            reserve_stock(detail["orderId"], detail["items"])
+        except Exception:
+            # Only this message is retried; the rest of the batch is deleted
+            failures.append({"itemIdentifier": record["messageId"]})
+
+    return {"batchItemFailures": failures}
+
+
+def reserve_stock(order_id, items):
+    for item in items:
+        if item["sku"] == "FAIL-TEST":
+            raise RuntimeError(f"Simulated failure for order {order_id}")
+    # Real implementation: conditional DynamoDB updates decrementing stock
+```
+
+### AWS CLI verification commands
+
+```bash
+# Publish a test event directly to the bus
+aws events put-events --entries '[{
+  "EventBusName": "orders-bus",
+  "Source": "orders.service",
+  "DetailType": "OrderPlaced",
+  "Detail": "{\"orderId\":\"test-1\",\"items\":[{\"sku\":\"ABC\",\"qty\":1}]}"
+}]'
+
+# Inspect queue backlog and in-flight messages
+aws sqs get-queue-attributes \
+  --queue-url "$QUEUE_URL" \
+  --attribute-names ApproximateNumberOfMessages \
+                    ApproximateNumberOfMessagesNotVisible \
+                    ApproximateAgeOfOldestMessage
+
+# Check for poison messages in the DLQ
+aws sqs receive-message --queue-url "$DLQ_URL" --max-number-of-messages 10
+
+# Observe function concurrency and throttling
+aws cloudwatch get-metric-statistics \
+  --namespace AWS/Lambda --metric-name Throttles \
+  --dimensions Name=FunctionName,Value=ReserveInventoryFunction \
+  --start-time "$(date -u -d '1 hour ago' +%Y-%m-%dT%H:%M:%SZ)" \
+  --end-time "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+  --period 300 --statistics Sum
+
+# Replay archived events after fixing a consumer bug
+aws events start-replay \
+  --replay-name recover-orders \
+  --event-source-arn "$ARCHIVE_ARN" \
+  --event-start-time 2026-07-01T00:00:00Z \
+  --event-end-time 2026-07-01T06:00:00Z \
+  --destination '{"Arn":"'"$BUS_ARN"'"}'
+```
+
+### Terraform: queue, DLQ, and EventBridge rule
+
+```hcl
+resource "aws_sqs_queue" "inventory_dlq" {
+  name                      = "inventory-dlq"
+  message_retention_seconds = 1209600
+}
+
+resource "aws_sqs_queue" "inventory" {
+  name                       = "inventory-queue"
+  visibility_timeout_seconds = 90
+  receive_wait_time_seconds  = 20
+  sqs_managed_sse_enabled    = true
+
+  redrive_policy = jsonencode({
+    deadLetterTargetArn = aws_sqs_queue.inventory_dlq.arn
+    maxReceiveCount     = 3
+  })
+}
+
+resource "aws_cloudwatch_event_rule" "order_placed" {
+  name           = "order-placed"
+  event_bus_name = aws_cloudwatch_event_bus.orders.name
+
+  event_pattern = jsonencode({
+    source        = ["orders.service"]
+    "detail-type" = ["OrderPlaced"]
+  })
+}
+
+resource "aws_cloudwatch_event_target" "to_inventory" {
+  rule           = aws_cloudwatch_event_rule.order_placed.name
+  event_bus_name = aws_cloudwatch_event_bus.orders.name
+  arn            = aws_sqs_queue.inventory.arn
+
+  dead_letter_config {
+    arn = aws_sqs_queue.inventory_dlq.arn
+  }
+
+  retry_policy {
+    maximum_retry_attempts       = 3
+    maximum_event_age_in_seconds = 3600
+  }
+}
+
+resource "aws_cloudwatch_metric_alarm" "dlq_not_empty" {
+  alarm_name          = "inventory-dlq-has-messages"
+  namespace           = "AWS/SQS"
+  metric_name         = "ApproximateNumberOfMessagesVisible"
+  dimensions          = { QueueName = aws_sqs_queue.inventory_dlq.name }
+  statistic           = "Maximum"
+  period              = 60
+  evaluation_periods  = 1
+  threshold           = 0
+  comparison_operator = "GreaterThanThreshold"
 }
 ```
 
-Apply and verify:
-
-```bash
-aws route53 change-resource-record-sets \
-  --hosted-zone-id Z1234567890ABC \
-  --change-batch file://failover.json
-
-# Verify what Route 53 itself would answer, bypassing resolver caches.
-dig +short @ns-123.awsdns-45.com api.example.com A
-```
-
-### Kubernetes — EKS Ingress Producing an ALB
-
-The AWS Load Balancer Controller translates this manifest into an internet-facing ALB with IP targets, so the load balancer forwards directly to pod IP addresses in the VPC.
+### OpenAPI contract fragment (API-first)
 
 ```yaml
-apiVersion: networking.k8s.io/v1
-kind: Ingress
+openapi: 3.0.3
+info:
+  title: Orders API
+  version: 1.0.0
+paths:
+  /v1/orders:
+    post:
+      operationId: placeOrder
+      security:
+        - CognitoAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PlaceOrderRequest"
+      responses:
+        "201":
+          description: Order accepted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OrderCreated"
+        "400": { description: Validation failed }
+        "429": { description: Rate limit exceeded }
+components:
+  schemas:
+    PlaceOrderRequest:
+      type: object
+      required: [customerId, items, idempotencyKey]
+      properties:
+        customerId: { type: string, format: uuid }
+        idempotencyKey: { type: string, minLength: 8, maxLength: 128 }
+        items:
+          type: array
+          minItems: 1
+          items:
+            type: object
+            required: [sku, qty]
+            properties:
+              sku: { type: string }
+              qty: { type: integer, minimum: 1 }
+    OrderCreated:
+      type: object
+      properties:
+        orderId: { type: string }
+        status: { type: string, enum: [PLACED] }
+```
+
+### Kubernetes deployment for a microservice on EKS
+
+```yaml
+apiVersion: apps/v1
+kind: Deployment
 metadata:
-  name: orders-ingress
-  annotations:
-    alb.ingress.kubernetes.io/scheme: internet-facing
-    alb.ingress.kubernetes.io/target-type: ip
-    alb.ingress.kubernetes.io/listen-ports: '[{"HTTPS":443}]'
-    alb.ingress.kubernetes.io/certificate-arn: arn:aws:acm:us-east-1:111122223333:certificate/EXAMPLE
-    alb.ingress.kubernetes.io/healthcheck-path: /health
-    alb.ingress.kubernetes.io/subnets: subnet-public-a,subnet-public-b
-    alb.ingress.kubernetes.io/wafv2-acl-arn: arn:aws:wafv2:us-east-1:111122223333:regional/webacl/prod/EXAMPLE
+  name: orders-service
+  labels: { app: orders-service }
 spec:
-  ingressClassName: alb
-  rules:
-    - host: orders.example.com
-      http:
-        paths:
-          - path: /
-            pathType: Prefix
-            backend:
-              service:
-                name: orders
-                port:
-                  number: 8080
+  replicas: 3
+  selector:
+    matchLabels: { app: orders-service }
+  template:
+    metadata:
+      labels: { app: orders-service }
+    spec:
+      serviceAccountName: orders-sa # IRSA: pod-level IAM role
+      containers:
+        - name: orders
+          image: 123456789012.dkr.ecr.eu-west-1.amazonaws.com/orders:1.4.2
+          ports: [{ containerPort: 8080 }]
+          resources:
+            requests: { cpu: "250m", memory: "512Mi" }
+            limits: { cpu: "1000m", memory: "1Gi" }
+          readinessProbe:
+            httpGet: { path: /health/ready, port: 8080 }
+            initialDelaySeconds: 5
+          livenessProbe:
+            httpGet: { path: /health/live, port: 8080 }
+            initialDelaySeconds: 15
+      topologySpreadConstraints: # spread across AZs
+        - maxSkew: 1
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels: { app: orders-service }
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: orders-hpa
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: orders-service
+  minReplicas: 3
+  maxReplicas: 30
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target: { type: Utilization, averageUtilization: 65 }
 ```
 
-### Athena — Find the Top NAT Gateway Destinations From Flow Logs
+### Step Functions state machine (orchestrated saga)
 
-The query that turns a cost surprise into a specific remediation.
-
-```sql
-SELECT
-  dstaddr,
-  dstport,
-  SUM(bytes) / 1024.0 / 1024.0 / 1024.0 AS gib,
-  COUNT(*) AS flows
-FROM vpc_flow_logs
-WHERE date_partition BETWEEN '2026/07/01' AND '2026/07/31'
-  AND action = 'ACCEPT'
-  AND srcaddr LIKE '10.20.%'
-  AND NOT regexp_like(dstaddr, '^10\.20\.')
-GROUP BY dstaddr, dstport
-ORDER BY gib DESC
-LIMIT 25;
+```json
+{
+  "Comment": "Order saga with compensation",
+  "StartAt": "ReserveInventory",
+  "States": {
+    "ReserveInventory": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": { "FunctionName": "ReserveInventory", "Payload.$": "$" },
+      "Retry": [
+        {
+          "ErrorEquals": ["States.TaskFailed"],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2.0
+        }
+      ],
+      "Catch": [{ "ErrorEquals": ["States.ALL"], "Next": "RejectOrder" }],
+      "Next": "ChargePayment"
+    },
+    "ChargePayment": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": { "FunctionName": "ChargePayment", "Payload.$": "$" },
+      "Catch": [{ "ErrorEquals": ["States.ALL"], "Next": "ReleaseInventory" }],
+      "Next": "OrderConfirmed"
+    },
+    "ReleaseInventory": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": { "FunctionName": "ReleaseInventory", "Payload.$": "$" },
+      "Next": "RejectOrder"
+    },
+    "RejectOrder": { "Type": "Fail", "Error": "OrderFailed" },
+    "OrderConfirmed": { "Type": "Succeed" }
+  }
+}
 ```
 
 ---
 
-## AWS Certification Tips
+## Architecture Diagrams
 
-### High-Yield Facts
+### Pattern selection decision flow
 
-| Fact | Why it appears |
-|---|---|
-| Security groups are stateful and allow-only; NACLs are stateless and support deny | The most examined discriminator in the entire networking domain |
-| NACL rules are evaluated lowest-number-first, first match wins | Distractors reverse this or claim all rules are evaluated |
-| Five addresses reserved per subnet; a `/28` gives 11 usable | Subnetting calculation questions |
-| Gateway endpoints support only S3 and DynamoDB and are free | Cost-optimisation questions almost always have this as the answer |
-| Gateway endpoints do not work over peering, VPN, or Direct Connect; Interface endpoints do | Hybrid-connectivity questions |
-| VPC peering is non-transitive and forbids overlapping CIDRs | Multi-VPC design questions |
-| NAT Gateway is zonal; deploy one per Availability Zone | High-availability questions |
-| NAT instance requires disabling the source/destination check | Legacy but still examined |
-| An IGW alone is insufficient; a public IP, a route, and permissive rules are all required | The "instance cannot reach the internet" archetype |
-| Route 53 health checks cannot reach private endpoints; use a CloudWatch alarm health check | Private-failover questions |
-| Alias records work at the zone apex and cost nothing; CNAME does neither | DNS questions |
-| ACM certificates for CloudFront must be issued in `us-east-1` | Certificate placement questions |
-| NLB gives static IPs and extreme performance; ALB gives content-based routing | Load balancer selection |
-| Only REST APIs support WAF, API keys and usage plans, caching, request validation, and private endpoints | API Gateway selection |
-| A Private API requires an Interface endpoint plus an allowing resource policy | Private API questions |
-| Global Accelerator provides static anycast IPs and fast failover independent of DNS caching | "Failover must not depend on DNS TTL" |
+<figure markdown="span">
+    ![3layerglobalinfra](../img/U1/patternselection.png){width="80%"}
+    <figcaption>Patttern Selection Flow</figcaption>
+    <p align='right' style="font-size:0.8em"><i>Image Source: AI Generaed (Google Gemini)</i></p>
+</figure>
 
-### Frequently Confused Pairs
 
-| Pair | The distinguishing question to ask |
-|---|---|
-| Security group versus NACL | Do I need to *deny* something, or is this subnet-wide? Then NACL. Otherwise security group. |
-| Gateway endpoint versus Interface endpoint | Is it S3 or DynamoDB, and only from within this VPC? Gateway. Anything else, or reachable from on premises? Interface. |
-| Peering versus Transit Gateway | Do I need transitivity, hybrid, or more than a handful of VPCs? Transit Gateway. |
-| ALB versus NLB | Do I need layer 7 routing (ALB) or static IPs, non-HTTP protocols, or extreme scale (NLB)? |
-| API Gateway versus ALB | Do I need managed authorization, throttling, validation, and keys (API Gateway) or simple content routing to targets (ALB)? |
-| REST versus HTTP API | Do I need WAF, keys, caching, validation, private endpoints, or VTL? REST. Otherwise HTTP. |
-| Latency versus geolocation routing | Performance for global users (latency) or legal and compliance placement (geolocation)? |
-| Weighted versus multivalue answer | Deliberate proportional split (weighted) or simple health-aware spreading (multivalue)? |
-| Route 53 failover versus Global Accelerator | Is DNS-TTL-bounded failover acceptable (Route 53) or must failover be fast and DNS-independent (Global Accelerator)? |
-| CloudFront versus Global Accelerator | Cacheable HTTP content (CloudFront) or non-HTTP, static IPs, or pure network acceleration (Global Accelerator)? |
-| NAT Gateway versus egress-only Internet Gateway | IPv4 (NAT Gateway) or IPv6 (egress-only Internet Gateway)? |
-| Direct Connect versus Site-to-Site VPN | Consistent dedicated bandwidth and predictable latency (Direct Connect) or fast, cheap, encrypted-over-internet (VPN)? |
-| PrivateLink versus peering | Exposing one service without exchanging routes (PrivateLink) or full network-to-network reachability (peering)? |
+### Monolith to cloud-native evolution
 
-### Memory Aids
+<figure markdown="span">
+    ![3layerglobalinfra](../img/U1/architectureEvolution.png){width="80%"}
+    <figcaption>Evolution of Software Architecture Stages</figcaption>
+    <p align='right' style="font-size:0.8em"><i>Image Source: AI Generaed (Google Gemini)</i></p>
+</figure>
 
-- **"State is in the group."** Security **G**roups are stateful and **G**enerous only by allow; **N**ACLs are **N**umbered, **N**on-stateful, and can say **N**o.
-- **"Gateway is for the two G-scale stores."** Gateway endpoints serve S3 and DynamoDB only, and they are free.
-- **"Public is a route, not a name."**
-- **"Latency for speed, Geo for law, Weight for canaries, Failover for disaster."**
-- **"REST is rich, HTTP is fast and cheap, WebSocket is bidirectional."**
-- **"Timeout means path or filter; refused means the packet arrived."**
 
-### Scenario-Reading Technique
+### End-to-end platform reference architecture
 
-Certification scenarios encode the answer in requirement keywords. Train yourself to extract them:
+<figure markdown="span">
+    ![3layerglobalinfra](../img/U1/HAmicroservice.png){width="80%"}
+    <figcaption>High Avialability Microservice Architecture</figcaption>
+    <p align='right' style="font-size:0.8em"><i>Image Source: AI Generaed (Google Gemini)</i></p>
+</figure>
 
-| Keyword in the question | Almost always points to |
-|---|---|
-| "must not traverse the internet" | VPC endpoint or PrivateLink |
-| "lowest cost" with S3 or DynamoDB from a private subnet | Gateway endpoint |
-| "static IP addresses" or "allow-listed by the client firewall" | NLB or Global Accelerator |
-| "block a specific IP range" | NACL deny rule |
-| "must survive the loss of an Availability Zone" | Per-zone resources and multi-AZ targets |
-| "hundreds of VPCs" or "on-premises connectivity for many VPCs" | Transit Gateway |
-| "third party must consume our service privately" | PrivateLink endpoint service |
-| "no code changes" and "validate JWTs" | HTTP API JWT authorizer |
-| "throttle each customer differently" | REST API usage plans and API keys |
-| "minimise operational overhead" | The managed option, almost every time |
 
-!!! warning "The Cheapest-Answer Trap"
-    Many questions ask for the **most cost-effective** solution that meets the requirements. Read the requirements first: a single NAT Gateway is cheaper but fails the "must survive an Availability Zone failure" requirement, and is therefore wrong even though it is cheaper. Cost is a tie-breaker among solutions that all satisfy the stated constraints, never a reason to violate one.
-
----
+### Order journey from the user's perspective
+<figure markdown="span">
+    ![3layerglobalinfra](../img/U1/Customerorder.png){width="80%"}
+    <figcaption>User Prespective of Customer order journey</figcaption>
+    <p align='right' style="font-size:0.8em"><i>Image Source: AI Generaed (Google Gemini)</i></p>
+</figure>
 
 ## Summary
 
-Networking in AWS is the discipline of controlling three things deliberately: **what a name resolves to**, **where a packet is allowed to travel**, and **who is permitted to send it**. Amazon VPC, Amazon Route 53, and Amazon API Gateway are the primary instruments for those three concerns, and the load balancing and content-delivery services sit between them in the request path.
+- Cloud-native design patterns exist because cloud infrastructure changed three fundamental assumptions: capacity became elastic and metered, failure became routine rather than exceptional, and delivery speed became a competitive advantage. The four patterns in this topic each address one consequence of that shift.
 
-The architectural lessons worth carrying beyond this chapter:
+- **Serverless** answers _how compute should be provisioned_: on demand, per invocation, scaling to zero, with the provider absorbing operational responsibility. It is optimal for bursty, event-driven, and intermittent workloads, and it trades cold-start latency, execution limits, and portability for radically lower operational burden.
 
-- **A VPC is software, not wire.** Isolation comes from encapsulation and a distributed mapping service, with enforcement at every host's Nitro card. This is why security groups scale without a chokepoint, why broadcast does not exist, and why you cannot observe a neighbour's traffic.
-- **A subnet's tier is a property of its route table.** "Public", "private", and "isolated" are conclusions drawn from routing, and a route table is the artefact you show an auditor.
-- **Statefulness is the dividing line between the two filters.** Security groups carry application intent because they are stateful and can reference other groups; NACLs are coarse guardrails because they are stateless and ordered.
-- **Address planning is the one decision you cannot cheaply undo.** Plan hierarchically, leave headroom, never overlap, and account for container networking's appetite for addresses.
-- **Zonal components are where availability is won or lost.** NAT Gateways, Interface endpoint ENIs, and subnets are per-zone; AWS does not make them highly available on your behalf.
-- **Keep traffic on the AWS network.** Endpoints and PrivateLink simultaneously improve security, reduce latency, and cut cost — a rare alignment of all three, and the reason a Gateway endpoint for S3 should be considered mandatory.
-- **DNS is a control plane for traffic.** Route 53 routing policies and health checks turn naming into global failover, canary deployment, and compliance placement, subject always to the arithmetic of TTL and caching.
-- **Push cross-cutting concerns to the edge.** Authorization, validation, throttling, and caching in API Gateway are cheaper, more consistent, and more secure than the same logic repeated in every service.
-- **Prefer designs whose recovery path is data-plane only.** Pre-provisioned capacity plus health-check-driven failover is more resilient than any plan that must call a control-plane API during an incident.
-- **Decouple where you can.** A queue between the front door and the workers converts a scaling failure into a latency increase, and turns a chain of multiplied availabilities into independent ones.
-- **Express the whole network as code.** The network is the layer you change least and can least afford to lose; it is therefore the layer where Infrastructure as Code returns the most.
+- **Microservices** answers _how the system should be decomposed_: into independently deployable, independently scalable services aligned to bounded contexts and to team ownership. It delivers failure isolation and delivery velocity at the cost of distributed systems complexity — and it fails badly when boundaries are drawn prematurely or when services share a database.
 
-For DSO303 specifically, these ideas recur throughout the module. The `awsvpc` mode that makes ECS tasks first-class network citizens, the VPC CNI that gives EKS pods real VPC addresses, Lambda's Hyperplane ENIs, CI/CD pipelines that need private access to build artefacts, and observability built on Flow Logs and X-Ray are all direct applications of the material in this chapter.
+- **Event-driven** answers _how components should communicate_: asynchronously, through immutable facts routed by a broker, so producers know nothing of consumers. It is the primary mechanism for loose coupling, load levelling, and resilience, and it demands idempotency, correlation IDs, DLQs, and disciplined observability in return.
 
----
-
-## Practice Questions
-
-### Beginner Questions
-
-**1.** Explain, in your own words, the difference between a public subnet, a private subnet, and an isolated subnet. For each, state exactly what appears in its route table.
-
-**2.** A subnet is created with CIDR `10.30.4.0/24`. List every address that cannot be assigned to a resource, and state the purpose of each. How many addresses remain usable?
-
-**3.** You create a new security group and attach it to an EC2 instance in a public subnet. The instance has a public IP address. Without adding any rules, can you (a) SSH to the instance from the internet, and (b) run `yum update` from the instance? Explain both answers in terms of default security group behaviour.
-
-**4.** State three differences between a security group and a network ACL, and give one situation in which only a network ACL can satisfy the requirement.
-
-**5.** An application in a private subnet must download objects from Amazon S3. Compare routing this traffic through a NAT Gateway with using a Gateway endpoint, in terms of cost, security, and the network path taken.
-
-### Intermediate Questions
-
-**1.** A VPC is allocated `10.40.0.0/16`. Design a subnet plan for **three** Availability Zones containing a public tier (`/24` each), a private application tier (`/20` each), and an isolated data tier (`/22` each), leaving at least half the VPC unallocated for future growth. Write out every CIDR block, confirm that none overlap, and state how many usable addresses each private application subnet provides.
-
-**2.** A team enables a custom network ACL on a subnet with inbound allow for TCP 443 and outbound allow for TCP 443. All HTTPS requests to the web servers now time out. Explain precisely why, identify the missing rule including its port range and direction, and explain why the same problem does not occur with security groups.
-
-**3.** Compare the seven Route 53 routing policies. For each of the following requirements, choose one policy and justify it: (a) 10 percent of users should reach a new version; (b) European users must be served only from a European Region for data-protection reasons; (c) users worldwide should get the fastest response; (d) if the primary Region fails, serve a static maintenance page from S3.
-
-**4.** An HTTP API using a Lambda authorizer shows a p50 latency of 320 milliseconds, of which 140 milliseconds is the authorizer invocation. Describe three changes that would reduce this, and state the trade-off each one introduces.
-
-**5.** Your organisation has eight VPCs across three accounts, all of which must communicate, plus a requirement to reach an on-premises data centre. Compare VPC peering and Transit Gateway for this case quantitatively (number of connections, number of route entries, cost dimensions) and recommend one with justification.
-
-### Advanced Questions
-
-**1.** An EKS cluster must support 15,000 concurrent pods using the Amazon VPC CNI. The VPC is currently `10.50.0.0/16` with three private subnets of `/20` each. Calculate whether the current address space is sufficient, accounting for the CNI's warm-address behaviour and for cluster growth. If it is not, design a remediation using secondary CIDR blocks, CNI custom networking, and prefix delegation, and explain the trade-offs of each technique.
-
-**2.** Design a multi-Region active-active architecture for an API that must maintain availability during the complete loss of one Region, with a recovery time objective under 60 seconds. Specify the DNS strategy, the health-check strategy, the data-replication implication, and explain why your failover mechanism does not depend on any control plane in the failed Region. Justify your choice between Route 53 failover, Route 53 latency routing with health checks, and AWS Global Accelerator.
-
-**3.** A financial services organisation requires that (a) no workload subnet has any route to the internet, (b) all outbound traffic from 30 VPCs is inspected by a stateful firewall with domain-name filtering, (c) each business unit's VPCs cannot reach another business unit's VPCs, and (d) all of this must be auditable. Design the network. Name every component, describe the Transit Gateway route-table structure, explain how egress inspection is enforced, and describe the evidence you would produce for an auditor.
-
-**4.** Your API Gateway front end can accept 10,000 requests per second, but the downstream relational database supports 400 concurrent connections and the business requires that no request be lost. Design the complete request path including back-pressure, and calculate the queue-depth and worker-concurrency implications if a five-minute burst arrives at 10,000 requests per second while workers drain at 400 per second. State what the client experiences at each stage.
-
-**5.** An organisation's monthly bill shows large charges for `NatGateway-Bytes`, `DataTransfer-Regional-Bytes`, and `PublicIPv4:InUseAddress`. Describe a systematic investigation using VPC Flow Logs, Athena, and Cost Explorer, then propose a remediation for each of the three charges. For each remediation, state the new cost it introduces and the conditions under which the change would **not** be worthwhile.
-
-!!! question "Extension Exercise for the Ambitious"
-    Take the CloudFormation template from the Code Examples section and extend it to three Availability Zones, add Interface endpoints for `ssm`, `ssmmessages`, and `ec2messages`, remove all NAT Gateways, and demonstrate that you can still administer an instance and pull an image from Amazon ECR. Measure the cost difference. Then explain the circumstances under which removing NAT entirely is and is not viable.
+- **API-first** answers _how integration should be governed_: by designing and agreeing the contract before implementation, treating the API as a durable product with versioning, documentation, and enforcement at the gateway.

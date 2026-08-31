@@ -1,12 +1,9 @@
 # Lab 03 — Amazon EC2 and Deploying the USMS Application
-
-*Practical 1, Part B — completing the VPC and EC2 deployment, with in-class assessment*
-
 ---
 
 ## 1. Lab Overview
 
-Part A built a network with nothing in it. This session puts servers in it.
+Lab 2 built a network with nothing in it. This session puts servers in it.
 
 You will launch the USMS web server into the public subnet you built, attach the security group you
 wrote, and give it the instance profile Lab 1 created — three artefacts from two previous labs,
@@ -17,22 +14,6 @@ into the private subnet so that the two-tier design stops being a diagram.
 Then you will prove things: that the instance profile really is attached, that the user data really
 arrived, that stopping and starting an instance changes one address and not the other, and that all
 of it survives a restart of the emulator.
-
-The session ends with an **in-class assessment** (Section 14): a timed practical task plus a short
-viva. Section 14 tells you exactly what is assessed and how it is marked, so read it at the start of
-the session rather than at the end.
-
-**Time:** roughly 3 hours for Steps 1 to 23, plus 60 minutes for the assessment.
-
-**Where this sits in the course**
-
-```text
-Lab 01  IAM ..................... roles, policies, usms-ec2-app-profile
-Lab 02  VPC ..................... Practical 1 Part A — the network
-Lab 03  EC2 .................... THIS LAB — servers inside that network
-Lab 04  S3 ...................... the bucket usms-ec2-app-role can already write to
-Lab 05  Lambda .................. functions triggered from that bucket
-```
 
 ---
 
@@ -184,52 +165,7 @@ each of those three independently.
 
 ## 6. Architecture
 
-```text
-                                Internet
-                                    |
-                          +---------+---------+
-                          |     usms-igw      |
-                          +---------+---------+
-                                    |
-  ==================================|========================================
-  ||  usms-vpc  10.0.0.0/16         |                                      ||
-  ||                                |                                      ||
-  ||   usms-public-rt   0.0.0.0/0 --+                                       ||
-  ||        |                                                              ||
-  ||   +----+-------------------------------------------------------+      ||
-  ||   |  usms-public-subnet-a   10.0.1.0/24   us-east-1a            |      ||
-  ||   |                                                            |      ||
-  ||   |   +----------------------------------------------------+   |      ||
-  ||   |   |  usms-web-01                          t3.micro     |   |      ||
-  ||   |   |    private 10.0.1.x   public via usms-web-eip      |   |      ||
-  ||   |   |    sg      usms-app-sg     (80, 443, 22)           |   |      ||
-  ||   |   |    profile usms-ec2-app-profile                    |   |      ||
-  ||   |   |              -> usms-ec2-app-role                  |   |      ||
-  ||   |   |                   -> USMSStudentDataReadWrite      |   |      ||
-  ||   |   |    root  /dev/xvda   8 GiB gp3   delete on term    |   |      ||
-  ||   |   |    data  /dev/sdf    8 GiB gp3   usms-web-data-vol |   |      ||
-  ||   |   |    user-data: install nginx, write the portal page |   |      ||
-  ||   |   +--------------------------+-------------------------+   |      ||
-  ||   |                              |                             |      ||
-  ||   |   [ usms-nat ]               | tcp 5432                    |      ||
-  ||   +------------------------------|-----------------------------+      ||
-  ||                                  |                                    ||
-  ||   usms-private-rt  0.0.0.0/0 -> usms-nat                              ||
-  ||        |                         |                                    ||
-  ||   +----+-------------------------v-----------------------------+      ||
-  ||   |  usms-private-subnet-a  10.0.3.0/24  us-east-1a            |      ||
-  ||   |                                                            |      ||
-  ||   |   +----------------------------------------------------+   |      ||
-  ||   |   |  usms-db-01                           t3.micro     |   |      ||
-  ||   |   |    private 10.0.3.x   NO public address            |   |      ||
-  ||   |   |    sg      usms-db-sg   (5432 from usms-app-sg)    |   |      ||
-  ||   |   +----------------------------------------------------+   |      ||
-  ||   |   guarded by usms-private-nacl                             |      ||
-  ||   +------------------------------------------------------------+      ||
-  ==========================================================================
-
-  usms-web-golden  <- AMI created from usms-web-01 in Step 20
-```
+![Architecture](image-1.png)
 
 ---
 
@@ -2858,7 +2794,7 @@ Everything below is checkable from your own repository.
 - [ ] `labs/lab-03-ec2/exercises.md` contains all five exercises
 - [ ] Every Floci limitation you hit is recorded, with what real AWS would have done
 - [ ] Screenshots in `screenshots/` for Checkpoints 3, 5 and 6
-
+<!-- 
 ### 14.2 The in-class practical task — 60 minutes, 60 marks
 
 You will be given the task at the start of the assessment slot and must complete it in your own
@@ -2873,9 +2809,9 @@ The task will be a variation on this shape, so prepare for the shape rather than
 > `usms-student-data` but never write to it. It must have a data volume that survives termination.
 > Bootstrap it with a user-data script that records its own identity to a log file.
 >
-> Build it, prove each requirement, and record it in `configs/lab-03.env`.
+> Build it, prove each requirement, and record it in `configs/lab-03.env`. -->
 
-**Marking scheme**
+<!-- **Marking scheme**
 
 | Criterion | Marks | What earns full marks |
 | --- | --- | --- |
@@ -2895,9 +2831,9 @@ The task will be a variation on this shape, so prepare for the shape rather than
 | A resource with no `Project=USMS` tag | −3 each |
 | Any credential visible in terminal output, a file, or a screenshot | −20 |
 | `floci start`, `docker compose down -v`, or `docker volume prune` used | −20 |
-| A claim of success with no verification command behind it | −5 each |
+| A claim of success with no verification command behind it | −5 each | -->
 
-### 14.3 Viva — 10 minutes, 40 marks
+<!-- ### 14.3 Viva — 10 minutes, 40 marks
 
 Two questions from this bank, chosen at random. You may use your repository to illustrate an answer,
 but the answer must be in your own words.
@@ -2924,8 +2860,8 @@ but the answer must be in your own words.
 11. Floci does not enforce security groups. Given that, how do you know the rules you wrote are
     correct? What class of mistake would your verification catch, and what class would it miss?
 12. You are asked to move `usms-web-01` to `us-east-1b`. What can be moved, what must be recreated,
-    and what does that tell you about which AWS resources are zonal and which are regional?
-
+    and what does that tell you about which AWS resources are zonal and which are regional? -->
+<!-- 
 **Marking**
 
 | Band | Marks | Description |
@@ -2934,7 +2870,7 @@ but the answer must be in your own words.
 | Good | 26–33 | Correct with minor imprecision; recovers when prompted |
 | Satisfactory | 20–25 | The mechanism is understood; the explanation is vague or incomplete |
 | Weak | 12–19 | Recalls the commands but not what they did |
-| Fail | 0–11 | Cannot explain the system they built |
+| Fail | 0–11 | Cannot explain the system they built | -->
 
 ---
 
@@ -3032,30 +2968,7 @@ for the end of the course, and in that order.
 
 ### 16.3 The architecture you now have
 
-```text
-Lab 01  IAM
-  usms-developer-role ................... used in Lab 02
-  usms-ec2-app-role + usms-ec2-app-profile  ATTACHED TO usms-web-01
-  USMSStudentDataReadWrite .............. names a bucket that does not exist yet -> Lab 04
-  usms-lambda-exec-role ................. waiting for Lab 05
-
-Lab 02  NETWORK
-  usms-vpc 10.0.0.0/16
-    usms-public-subnet-a / -b   -> usms-public-rt  -> usms-igw
-    usms-private-subnet-a / -b  -> usms-private-rt -> usms-nat
-                                                   -> usms-s3-endpoint
-    usms-app-sg, usms-db-sg, usms-private-nacl
-
-Lab 03  COMPUTE                                        <-- you are here
-  usms-web-01   public subnet a   usms-app-sg   usms-ec2-app-profile
-                usms-web-eip      /dev/sdf usms-web-data-vol
-                user-data: nginx + the USMS portal page
-  usms-db-01    private subnet a  usms-db-sg    no profile, no public address
-  usms-web-golden  AMI            -> Lab 08
-
-Lab 04  STORAGE (next)
-  usms-student-data  <- the bucket that makes USMSStudentDataReadWrite real
-```
+![alt text](image-2.png)
 
 ---
 

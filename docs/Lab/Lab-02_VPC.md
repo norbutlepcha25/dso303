@@ -1105,7 +1105,7 @@ PUBLIC_ASSOC_A_ID = rtbassoc-0123456789abcdef0
 
 > Example output your association ID will differ.
 
-✏️ **Your turn**
+ **Your turn**
 
 USMS has to survive the loss of one Availability Zone, so the web tier needs a second public subnet.
 Create `usms-public-subnet-b` with CIDR `10.0.2.0/24` in `us-east-1b`, turn on auto-assign public
@@ -1343,7 +1343,7 @@ sgr-0ddd444eee555fff6
 > Example output your IDs will differ. Each `sgr-` value is a rule ID, which is what you would pass
 > to `revoke-security-group-ingress` to remove exactly that rule.
 
-✏️ **Your turn**
+ **Your turn**
 
 The USMS web tier will serve HTTPS as well as HTTP. Add an inbound rule to `usms-app-sg` allowing TCP
 443 from `0.0.0.0/0`, and give the rule a description so that a future reader knows why it is there.
@@ -2089,7 +2089,7 @@ the course when nobody remembers what the resource was for:
 aws ec2 create-tags --resources <id> --tags Key=Project,Value=USMS Key=Name,Value=<name>
 ```
 
-✏️ **Your turn**
+ **Your turn**
 
 Produce a table of every subnet in `usms-vpc` showing its name, CIDR, Availability Zone and tier, with
 the private subnets listed first, using `--filters` to restrict the query to this VPC and `--query` to
@@ -3348,5 +3348,3 @@ shape.
 - [Controlling command output with `--query` and `--filters`](https://docs.aws.amazon.com/cli/latest/userguide/cli-usage-filter.html)
 
 ---
-
-*Lab 02 complete. Part B Lab 03, EC2 launches into the subnets you just built.*

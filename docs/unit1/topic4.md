@@ -1,2168 +1,2551 @@
-# Compute Services on AWS  EC2, ECS, EKS, Lambda and Fargate
+# Storage Services — Amazon S3, Amazon EBS, and Amazon EFS
 
-!!! info "Where this topic sits in DSO303"
-    Compute is the first of the four foundational resource classes in any cloud architecture  compute, storage, networking, and identity. Every later topic in this module (microservices, CI/CD pipelines, observability, event-driven design, security hardening) ultimately runs on one of the compute models introduced here. Choosing the compute model is one of the highest-leverage architectural decisions you will make, because it constrains your deployment pipeline, your scaling behaviour, your failure modes, your operational burden, and your monthly bill for years afterwards.
+*DSO303 — Cloud Native Solution Design (AWS) — Unit 1.2.2*
 
+Storage is the part of a cloud architecture that outlives everything else. Compute instances are ephemeral, containers are replaced on every deployment, and functions live for milliseconds. Data persists. Consequently, the storage decisions an architect makes are the most expensive to reverse and the most consequential for durability, cost, and compliance. This chapter teaches storage as an architectural discipline rather than as a catalogue of AWS services.
+
+---
+
+## Learning Objectives
+
+After studying this chapter, you should be able to:
+
+- Explain the fundamental distinction between **object storage**, **block storage**, and **file storage**, and articulate why each abstraction exists rather than merely memorising which AWS service belongs to which category.
+- Describe the internal architecture of Amazon S3, including its flat keyspace, partitioned index, erasure coding, multi-Availability-Zone replication, and strong read-after-write consistency model.
+- Explain how Amazon EBS delivers network-attached block storage that behaves like a local disk, how the AWS Nitro system participates in the data path, and how snapshots achieve incremental, cross-AZ durability through S3.
+- Explain how Amazon EFS provides a POSIX-compliant, elastically scaling NFSv4.1 file system with mount targets in each Availability Zone.
+- Distinguish **control plane** operations from **data plane** operations for each storage service and explain why that distinction matters for availability design.
+- Select the correct S3 storage class and the correct EBS volume type for a given workload, justifying the choice with access-pattern, latency, throughput, and cost reasoning.
+- Design storage layers that satisfy explicit **durability**, **availability**, **latency**, **throughput**, and **cost** targets, and articulate the trade-offs sacrificed to meet them.
+- Apply security-by-design to storage: encryption at rest and in transit, KMS key strategy, least-privilege IAM, resource policies, Block Public Access, and VPC endpoints.
+- Externalise application state into managed storage so that compute tiers become stateless, cloud-native, and horizontally scalable — a core DSO303 outcome.
+- Provision storage reproducibly using Infrastructure as Code with CloudFormation and Terraform.
+- Choose correctly between S3, EBS, EFS, FSx, and instance store using a defensible decision framework.
+
+!!! info "How to read this chapter"
+    Every section answers three questions in order: **why** does this exist, **how** does it work internally, and **when** should an architect choose it. If you can only remember one thing per service, remember the *shape of the problem it solves*, not the list of its features.
+
+---
 
 ## Definition
 
-**Compute** in AWS is the family of services that execute your application code  that provide CPU cycles, memory, and an execution context in which a process runs. Storage services hold bytes at rest, networking services move bytes between endpoints, and compute services transform bytes.
+AWS storage services are managed, API-driven, durable data-persistence systems that decouple data from the lifetime of any individual compute resource. They sit in the **data layer** of an AWS architecture, beneath the compute layer (EC2, ECS, EKS, Lambda) and alongside the database layer (RDS, DynamoDB, Aurora).
 
-AWS offers compute at several different **levels of abstraction**. The higher the abstraction, the more of the operational stack AWS manages on your behalf, and the less control and flexibility you retain.
+Three services form the foundation of the AWS storage portfolio, and each implements a fundamentally different storage abstraction.
 
-| Service | Abstraction level | Unit of deployment | What AWS manages | What you manage |
-|---|---|---|---|---|
-| **Amazon EC2** | Infrastructure as a Service (IaaS) | Virtual machine instance | Physical hosts, hypervisor, network fabric, hardware failure detection | Guest OS, patching, runtime, application, scaling policy, capacity |
-| **Amazon ECS (EC2 launch type)** | Containers as a Service (CaaS) | Container / task | Orchestration control plane, scheduling, service discovery integration | Container image, EC2 host fleet, host patching, cluster capacity |
-| **Amazon ECS (Fargate)** | Serverless containers | Container / task | Everything below the container: host, OS, agent, capacity | Container image, task sizing, IAM, networking configuration |
-| **Amazon EKS** | Managed Kubernetes | Pod (in a Deployment, Job, etc.) | Kubernetes control plane, etcd, API server HA, control-plane upgrades | Worker nodes (or Fargate profiles), add-ons, manifests, upgrade cadence |
-| **AWS Lambda** | Function as a Service (FaaS) | Function invocation | Absolutely everything except your code and configuration | Handler code, memory setting, IAM role, event source configuration |
+### Amazon S3 — Simple Storage Service
 
-!!! note "The single most important sentence in this chapter"
-    You are not choosing between EC2, ECS, EKS, and Lambda on the basis of which is "best" or "most modern". You are choosing **how much of the operational stack you want to be responsible for**, and accepting the constraints that come with giving that responsibility away.
+Amazon S3 is a **regional, fully managed object storage service**. Data is stored as immutable **objects** — an opaque blob of bytes plus user-defined metadata — inside flat containers called **buckets**, and accessed over HTTPS through a REST API. S3 has no file system, no directories, no partial in-place writes, and no notion of a mounted device. It is designed for effectively unlimited capacity, eleven nines of durability, and internet-scale concurrency.
 
-### The Compute Spectrum
+### Amazon EBS — Elastic Block Store
 
-<figure markdown="span">
-    ![3layerglobalinfra](../img/U1/computeEvolution.png){width="80%"}
-    <figcaption>Level of Control in AWS</figcaption>
-    <p align='right' style="font-size:0.8em"><i>Image Source: AI Generaed (Google Gemini)</i></p>
-</figure>
-Moving left to right along this spectrum:
+Amazon EBS is an **Availability-Zone-scoped, network-attached block storage service**. It presents a raw block device to an EC2 instance, which the guest operating system formats with a file system (ext4, XFS, NTFS) exactly as it would a physical disk. EBS volumes are attached to instances over a purpose-built network path, replicated within a single Availability Zone, and support point-in-time snapshots stored in S3.
 
-- **Operational burden decreases.** You stop patching kernels, then you stop managing hosts, then you stop thinking about servers at all.
-- **Granularity of billing increases.** You move from per-hour instance billing, to per-second task billing, to per-millisecond invocation billing.
-- **Constraints tighten.** Lambda imposes a maximum execution duration, a maximum deployment package size, and a stateless execution model. EC2 imposes none of these.
-- **Portability changes character.** Containers are portable across clouds; Lambda functions are portable only in their business logic, not in their operational shape.
+### Amazon EFS — Elastic File System
+
+Amazon EFS is a **regional, fully managed, elastic network file system** implementing the **NFSv4.1** protocol. It provides shared POSIX semantics — directories, file permissions, hard links, byte-range locking — to thousands of concurrent clients across multiple Availability Zones. Capacity grows and shrinks automatically as files are written and deleted, with no provisioning step.
+
+![alt text](image-1.png)
+
+### Where they fit in AWS architecture
+
+```mermaid
+graph TD
+    subgraph Compute
+        A["EC2 Instances"]
+        B["ECS and EKS Tasks"]
+        C["Lambda Functions"]
+    end
+    subgraph Storage
+        D["Amazon S3 - Object"]
+        E["Amazon EBS - Block"]
+        F["Amazon EFS - File"]
+        G["Instance Store - Ephemeral Block"]
+    end
+    subgraph Database
+        H["Amazon RDS"]
+        I["Amazon DynamoDB"]
+    end
+    A --> E
+    A --> G
+    A --> F
+    B --> F
+    B --> D
+    C --> D
+    C --> F
+    A --> D
+    H --> E
+    D --> I
+```
+
+!!! note "Storage is not the same as a database"
+    A database imposes structure, query semantics, transactions, and indexing on top of storage. A storage service stores bytes and returns bytes. RDS internally uses EBS volumes; DynamoDB internally uses its own distributed storage layer. The architectural rule is straightforward: if you need to *query* the data by content, you want a database; if you need to *retrieve* the data by identity, you want storage.
 
 ---
 
 ## Why This Service or Concept Exists
 
-### The Problem Before Cloud Compute
+### The problem before cloud storage
 
-The structural problems were:
+In a traditional on-premises data centre, storage is a capital purchase. An organisation forecasts capacity for three to five years, buys a Storage Area Network or Network Attached Storage appliance, racks it, cables it, configures RAID groups, and hires storage administrators. This model has structural defects that no amount of operational discipline can remove.
 
-| Problem | Consequence |
-|---|---|
-| **Capacity had to be bought before demand was known** | Systematic over-provisioning; typical server utilisation of 10–20 percent |
-| **Provisioning latency measured in weeks** | Business initiatives blocked on infrastructure |
-| **Capital expenditure, not operating expenditure** | Large up-front cost, depreciation schedules, board approval for experiments |
-| **Manual configuration** | Configuration drift, snowflake servers, "works on that box" failures |
-| **Failure handling was manual** | Hardware failure meant an engineer physically replacing a component |
-| **Scaling down was impossible** | You cannot un-buy a server |
-
-### What AWS Compute Changed
-
-**Amazon EC2 (2006)** was the founding answer: virtual machines available through an API in minutes, billed by the hour and later by the second, disposable by design. This converted capital expenditure into operating expenditure and provisioning time from weeks into minutes. Crucially, it made *elasticity* possible  the ability to grow and, just as importantly, shrink capacity in response to real demand.
-
-But EC2 left a large problem unsolved. A virtual machine still has an operating system that must be patched, a filesystem that accumulates state, and a deployment process that must place application artefacts onto it. Teams building dozens of microservices discovered that managing hundreds of EC2 instances is not fundamentally easier than managing hundreds of physical servers  it is merely faster to provision them.
-
-**Containers** solved the packaging problem: an immutable image bundling application code, runtime, libraries, and configuration, guaranteed to behave identically wherever it runs. But containers created a new problem  *placement*. If you have 300 containers and 40 hosts, which container runs where? What happens when a host dies? How do containers find each other? These are **orchestration** problems.
-
-**Amazon ECS (2014)** provided AWS-native orchestration: a control plane that schedules containers onto a fleet, restarts them on failure, integrates with ELB, and authenticates through IAM. It is deliberately opinionated and deeply integrated with AWS.
-
-**Amazon EKS (2018)** provided the same orchestration through **Kubernetes**, the open-source de facto standard, for organisations that wanted a portable, extensible, community-driven control plane, or that already had Kubernetes expertise and tooling.
-
-**AWS Fargate (2017)** removed the last piece of server management from containers. With Fargate you do not run EC2 instances at all  you declare CPU and memory per task or pod, and AWS provisions the underlying compute invisibly.
-
-**AWS Lambda (2014)** went furthest: you upload a function, you configure an event source, and AWS runs the function on demand, scaling from zero to thousands of concurrent executions and back to zero, charging only for the milliseconds consumed. There is no host to see, no capacity to plan, no idle cost.
-
-!!! tip "The evolution is additive, not replacing"
-    A common beginner error is to assume that Lambda "replaced" EC2, or that EKS "replaced" ECS. In reality, mature AWS estates run all of these simultaneously, each for the workloads it fits. Netflix runs enormous EC2 fleets *and* serverless functions. A bank may run a Kubernetes platform for its microservices *and* Lambda for its event glue *and* EC2 for a licensed legacy database.
-
-### Traditional Approach Compared With the AWS Approach
-
-| Dimension | Traditional data centre | AWS compute |
+| Problem in the traditional model | Consequence | How AWS storage addresses it |
 |---|---|---|
-| Provisioning time | Weeks to months | Seconds to minutes |
-| Cost model | Capital expenditure, depreciated | Operating expenditure, consumption-based |
-| Capacity planning | Forecast peak 1–2 years ahead | Scale reactively or predictively |
-| Failure recovery | Manual hardware replacement | Instance replacement via API or automatically by an Auto Scaling group |
-| Utilisation | Typically 10–20 percent | 40–70 percent with autoscaling; effectively 100 percent with Lambda |
-| Experimentation cost | High  hardware must be purchased | Near zero  terminate when finished |
-| Geographic expansion | Build or lease a new data centre | Deploy into another Region via API |
+| Capacity must be forecast years in advance | Either over-provisioning and wasted capital, or emergency procurement with weeks of lead time | Elastic capacity provisioned by API in seconds |
+| Durability depends on RAID and local redundancy | A data-centre fire, flood, or power event destroys all copies | S3 and EFS replicate across multiple Availability Zones automatically |
+| Scaling throughput requires buying more spindles or controllers | Performance is bounded by hardware already purchased | Performance is a configurable dimension decoupled from capacity, notably in gp3 and io2 |
+| Backups are batch jobs to tape with long restore times | Recovery Time Objective measured in days | Snapshots are incremental, API-driven, and restorable in minutes |
+| Storage is a shared, contended appliance | Noisy-neighbour effects across unrelated applications | Per-volume and per-file-system performance isolation |
+| Geographic redundancy requires a second data centre | Prohibitive cost for most organisations | Cross-Region Replication is a configuration setting |
+| Access control is network-based and coarse | Anyone on the correct VLAN can reach the data | Identity-based IAM policies, resource policies, and encryption context |
 
+### Why AWS introduced three distinct services
 
+A frequent beginner question is why AWS did not build one universal storage service. The answer is that the three storage abstractions make **mutually incompatible trade-offs**, and no single design can satisfy all of them simultaneously.
+
+Object storage achieves near-infinite scale and extreme durability precisely because it gives up in-place mutation, POSIX semantics, and low-latency small random writes. Every object is written whole, distributed across many devices with erasure coding, and identified by a key in a flat namespace. That design is what makes eleven nines of durability and unlimited capacity achievable — but it also means you cannot open an object, seek to byte 4,096, and overwrite four bytes.
+
+Block storage achieves single-digit-millisecond latency and true random-access semantics precisely because it presents a narrow, low-level interface — read block N, write block N — to exactly one host at a time in the common case. That design is what makes it suitable for database engines and boot volumes. But it cannot span Availability Zones, because synchronous block replication across tens of kilometres would destroy the latency guarantee.
+
+File storage achieves shared, concurrent, POSIX-correct access from many hosts precisely because it maintains a distributed metadata service that coordinates directory structure, locking, and permissions. That coordination cost is what makes EFS more expensive per gigabyte and higher-latency than EBS — but it is also what allows a hundred containers to write into the same directory safely.
+
+```mermaid
+graph LR
+    A["Storage Design Trade-off Triangle"] --> B["Object - Unlimited scale and durability"]
+    A --> C["Block - Lowest latency and random write"]
+    A --> D["File - Shared POSIX access"]
+    B --> E["Sacrifices in-place mutation"]
+    C --> F["Sacrifices sharing and cross-AZ reach"]
+    D --> G["Sacrifices cost per gigabyte and raw latency"]
+```
+
+!!! tip "The architect's framing"
+    Do not ask "which AWS storage service should I use". Ask "what access pattern does my data have". Access pattern determines abstraction; abstraction determines service. This sequencing is what separates an architect from a console operator.
+
+### Benefits over older methods
+
+- **Consumption-based economics.** You pay for what is stored and what is requested, not for what might be needed in 2029.
+- **Durability as an engineered property.** Eleven nines of durability is achieved through erasure coding and multi-AZ placement, not through hoping the RAID controller holds.
+- **Separation of capacity from performance.** With gp3 volumes, IOPS and throughput are provisioned independently of size — an option that has no clean on-premises analogue.
+- **Security integrated with identity.** Access is granted to IAM principals, not to network segments.
+- **Programmability.** Every operation is an API call, which makes storage automatable, testable, and expressible as Infrastructure as Code.
+
+---
+
+## Real-World Motivation
+
+Abstract benefits become convincing only when tied to concrete engineering pressures. The following scenarios illustrate why organisations reach for each abstraction.
+
+### Media streaming at global scale
+
+A video streaming platform of the kind operated by Netflix ingests master video files, transcodes them into dozens of bitrate ladders, and serves the resulting segments to hundreds of millions of devices. The transcoded segments are written once and read billions of times. They are immutable, individually addressable, and vary enormously in access frequency — a new release is hot for two weeks and cold forever after.
+
+This is the canonical object storage workload. S3 stores the segments; CloudFront caches them at the edge; S3 Intelligent-Tiering moves aged content to cheaper tiers automatically. Attempting this on block storage would require a file system large enough to hold petabytes, which does not exist as a single EBS volume, and would provide no HTTP-native access path.
+
+### Transactional financial systems
+
+A core banking ledger running PostgreSQL on EC2 demands single-digit-millisecond write latency, strict ordering, crash-consistent recovery, and predictable IOPS under load. The database engine writes 8 KiB pages and a write-ahead log with fsync barriers.
+
+This is the canonical block storage workload. Only EBS io2 Block Express provides the sub-millisecond latency, the provisioned IOPS guarantee, and the durability that a transactional engine requires. S3 cannot serve this because it has no partial-write semantics; EFS cannot serve it because NFS network round-trips and metadata coordination add latency that the log writer cannot absorb.
+
+### Shared content management for a legacy application
+
+A government agency migrates a document management system in which a fleet of application servers all mount `/var/www/documents` and read and write the same directory tree. The application uses POSIX file locking and expects `rename` to be atomic. Rewriting it to use an object API would take eighteen months and is not funded.
+
+This is the canonical file storage workload. EFS lets the fleet mount the same file system from every Availability Zone with no application change, preserving POSIX semantics while removing the single-server bottleneck. This "lift and shift with shared state" pattern is one of the most common real migrations an architect will encounter.
+
+### Analytics and the data lake
+
+An e-commerce company such as Amazon or a ride-hailing platform such as Uber lands raw clickstream events, transaction logs, and telemetry into a central repository, then runs Athena, EMR, Glue, and Redshift Spectrum over it. The data is append-only, queried by columnar scan, and retained for years for regulatory reasons.
+
+S3 is the storage substrate for essentially every data lake on AWS, because compute engines can be attached and detached independently of the data, and because storage classes let seven-year-old data cost a fraction of last week's data.
+
+### Container platforms and stateful workloads
+
+A microservices platform running on EKS deploys pods that are rescheduled across nodes at any moment. A pod that writes to its container file system loses that data on restart. A pod that needs shared configuration or user uploads across replicas needs storage that is not tied to a node.
+
+EFS provides `ReadWriteMany` persistent volumes for shared state; EBS provides `ReadWriteOnce` persistent volumes for per-pod state such as a Prometheus time-series database; S3 provides the artefact and object store the application talks to over the API. This triad appears in nearly every production Kubernetes architecture and is a direct DSO303 outcome.
+
+!!! example "Healthcare and regulated data"
+    A hospital system storing medical imaging must retain studies for decades, encrypt them with customer-managed keys, produce an immutable audit trail of every access, and prevent deletion before a retention period expires. S3 with SSE-KMS, CloudTrail data events, and S3 Object Lock in Compliance mode satisfies all four requirements as configuration rather than as custom code. This is a clear illustration of why managed storage beats self-managed storage in regulated environments.
+
+---
 
 ## Core Concepts
 
-### Virtualisation and Multi-Tenancy
+### The three storage abstractions
 
-A **hypervisor** is software (or, on modern AWS hardware, largely dedicated silicon) that partitions one physical server into multiple isolated virtual machines. Each VM believes it has its own CPU, memory, disks, and network interfaces. The hypervisor enforces isolation so that one tenant cannot read another tenant's memory or saturate another tenant's I/O.
+Understanding the taxonomy is the single highest-leverage concept in this chapter. Everything else follows from it.
 
-<figure markdown="span">
-    ![hypervisor](../img/U1/hypervisor.webp){width="80%"}
-    <figcaption>Types of Hypervisor</figcaption>
-</figure>
-
-
-**Multi-tenancy** is the practice of running multiple customers' workloads on shared physical hardware. It is what makes cloud economics work  utilisation of the physical fleet is high because peaks and troughs of different customers do not coincide. AWS offers tenancy options that trade this economy for isolation: shared (default), Dedicated Instances (hardware not shared with other AWS accounts), and Dedicated Hosts (you get a specific physical server, with visibility of sockets and cores, which matters for per-socket software licensing).
-
-### Containers Versus Virtual Machines
-
-<figure markdown="span">
-    ![hypervisor](../img/U1/virtualizationVScontainer.png){width="80%"}
-    <figcaption>Virtual machine model VS Container Model</figcaption>
-</figure>
-
-
-A **container** is an operating-system-level isolation construct. It does not carry its own kernel. It uses Linux kernel primitives  **namespaces** (to give the process its own view of the process tree, network stack, mount table, users, and hostname) and **cgroups** (to constrain CPU, memory, and I/O consumption)  plus a layered filesystem.
-
-| Property | Virtual machine | Container |
-|---|---|---|
-| Isolation boundary | Hardware-virtualised; separate kernel | Kernel namespaces; shared kernel |
-| Start time | Tens of seconds to minutes | Milliseconds to a few seconds |
-| Image size | Gigabytes | Tens to hundreds of megabytes |
-| Density per host | Tens | Hundreds |
-| Isolation strength | Very strong | Strong, but a shared kernel is a shared attack surface |
-| Typical use | Full OS environments, legacy software | Microservices, stateless application processes |
-
-!!! warning "Containers are not a security boundary equivalent to a VM"
-    Because containers share the host kernel, a kernel vulnerability can in principle allow container escape. This is exactly why AWS Fargate and AWS Lambda do **not** simply run customer containers side by side on a shared kernel  they place each task or execution environment inside its own lightweight virtual machine. Never assume that "it is in a container" means "it is isolated from other tenants".
-
-### Container Images, Registries, and Immutability
-
-A **container image** is an immutable, layered, content-addressed filesystem plus metadata (entrypoint, environment variables, exposed ports). Images are built from a **Dockerfile**, stored in a **registry**  on AWS, **Amazon Elastic Container Registry (ECR)**  and pulled by hosts at launch.
-
-Immutability is an architectural principle, not merely an implementation detail. It means:
-
-- The artefact tested in staging is bit-for-bit the artefact running in production.
-- Rollback is redeployment of a previous image tag, not an inverse migration script.
-- Configuration that varies by environment must be injected at runtime (environment variables, Secrets Manager, Parameter Store) rather than baked into the image.
-
-!!! danger "Never use the `latest` tag in production"
-    `latest` is a mutable pointer. Two tasks launched five minutes apart can run different code with the same tag, and you lose the ability to roll back deterministically. Tag images with an immutable identifier  a Git commit SHA or a semantic version  and enable ECR **tag immutability** so a tag cannot be overwritten.
-
-### Orchestration
-
-**Orchestration** is the automated management of container lifecycle across a fleet of hosts. An orchestrator is responsible for:
-
-| Responsibility | Meaning |
-|---|---|
-| **Scheduling / placement** | Deciding which host runs which container, given resource requests and constraints |
-| **Desired state reconciliation** | Continuously comparing actual state to declared state and correcting the difference |
-| **Health checking and self-healing** | Detecting unhealthy containers and replacing them |
-| **Service discovery** | Allowing containers to find each other as instances come and go |
-| **Load balancing integration** | Registering and deregistering targets with a load balancer |
-| **Rolling deployment** | Replacing old versions with new versions without downtime |
-| **Resource management** | Bin-packing containers onto hosts within CPU and memory limits |
-
-The **declarative model** is central. You do not command "start three containers"; you declare "the desired count of this service is three", and a reconciliation loop makes reality match that declaration, indefinitely, including after failures you never observe.
-
-
-<figure markdown="span">
-    ![hypervisor](../img/U1/containerOrchestration.png){width="80%"}
-    <figcaption>Modern Container Orchestration</figcaption>
-</figure>
-
-### Serverless
-
-**Serverless** does not mean there are no servers. It means four properties hold simultaneously:
-
-1. **No server provisioning or management** by you.
-2. **Automatic, demand-driven scaling**, including scaling to zero.
-3. **Pay for value consumed**, not for allocated capacity  no charge when idle.
-4. **Built-in availability and fault tolerance** across Availability Zones by default.
-
-Lambda satisfies all four. Fargate satisfies the first, second (partially  a running task costs money even when idle), and fourth, but a Fargate task that sits idle still bills; that is why Fargate is called "serverless containers" rather than fully serverless.
-
-### Statelessness
-
-A **stateless** compute node holds no data that cannot be lost without consequence. Session state, uploaded files, and caches must live in external services  DynamoDB, ElastiCache, S3, RDS.
-
-Statelessness is what makes elasticity possible. If any instance can be terminated at any moment without data loss, then the platform is free to replace instances for scaling, patching, Spot reclamation, or failure recovery. Every compute service in this chapter assumes statelessness by default; every design that violates it (writing user uploads to a container's local filesystem, holding sessions in process memory behind a round-robin load balancer) creates a correctness bug that only appears under scaling or failure.
-
-!!! example "The classic statefulness bug"
-    A team stores user session data in the memory of each EC2 instance and enables sticky sessions on the load balancer to compensate. The application works. Then an instance is replaced during a deployment and those users are silently logged out mid-checkout. The fix is not more stickiness; it is externalising session state to ElastiCache or DynamoDB.
-
-### Elasticity, Scalability, and Availability
-
-These three words are frequently confused and mean different things.
-
-| Term | Definition | Mechanism on AWS |
-|---|---|---|
-| **Scalability** | The ability to handle increased load by adding resources | Horizontal scaling of instances, tasks, pods, or concurrent executions |
-| **Elasticity** | The ability to scale **out and back in** automatically in response to demand | Auto Scaling groups, ECS service auto scaling, HPA, Lambda concurrency |
-| **High availability** | Continued operation despite the failure of a component | Multi-AZ deployment, health checks, redundancy |
-| **Fault tolerance** | Continued operation with no degradation despite failure | N+1 or N+2 redundancy, retries, idempotency, circuit breakers |
-| **Durability** | Data survives failure | Handled by storage services, not compute |
-
-**Vertical scaling** (a larger instance) has a hard ceiling and requires downtime or replacement. **Horizontal scaling** (more instances) is unbounded in principle and is the cloud-native default. Design for horizontal scaling; use vertical scaling only where the workload genuinely cannot be partitioned, such as a single-writer relational database.
-
-### The Shared Responsibility Model for Compute
-
-AWS is responsible for the security **of** the cloud; the customer is responsible for security **in** the cloud. Where that line falls is exactly what differentiates the compute services.
+| Dimension | Object storage | Block storage | File storage |
+|---|---|---|---|
+| Unit of storage | Object — bytes plus metadata | Fixed-size block, typically 512 B or 4 KiB | File within a directory hierarchy |
+| Namespace | Flat keyspace within a bucket | Linear array of numbered blocks | Hierarchical tree of directories |
+| Access protocol | HTTPS REST API | Block protocol over a network path, presented as a device | NFS or SMB |
+| Mutation model | Replace whole object; no partial overwrite | Overwrite any block in place | Read, write, seek, truncate, append |
+| Metadata | Rich, user-defined, stored with the object | None beyond the block address | POSIX attributes — owner, mode, timestamps |
+| Concurrent writers | Many, last write wins per key | Normally one host; Multi-Attach is a special case | Many, coordinated by the file system |
+| Typical latency | Tens of milliseconds first byte | Sub-millisecond to low single-digit milliseconds | Low single-digit milliseconds |
+| Scale ceiling | Effectively unlimited | Per-volume ceiling, currently 64 TiB for most types | Petabyte-scale, elastic |
+| AWS service | Amazon S3 | Amazon EBS, instance store | Amazon EFS, Amazon FSx |
 
 ```mermaid
 graph TD
-    subgraph EC2["Amazon EC2"]
-        E1["Customer: App, Runtime, Guest OS, Patching, Firewall Rules"]
-        E2["AWS: Hypervisor, Hardware, Network, Facilities"]
-    end
-    subgraph FG["ECS or EKS on Fargate"]
-        F1["Customer: App, Container Image, Task IAM, Networking Config"]
-        F2["AWS: Host OS, Agent, Capacity, Hypervisor, Hardware"]
-    end
-    subgraph LM["AWS Lambda"]
-        L1["Customer: Function Code, Memory Config, IAM Role"]
-        L2["AWS: Runtime, Execution Environment, Scaling, Everything Else"]
-    end
+    A["Application Data"] --> B{"What is the access pattern"}
+    B -->|"Whole-item read and write over HTTP"| C["Object Storage - S3"]
+    B -->|"Random block-level read and write from one host"| D["Block Storage - EBS"]
+    B -->|"Shared POSIX access from many hosts"| E["File Storage - EFS"]
+    C --> F["Data lake, backups, static assets, artefacts"]
+    D --> G["Boot volumes, databases, transactional logs"]
+    E --> H["Shared content, CMS, home directories, ML datasets"]
 ```
+
+### Amazon S3 core vocabulary
+
+**Bucket.** A container for objects, created in a specific AWS Region. Bucket names in the general-purpose namespace are globally unique across all AWS accounts because they must be resolvable as DNS names. A bucket is a *regional* resource — its data never leaves the Region unless you explicitly replicate it.
+
+**Object.** The stored entity: a key, a value (the byte payload, from zero bytes up to 5 TiB), a version identifier, metadata, and access-control information.
+
+**Key.** The full, unique name of an object within a bucket, for example `logs/2026/08/10/app-server-01.log.gz`. The key is a single flat string. S3 has **no directories**.
+
+**Prefix.** Any leading substring of a key, conventionally delimited by `/`. Prefixes are the mechanism by which S3 emulates a folder hierarchy in the console and by which request-rate scaling is partitioned. Prefixes are also the unit at which many IAM policies and lifecycle rules are scoped.
+
+**Delimiter.** A character supplied to `ListObjectsV2` that causes S3 to roll up keys sharing a common prefix into `CommonPrefixes`, producing the appearance of a folder listing.
+
+**Versioning.** A bucket-level setting that, once enabled, causes every `PUT` and `DELETE` to create a new version rather than replacing or removing data. A `DELETE` inserts a **delete marker**; the prior versions remain and are billed.
+
+**Storage class.** A per-object attribute selecting the durability, availability, latency, and cost profile — Standard, Intelligent-Tiering, Standard-IA, One Zone-IA, Glacier Instant Retrieval, Glacier Flexible Retrieval, Glacier Deep Archive, and Express One Zone.
+
+**Lifecycle policy.** Bucket-level rules that transition objects between storage classes or expire them after a defined age, evaluated asynchronously once per day.
+
+**Multipart upload.** A protocol for uploading a large object as independent parts that can be sent in parallel and retried individually, then assembled server-side.
+
+**Presigned URL.** A time-limited URL that embeds a signature granting a specific operation on a specific object to an anonymous holder, without granting them IAM credentials.
+
+!!! warning "There are no folders in S3"
+    The console displays folders, and the CLI accepts paths that look like folders, but the underlying data model is a flat map from key strings to objects. Creating a "folder" in the console creates a zero-byte object whose key ends in `/`. Believing in folders leads directly to two classic errors: assuming that renaming a prefix is cheap (it is a copy of every object followed by a delete of every object), and assuming that listing is free (it is a paginated API call billed per request that scans the index).
+
+### Amazon EBS core vocabulary
+
+**Volume.** A block device of a chosen type and size, created within one Availability Zone, attachable to EC2 instances in that same Availability Zone.
+
+**Volume type.** The performance and cost family: `gp3` and `gp2` for general-purpose SSD, `io2 Block Express` and `io1` for provisioned-IOPS SSD, `st1` for throughput-optimised HDD, and `sc1` for cold HDD.
+
+**IOPS.** Input/output operations per second, measured against a base I/O size — 16 KiB for SSD-backed types. A single 128 KiB request counts as multiple IOPS on SSD types.
+
+**Throughput.** Bytes per second transferred, the product of IOPS and I/O size up to the volume and instance ceilings.
+
+**Burst bucket.** The credit mechanism that allows `gp2`, `st1`, and `sc1` volumes to exceed their baseline performance for limited periods. `gp3` has no burst bucket; its performance is provisioned and constant.
+
+**Snapshot.** A point-in-time, incremental, block-level copy of a volume stored durably in S3 in a service-managed bucket you cannot browse. Snapshots are *Regional* resources and are the mechanism by which EBS data crosses Availability Zone and Region boundaries.
+
+**EBS-optimised instance.** An instance whose network capacity for EBS traffic is dedicated and separate from general network traffic. All current-generation instances are EBS-optimised by default.
+
+**Multi-Attach.** A capability of `io1` and `io2` volumes allowing a single volume to be attached to up to sixteen Nitro-based instances in the same Availability Zone concurrently. It provides no coordination; a cluster-aware file system is mandatory.
+
+**Elastic Volumes.** The capability to change a volume's size, type, and provisioned performance while it remains attached and in use, without detaching or stopping the instance.
+
+### Amazon EFS core vocabulary
+
+**File system.** The regional EFS resource, identified by an `fs-` identifier, which contains the directory tree.
+
+**Mount target.** An elastic network interface with an IP address placed in a subnet within one Availability Zone, through which NFS clients in that Availability Zone reach the file system. You create one mount target per Availability Zone you intend to serve.
+
+**Access point.** An application-specific entry point into a file system that enforces a root directory and can override the POSIX user and group identity of all requests through it. Access points are the mechanism for safe multi-tenant sharing of a single file system.
+
+**Throughput mode.** `Elastic` scales throughput automatically with demand and is the recommended default; `Provisioned` fixes a throughput level independent of stored size; `Bursting` scales baseline throughput with the amount of data stored and uses a credit bucket.
+
+**Performance mode.** `General Purpose` minimises per-operation latency and is correct for nearly all workloads; `Max I/O` raises the aggregate parallel throughput ceiling at the cost of higher latency and is legacy for most designs.
+
+**Storage class.** `Standard` for multi-AZ frequently accessed data, `Infrequent Access` and `Archive` for cooler data, plus One Zone variants that store data in a single Availability Zone at a lower price and lower availability.
+
+**Lifecycle management.** Policies that move files between EFS storage classes based on the time since last access, and optionally move them back on first read.
+
+### Instance store
+
+**Instance store** is physically attached NVMe or SSD storage on the host serving an EC2 instance. It offers the highest possible I/O performance because there is no network in the path, but the data is **ephemeral**: it is lost when the instance stops, hibernates, or is terminated, and when the underlying hardware fails. It is not a durable storage service, and no snapshot mechanism exists for it.
+
+!!! danger "Instance store data loss is a design property, not a failure"
+    Instance store volumes lose all data on instance stop or termination. Architects use them deliberately — for scratch space, caches, temporary shuffle data in Spark, or replicated distributed databases such as Cassandra that maintain their own redundancy across nodes. Placing a single-copy production database on instance store is a design error, not bad luck.
+
+### Durability and availability are different properties
+
+Students frequently conflate these two figures. They measure different failure modes and are engineered by different mechanisms.
+
+- **Durability** is the probability that stored data is not lost. S3 Standard is designed for 99.999999999 percent (eleven nines) annual durability, achieved by erasure-coding each object across devices in at least three Availability Zones.
+- **Availability** is the probability that stored data can be *accessed* at a given moment. S3 Standard offers a 99.99 percent availability design target with a 99.9 percent Service Level Agreement.
+
+Data can be perfectly durable and temporarily unavailable — for instance, during a control plane disruption. The architectural implication is that a design requiring high availability may need a second Region or a cached copy, even though the durability of a single Region is already extraordinary.
+
+| Service or class | Design durability | Design availability | AZ scope |
+|---|---|---|---|
+| S3 Standard | 99.999999999 percent | 99.99 percent | Three or more AZs |
+| S3 Standard-IA | 99.999999999 percent | 99.9 percent | Three or more AZs |
+| S3 One Zone-IA | 99.999999999 percent within the AZ | 99.5 percent | One AZ |
+| S3 Glacier Deep Archive | 99.999999999 percent | 99.99 percent after restore | Three or more AZs |
+| S3 Express One Zone | High within the AZ | 99.95 percent | One AZ |
+| EBS gp3 and io2 volume | Annual failure rate between 0.1 and 0.2 percent for gp3; io2 is designed for 99.999 percent durability | 99.8 to 99.999 percent depending on type | One AZ |
+| EBS snapshot | Same multi-AZ durability as S3 | Regional | Regional |
+| EFS Standard | Designed for eleven nines | 99.99 percent | Three or more AZs |
+| EFS One Zone | Designed for eleven nines within the AZ | 99.9 percent | One AZ |
+| Instance store | None — ephemeral | Tied to the instance | One host |
+
+!!! note "Interpreting eleven nines"
+    Eleven nines of annual durability means that if you store ten million objects, you should statistically expect to lose one object every ten thousand years. This figure describes AWS device and facility failure. It does **not** protect against a user or an application deleting the data, an IAM policy being misconfigured, or ransomware encrypting the bucket. Those risks are addressed by versioning, MFA Delete, Object Lock, replication to a separate account, and Backup vaults — not by the durability figure.
+
+### Consistency model
+
+Since December 2020, Amazon S3 provides **strong read-after-write consistency** for all `PUT` and `DELETE` operations on all objects, in all Regions, with no performance penalty and no opt-in. A successful `PUT` is immediately visible to any subsequent `GET`, `LIST`, or `HEAD`. Overwrites and deletes are also strongly consistent.
+
+This removed an entire class of workaround code that older systems carried, such as retry loops after writing a manifest file. However, two caveats remain relevant to architects:
+
+- Bucket **configuration** changes — policies, ACLs, lifecycle rules, replication rules — remain **eventually consistent** and may take time to propagate.
+- Cross-Region Replication is asynchronous by design and provides no consistency guarantee at the destination; S3 Replication Time Control provides a Service Level Agreement of fifteen minutes for the vast majority of objects but is still asynchronous.
+
+EBS provides the consistency semantics of a block device: a write acknowledged to the operating system is durable within the Availability Zone. EFS provides NFSv4.1 close-to-open consistency by default, with strong consistency for operations within a single mount when the client cache is respected.
 
 ---
 
 ## Internal Working
 
-Understanding what happens behind the API call is what separates an architect from a console user. In every case below, keep two questions in mind: **where is the control plane, and where is the data plane?**
+This section explains what actually happens inside AWS when you issue a storage request. Understanding these mechanisms is what allows you to predict performance, explain failures, and design around limits rather than being surprised by them.
 
-- The **control plane** is the management layer  the APIs, schedulers, and state stores that decide what should exist and where.
-- The **data plane** is the layer that actually serves traffic and runs your code.
+### Control plane versus data plane
 
-The distinction matters because their failure modes differ. If the ECS control plane were unavailable, existing tasks would continue serving traffic; you simply could not deploy or scale. If the data plane fails, your users see errors immediately. **Well-architected systems degrade gracefully when the control plane is impaired.**
+Every AWS storage service separates two distinct subsystems, and conflating them is a common source of architectural error.
 
-### Amazon EC2 and the Nitro System
+The **control plane** handles resource lifecycle: creating buckets, creating and attaching volumes, creating mount targets, modifying configuration. Control plane operations are relatively low-volume, are often Regional in scope, involve consensus and metadata updates, and take seconds to minutes.
 
-Historically, EC2 hosts ran a modified Xen hypervisor, and the hypervisor itself consumed host CPU and memory to emulate network and storage devices. This "virtualisation tax" reduced the capacity available to customers and added latency.
+The **data plane** handles the actual movement of bytes: `GetObject`, `PutObject`, block reads and writes, NFS operations. Data plane operations are extremely high-volume, are designed for minimal dependencies, and take microseconds to milliseconds.
 
-The **AWS Nitro System** re-architected this. Nitro moves virtualisation functions off the main system board and onto dedicated hardware:
+AWS deliberately engineers data planes to have **static stability** — the ability to continue operating correctly even when the control plane is impaired. This is why a running EC2 instance keeps reading and writing its EBS volume during a Regional control plane event even though you cannot launch new instances.
 
-| Nitro component | Responsibility |
-|---|---|
-| **Nitro Cards** | Dedicated hardware for VPC networking, EBS storage, instance storage, and system control. Network and storage I/O bypass the main CPU. |
-| **Nitro Security Chip** | Integrates into the motherboard; controls access to hardware resources and firmware, making persistent firmware compromise infeasible. |
-| **Nitro Hypervisor** | A very thin, KVM-based hypervisor that primarily allocates CPU and memory. Because I/O is offloaded, it does almost nothing on the data path. |
-
-The architectural consequences are significant:
-
-- Nearly all host CPU and memory is available to customer instances, so bare-metal-class performance is achievable in a virtualised instance.
-- Because the Nitro Security Chip constrains the hardware and there is no general-purpose administrative access path to customer instances, AWS operators cannot access customer instance memory or data. This is a *design* property, not a policy promise.
-- Features such as **EBS encryption at line rate**, **Elastic Fabric Adapter** for HPC, and **bare metal instance types** are all consequences of the Nitro architecture.
-
-**EC2 launch flow (control plane to data plane):**
-
-```mermaid
-sequenceDiagram
-    participant U as "User or IaC Tool"
-    participant API as "EC2 Control Plane API"
-    participant PL as "Placement Service"
-    participant HOST as "Nitro Host in an AZ"
-    participant EBS as "EBS Service"
-    participant VPC as "VPC Network Fabric"
-
-    U->>API: "RunInstances with AMI, type, subnet, SG, role"
-    API->>API: "Authenticate and authorise via IAM"
-    API->>PL: "Request capacity in target AZ"
-    PL->>HOST: "Select host with free capacity"
-    HOST->>EBS: "Attach root volume from AMI snapshot"
-    HOST->>VPC: "Create ENI and attach to subnet"
-    HOST->>HOST: "Boot guest OS on Nitro hypervisor"
-    HOST->>HOST: "Run user data script via cloud init"
-    HOST-->>API: "State running, status checks passing"
-    API-->>U: "Instance ID and private IP returned"
-```
-
-Two details matter architecturally. First, the **Elastic Network Interface (ENI)** is a first-class VPC object with its own private IP, MAC address, and security groups  instance networking is a VPC construct, not an OS construct. Second, **user data** runs once at first boot by default and is the standard bootstrap hook, though for anything beyond trivial bootstrapping you should bake configuration into the AMI (with EC2 Image Builder) or use a configuration-management tool.
-
-### Instance Families (Exam Must-Know)
-
-- **General Purpose (T, M)** — Balanced CPU/memory. Use: web servers, small DBs. T-series has **burstable** CPU with credits.
-- **Compute Optimized (C)** — High-performance CPUs. Use: batch processing, ML inference, gaming servers, HPC.
-- **Memory Optimized (R, X, z)** — Large RAM. Use: in-memory caches (Redis, Memcached), real-time big data analytics.
-- **Storage Optimized (I, D, H)** — High sequential read/write. Use: data warehousing, distributed file systems, HDFS.
-- **Accelerated Computing (P, G, Inf, Trn)** — GPUs/custom chips. Use: ML training, video encoding, 3D rendering.
-
-> **Exam shortcut**: C = Compute, R = RAM, I = I/O, T = Turbo (burstable), G = Graphics.
-> 
-
-# EC2 Instance Families Comparison Table
-
-| Family | Naming Convention | Key Benefit | Drawbacks | Ideal Use Cases | Notes / Memory Trick |
-| --- | --- | --- | --- | --- | --- |
-| **General Purpose** | `T`, `M` (e.g., t3, m6i) | Balanced CPU, memory, and networking | Not optimized for extremes | Web servers, small DBs, dev/test | “Default choice” |
-| **Compute Optimized** | `C` (e.g., c6g, c5) | High CPU performance | Lower memory per vCPU | Batch processing, HPC, gaming servers | “C = CPU” |
-| **Memory Optimized** | `R`, `X`, `Z` (e.g., r6g, x2idn) | High RAM capacity | Expensive | In-memory DBs, caching, SAP HANA | “R = RAM” |
-| **Storage Optimized** | `I`, `D`, `H` (e.g., i4i, d3, h1) | High disk throughput and low latency | Limited flexibility | Data warehousing, NoSQL DBs | “I = IOPS” |
-| **Accelerated Computing** | `P`, `G`, `F`, `Inf`, `Trn` | GPU / hardware acceleration | Costly, specialized | ML, AI, video rendering | “P = Powerful GPUs” |
-| **Burstable Performance** | `T` (e.g., t2, t3, t4g) | Cheap, burst CPU when needed | CPU credit limits | Low-traffic apps, dev environments | “Bursty workloads” |
-| **High Performance Computing (HPC)** | `Hpc` | Ultra-low-latency networking | Niche usage | Scientific simulations | Exam rarely goes deep |
-
-!image.png
-
-# Naming Convention Breakdown (VERY IMPORTANT FOR EXAM)
-
-Example: **m5.xlarge**
-
-| Part | Meaning |
-| --- | --- |
-| **m** | Instance family (General Purpose) |
-| **5** | Generation (newer = better) |
-| **xlarge** | Size (CPU, RAM scaling) |
-
-### Additional Suffixes You Might See
-
-| Suffix | Meaning |
-| --- | --- |
-| **g** | ARM-based (AWS Graviton – cheaper, efficient) |
-| **i** | Intel processor |
-| **a** | AMD processor (lower cost) |
-| **d** | Instance store (local SSD) |
-| **n** | High network performance |
-| **z** | High-frequency CPU |
-
-# Quick Decision Guide (Exam Gold)
-
-Use this mental shortcut during the exam:
-
-- ❓ Need **balanced** → **M**
-- ❓ Need **cheap burstable** → **T**
-- ❓ Need **CPU heavy** → **C**
-- ❓ Need **RAM heavy** → **R / X**
-- ❓ Need **fast disk** → **I / D**
-- ❓ Need **GPU / ML** → **P / G**
-- ❓ Need **ARM cost savings** → choose **Graviton (g)**
-
-# Common Exam Traps
-
-- **T instances** → Don’t use them for sustained high CPU (credit exhaustion).
-- **Instance store (d)** → Data is **ephemeral** and is lost on stop..
-- **Graviton (g)** → Must support ARM architecture..
-- **Memory optimized** → Often best for databases, not compute..
-- **Compute optimized** → Not ideal for memory-heavy apps..
-
-### Amazon ECS Internals
-
-ECS separates cleanly into a fully AWS-managed control plane and a customer-visible (or Fargate-hidden) data plane.
-
-**Control plane.** The ECS control plane is a regional, AWS-operated service. It stores cluster state, accepts API calls (`RunTask`, `CreateService`, `UpdateService`), runs the **scheduler** that decides placement, and runs the **service scheduler** reconciliation loop that maintains desired count. You never see, patch, or pay for it  ECS itself has no control-plane charge.
-
-**Data plane.** On the EC2 launch type, the data plane is EC2 instances you own, each running the **ECS container agent** (a Go binary, usually pre-installed on the ECS-Optimized AMI) plus a container runtime. On Fargate, the data plane is AWS-managed microVMs and you never see a host.
-
-**The agent is a poller, not a listener.** This is a frequently misunderstood point. The container agent establishes an **outbound** connection to the ECS service endpoint and receives instructions over it. There is no inbound connection from AWS to your instance. Consequently:
-
-- ECS instances in private subnets need outbound internet access via a NAT Gateway, or VPC endpoints for `ecs`, `ecs-agent`, `ecs-telemetry`, `ecr.api`, `ecr.dkr`, `logs`, and S3 (for image layers).
-- If the agent cannot reach the endpoint, the instance eventually shows as disconnected and the scheduler stops placing tasks on it  but already-running containers keep running.
-
-```mermaid
-sequenceDiagram
-    participant U as "Developer or CI Pipeline"
-    participant CP as "ECS Control Plane"
-    participant SCH as "ECS Scheduler"
-    participant AG as "ECS Agent on EC2 Instance"
-    participant DR as "Container Runtime"
-    participant ECR as "Amazon ECR"
-    participant ALB as "Application Load Balancer"
-
-    U->>CP: "UpdateService with new task definition revision"
-    CP->>SCH: "Reconcile desired versus running count"
-    SCH->>SCH: "Evaluate placement constraints and strategy"
-    SCH->>AG: "Agent polls and receives start task payload"
-    AG->>ECR: "Authenticate with execution role and pull image"
-    ECR-->>AG: "Image layers"
-    AG->>DR: "Create and start container with cgroup limits"
-    DR-->>AG: "Container running"
-    AG-->>CP: "Report task state and telemetry"
-    CP->>ALB: "Register task IP and port as target"
-    ALB->>DR: "Health check requests"
-    ALB-->>CP: "Target healthy"
-```
-
-**Task definitions and tasks.** A **task definition** is an immutable, versioned JSON document  the blueprint. Each update creates a new **revision**. A **task** is a running instantiation of a revision: one or more containers scheduled together onto the same host, sharing a network namespace under `awsvpc` mode. A **service** maintains a desired number of tasks and integrates with load balancing and deployment strategies.
-
-**Networking modes** on the EC2 launch type determine the network path:
-
-| Mode | Behaviour | Trade-off |
+| Aspect | Control plane | Data plane |
 |---|---|---|
-| `awsvpc` | Each task gets its own ENI, private IP, and security groups | Best isolation and observability; ENIs per instance are limited by instance type |
-| `bridge` | Docker bridge with port mapping, optionally dynamic host ports | High density; weaker isolation; security groups apply at instance level |
-| `host` | Container uses the host network namespace directly | Lowest overhead; port conflicts; no per-task isolation |
-| `none` | No external networking | Batch jobs with no network requirement |
+| S3 examples | `CreateBucket`, `PutBucketPolicy`, `PutLifecycleConfiguration` | `GetObject`, `PutObject`, `ListObjectsV2` |
+| EBS examples | `CreateVolume`, `AttachVolume`, `CreateSnapshot`, `ModifyVolume` | Block read and write from the attached instance |
+| EFS examples | `CreateFileSystem`, `CreateMountTarget`, `CreateAccessPoint` | NFS read, write, and metadata operations |
+| Failure impact | Cannot provision or reconfigure | Cannot access data — far more severe |
+| Design implication | Pre-provision capacity; do not create resources on the critical path | Design retries, timeouts, and multi-AZ redundancy here |
 
-Fargate always uses `awsvpc`.
+!!! tip "A design rule that follows directly"
+    Never place a control plane call on a user request's critical path. An application that calls `CreateBucket` or `AttachVolume` during a customer transaction has coupled its availability to the least-available subsystem. Provision in advance, ideally through Infrastructure as Code, and let the request path touch only the data plane.
 
-### AWS Fargate Internals
+### Inside Amazon S3
 
-Fargate is not a separate orchestrator; it is a **capacity provider**  a way of obtaining data-plane capacity for ECS tasks or EKS pods without managing instances.
+#### The flat keyspace and the partitioned index
 
-When a task is launched on Fargate, AWS provisions a **dedicated, right-sized microVM** for that task on AWS-managed hardware, attaches an ENI **in your VPC** (this is the key point  the ENI is in your subnet, consumes an IP from your CIDR, and is governed by your security groups), pulls the image, and starts the container. When the task stops, the microVM is destroyed.
+S3 maintains a distributed **index** that maps a bucket-and-key string to the physical location of the object's data fragments. Because the keyspace is a flat, lexicographically ordered string space, S3 partitions this index by key range. When a particular key range receives sustained high request rates, S3 automatically splits that partition into smaller ranges spread across more index servers. This process is called **partition splitting** and it happens continuously and transparently.
 
-!!! info "Why Fargate gives each task its own microVM"
-    If Fargate packed multiple customers' containers onto a shared kernel, a container-escape vulnerability would be a cross-tenant breach. By giving each task a dedicated microVM, Fargate obtains VM-grade isolation with container-grade start times. This is also why you cannot run privileged containers, mount host paths, or use a container as a DaemonSet-style host agent on Fargate  there is no host to reach.
-
-### Amazon EKS Internals
-
-Kubernetes has a well-defined control-plane architecture. EKS runs that control plane for you.
-
-**Kubernetes control-plane components:**
-
-| Component | Responsibility |
-|---|---|
-| **kube-apiserver** | The single front door. All reads and writes go through it. Performs authentication, authorisation, admission control, and validation. |
-| **etcd** | A strongly consistent, distributed key-value store holding all cluster state. The source of truth. |
-| **kube-scheduler** | Watches for unscheduled pods and binds each to a node based on resource requests, affinity, taints and tolerations, and topology constraints. |
-| **kube-controller-manager** | Runs reconciliation loops  the Deployment controller, ReplicaSet controller, node controller, and so on. |
-| **cloud-controller-manager** | Integrates with AWS to provision load balancers, EBS volumes, and route tables. |
-
-**Worker node components:**
-
-| Component | Responsibility |
-|---|---|
-| **kubelet** | The node agent. Watches the API server for pods assigned to its node and instructs the container runtime to run them. Reports node and pod status. |
-| **containerd** | The container runtime that pulls images and manages container lifecycle. |
-| **kube-proxy** | Programs iptables or IPVS rules so that Service virtual IPs route to healthy pod endpoints. |
-| **VPC CNI plugin** | The AWS-specific networking plugin that assigns each pod a **real VPC IP address** from the subnet, via secondary IPs on the node's ENIs. |
-
-**What EKS manages.** EKS runs the API server, etcd, scheduler, and controller manager across **at least three Availability Zones**, with automated backups of etcd, automatic replacement of unhealthy control-plane instances, and a managed upgrade path. The control plane runs in an AWS-owned VPC and is exposed to your VPC through cross-account ENIs. You are charged an hourly fee per cluster for this control plane  a genuine difference from ECS, which is free.
-
-!!! warning "The EKS control plane is per cluster and always on"
-    Because EKS bills an hourly control-plane fee per cluster regardless of workload, running many small clusters is expensive. This is a real architectural pressure toward fewer, larger, multi-tenant clusters with namespace-level isolation  which in turn creates a need for network policies, resource quotas, and RBAC discipline.
-
-**The VPC CNI is architecturally significant.** Unlike overlay-network CNIs, the AWS VPC CNI gives each pod a routable VPC IP. This means pods are first-class network citizens: security groups can be applied to pods, VPC Flow Logs capture pod traffic, and there is no encapsulation overhead. The cost is **IP address consumption**  a large cluster can exhaust a subnet's CIDR. Architects must size subnets generously, or enable prefix delegation, or use custom networking with a secondary CIDR.
+The published request-rate targets are **at least 3,500 `PUT`, `COPY`, `POST`, and `DELETE` requests per second, and at least 5,500 `GET` and `HEAD` requests per second, per partitioned prefix**. Crucially, there is no limit on the number of prefixes, so aggregate throughput scales horizontally as you spread keys across prefixes.
 
 ```mermaid
 graph TD
-    subgraph AWSVPC["AWS Managed Account"]
-        API["kube apiserver across three AZs"]
-        ETCD["etcd cluster"]
-        SCHED["kube scheduler"]
-        CM["controller manager"]
-        API --- ETCD
-        API --- SCHED
-        API --- CM
-    end
-
-    subgraph CUST["Customer VPC"]
-        ENI["Cross account ENIs"]
-        N1["Worker Node AZ A"]
-        N2["Worker Node AZ B"]
-        N3["Fargate Pod AZ C"]
-        N1 --> P1["Pods"]
-        N2 --> P2["Pods"]
-    end
-
-    API --- ENI
-    ENI --- N1
-    ENI --- N2
-    ENI --- N3
+    A["Client request for a key"] --> B["S3 Front End Fleet"]
+    B --> C["Authentication and Authorization"]
+    C --> D["Index Lookup by Key Range"]
+    D --> E["Partition 1 - keys a to f"]
+    D --> F["Partition 2 - keys g to m"]
+    D --> G["Partition 3 - keys n to z"]
+    E --> H["Storage Node Fleet"]
+    F --> H
+    G --> H
+    H --> I["Erasure-coded fragments across AZs"]
 ```
 
-**Identity mapping.** EKS authenticates users through IAM, translating IAM identities into Kubernetes RBAC subjects  historically via the `aws-auth` ConfigMap, and now preferably via **EKS access entries**, an API-driven mechanism that is auditable and does not risk locking you out by ConfigMap corruption. For workload identity, **IAM Roles for Service Accounts (IRSA)**  and more recently **EKS Pod Identity**  allow a pod to assume an IAM role via an OIDC-federated token projected into the pod, so a pod gets exactly the AWS permissions it needs without sharing the node role.
+!!! info "The historical hashed-prefix advice is obsolete"
+    Before 2018, S3 required a random hash at the start of keys to distribute load. That requirement was removed when S3 introduced automatic prefix-level scaling. Modern guidance is the opposite: use meaningful, hierarchical prefixes such as `year/month/day/`, and if a single prefix genuinely saturates, introduce parallel prefixes deliberately. Certification questions still occasionally test the modern behaviour, so know that the rate limits are per prefix and that adding prefixes multiplies capacity.
 
-### AWS Lambda Internals
+#### Erasure coding and multi-AZ placement
 
-Lambda's internals are the most abstracted and the most interesting.
+When S3 accepts a `PUT`, it does not simply write three copies. It applies **erasure coding**: the object's data is split into *k* data fragments and *m* parity fragments, such that the original can be reconstructed from any *k* of the *k + m* total fragments. These fragments are then distributed across storage devices located in a minimum of three Availability Zones within the Region.
 
-**Firecracker.** AWS built **Firecracker**, an open-source Virtual Machine Monitor written in Rust, specifically for serverless. A Firecracker microVM boots in roughly 125 milliseconds, has a minimal device model (no BIOS, no PCI, no legacy devices), and consumes only a few megabytes of memory overhead. This gives Lambda hardware-virtualisation isolation between tenants at a granularity and start-up cost that a conventional hypervisor could not achieve. Fargate uses the same technology.
+This design is more space-efficient than triple replication while tolerating more simultaneous failures. S3 continuously runs background **integrity checking**, computing checksums on stored fragments, detecting silent data corruption or bit rot, and regenerating any degraded fragment from the surviving ones. The eleven-nines figure is the output of a reliability model over these mechanisms — device annual failure rates, fragment counts, and the speed of automatic repair.
 
-**The execution environment lifecycle.** A Lambda **execution environment** is a microVM that hosts one function version and processes **one invocation at a time**. Its lifecycle has three phases:
-
-| Phase | What happens | Billing |
-|---|---|---|
-| **Init** | A microVM is created, the runtime is bootstrapped, the deployment package is downloaded and extracted, and code outside the handler (imports, static initialisers, connection setup) executes | Included in the reported init duration; for standard on-demand invocation the init is not billed separately, though provisioned concurrency changes the model |
-| **Invoke** | The handler function runs for this event | Billed per millisecond of duration multiplied by configured memory |
-| **Shutdown** | After a period of inactivity the environment is frozen and eventually destroyed | Not billed |
-
-Between invocations the environment is **frozen**, not destroyed. If another invocation arrives soon, the same environment is **thawed** and reused  this is a **warm start**, and the Init phase is skipped entirely.
-
-```mermaid
-stateDiagram-v2
-    [*] --> Init: "First invocation, no warm environment"
-    Init --> Invoke: "Runtime ready, handler called"
-    Invoke --> Frozen: "Response returned"
-    Frozen --> Invoke: "Warm start, environment reused"
-    Frozen --> Shutdown: "Idle timeout reached"
-    Shutdown --> [*]
-    Invoke --> Invoke: "Sequential invocations, never concurrent"
-```
-
-!!! danger "One environment serves exactly one request at a time"
-    This is the most important mental model for Lambda. Concurrency is achieved by creating **more environments**, never by threading within one. Therefore ten concurrent requests means ten environments, and any in-memory cache you populate is per-environment, not shared. Never assume anything about which environment serves a request.
-
-**Cold starts.** A **cold start** is an invocation that must pay the Init phase. It occurs on the first invocation of a function version, when concurrency increases beyond the number of warm environments, and after environments are recycled. Typical additional latency ranges from tens of milliseconds for a small Python or Node.js function to several seconds for a large JVM or .NET function loading a heavy dependency-injection framework. Deploying a function into a VPC no longer causes multi-second cold starts  since the Hyperplane ENI redesign, VPC-attached ENIs are created and shared ahead of time rather than per environment.
-
-Mitigations, in order of preference:
-
-1. Reduce package size and defer heavy imports.
-2. Move client construction and configuration loading outside the handler so it runs once per environment.
-3. Choose a lighter runtime or use ahead-of-time compilation (for example, native images for Java, or `Lambda SnapStart` for Java, which snapshots an initialised environment and restores it).
-4. Use **provisioned concurrency** to keep a declared number of environments initialised and warm, at additional cost.
-
-**Worker fleet and placement.** Lambda runs on a large fleet of EC2 **Worker** hosts. Each Worker hosts many Firecracker microVMs. A per-function **Assignment Service** (a Lambda-internal control plane component) tracks which environments are warm for which function version and routes an incoming invocation either to a warm environment or to a placement request for a new one. The critical isolation property is that a given microVM is only ever used for **one function version of one account** for its entire lifetime  it is never recycled across tenants.
-
-**Synchronous versus asynchronous invocation paths.** These follow genuinely different internal routes:
+The write is not acknowledged to the client until enough fragments are durably persisted across multiple Availability Zones to satisfy the durability design. This is why S3 `PUT` latency is measured in tens of milliseconds rather than microseconds, and why S3 is inappropriate as a database write path.
 
 ```mermaid
 sequenceDiagram
-    participant C as "Caller"
-    participant FE as "Lambda Frontend"
-    participant Q as "Internal Async Queue"
-    participant P as "Poller Fleet"
-    participant W as "Worker with microVM"
-    participant DLQ as "Dead Letter or On Failure Destination"
-
-    Note over C,W: "Synchronous path, for example API Gateway"
-    C->>FE: "Invoke RequestResponse"
-    FE->>W: "Route to warm environment or cold start"
-    W-->>FE: "Response payload"
-    FE-->>C: "HTTP response"
-
-    Note over C,DLQ: "Asynchronous path, for example S3 event"
-    C->>FE: "Invoke Event"
-    FE->>Q: "Enqueue"
-    FE-->>C: "202 Accepted immediately"
-    P->>Q: "Poll"
-    P->>W: "Invoke"
-    W-->>P: "Failure"
-    P->>W: "Retry twice with backoff"
-    P->>DLQ: "Send after retries exhausted"
+    participant C as "Client"
+    participant FE as "S3 Front End"
+    participant EC as "Erasure Coder"
+    participant AZ1 as "Storage in AZ A"
+    participant AZ2 as "Storage in AZ B"
+    participant AZ3 as "Storage in AZ C"
+    C->>FE: "PUT object with checksum"
+    FE->>FE: "Authenticate and authorize"
+    FE->>EC: "Split into data and parity fragments"
+    EC->>AZ1: "Write fragment set 1"
+    EC->>AZ2: "Write fragment set 2"
+    EC->>AZ3: "Write fragment set 3"
+    AZ1-->>EC: "Durably persisted"
+    AZ2-->>EC: "Durably persisted"
+    AZ3-->>EC: "Durably persisted"
+    EC->>FE: "Quorum satisfied, index updated"
+    FE-->>C: "200 OK with ETag"
 ```
 
-For **event source mappings** (SQS, Kinesis, DynamoDB Streams, MSK), the model is different again: a Lambda-managed **poller fleet** reads from the source and invokes your function synchronously with a batch. Failure semantics are therefore determined by the source  for SQS, a failed batch returns messages to the queue after the visibility timeout; for Kinesis and DynamoDB Streams, a failed batch blocks the shard until it succeeds or the retry policy expires, which is a classic cause of stalled stream processing.
+#### How strong consistency is achieved
+
+Strong read-after-write consistency requires that the index update and the data write become visible atomically from the perspective of any reader. S3 achieves this without sacrificing throughput by making the index itself a strongly consistent, replicated store, and by ensuring that a `GET` resolves through that index rather than through any cached or eventually replicated view. The practical consequence for architects is that no application-level workaround is needed, and any code you inherit that sleeps or retries after a write to "wait for consistency" can be deleted.
+
+#### The networking path and VPC endpoints
+
+By default, S3 is reached over its public Regional endpoint, for example `s3.ap-south-1.amazonaws.com`. A request from an EC2 instance in a private subnet would therefore need a NAT Gateway and an Internet Gateway to reach it — which incurs NAT data-processing charges, adds a bandwidth bottleneck, and routes internal traffic through a public endpoint.
+
+AWS provides two endpoint types that keep the traffic on the AWS network.
+
+| Endpoint type | Mechanism | Cost | Cross-account and on-premises reach | Typical use |
+|---|---|---|---|---|
+| Gateway VPC endpoint for S3 | Adds a prefix-list route to the VPC route table; traffic to S3 leaves via the endpoint | No hourly or data charge | Not reachable from on-premises over VPN or Direct Connect | Default choice for in-VPC access to S3 |
+| Interface VPC endpoint powered by PrivateLink | Places an ENI with a private IP inside your subnet; resolved by private DNS | Hourly charge per endpoint plus data processing | Reachable from on-premises and from peered VPCs | Hybrid architectures and stricter network isolation |
+
+```mermaid
+graph LR
+    A["EC2 in Private Subnet"] --> B{"Route to S3"}
+    B -->|"No endpoint"| C["NAT Gateway"]
+    C --> D["Internet Gateway"]
+    D --> E["S3 Public Endpoint"]
+    B -->|"Gateway endpoint"| F["Gateway VPC Endpoint"]
+    F --> E
+    B -->|"Interface endpoint"| G["PrivateLink ENI"]
+    G --> E
+```
+
+!!! warning "A common and expensive mistake"
+    Routing terabytes of S3 traffic through a NAT Gateway is one of the most frequent avoidable costs in AWS bills. NAT Gateway charges an hourly fee plus a per-gigabyte data-processing fee on top of the data transfer. A Gateway VPC endpoint for S3 eliminates that per-gigabyte charge entirely and costs nothing. Adding one is often the single highest-return cost optimisation in an account.
+
+### Inside Amazon EBS
+
+#### Network-attached storage that behaves like a disk
+
+An EBS volume is not a disk inside the EC2 host. It is storage residing on a separate fleet of EBS servers, reached over a dedicated, high-bandwidth network fabric. The illusion of a local disk is created at the hardware level.
+
+On Nitro-based instances — which is to say all current-generation instances — the **Nitro card for EBS** is a dedicated PCIe device on the host. The guest operating system sees a standard NVMe controller and issues ordinary NVMe commands to it. The Nitro card intercepts those commands, encrypts the data if the volume is encrypted, converts them into network operations against the EBS server fleet, and returns completions to the guest. The hypervisor and the guest CPU are not involved in the I/O path, which is why Nitro instances achieve near-bare-metal storage performance and why EBS encryption has no measurable performance cost.
+
+```mermaid
+graph TD
+    A["Guest OS File System"] --> B["NVMe Driver"]
+    B --> C["Nitro Card for EBS on the host"]
+    C --> D["Hardware Encryption Engine"]
+    D --> E["EBS Network Fabric"]
+    E --> F["Primary Replica in AZ"]
+    F --> G["Secondary Replica in same AZ"]
+    F --> H["Acknowledge write to Nitro"]
+    H --> C
+```
+
+#### Replication within a single Availability Zone
+
+Each EBS volume's data is automatically replicated across multiple servers **within one Availability Zone**. A write is acknowledged only after it is durably recorded on more than one replica, which is what protects against the failure of any single storage server or drive.
+
+The deliberate architectural decision is that this replication does **not** span Availability Zones. Synchronous replication over the tens of kilometres separating Availability Zones would add hundreds of microseconds to every write, destroying the latency profile that block storage exists to provide. Therefore:
+
+- An EBS volume can only be attached to an instance in **its own Availability Zone**.
+- An Availability Zone failure makes the volume unavailable, though the data is not lost.
+- Cross-AZ and cross-Region durability for EBS is achieved through **snapshots**, not through the volume itself.
+
+!!! danger "Availability Zone scope is the defining constraint of EBS"
+    Any architecture that treats an EBS volume as a highly available store is wrong. If an application must survive the loss of an Availability Zone with its data intact and immediately accessible, the correct answers are database-level replication such as RDS Multi-AZ, a multi-AZ file system such as EFS, or object storage such as S3 — not a single EBS volume.
+
+#### Snapshot mechanics
+
+An EBS snapshot is a **block-level, incremental, point-in-time copy** written to S3 in a service-managed location. The mechanics matter because they explain both the cost model and the restore behaviour.
+
+The first snapshot of a volume copies every block that has ever been written. Subsequent snapshots copy only the blocks that changed since the previous snapshot, and reference the unchanged blocks by pointer. This is why a daily snapshot of a 1 TiB volume with 10 GiB of daily change costs approximately the size of the full first copy plus 10 GiB per day, not 1 TiB per day.
+
+Deleting a snapshot does not break later snapshots. AWS removes only the blocks that no snapshot still references, so the chain remains restorable at every retained point. This reference-counted design is why you cannot compute a snapshot's "size" in isolation.
+
+When a volume is created from a snapshot, it is **available immediately** but is **lazily loaded**: blocks are fetched from S3 on first access, meaning the initial reads after a restore are slower than steady-state. Two mechanisms address this. **Fast Snapshot Restore** pre-warms a snapshot in specified Availability Zones so that restored volumes deliver full performance instantly, at an hourly charge per snapshot per Availability Zone. Alternatively, an operator can sequentially read the entire device to force hydration.
+
+```mermaid
+stateDiagram-v2
+    [*] --> VolumeInUse
+    VolumeInUse --> SnapshotPending : "CreateSnapshot called"
+    SnapshotPending --> SnapshotCompleted : "Changed blocks copied to S3"
+    SnapshotCompleted --> SnapshotCopied : "CopySnapshot to another Region"
+    SnapshotCompleted --> NewVolumeCreating : "CreateVolume from snapshot"
+    NewVolumeCreating --> NewVolumeLazyLoading : "Available but hydrating"
+    NewVolumeLazyLoading --> NewVolumeFullPerformance : "Blocks fetched or FSR enabled"
+    NewVolumeFullPerformance --> [*]
+```
+
+!!! note "Crash consistency versus application consistency"
+    A snapshot taken while a volume is in use is **crash consistent** — equivalent to pulling the power cable. A journalling file system such as ext4 or XFS will recover, but a database may need to replay its log. For **application-consistent** snapshots, the correct approach is to flush and freeze the file system before the snapshot, which AWS Systems Manager Run Command and AWS Backup can orchestrate, or to snapshot from a quiesced replica.
+
+### Inside Amazon EFS
+
+#### A managed NFSv4.1 service with distributed metadata
+
+EFS implements the NFSv4.1 protocol so that any standard Linux NFS client can mount it with no proprietary agent. Behind the protocol endpoint, EFS is a distributed system with two logically separate subsystems: a **metadata service** that maintains the directory tree, inodes, permissions, and lock state, and a **data service** that stores file contents redundantly across multiple Availability Zones in the Region.
+
+Every file's data and metadata are stored redundantly across Availability Zones, which is precisely why EFS survives an Availability Zone failure while EBS does not — and equally why EFS has higher per-operation latency than EBS, since a metadata mutation must be coordinated across zones.
+
+#### Mount targets and the network path
+
+An EFS file system is a Regional resource, but clients do not talk to a Regional endpoint. Instead you create a **mount target** in each Availability Zone. A mount target is an elastic network interface with a private IP address inside one of your subnets, protected by a security group.
+
+When an EC2 instance or a container mounts the file system using the DNS name `fs-0123456789abcdef0.efs.ap-south-1.amazonaws.com`, Route 53 resolves that name to the IP address of the mount target **in the client's own Availability Zone**. This zone-local resolution is deliberate: it keeps NFS traffic within the Availability Zone, minimising latency and avoiding cross-AZ data transfer charges.
+
+```mermaid
+graph TD
+    subgraph "Availability Zone A"
+        A1["EC2 or Pod"] --> M1["Mount Target ENI in AZ A"]
+    end
+    subgraph "Availability Zone B"
+        A2["EC2 or Pod"] --> M2["Mount Target ENI in AZ B"]
+    end
+    subgraph "Availability Zone C"
+        A3["EC2 or Pod"] --> M3["Mount Target ENI in AZ C"]
+    end
+    M1 --> E["EFS Distributed Storage across three AZs"]
+    M2 --> E
+    M3 --> E
+```
+
+!!! warning "The most common EFS failure to diagnose"
+    A mount that hangs and eventually times out is almost always a security group problem or a missing mount target. The mount target's security group must allow inbound TCP port 2049 from the client's security group, and a mount target must exist in the client's Availability Zone. If either is absent, the NFS client will retry silently until it times out, producing no useful error message.
+
+#### Elastic capacity and throughput
+
+EFS has no provisioned size. Metadata operations allocate space as files are written and release it as files are deleted, and billing is computed from measured storage consumption. This removes an entire class of operational work — no resizing, no monitoring free space, no emergency expansion at 03:00.
+
+In **Elastic throughput** mode, EFS measures the workload's demand continuously and adjusts the available throughput automatically, billing for the data actually read and written. In **Bursting** mode, baseline throughput scales at roughly 50 KiB/s per GiB stored, with burst credits accumulating when the file system runs below baseline and depleting when it runs above. A small file system in Bursting mode can therefore exhaust its credits and become dramatically slower — a classic and confusing production incident.
 
 ---
 
 ## Architecture Components
 
-A production compute architecture is never just compute. The following components appear in nearly every design in this module.
+A production storage architecture involves more than the storage service itself. The following components typically appear together, and an architect must be able to state the responsibility of each.
 
-| Component | Layer | Responsibility in a compute architecture |
-|---|---|---|
-| **Amazon Route 53** | DNS | Resolves the application hostname; health checks and latency-, geo-, or failover-based routing across Regions |
-| **Amazon CloudFront** | Edge / CDN | Terminates TLS close to the user, caches static and cacheable dynamic content, absorbs volumetric traffic before it reaches compute, integrates with AWS WAF and Shield |
-| **AWS WAF and Shield** | Edge security | Filters malicious HTTP requests and mitigates DDoS before requests consume compute capacity |
-| **Application Load Balancer (ALB)** | Layer 7 | HTTP/HTTPS routing by host, path, header, or method; target groups of instances, IPs, or Lambda functions; per-target health checks; TLS termination |
-| **Network Load Balancer (NLB)** | Layer 4 | Ultra-low-latency TCP/UDP/TLS load balancing, static IPs, extreme throughput; used for non-HTTP protocols and where source IP preservation matters |
-| **Amazon API Gateway** | API front door | REST/HTTP/WebSocket APIs, request validation, throttling, authorisation, and direct integration with Lambda without a load balancer |
-| **Amazon VPC** | Network | The isolated virtual network in which all non-Lambda-managed compute lives |
-| **Subnets** | Network | AZ-scoped IP ranges; public subnets have a route to an Internet Gateway, private subnets do not |
-| **Internet Gateway and NAT Gateway** | Network | Inbound/outbound internet for public subnets; outbound-only internet for private subnets |
-| **VPC Endpoints** | Network | Private connectivity to AWS services without traversing the internet; essential for private ECS/EKS clusters and for reducing NAT cost |
-| **Security Groups** | Network security | Stateful, instance/ENI/task/pod-level virtual firewalls; the primary microsegmentation tool |
-| **Network ACLs** | Network security | Stateless, subnet-level filters; a coarse secondary control |
-| **Amazon EC2** | Compute | Virtual machines; the substrate for IaaS workloads and for ECS/EKS node groups |
-| **EC2 Auto Scaling Group** | Compute control | Maintains desired instance count, replaces failed instances, spreads across AZs, executes scaling policies |
-| **Amazon ECS** | Compute orchestration | AWS-native container orchestration; clusters, services, tasks, task definitions |
-| **Amazon EKS** | Compute orchestration | Managed Kubernetes control plane; node groups, Fargate profiles, add-ons |
-| **AWS Fargate** | Compute capacity | Serverless capacity provider for ECS tasks and EKS pods |
-| **AWS Lambda** | Compute | Event-driven function execution |
-| **Amazon ECR** | Artefact store | Private, IAM-controlled container registry with image scanning, lifecycle policies, and tag immutability |
-| **AWS IAM** | Identity | Roles for instances, task execution, task workloads, pods (IRSA), and functions; the foundation of least privilege |
-| **Amazon S3** | Storage | Static assets, deployment artefacts, data lake input and output |
-| **Amazon EBS and EFS** | Storage | Block storage attached to instances; shared POSIX filesystem mountable by many tasks, pods, and Lambda functions |
-| **Amazon RDS, Aurora, DynamoDB** | Data | Externalised state that makes compute stateless |
-| **Amazon SQS, SNS, EventBridge, Kinesis** | Messaging | Decoupling, buffering, fan-out, and event routing between compute components |
-| **AWS Step Functions** | Orchestration | Durable, visual workflow orchestration across Lambda, ECS tasks, and other services; handles retries, timeouts, and long-running state |
-| **Amazon CloudWatch** | Observability | Metrics, logs, alarms, dashboards, Container Insights, Lambda Insights |
-| **AWS X-Ray** | Observability | Distributed tracing across service boundaries |
-| **AWS CloudTrail** | Audit | Records every control-plane API call for security and compliance investigation |
-| **AWS CloudFormation, CDK, Terraform** | Automation | Infrastructure as Code  declarative, version-controlled, reviewable infrastructure |
-| **AWS Systems Manager** | Operations | Patch Manager, Session Manager (SSH-free shell access), Parameter Store for configuration |
+| Component | Responsibility in a storage architecture |
+|---|---|
+| Client — browser, mobile app, service | Originates read and write requests; may upload directly to S3 using presigned URLs to bypass the application tier |
+| Amazon Route 53 | Resolves service and bucket endpoints; resolves EFS mount target DNS to the zone-local IP |
+| Amazon CloudFront | Caches S3 objects at edge locations, reducing latency, origin load, and data transfer cost; enforces access through Origin Access Control |
+| Application Load Balancer | Distributes requests across a stateless application tier that has externalised its state into S3 or EFS; can log access records directly to S3 |
+| Amazon API Gateway | Fronts APIs that issue presigned URLs or proxy directly to S3 for small payloads |
+| Amazon VPC, subnets, route tables | Define the network path from compute to storage; carry the Gateway or Interface endpoint for S3 and the mount target ENIs for EFS |
+| Security groups | Stateful instance-level firewall; controls TCP 2049 to EFS mount targets; irrelevant to S3 unless an Interface endpoint is used |
+| Network ACLs | Stateless subnet-level firewall; must permit both request and ephemeral response ports for NFS |
+| Amazon EC2 | Attaches EBS volumes and instance store; mounts EFS; reads and writes S3 over the API |
+| Amazon ECS and Amazon EKS | Mount EFS as shared volumes and EBS as per-task or per-pod volumes through the CSI drivers |
+| AWS Lambda | Reads and writes S3 as an event source and a data store; can mount EFS through an access point for shared state or large dependencies |
+| AWS IAM | Authorises every storage API call; defines roles for instances, tasks, and functions |
+| AWS KMS | Provides and controls the customer-managed keys used to encrypt S3 objects, EBS volumes, EFS file systems, and snapshots |
+| Amazon S3 | Object store for artefacts, backups, data lake, static assets, and logs |
+| Amazon EBS | Block store for boot volumes, databases, and per-instance persistent state |
+| Amazon EFS | Shared file store for content, home directories, and shared container volumes |
+| Amazon CloudWatch | Collects storage metrics and logs; hosts alarms and dashboards |
+| AWS CloudTrail | Records management events always, and S3 or Lambda data events when explicitly enabled |
+| Amazon EventBridge and Amazon SNS and Amazon SQS | Carry S3 event notifications to downstream consumers, enabling event-driven processing |
+| AWS Backup | Centralises backup policy, retention, and cross-Region and cross-account copy for EBS, EFS, and other resources |
+| AWS CloudFormation and Terraform | Define storage resources declaratively so environments are reproducible and reviewable |
 
-!!! tip "Architectural reading of this table"
-    Notice that the compute rows are a minority. In a well-designed system, compute is deliberately made boring: stateless, replaceable, and surrounded by managed services that hold the state, route the traffic, and observe the behaviour. If your compute layer is the most complicated part of your diagram, you have probably put responsibilities in the wrong place.
+```mermaid
+graph TD
+    U["User"] --> R53["Route 53"]
+    R53 --> CF["CloudFront"]
+    CF --> S3["S3 Bucket with OAC"]
+    R53 --> ALB["Application Load Balancer"]
+    ALB --> ECS["ECS or EKS Service"]
+    ECS --> EFSV["EFS Shared Volume"]
+    ECS --> S3
+    ECS --> RDS["RDS on EBS"]
+    S3 --> EVB["EventBridge"]
+    EVB --> LMB["Lambda Processor"]
+    LMB --> S3
+    S3 --> CT["CloudTrail Data Events"]
+    ECS --> CW["CloudWatch Metrics and Logs"]
+```
 
 ---
 
 ## Request Lifecycle
 
-### Synchronous Web Request Through a Container Service
+Tracing a request end to end is the fastest way to build an accurate mental model of latency, failure points, and cost.
 
-Consider a user loading a product page from an application running as ECS tasks behind an ALB.
+### Lifecycle of an S3 GET request
 
-```mermaid
-sequenceDiagram
-    participant U as "User Browser"
-    participant R53 as "Route 53"
-    participant CF as "CloudFront"
-    participant WAF as "AWS WAF"
-    participant ALB as "Application Load Balancer"
-    participant T as "ECS Task in Private Subnet"
-    participant DDB as "DynamoDB"
-    participant CW as "CloudWatch Logs"
-
-    U->>R53: "DNS query for shop.example.com"
-    R53-->>U: "CloudFront distribution alias"
-    U->>CF: "HTTPS GET /product/42"
-    CF->>WAF: "Evaluate rules"
-    WAF-->>CF: "Allow"
-    CF->>CF: "Cache lookup, miss"
-    CF->>ALB: "Forward to origin over HTTPS"
-    ALB->>ALB: "Listener rule matches path, choose healthy target"
-    ALB->>T: "HTTP request to task ENI private IP and port"
-    T->>DDB: "GetItem using task role credentials"
-    DDB-->>T: "Item"
-    T->>CW: "Structured log line with request id"
-    T-->>ALB: "200 response"
-    ALB-->>CF: "200 response"
-    CF->>CF: "Store in cache per cache control headers"
-    CF-->>U: "200 response"
-```
-
-**Step-by-step, with the architectural reasoning at each hop:**
-
-1. **DNS resolution.** Route 53 returns an alias record for the CloudFront distribution. Using an alias rather than a CNAME allows the apex domain to be used and incurs no additional lookup charge.
-2. **Edge termination.** TLS terminates at the nearest CloudFront point of presence, so the expensive handshake happens close to the user. This alone can remove 100 ms or more of latency for distant users.
-3. **Security filtering.** WAF evaluates managed and custom rules at the edge, so malicious requests never consume application compute. **Filtering at the edge is cheaper than filtering at the origin.**
-4. **Cache evaluation.** A cache hit ends the request here. Every cache hit is a request your compute layer never sees  CloudFront is, in effect, a compute-cost optimisation.
-5. **Origin request.** CloudFront forwards to the ALB. The ALB's security group should permit inbound traffic only from CloudFront's managed prefix list, not from the whole internet.
-6. **Load balancer routing.** The ALB evaluates listener rules and selects a healthy target from the target group using round-robin or least-outstanding-requests. Unhealthy targets are excluded automatically.
-7. **Task ingress.** With `awsvpc` networking, the ALB sends traffic directly to the task's own ENI private IP. The task's security group should allow inbound only from the ALB's security group  **security group referencing**, not CIDR ranges, is the correct pattern.
-8. **Data access.** The container obtains temporary credentials from the **task IAM role** via the container credentials endpoint (`169.254.170.2`). No long-lived access keys exist anywhere in the system.
-9. **Logging.** The `awslogs` log driver streams stdout/stderr to CloudWatch Logs. Logs should be structured JSON including a correlation ID.
-10. **Response and caching.** The response propagates back, and CloudFront caches it according to `Cache-Control` headers.
-
-### Serverless Request Through API Gateway and Lambda
+1. The client resolves the bucket endpoint through DNS. For virtual-hosted-style addressing, the name is `bucket-name.s3.region.amazonaws.com`.
+2. If the client is inside a VPC with a Gateway endpoint for S3, the route table directs the traffic to the endpoint and it never traverses the internet. Otherwise it exits through a NAT Gateway and Internet Gateway.
+3. TLS is negotiated with the S3 front-end fleet.
+4. The client presents an AWS Signature Version 4 signature derived from its credentials. S3 verifies the signature and identifies the principal.
+5. S3 evaluates authorisation as the union of the identity-based IAM policy, the bucket policy, any Service Control Policy, any VPC endpoint policy, Block Public Access settings, and — if enabled — object ownership and ACL rules. An explicit `Deny` anywhere wins.
+6. S3 consults the index partition owning that key range and locates the object's fragments.
+7. If the object is encrypted with SSE-KMS, S3 calls KMS to decrypt the data key. This adds latency and consumes a KMS request quota, which is why S3 Bucket Keys exist.
+8. S3 reads sufficient fragments, reconstructs the object, and streams the bytes back with a `200 OK` and an `ETag`.
+9. Metrics are emitted to CloudWatch; if data events are enabled, a record is written to CloudTrail.
 
 ```mermaid
 sequenceDiagram
-    participant U as "Client"
-    participant APIG as "API Gateway"
-    participant AUTH as "Lambda Authorizer or Cognito"
-    participant L as "Lambda Service Frontend"
-    participant EE as "Execution Environment"
-    participant DDB as "DynamoDB"
-
-    U->>APIG: "POST /orders with bearer token"
-    APIG->>APIG: "Throttle check and request validation"
-    APIG->>AUTH: "Authorise token"
-    AUTH-->>APIG: "Allow policy, cached"
-    APIG->>L: "Invoke function synchronously"
-    alt "Warm environment available"
-        L->>EE: "Route to frozen environment, thaw"
-    else "No warm environment"
-        L->>EE: "Create microVM, run Init phase"
-    end
-    EE->>DDB: "PutItem with function execution role"
-    DDB-->>EE: "Success"
-    EE-->>L: "JSON response"
-    L-->>APIG: "Response payload"
-    APIG-->>U: "201 Created"
+    participant App as "Application"
+    participant VPCE as "Gateway VPC Endpoint"
+    participant S3 as "S3 Front End"
+    participant IAM as "Authorization Engine"
+    participant KMS as "AWS KMS"
+    participant ST as "Storage Fleet"
+    App->>VPCE: "GET object over TLS"
+    VPCE->>S3: "Routed on the AWS network"
+    S3->>IAM: "Evaluate SigV4 and all policies"
+    IAM-->>S3: "Allow"
+    S3->>S3: "Resolve key in index partition"
+    S3->>KMS: "Decrypt data key if SSE-KMS"
+    KMS-->>S3: "Plaintext data key"
+    S3->>ST: "Read erasure-coded fragments"
+    ST-->>S3: "Fragments"
+    S3-->>App: "200 OK with object bytes"
 ```
 
-The critical differences from the container path:
+### Lifecycle of an EBS write
 
-- **There is no load balancer and no VPC hop** unless the function is explicitly attached to a VPC. Lambda's own service infrastructure handles ingress.
-- **The scaling decision is made per request**, not per aggregated metric. There is no scaling delay in the Auto Scaling sense  but there is cold-start latency.
-- **Throttling is a first-class concept.** API Gateway throttles, and Lambda enforces account and per-function concurrency limits. Exceeding them yields `429 TooManyRequestsException`, and the client must retry.
-
-### Asynchronous, Event-Driven Lifecycle
+1. The application issues a `write` system call.
+2. The operating system's page cache may buffer the write. Durability is only guaranteed after `fsync` or when the write is issued with a barrier.
+3. The file system translates the file offset into logical block addresses and issues NVMe commands.
+4. The Nitro card for EBS receives the NVMe command, encrypts the payload in hardware if the volume is encrypted, and packages it for the EBS network fabric.
+5. The EBS server fleet writes the block to the primary replica and synchronously to at least one additional replica within the same Availability Zone.
+6. Once the required replicas acknowledge, the Nitro card signals completion to the guest.
+7. The application's `fsync` returns and the data is durable within that Availability Zone.
 
 ```mermaid
-flowchart TD
-    A["Client uploads object to S3"] --> B["S3 emits ObjectCreated event"]
-    B --> C["EventBridge rule or direct notification"]
-    C --> D["SQS queue buffers the event"]
-    D --> E["Lambda event source mapping polls the queue"]
-    E --> F["Lambda processes batch"]
-    F --> G{"Processing succeeded"}
-    G -->|"Yes"| H["Delete messages from queue"]
-    G -->|"No"| I["Message returns after visibility timeout"]
-    I --> J{"Receive count exceeds maxReceiveCount"}
-    J -->|"Yes"| K["Move to dead letter queue"]
-    J -->|"No"| E
-    K --> L["CloudWatch alarm on DLQ depth notifies on call"]
+sequenceDiagram
+    participant P as "Process"
+    participant OS as "Guest Kernel and File System"
+    participant N as "Nitro EBS Card"
+    participant E1 as "EBS Primary Replica"
+    participant E2 as "EBS Secondary Replica"
+    P->>OS: "write then fsync"
+    OS->>N: "NVMe write command"
+    N->>N: "Encrypt block in hardware"
+    N->>E1: "Write over EBS fabric"
+    E1->>E2: "Replicate within the AZ"
+    E2-->>E1: "Acknowledged"
+    E1-->>N: "Durable"
+    N-->>OS: "Completion"
+    OS-->>P: "fsync returns"
 ```
 
-!!! note "Synchronous versus asynchronous is an availability decision"
-    In the synchronous path, if the compute layer is unavailable the user sees an error. In the asynchronous path, if the compute layer is unavailable the queue simply grows, and processing catches up when capacity returns. **Introducing a queue converts an availability problem into a latency problem**  which is almost always the better problem to have. This is the single most valuable pattern in event-driven architecture.
+### Lifecycle of an EFS read
+
+1. The client resolves the file system DNS name; Route 53 returns the mount target IP in the client's own Availability Zone.
+2. The NFS client establishes a TCP session on port 2049 to that mount target ENI. The mount target's security group must permit the traffic.
+3. If IAM authorisation or TLS is in use, the `efs-utils` helper establishes a stunnel-based encrypted channel and signs requests.
+4. The client issues NFS `LOOKUP` operations to walk the path, then `OPEN` and `READ`.
+5. The metadata service resolves the inode and permissions, applying any access point enforcement of root directory and POSIX identity.
+6. The data service returns the requested byte ranges, read from redundant copies across Availability Zones.
+7. The client caches attributes and data according to NFS close-to-open semantics.
+
+```mermaid
+sequenceDiagram
+    participant C as "Container or EC2 Client"
+    participant DNS as "Route 53 Resolver"
+    participant MT as "Mount Target ENI in same AZ"
+    participant MD as "EFS Metadata Service"
+    participant DS as "EFS Data Service"
+    C->>DNS: "Resolve file system DNS name"
+    DNS-->>C: "Zone-local mount target IP"
+    C->>MT: "NFS session on TCP 2049"
+    MT->>MD: "LOOKUP path components"
+    MD-->>MT: "Inode and permissions"
+    MT->>DS: "READ byte range"
+    DS-->>MT: "Data from multi-AZ replicas"
+    MT-->>C: "File data"
+```
+
+### Synchronous versus asynchronous paths
+
+Storage participates in both communication styles, and mixing them up produces incorrect designs.
+
+| Path | Style | Latency expectation | Design implication |
+|---|---|---|---|
+| `GetObject` and `PutObject` | Synchronous | Tens of milliseconds | Set timeouts and retries; never call on a tight loop without concurrency |
+| EBS block I/O | Synchronous | Sub-millisecond to low milliseconds | Provision IOPS to match the peak, not the average |
+| EFS NFS operations | Synchronous | Low milliseconds, higher for metadata | Avoid workloads dominated by small metadata operations |
+| S3 event notification to Lambda, SQS, SNS, or EventBridge | Asynchronous | Typically seconds, no ordering guarantee | Consumers must be idempotent and tolerate duplicates and reordering |
+| S3 lifecycle transitions | Asynchronous batch | Evaluated approximately daily | Do not depend on a transition happening at an exact hour |
+| S3 Cross-Region Replication | Asynchronous | Minutes; fifteen-minute SLA with Replication Time Control | Destination is not a consistent read replica |
+| EBS snapshot creation | Asynchronous after the point-in-time is captured | The point in time is immediate; the copy completes later | The volume can be used immediately after the API returns |
+
+!!! warning "S3 event notifications are at-least-once"
+    S3 event notifications guarantee delivery at least once, not exactly once, and provide no ordering guarantee across keys. Any Lambda function or SQS consumer triggered by S3 must be idempotent — typically by making the output key deterministic from the input key, or by recording processed object versions in DynamoDB with a conditional write.
 
 ---
 
 ## AWS Service Deep Dive
 
-!!! warning "On numbers and quotas"
-    Service limits below are stated as of 2026. Many are **soft (adjustable) quotas** that can be raised through AWS Service Quotas, and several are **Region-dependent**. Treat every figure here as a design signal rather than an immutable constant, and verify against the AWS Service Quotas console and the current service documentation before committing to a design. Pricing is described in terms of **pricing dimensions** and orders of magnitude only; always consult the current AWS pricing pages and the AWS Pricing Calculator for figures.
+### Amazon S3 Deep Dive
 
-### Amazon EC2
+#### Purpose
 
-**Purpose.** To provide resizable virtual machines with full control over the operating system, so that arbitrary software  including legacy applications, licensed software, custom kernels, GPU workloads, and stateful systems  can run in the cloud with the same freedom as on physical hardware.
+S3 exists to store an unbounded number of immutable objects with extreme durability, accessible over HTTP from anywhere with appropriate credentials, at a cost per gigabyte low enough to make retaining data cheaper than deciding whether to delete it. It is the default destination for backups, logs, media, data lakes, static websites, build artefacts, and machine learning training sets.
 
-**Architecture.** An EC2 instance is a guest OS running on a Nitro host within a specific Availability Zone. It is composed of:
+#### Architecture
 
-- An **AMI (Amazon Machine Image)**  the template containing the root volume snapshot, kernel configuration, and launch permissions.
-- An **instance type**  a fixed combination of vCPU, memory, network bandwidth, and storage characteristics.
-- One or more **ENIs**, each in a subnet, each with security groups.
-- **EBS volumes** (network-attached, persistent, independently durable) and/or **instance store** volumes (physically attached NVMe, extremely fast, ephemeral, lost on stop or termination).
-- An **IAM instance profile** granting the instance an IAM role.
-- **User data** for first-boot bootstrapping.
+S3 is a Regional service composed of a horizontally scaled front-end fleet, a strongly consistent partitioned index, and a storage fleet that holds erasure-coded fragments across at least three Availability Zones. Buckets are containers with Regional affinity; objects are addressed by key within a bucket. There is no server for you to size, no capacity to provision, and no maintenance window.
 
-**Important features.**
+Two bucket types now exist. **General purpose buckets** are the standard, multi-AZ, globally named buckets used for nearly all workloads. **Directory buckets** support the S3 Express One Zone storage class, use a hierarchical namespace optimised for single-digit-millisecond latency, and reside in a single Availability Zone chosen by the customer.
 
-| Feature | Architectural value |
-|---|---|
-| Instance families (general purpose, compute, memory, storage, accelerated) | Match hardware to workload shape rather than over-buying a single dimension |
-| Graviton processors (ARM-based) | Typically better price-performance than equivalent x86 instances for many workloads; requires ARM-compatible builds |
-| Auto Scaling groups | Desired-count reconciliation, AZ balancing, health-based replacement, lifecycle hooks |
-| Launch templates | Versioned instance configuration; the modern replacement for launch configurations, required for mixed-instances policies |
-| Placement groups | Cluster (low latency, same rack), Spread (distinct hardware, for HA), Partition (fault-domain-aware, for HDFS-style systems) |
-| Elastic IP and ENI attach/detach | Network identity that can survive instance replacement |
-| Nitro Enclaves | Isolated, attestable compute environments for processing highly sensitive data with no persistent storage or interactive access |
-| EC2 Image Builder | Automated, versioned, tested AMI pipelines  the correct answer to "golden image" management |
-| Hibernation | Preserves RAM to EBS so an instance resumes with its memory state intact |
+#### Important features
 
-**Limitations.**
+- **Versioning** preserves every version of every object and inserts delete markers instead of destroying data.
+- **Object Lock** provides write-once-read-many retention in Governance mode, which privileged users can override, and Compliance mode, which nobody including the root user can override until the retention period expires.
+- **Lifecycle policies** transition objects between storage classes and expire them, including expiring noncurrent versions and aborting incomplete multipart uploads.
+- **Replication**, both Cross-Region and Same-Region, copies objects asynchronously to another bucket, optionally in another account, with optional Replication Time Control.
+- **Event notifications** to Lambda, SQS, SNS, and EventBridge make S3 an event source for event-driven architectures.
+- **Multipart upload** enables parallel, resumable uploads of large objects.
+- **Presigned URLs** delegate a single operation to an anonymous holder for a bounded time.
+- **S3 Select** and **Athena** allow SQL-style querying of object contents without moving the data.
+- **Requester Pays** shifts request and transfer charges to the caller.
+- **Transfer Acceleration** routes uploads through CloudFront edge locations for geographically distant clients.
+- **Storage Lens** provides organisation-wide analytics on usage and activity.
+- **Access Points** and **Object Lambda Access Points** provide per-application entry points and on-the-fly transformation of retrieved objects.
+- **Mountpoint for Amazon S3** presents a bucket as a file system for read-heavy analytics, without providing full POSIX semantics.
 
-- You are responsible for the guest OS: patching, hardening, agent installation, log shipping, and vulnerability management.
-- Boot time is measured in tens of seconds to minutes, so reactive scaling always lags demand.
-- Idle instances cost the same as busy instances  utilisation discipline is entirely on you.
-- An instance is bound to one AZ; instance-store data and the instance itself do not survive AZ loss.
+#### Storage classes
 
-**Pricing model (dimensions).**
+| Storage class | Designed for | Minimum storage duration | Minimum billable object size | Retrieval fee | Availability Zones | First-byte latency |
+|---|---|---|---|---|---|---|
+| S3 Standard | Frequently accessed, general purpose | None | None | None | Three or more | Milliseconds |
+| S3 Intelligent-Tiering | Unknown or changing access patterns | None | 128 KiB for auto-tiering eligibility | None; small monitoring fee per object | Three or more | Milliseconds |
+| S3 Standard-IA | Infrequent access, rapid retrieval needed | 30 days | 128 KiB | Per GiB retrieved | Three or more | Milliseconds |
+| S3 One Zone-IA | Infrequent access, recreatable data | 30 days | 128 KiB | Per GiB retrieved | One | Milliseconds |
+| S3 Glacier Instant Retrieval | Archive needing millisecond access | 90 days | 128 KiB | Per GiB retrieved, higher than IA | Three or more | Milliseconds |
+| S3 Glacier Flexible Retrieval | Archive, minutes to hours acceptable | 90 days | 40 KiB | Per GiB and per request, varies by retrieval tier | Three or more | Expedited in one to five minutes, Standard in three to five hours, Bulk in five to twelve hours |
+| S3 Glacier Deep Archive | Long-term retention, rarely accessed | 180 days | 40 KiB | Per GiB retrieved | Three or more | Standard in around twelve hours, Bulk in up to forty-eight hours |
+| S3 Express One Zone | Latency-sensitive, very high request rate | One hour | 512 KiB | None, but higher request charges | One, in a directory bucket | Single-digit milliseconds |
 
-| Purchase option | How it works | Best for |
+!!! danger "Minimum duration charges are a real budget trap"
+    An object stored in Standard-IA and deleted after five days is billed for thirty days. An object in Glacier Deep Archive deleted after a week is billed for one hundred and eighty days. Lifecycle rules that transition short-lived data to colder classes can therefore *increase* cost substantially. Always compare the expected object lifetime against the minimum storage duration before writing a transition rule.
+
+#### Storage class decision flow
+
+```mermaid
+graph TD
+    A["New object"] --> B{"Access pattern known"}
+    B -->|"No"| C["S3 Intelligent-Tiering"]
+    B -->|"Yes"| D{"Accessed frequently"}
+    D -->|"Yes"| E{"Needs single-digit ms and very high request rate"}
+    E -->|"Yes"| F["S3 Express One Zone"]
+    E -->|"No"| G["S3 Standard"]
+    D -->|"No"| H{"Must be retrievable in milliseconds"}
+    H -->|"Yes"| I{"Is the data recreatable"}
+    I -->|"Yes"| J["S3 One Zone-IA"]
+    I -->|"No"| K["S3 Standard-IA or Glacier Instant Retrieval"]
+    H -->|"No"| L{"Acceptable retrieval delay"}
+    L -->|"Minutes to hours"| M["Glacier Flexible Retrieval"]
+    L -->|"Twelve hours or more"| N["Glacier Deep Archive"]
+```
+
+#### The life of an object under versioning and lifecycle rules
+
+The following state machine shows why versioning without lifecycle expiry causes unbounded cost growth, and why a delete in a versioned bucket is recoverable.
+
+```mermaid
+stateDiagram-v2
+    [*] --> CurrentStandard : "PUT object"
+    CurrentStandard --> NoncurrentVersion : "PUT same key again"
+    NoncurrentVersion --> CurrentStandard : "Restore an older version"
+    CurrentStandard --> CurrentInfrequentAccess : "Lifecycle transition after 30 days"
+    CurrentInfrequentAccess --> CurrentGlacier : "Lifecycle transition after 90 days"
+    CurrentStandard --> DeleteMarkerCurrent : "DELETE without version id"
+    DeleteMarkerCurrent --> CurrentStandard : "Remove the delete marker"
+    NoncurrentVersion --> PermanentlyDeleted : "NoncurrentVersionExpiration"
+    CurrentGlacier --> PermanentlyDeleted : "Expiration rule"
+    PermanentlyDeleted --> [*]
+```
+
+!!! danger "The delete that is not a delete"
+    In a versioned bucket, a `DELETE` without a version identifier does not remove data; it inserts a delete marker and hides the object. The prior versions remain and continue to be billed. To actually free storage you must delete specific version identifiers, which is exactly what a `NoncurrentVersionExpiration` lifecycle rule automates. This mechanism is simultaneously the strongest protection against accidental deletion and the most common cause of unexplained storage growth.
+
+#### Limitations
+
+- Objects are immutable; there is no partial in-place update and no append. Modifying one byte requires re-uploading the whole object.
+- Maximum object size is 5 TiB, and a single `PUT` without multipart is limited to 5 GiB.
+- Listing is a paginated, eventually complete operation over a very large keyspace; listing millions of keys is slow and costly. Use S3 Inventory instead.
+- Renaming an object or a prefix is a copy plus a delete, with full data transfer and request cost.
+- No POSIX semantics: no file locking, no hard links, no atomic rename of a tree.
+- Strong consistency applies to object data, not to bucket configuration.
+- Bucket names are globally unique, which constrains naming conventions across organisations.
+
+#### Pricing model
+
+S3 charges across several independent dimensions. Architects must reason about all of them, because request charges frequently exceed storage charges for small-object workloads.
+
+| Dimension | Basis | Architectural implication |
 |---|---|---|
-| **On-Demand** | Pay per second (60-second minimum for Linux) with no commitment | Unpredictable workloads, development, spike absorption |
-| **Savings Plans (Compute or EC2 Instance)** | Commit to a dollar-per-hour spend for one or three years; discounts commonly in the region of 30–70 percent depending on term and payment option | Steady baseline load; Compute Savings Plans also cover Fargate and Lambda |
-| **Reserved Instances** | Commit to a specific instance configuration for one or three years | Long-lived, unchanging workloads; Standard RIs can be sold in the Marketplace |
-| **Spot Instances** | Bid on spare capacity at discounts frequently around 70–90 percent; AWS reclaims with a two-minute interruption notice | Fault-tolerant, stateless, interruptible work: batch, CI runners, stateless web tiers behind a queue |
-| **Dedicated Instances / Dedicated Hosts** | Hardware isolation; Dedicated Hosts expose socket and core counts | Regulatory isolation, per-socket BYOL licensing |
-| **Capacity Reservations** | Reserve capacity in a specific AZ without a term commitment | Guaranteeing capacity for a known event or DR failover |
+| Storage | Per GiB-month, varying by storage class | Lifecycle policies are the main lever |
+| Requests | Per thousand `PUT`, `COPY`, `POST`, `LIST` and per thousand `GET` and `SELECT`, priced differently per class | Batching small objects can cut cost by an order of magnitude |
+| Data transfer out to the internet | Per GiB, tiered | Serve through CloudFront to reduce it |
+| Data transfer within a Region to services | Generally free to services in the same Region | Use a Gateway VPC endpoint to avoid NAT charges |
+| Retrieval | Per GiB for IA and Glacier classes | A cold class accessed often costs more than Standard |
+| Management features | Per object for Intelligent-Tiering monitoring, Inventory, Storage Lens advanced metrics, Object Lock, replication | Small-object-heavy buckets pay a high per-object overhead |
+| Replication | Storage in the destination plus inter-Region transfer plus requests | Cross-Region Replication roughly doubles storage cost |
 
-Additional dimensions that surprise beginners: **EBS volume storage and provisioned IOPS**, **data transfer out to the internet**, **cross-AZ data transfer**, **NAT Gateway processing**, and **Elastic IPs that are allocated but not attached**.
+!!! info "Verify pricing before quoting figures"
+    Prices differ by Region and change over time. Treat published figures as orders of magnitude — Standard storage on the order of low tens of United States cents per GiB-month, Deep Archive roughly an order of magnitude cheaper, and internet egress on the order of several cents per GiB. Always confirm against the current AWS pricing pages and model your workload with the AWS Pricing Calculator before committing to a design.
 
-**Performance characteristics.** Network and EBS bandwidth scale with instance size, and smaller instances of many families use a **credit-based burst** model for both CPU (the T family) and EBS/network throughput. A T-family instance that exhausts CPU credits is throttled to its baseline, which is a classic cause of mysterious latency in a system that "worked in testing". Enhanced networking (ENA) and, for HPC, Elastic Fabric Adapter provide high packet-per-second and low-latency capability.
+#### Performance characteristics and scaling behaviour
 
-**Scaling behaviour.** Horizontal scaling via Auto Scaling groups with target tracking (for example, maintain 50 percent average CPU), step scaling, scheduled scaling, or predictive scaling. Key parameters are the **warm-up period** (how long a new instance takes to become useful, so it is excluded from metrics until then) and the **cooldown** (preventing oscillation). Vertical scaling requires stopping and restarting the instance with a new type.
+- At least 3,500 write and 5,500 read requests per second **per partitioned prefix**, with unlimited prefixes and automatic partition splitting.
+- Throughput scales horizontally with parallelism; a single connection is limited by TCP behaviour, so large transfers should use multipart with many concurrent parts.
+- Byte-range `GET` requests allow parallel reads of a single large object.
+- First-byte latency in the tens of milliseconds for Standard; single-digit milliseconds for Express One Zone.
+- No provisioning, no warm-up, and no capacity planning: S3 scales elastically as load arrives.
 
-**Availability.** Instances are single-AZ. Availability is achieved by running an Auto Scaling group across multiple AZs behind a load balancer with health checks, and by setting the ASG health check type to `ELB` so that an instance failing application health checks is replaced, not merely one failing EC2 status checks.
+#### Availability, durability, and security features
 
-**Security features.** Security groups and NACLs, IAM instance profiles with temporary credentials via IMDSv2, EBS encryption with KMS, Nitro-enforced isolation, AWS Systems Manager Session Manager for shell access without SSH keys or open port 22, Inspector for vulnerability assessment, and Nitro Enclaves for confidential computing.
+S3 Standard is designed for eleven nines of durability and 99.99 percent availability, backed by a 99.9 percent Service Level Agreement. Security features include Block Public Access at both account and bucket level, bucket policies, IAM identity policies, Access Points, VPC endpoint policies, default encryption with SSE-S3 or SSE-KMS or DSSE-KMS, Bucket Keys to reduce KMS calls, Object Lock, MFA Delete, Access Analyzer for S3, server access logging, and CloudTrail data events.
 
-**Service limits (illustrative, mostly adjustable).**
+Since 2023, **all new objects are encrypted at rest by default with SSE-S3**, and Block Public Access and object ownership defaults were tightened so that ACLs are disabled on new buckets.
 
-| Limit | Typical default | Notes |
+#### Service limits
+
+| Limit | Value | Adjustable |
 |---|---|---|
-| Running On-Demand instances | Expressed as a **vCPU quota per instance family group**, per Region | Adjustable; new accounts start low |
-| Spot instances | Separate vCPU quota per family | Adjustable |
-| ENIs per instance and IPs per ENI | Determined by instance type | Not adjustable; a hard design constraint for `awsvpc` density and the EKS VPC CNI |
-| EBS volumes attached | Instance-type dependent | Nitro instances attach volumes as NVMe devices |
-| Auto Scaling groups per Region | In the low thousands | Adjustable |
+| Buckets per account | 10,000 by default in the general purpose namespace | Yes, through a quota increase |
+| Objects per bucket | Unlimited | Not applicable |
+| Maximum object size | 5 TiB | No |
+| Maximum single `PUT` without multipart | 5 GiB | No |
+| Parts per multipart upload | 10,000 | No |
+| Part size range | 5 MiB to 5 GiB, last part may be smaller | No |
+| Bucket policy document size | 20 KB | No |
+| Lifecycle rules per bucket | 1,000 | No |
+| Access points per Region per account | Several thousand | Yes |
+| Request rate per prefix | 3,500 write and 5,500 read per second minimum | Scales automatically |
 
-**Common configurations.** A private-subnet Auto Scaling group across three AZs, behind an ALB in public subnets, using a launch template referencing a hardened AMI produced by EC2 Image Builder, with an instance profile granting only the permissions the application needs, IMDSv2 required, EBS encrypted by a customer-managed KMS key, and Systems Manager Agent for patching and shell access.
+#### Common configurations
 
-!!! tip "When EC2 is the right answer"
-    Choose EC2 when you need OS-level control, when software is licensed per host or requires a specific kernel, when the workload is long-running and steady enough for Savings Plans, when you need GPUs or specialised hardware, or when you are lifting and shifting an existing application before modernising it.
+A production bucket typically has versioning enabled, Block Public Access fully on, default encryption with a customer-managed KMS key and Bucket Keys enabled, a bucket policy denying non-TLS requests, a lifecycle rule that expires noncurrent versions after a retention window and aborts incomplete multipart uploads after seven days, server access logging or CloudTrail data events directed to a separate logging bucket, and replication to a second Region or a separate account for critical data.
 
-### Amazon ECS
+---
 
-**Purpose.** To run and scale Docker containers on AWS with a control plane that is fully managed, has no additional charge, and integrates natively with IAM, VPC networking, ELB, CloudWatch, and Auto Scaling  without requiring the team to learn Kubernetes.
+### Amazon EBS Deep Dive
 
-**Architecture.**
+#### Purpose
 
-| Object | Meaning |
-|---|---|
-| **Cluster** | A logical grouping of capacity and services. A namespace, not a machine. |
-| **Task definition** | An immutable, versioned blueprint: container images, CPU and memory, ports, environment, secrets, log configuration, IAM roles, volumes |
-| **Task** | A running instance of a task definition revision; one or more containers co-scheduled on one host |
-| **Service** | A controller that maintains a desired count of tasks, registers them with a load balancer, and performs rolling deployments |
-| **Capacity provider** | The source of compute: an Auto Scaling group, `FARGATE`, or `FARGATE_SPOT` |
-| **Container agent** | The per-instance process that communicates with the control plane (EC2 launch type only) |
+EBS exists to give EC2 instances persistent, low-latency, random-access block storage that survives instance termination and can be snapshotted, resized, and re-attached. It is the storage substrate for boot volumes, self-managed databases, and any workload whose software expects a local disk.
 
-**Important features.**
+#### Architecture
 
-- **Two launch types**: EC2 (you own the instances, maximum control and cost tuning) and Fargate (no instances at all).
-- **Capacity provider strategies** allowing a service to be split across, for example, 1 base task on Fargate plus a 1:4 weight ratio between Fargate and Fargate Spot.
-- **Service Connect** and **ECS Service Discovery (Cloud Map)** for service-to-service communication by name.
-- **Deployment circuit breaker** that automatically rolls back a deployment whose tasks repeatedly fail to reach a healthy state.
-- **Task roles separate from execution roles**  a genuinely important security feature discussed below.
-- **ECS Exec** for interactive shell access into a running container via Systems Manager, without SSH.
-- **ECS Anywhere** for running the ECS agent on on-premises or edge hardware managed by the same control plane.
+EBS volumes live on a dedicated storage fleet within a single Availability Zone, replicated across multiple servers in that zone, and reached from the EC2 host over a purpose-built network fabric mediated by the Nitro card. The volume is exposed to the guest as an NVMe block device. Snapshots are written incrementally to S3 as Regional resources, providing the cross-zone and cross-Region durability path.
 
-**Limitations.**
+#### Volume types
 
-- ECS is AWS-specific. Task definitions and service definitions do not port to another cloud, though the container images do.
-- Its extensibility model is far narrower than Kubernetes  there are no CRDs, operators, or admission controllers.
-- The ecosystem of third-party tooling (service meshes, policy engines, GitOps controllers) is smaller than Kubernetes'.
+| Type | Media | Size range | Max IOPS per volume | Max throughput per volume | IOPS model | Best-suited workloads |
+|---|---|---|---|---|---|---|
+| gp3 | SSD | 1 GiB to 64 TiB | 16,000 | 1,000 MiB/s | 3,000 IOPS baseline included, provisioned independently of size | Default for boot volumes, most databases, application servers |
+| gp2 | SSD | 1 GiB to 64 TiB | 16,000 | 250 MiB/s | 3 IOPS per GiB, burst to 3,000 for small volumes | Legacy general purpose; superseded by gp3 |
+| io1 | SSD | 4 GiB to 16 TiB | 64,000 | 1,000 MiB/s | Provisioned, up to 50 IOPS per GiB | Legacy high-performance; superseded by io2 |
+| io2 Block Express | SSD | 4 GiB to 64 TiB | 256,000 | 4,000 MiB/s | Provisioned, up to 1,000 IOPS per GiB | Mission-critical relational databases, SAP HANA, Oracle |
+| st1 | HDD | 125 GiB to 16 TiB | 500 | 500 MiB/s | Throughput-oriented with burst credits | Big data, log processing, data warehouses, sequential reads |
+| sc1 | HDD | 125 GiB to 16 TiB | 250 | 250 MiB/s | Lowest cost, throughput-oriented | Cold data accessed a few times per month |
 
-**Pricing model.** The ECS control plane is **free**. You pay for the underlying capacity:
+!!! tip "gp3 is almost always better than gp2"
+    gp3 costs roughly twenty percent less per GiB than gp2, includes 3,000 IOPS and 125 MiB/s regardless of size, and lets you provision IOPS and throughput independently of capacity. Under gp2, obtaining 3,000 sustained IOPS required a 1,000 GiB volume. Migrating gp2 volumes to gp3 is an online `ModifyVolume` operation and is one of the most reliable cost optimisations available in a mature account.
 
-- **EC2 launch type**: standard EC2 instance, EBS, and data transfer charges. You pay for the whole instance whether or not tasks fill it, so **bin-packing efficiency directly determines cost**.
-- **Fargate**: per-second billing (one-minute minimum) on **vCPU-seconds and GB-seconds** of the requested task size, plus ephemeral storage above the included allowance. **Fargate Spot** offers a substantial discount for interruptible tasks, with a two-minute termination warning.
+#### Important features
 
-**Performance characteristics.** Task start time on EC2 is dominated by image pull time (seconds, or sub-second when the layer is already cached on the host). On Fargate, each task must pull the image into a fresh microVM, so start time is typically in the tens of seconds; Fargate supports **Seekable OCI (SOCI)** lazy loading to reduce this for large images. Networking in `awsvpc` mode gives each task the full performance of its own ENI.
+- **Elastic Volumes** allow online changes to size, type, IOPS, and throughput without detaching or stopping the instance. Note that the file system must then be grown with `growpart` and `resize2fs` or `xfs_growfs`.
+- **Snapshots** are incremental, Regional, copyable across Regions and accounts, and shareable.
+- **Fast Snapshot Restore** eliminates lazy-loading latency for restored volumes at an hourly charge.
+- **Encryption** is at-rest and in-transit between the instance and the volume, performed in Nitro hardware, with negligible performance impact. Encryption by default can be enforced account-wide per Region.
+- **Multi-Attach** allows io1 and io2 volumes to attach to up to sixteen Nitro instances in the same Availability Zone; a cluster-aware file system is required.
+- **Data Lifecycle Manager** automates snapshot creation, retention, and cross-Region copy.
+- **EBS direct APIs** allow reading snapshot blocks and writing new snapshots programmatically, enabling efficient backup tooling.
+- **Recycle Bin** allows recovery of accidentally deleted snapshots and AMIs within a retention window.
 
-**Scaling behaviour.** Two independent layers must scale, and confusing them is a classic error:
+#### Limitations
 
-1. **Service auto scaling**  Application Auto Scaling adjusts the desired task count using target tracking (on `ECSServiceAverageCPUUtilization`, `ECSServiceAverageMemoryUtilization`, `ALBRequestCountPerTarget`) or step scaling or scheduled scaling.
-2. **Cluster capacity scaling**  on the EC2 launch type, **managed scaling via capacity providers** adjusts the Auto Scaling group so that there is room for tasks. It computes a `CapacityProviderReservation` metric and scales instances to keep a configured target (for example, 100 means "exactly enough capacity", below 100 leaves headroom for faster task starts).
+- A volume is bound to a single Availability Zone and can only attach to instances in that zone.
+- Except for Multi-Attach, a volume attaches to exactly one instance at a time.
+- Volume performance is also capped by the **instance's** EBS bandwidth and IOPS limits, which vary by instance type and size. A large volume attached to a small instance will not deliver its rated performance.
+- Volumes cannot be shrunk; they can only grow.
+- Snapshots are crash-consistent unless the file system is quiesced.
+- HDD types perform poorly for small random I/O; they are throughput devices, not IOPS devices.
 
-On Fargate, layer 2 does not exist. This is the primary operational simplification Fargate buys you.
+#### Pricing model
 
-**Availability.** The ECS control plane is regional and multi-AZ. Your availability comes from placing tasks across multiple AZs  use the `spread` placement strategy across `attribute:ecs.availability-zone`, run at least two tasks per service, and ensure subnets in the service's network configuration span AZs.
-
-**Security features.** Three distinct IAM roles, and understanding their separation is examinable and operationally important:
-
-| Role | Assumed by | Used for |
-|---|---|---|
-| **Container instance role** | The EC2 instance (EC2 launch type only) | Agent-to-control-plane calls, ECR pulls at host level |
-| **Task execution role** | The ECS agent / Fargate infrastructure, on your behalf | Pulling the image from ECR, writing container logs to CloudWatch, retrieving secrets referenced in the task definition |
-| **Task role** | Your application code inside the container | All AWS API calls the application itself makes |
-
-Additional controls: `awsvpc` per-task security groups, secrets injected from Secrets Manager or SSM Parameter Store by reference (never as plaintext environment variables), ECR image scanning, read-only root filesystem, dropping Linux capabilities, and running as a non-root user.
-
-!!! danger "The most common ECS security mistake"
-    Granting the application's permissions to the **task execution role** instead of the **task role**, or worse, using one over-privileged role for both. The execution role is used by AWS infrastructure before your code runs; the task role is what your code gets. Keep them separate and minimal.
-
-**Service limits (illustrative, mostly adjustable).**
-
-| Limit | Typical default |
-|---|---|
-| Clusters per Region | 10,000 |
-| Services per cluster | 5,000 |
-| Tasks per service | 5,000 |
-| Containers per task definition | 10 |
-| Task definition size | 64 KiB |
-| Fargate task CPU / memory combinations | Discrete pairs from 0.25 vCPU / 0.5 GB up to 16 vCPU / 120 GB, with valid memory ranges tied to each vCPU size |
-| Fargate ephemeral storage | 20 GiB included, configurable up to 200 GiB |
-
-**Common configurations.** A Fargate service with two or more tasks in private subnets across three AZs, fronted by an ALB in public subnets, images pulled from ECR through VPC endpoints, secrets from Secrets Manager, logs to CloudWatch with a retention policy, Container Insights enabled, deployment circuit breaker with rollback enabled, and target-tracking auto scaling on `ALBRequestCountPerTarget`.
-
-### Amazon EKS
-
-**Purpose.** To run upstream-conformant Kubernetes on AWS without operating the control plane, so that organisations can use the Kubernetes API, ecosystem, and portability while AWS handles API server availability, etcd durability, and control-plane patching.
-
-**Architecture.** EKS splits into the AWS-managed control plane (API server, etcd, scheduler, controller manager, replicated across at least three AZs in an AWS-owned VPC) and your data plane, which may be any combination of:
-
-| Data plane option | Description | Trade-off |
-|---|---|---|
-| **Self-managed nodes** | You create the Auto Scaling group and AMI yourself | Maximum control; you own AMI builds and upgrade orchestration |
-| **Managed node groups** | EKS provisions and manages an ASG of EKS-optimised nodes, with node draining on update | Good balance; still EC2 instances you pay for by the hour |
-| **Fargate profiles** | Pods matching a namespace/label selector run on Fargate, one microVM per pod | No nodes to manage; no DaemonSets, no privileged pods, no GPU |
-| **Karpenter** | An open-source, AWS-developed node provisioner that launches right-sized instances directly in response to unschedulable pods | Fastest and most cost-efficient node scaling; replaces Cluster Autoscaler |
-| **EKS Auto Mode** | AWS manages compute, storage, and networking of the data plane, including node provisioning, patching, and consolidation | Lowest operational burden for a Kubernetes cluster; premium on compute cost |
-
-**Important features.**
-
-- Upstream-conformant Kubernetes API, so standard manifests, Helm charts, and operators work unchanged.
-- **EKS add-ons** for managed lifecycle of the VPC CNI, CoreDNS, `kube-proxy`, EBS/EFS CSI drivers, and Pod Identity agent.
-- **IRSA and EKS Pod Identity** for per-pod IAM permissions.
-- **Security groups for pods**, allowing VPC security groups to be applied at pod granularity.
-- **EKS access entries** for IAM-to-RBAC mapping through the AWS API rather than the `aws-auth` ConfigMap.
-- **Extended version support** for clusters running an older Kubernetes minor version, at an increased hourly rate.
-- Integration with AWS Load Balancer Controller (provisions ALBs from Ingress objects and NLBs from Service objects), External DNS, and the EBS/EFS CSI drivers.
-
-**Limitations.**
-
-- Kubernetes is genuinely complex. It introduces a large surface area of concepts, failure modes, and security configuration that a small team may not have capacity to operate well.
-- The control plane has an hourly charge **per cluster**, which discourages cluster proliferation.
-- **Version upgrades are a recurring, mandatory operational obligation.** Kubernetes minor versions have a limited standard support window (roughly 14 months), after which extended support incurs a higher fee, and eventually the cluster is auto-upgraded. Upgrades must be sequential across minor versions and require validating deprecated API usage.
-- Fargate on EKS cannot run DaemonSets, privileged containers, GPU workloads, or host-network pods, which breaks many common observability and networking agents.
-- The VPC CNI consumes real VPC IP addresses per pod, which can exhaust subnets.
-
-**Pricing model.** An hourly charge per cluster for the control plane (on the order of ten cents per hour per cluster for standard support, higher for extended support  check the current EKS pricing page), plus the data plane: EC2 instances, or Fargate vCPU-seconds and GB-seconds, plus EBS, load balancers, NAT Gateways, and data transfer. EKS Auto Mode adds a management surcharge on top of EC2 cost.
-
-**Performance characteristics.** The API server's throughput and etcd's write latency become relevant at large scale (thousands of nodes, tens of thousands of objects); EKS scales the control plane automatically but very chatty controllers can still stress it. Pod start latency is dominated by image pull and any init containers; node provisioning latency is minutes with Cluster Autoscaler and typically much faster with Karpenter, which launches instances directly.
-
-**Scaling behaviour.** Kubernetes scaling operates at three distinct layers, and an exam or interview will test whether you can name all three:
-
-| Layer | Mechanism | What it changes |
-|---|---|---|
-| **Pod horizontal** | Horizontal Pod Autoscaler (HPA) | Replica count of a Deployment, based on CPU, memory, or custom/external metrics via the metrics API |
-| **Pod vertical** | Vertical Pod Autoscaler (VPA) | The CPU/memory requests of pods, based on observed usage |
-| **Node** | Cluster Autoscaler or Karpenter | Number and type of worker nodes, in response to unschedulable pods |
-
-KEDA extends HPA with event-driven triggers, for example scaling on SQS queue depth or Kafka consumer lag  the Kubernetes analogue of Lambda's event-driven model.
-
-**Availability.** The control plane is multi-AZ and managed. Your responsibility is to spread node groups across AZs, use `topologySpreadConstraints` or pod anti-affinity so replicas of the same Deployment do not land on one node or in one AZ, configure **PodDisruptionBudgets** so that voluntary disruptions (node drains during upgrades) cannot take all replicas down at once, and set readiness probes correctly so traffic is not sent to pods that are not ready.
-
-**Security features.** IAM authentication combined with Kubernetes **RBAC** authorisation; IRSA/Pod Identity for workload credentials; security groups for pods and Kubernetes **NetworkPolicy** for east-west segmentation; secrets envelope-encrypted with KMS; private API server endpoint; audit logs shipped to CloudWatch; Pod Security Admission to enforce baseline or restricted standards; and image scanning in ECR combined with admission-time policy enforcement.
-
-!!! warning "The default Kubernetes network is flat"
-    Without NetworkPolicy, every pod in a cluster can reach every other pod. In a multi-tenant cluster this is a serious lateral-movement risk. Namespaces are an organisational boundary, not a security boundary, until you add NetworkPolicy, RBAC, resource quotas, and admission control.
-
-**Service limits (illustrative).**
-
-| Limit | Typical default |
-|---|---|
-| Clusters per account per Region | 100 |
-| Managed node groups per cluster | 30 |
-| Nodes per managed node group | 450 |
-| Pods per node | Determined by instance type ENI/IP capacity under the VPC CNI, unless prefix delegation is enabled |
-| Fargate profiles per cluster | 10, with up to 5 selectors each |
-
-**Common configurations.** A private-endpoint cluster with managed node groups or Karpenter across three AZs, the AWS Load Balancer Controller provisioning ALBs from Ingress resources, IRSA for every workload that touches AWS APIs, Cluster Autoscaler or Karpenter for node scaling, HPA for pod scaling, Container Insights or an Amazon Managed Prometheus and Grafana stack for observability, and GitOps deployment through Argo CD or Flux.
-
-### AWS Lambda
-
-**Purpose.** To execute code in response to events with no server or capacity management at all, scaling automatically from zero to very high concurrency, and charging only for compute actually consumed.
-
-**Architecture.** A **function** consists of code (a ZIP package or a container image up to 10 GB), a **runtime** (managed Node.js, Python, Java, .NET, Ruby, Go via provided runtimes, or a custom runtime through the Runtime API), a **handler** entry point, a **memory** setting from 128 MB to 10,240 MB that proportionally allocates CPU, a **timeout** up to 15 minutes, an **execution role**, and optional **layers**, **VPC configuration**, **environment variables**, and **ephemeral storage** in `/tmp` from 512 MB to 10,240 MB.
-
-**Important features.**
-
-| Feature | Purpose |
-|---|---|
-| **Versions and aliases** | Immutable published versions; aliases as stable pointers enabling weighted traffic shifting for canary deployments |
-| **Layers** | Shared dependency archives, reducing package duplication across functions |
-| **Container image support** | Package a function as an OCI image up to 10 GB, reusing existing container build pipelines |
-| **Provisioned concurrency** | Pre-initialised environments that eliminate cold starts, billed for being kept warm |
-| **Reserved concurrency** | Caps a function's maximum concurrency and simultaneously guarantees it that capacity, protecting other functions and downstream databases |
-| **SnapStart** | Snapshots an initialised execution environment and restores it, dramatically reducing cold starts for supported runtimes such as Java |
-| **Lambda function URLs** | A built-in HTTPS endpoint without API Gateway |
-| **Response streaming** | Progressive response delivery for larger payloads and lower time-to-first-byte |
-| **Event source mappings** | Managed pollers for SQS, Kinesis, DynamoDB Streams, MSK, Amazon MQ, and DocumentDB |
-| **Graviton (arm64) architecture** | Better price-performance for most workloads |
-| **Destinations** | On-success and on-failure routing for asynchronous invocations to SQS, SNS, EventBridge, or another function |
-| **Extensions and the Telemetry API** | Sidecar-style processes for observability and secrets caching |
-
-**Limitations.** These are the constraints that determine whether Lambda is viable at all:
-
-| Constraint | Value | Design implication |
-|---|---|---|
-| Maximum execution duration | 15 minutes | Long jobs must be decomposed, or moved to ECS/Batch/Step Functions |
-| Memory | 128 MB to 10,240 MB | CPU scales with memory; roughly one full vCPU near 1,769 MB, up to about six vCPUs at maximum |
-| Deployment package | 50 MB zipped direct upload, 250 MB unzipped including layers, 10 GB as a container image | Large ML models generally require the container image path or EFS |
-| Ephemeral `/tmp` | 512 MB default, up to 10,240 MB | Ephemeral and per-environment; never a durable store |
-| Synchronous payload | 6 MB request and response | Use S3 and pass a reference for larger payloads |
-| Asynchronous payload | 256 KB | Same pattern applies |
-| Concurrency | Default account limit of 1,000 concurrent executions per Region, a **soft quota** | Must be raised deliberately before a launch; also protects downstream systems |
-| Layers per function | 5 | Composition constraint |
-| Statelessness | No guaranteed environment reuse | Never rely on in-memory state persisting between invocations |
-
-**Pricing model.** Three principal dimensions: **number of requests**, **GB-seconds of duration** (configured memory multiplied by billed duration in milliseconds), and, where used, **provisioned concurrency** (billed for the time environments are kept warm plus a lower duration rate). A perpetual free tier covers a substantial monthly allowance of requests and GB-seconds. `arm64` is cheaper per GB-second than `x86_64`. Additional charges arise from the services Lambda talks to  API Gateway requests, CloudWatch Logs ingestion (frequently a larger bill than the Lambda itself for chatty functions), NAT Gateway processing for VPC-attached functions, and data transfer.
-
-!!! tip "The counter-intuitive memory optimisation"
-    Because CPU is allocated proportionally to memory, increasing memory often **reduces total cost**: a function that takes 2,000 ms at 512 MB may take 400 ms at 1,536 MB. The GB-seconds consumed fall even though the per-millisecond rate rises. Use **AWS Lambda Power Tuning** (a Step Functions state machine) to find the cost-optimal memory setting empirically rather than guessing.
-
-**Performance characteristics.** Warm invocation overhead is a few milliseconds. Cold-start Init cost ranges from roughly 100–300 ms for a small interpreted function to several seconds for large JVM or .NET applications. Provisioned concurrency and SnapStart address the tail. Because each environment handles one request at a time, **per-invocation latency does not degrade under load** the way a saturated server does  instead concurrency rises, which is a fundamentally different and generally more predictable performance profile.
-
-**Scaling behaviour.** Concurrency equals the number of simultaneously executing environments. Lambda scales concurrency in **bursts**, adding a substantial number of environments per function per short interval (per-function burst scaling, on the order of a thousand additional concurrent executions every ten seconds, up to the account limit), which is far faster than any Auto Scaling group. Two controls shape it:
-
-- **Reserved concurrency** caps and guarantees a function's share of the account pool. Setting it to zero is an effective emergency stop.
-- **Provisioned concurrency** keeps environments initialised, and is itself auto-scalable on a schedule or a utilisation target.
-
-**Availability.** Lambda automatically runs functions across multiple AZs within a Region with no configuration. If you attach a function to a VPC, you must specify subnets in multiple AZs, or you reintroduce a single-AZ dependency. Cross-Region resilience requires deploying the function in multiple Regions and routing with Route 53 or Global Accelerator.
-
-**Security features.** Per-function execution roles (the most granular IAM boundary of any compute service), resource-based policies controlling who may invoke the function, environment-variable encryption with KMS, VPC attachment for private resource access, Code Signing to enforce that only signed artefacts are deployed, and per-function CloudWatch log groups.
-
-**Service limits (illustrative; several adjustable).**
-
-| Limit | Typical default |
-|---|---|
-| Concurrent executions per Region | 1,000 (soft) |
-| Function and layer storage per Region | 75 GB (soft) |
-| Timeout | 900 seconds (hard) |
-| Environment variable total size | 4 KB (hard) |
-| Invocation payload, synchronous | 6 MB (hard) |
-| Invocation payload, asynchronous | 256 KB (hard) |
-
-**Common configurations.** A Python or Node.js function on `arm64`, 512–1,024 MB memory, a timeout set slightly above the observed p99 duration, an execution role scoped to specific resource ARNs, structured JSON logging with a defined log retention period, an SQS event source with a dead-letter queue and a `maxReceiveCount`, X-Ray active tracing, and deployment through a versioned alias with a canary traffic shift.
-
-### AWS Fargate as a Capacity Mode
-
-Fargate deserves separate treatment because students frequently misclassify it as a fourth orchestrator. It is not. **Fargate is a way of obtaining capacity for ECS or EKS; you still need one of those orchestrators.**
-
-| Aspect | ECS on EC2 | ECS on Fargate | EKS on EC2 | EKS on Fargate |
+| Dimension | gp3 | gp2 | io1 and io2 | st1 and sc1 |
 |---|---|---|---|---|
-| Host management | Yours | AWS | Yours | AWS |
-| Billing granularity | Per instance-second | Per task vCPU-second and GB-second | Per instance-second | Per pod vCPU-second and GB-second |
-| Bin packing | You control density | One microVM per task; no packing | You control density | One microVM per pod |
-| DaemonSets / host agents | Supported | Not applicable | Supported | **Not supported** |
-| GPU | Supported | Not supported | Supported | Not supported |
-| Privileged containers, host paths | Supported | Not supported | Supported | Not supported |
-| Spot capacity | EC2 Spot | Fargate Spot | EC2 Spot | Not available |
-| Typical cost position | Cheaper at high, steady utilisation | Cheaper at low or spiky utilisation and always cheaper in engineer-hours | Cheaper at scale | Convenient for isolated or bursty pods |
+| Provisioned capacity | Per GiB-month | Per GiB-month | Per GiB-month | Per GiB-month, lowest for sc1 |
+| Provisioned IOPS | Charged above the included 3,000 | Included in capacity price | Charged per provisioned IOPS-month, with tiering on io2 | Not applicable |
+| Provisioned throughput | Charged above the included 125 MiB/s | Not configurable | Not separately charged | Not applicable |
+| Snapshots | Per GiB-month of changed blocks stored, with a cheaper archive tier | Same | Same | Same |
+| Fast Snapshot Restore | Per hour per snapshot per Availability Zone | Same | Same | Same |
 
-!!! note "The Fargate cost heuristic"
-    Fargate's per-vCPU-hour rate is higher than the equivalent EC2 rate, but you pay only for what tasks request rather than for whole instances. Fargate therefore wins when your instances would sit below roughly 60–70 percent utilisation, and EC2 with Savings Plans or Spot wins when you can genuinely keep instances well packed. Always include the cost of the engineering time spent patching, scaling, and troubleshooting the node fleet in the comparison  for most teams it dominates the raw compute difference.
+Capacity is billed for what is **provisioned**, not for what is used. A 500 GiB volume containing 10 GiB of data costs the same as a full one — a fundamental difference from S3 and EFS and a recurring source of waste.
+
+#### Performance characteristics and scaling behaviour
+
+SSD types are optimised for IOPS and measure I/O in 16 KiB units; HDD types are optimised for megabytes per second and measure I/O in 1 MiB units. gp2, st1, and sc1 use burst-credit buckets, meaning sustained load can exhaust credits and drop performance to baseline abruptly. gp3, io1, and io2 deliver consistent provisioned performance with no credit mechanism.
+
+Scaling is **vertical and explicit**: you change the volume's size, type, or provisioned performance. There is no automatic scaling. Architects therefore monitor `VolumeQueueLength`, `BurstBalance`, and throughput metrics and adjust deliberately.
+
+#### Availability, durability, and security features
+
+An EBS volume is a single-Availability-Zone resource. gp3 and gp2 volumes are designed for an annual failure rate between 0.1 and 0.2 percent; io2 is designed for 99.999 percent durability. Availability design targets range from 99.8 to 99.999 percent depending on type. Security features include KMS encryption at rest with per-volume data keys, in-transit encryption on the fabric, IAM control over volume and snapshot APIs, snapshot sharing controls, and the ability to enforce encryption by default at the account level.
+
+#### Service limits
+
+| Limit | Typical default | Adjustable |
+|---|---|---|
+| Aggregate provisioned storage per Region | Tens of TiB per volume type family | Yes |
+| Snapshots per Region | 100,000 | Yes |
+| Volumes attachable per instance | Instance-type dependent, commonly 28 attachments on Nitro including network interfaces | No |
+| Maximum volume size | 64 TiB for gp3, gp2, io2 Block Express; 16 TiB for io1, st1, sc1 | No |
+| Multi-Attach instances per volume | 16 | No |
+| IOPS to size ratio | 500 to 1 for gp3, 1,000 to 1 for io2 | No |
+
+#### Common configurations
+
+A typical production configuration uses an encrypted gp3 root volume of modest size, a separate encrypted data volume sized and provisioned for the workload's measured IOPS, `DeleteOnTermination` set to false for data volumes, XFS or ext4 with an appropriate mount option set, an entry in `/etc/fstab` using the volume UUID rather than the device name, and a Data Lifecycle Manager policy taking tagged snapshots on a schedule with cross-Region copy for disaster recovery.
+
+---
+
+### Amazon EFS Deep Dive
+
+#### Purpose
+
+EFS exists to provide a shared, elastic, POSIX-compliant file system that many compute resources across multiple Availability Zones can mount simultaneously, without any capacity planning and without the operational burden of running an NFS server cluster.
+
+#### Architecture
+
+EFS is a Regional service with data and metadata stored redundantly across multiple Availability Zones. Clients access it through mount targets — elastic network interfaces placed in your subnets, one per Availability Zone — using the standard NFSv4.1 protocol. Access points provide application-scoped views with enforced root directories and POSIX identities.
+
+#### Important features
+
+- **Elastic capacity** with no provisioning; you pay for stored bytes.
+- **Elastic throughput mode** that scales performance automatically to demand.
+- **Storage classes and lifecycle management** that move files to Infrequent Access and Archive based on last-access time, and optionally back to Standard on read.
+- **Access points** for multi-tenant isolation within one file system.
+- **IAM authorisation for NFS clients**, enabling policy-based control in addition to POSIX permissions.
+- **Encryption at rest with KMS and in transit with TLS** through the `efs-utils` mount helper.
+- **AWS Backup integration** for policy-driven backup and restore.
+- **Replication** to another Region for disaster recovery, with a Recovery Point Objective typically measured in minutes.
+- **Container-native integration** through the ECS volume configuration and the EFS CSI driver for Kubernetes, supporting `ReadWriteMany` persistent volumes.
+
+#### Storage classes
+
+| Class | Availability Zone scope | Relative storage price | Access charge | Intended use |
+|---|---|---|---|---|
+| EFS Standard | Multiple AZs | Highest | None | Active working set |
+| EFS Infrequent Access | Multiple AZs | Substantially lower | Per GiB read and written | Files not accessed for a configured period |
+| EFS Archive | Multiple AZs | Lowest of the multi-AZ classes | Higher per GiB access charge | Files accessed a few times per year |
+| EFS One Zone | Single AZ | Lower than the Standard equivalent | None | Development, test, and recreatable data |
+| EFS One Zone-IA | Single AZ | Lowest overall | Per GiB access charge | Cold, recreatable, single-zone data |
+
+#### Limitations
+
+- Higher per-operation latency than EBS, because operations traverse the network and coordinate distributed metadata.
+- Higher cost per GiB-month than both EBS and S3 for the Standard class.
+- Metadata-intensive workloads — for example compiling a large source tree or `ls` on a directory with hundreds of thousands of entries — perform poorly relative to a local disk.
+- Not suitable as a database data directory for latency-sensitive transactional engines.
+- `Max I/O` performance mode raises the throughput ceiling but increases per-operation latency and is unnecessary for most designs.
+- Linux NFSv4.1 only; Windows SMB workloads require Amazon FSx for Windows File Server instead.
+
+#### Pricing model
+
+| Dimension | Basis |
+|---|---|
+| Storage | Per GiB-month, differing sharply by storage class |
+| Infrequent Access and Archive access | Per GiB read or written from those classes |
+| Elastic throughput | Per GiB of data read and written |
+| Provisioned throughput | Per MiB/s-month, in addition to storage |
+| Backup storage through AWS Backup | Per GiB-month of warm and cold backup |
+| Cross-Region replication | Storage in the destination plus inter-Region transfer |
+
+Unlike EBS, EFS bills for **consumed** capacity rather than provisioned capacity, which makes it economical for sparse or unpredictable data volumes but expensive for large, dense, hot data sets relative to EBS.
+
+#### Performance characteristics and scaling behaviour
+
+Throughput scales with the file system automatically in Elastic mode, reaching multiple gigabytes per second for reads in supported Regions. Bursting mode ties baseline throughput to stored capacity at approximately 50 KiB/s per GiB with a credit bucket, which is why small file systems in Bursting mode can stall. IOPS scale to hundreds of thousands of operations per second in General Purpose mode. Because throughput is aggregate across all clients, EFS is well suited to fan-out read patterns such as many containers reading the same model file.
+
+#### Availability, durability, and security features
+
+EFS Standard is designed for eleven nines of durability and 99.99 percent availability across multiple Availability Zones, which makes it fundamentally more available than a single EBS volume. Security is layered: security groups control network reachability to mount targets, IAM policies control who may mount and what actions they may perform, access points enforce a root directory and POSIX identity, POSIX permissions apply within the file system, and KMS provides encryption at rest with TLS in transit.
+
+#### Service limits
+
+| Limit | Typical value | Adjustable |
+|---|---|---|
+| File systems per account per Region | 1,000 | Yes |
+| Mount targets per Availability Zone per file system | 1 | No |
+| Connections per file system | Tens of thousands of NFS clients | Some aspects adjustable |
+| Access points per file system | 1,000 | Yes |
+| Maximum file size | 47.9 TiB | No |
+| Maximum file system size | Effectively unlimited, petabyte scale | Not applicable |
+| Security groups per mount target | 5 | No |
+
+#### Common configurations
+
+A production EFS deployment uses Elastic throughput, General Purpose performance mode, encryption at rest with a customer-managed KMS key, mount targets in every Availability Zone used by the compute tier, a dedicated security group allowing TCP 2049 only from the application security group, one access point per application enforcing a root directory and a non-root POSIX identity, lifecycle management transitioning to Infrequent Access after thirty days, TLS-enabled mounts via `efs-utils`, and an AWS Backup plan with a retention schedule.
+
+---
+
+### Contextual Services
+
+#### Amazon FSx
+
+Amazon FSx is a family of managed file systems for workloads whose requirements exceed what EFS is designed to satisfy.
+
+| FSx variant | Protocol | Primary use case |
+|---|---|---|
+| FSx for Windows File Server | SMB, with Active Directory integration | Windows applications, shared Windows home directories, .NET workloads |
+| FSx for Lustre | Lustre, POSIX | High-performance computing, machine learning training, seismic and genomics analysis; can link directly to an S3 bucket |
+| FSx for NetApp ONTAP | NFS, SMB, and iSCSI | Migrating existing NetApp estates; snapshots, cloning, and tiering features |
+| FSx for OpenZFS | NFS | Low-latency, ZFS-based workloads needing snapshots and cloning |
+
+The architectural rule is straightforward: choose EFS for Linux NFS shared storage, FSx for Windows File Server when SMB and Active Directory are required, and FSx for Lustre when the workload needs hundreds of gigabytes per second of throughput against data staged from S3.
+
+#### S3 Glacier storage classes
+
+The Glacier name now refers to storage classes within S3 rather than to a separate service for new designs. Glacier Instant Retrieval provides millisecond access for archives read a few times per year; Glacier Flexible Retrieval provides retrieval in minutes to hours; Glacier Deep Archive provides the lowest storage price in AWS in exchange for retrieval times measured in hours and a one-hundred-and-eighty-day minimum duration. Objects in the Flexible Retrieval and Deep Archive classes must be **restored** before they can be read, which creates a temporary copy in a readable class for a specified number of days.
+
+#### AWS Storage Gateway
+
+AWS Storage Gateway is a hybrid service that runs as a virtual appliance or hardware appliance inside an on-premises data centre and presents familiar local protocols while storing data in AWS.
+
+| Gateway type | Local protocol presented | AWS storage used | Typical scenario |
+|---|---|---|---|
+| S3 File Gateway | NFS and SMB | S3 objects | Presenting a file share whose files become S3 objects for analytics |
+| FSx File Gateway | SMB | FSx for Windows File Server | Low-latency on-premises access to a managed Windows file system |
+| Volume Gateway | iSCSI block volumes | EBS snapshots in S3 | Backing up on-premises block volumes, or cached volumes with a local hot set |
+| Tape Gateway | Virtual Tape Library over iSCSI | S3 and Glacier classes | Replacing physical tape libraries without changing backup software |
+
+!!! note "Storage Gateway is a migration and hybrid tool"
+    Storage Gateway exists to let organisations adopt cloud storage without rewriting applications or replacing backup software. It is rarely the right answer for a greenfield cloud-native design, where the application should speak to S3 or EFS directly.
 
 ---
 
 ## Important AWS Terminology
 
 | Term | Meaning |
-|------|----------|
-| **AMI (Amazon Machine Image)** | A template containing a root volume snapshot and launch metadata, used to boot EC2 instances |
-| **Instance type** | A named combination of vCPU, memory, storage, and network capability, for example `m7g.large` |
-| **Instance family** | A group of instance types optimised for a workload class: general purpose (M, T), compute (C), memory (R, X), storage (I, D), accelerated (P, G, Inf, Trn) |
-| **Graviton** | AWS-designed ARM-based processors offering improved price-performance; requires arm64-compatible builds |
-| **Nitro System** | The AWS hardware and lightweight hypervisor platform that offloads networking and storage to dedicated cards |
-| **Firecracker** | The open-source micro-VMM developed by AWS that underpins Lambda and Fargate isolation |
-| **microVM** | A minimal virtual machine with a reduced device model, booting in roughly 125 milliseconds |
-| **Hypervisor** | Software or firmware that creates and runs virtual machines on physical hardware |
-| **Availability Zone (AZ)** | One or more discrete data centres with independent power and cooling within a Region |
-| **Region** | A geographic area containing multiple isolated Availability Zones |
-| **ENI (Elastic Network Interface)** | A virtual network interface in a VPC subnet with its own private IP, MAC address, and security groups |
-| **Security Group** | A stateful virtual firewall attached to an ENI, task, or pod; allow rules only |
-| **Network ACL** | A stateless, subnet-level packet filter supporting both allow and deny rules |
-| **Instance profile** | The container that delivers an IAM role to an EC2 instance |
-| **IMDSv2** | The session-oriented, token-required Instance Metadata Service, which mitigates SSRF-based credential theft |
-| **User data** | A script executed by cloud-init at instance first boot |
-| **Launch template** | A versioned, reusable definition of instance configuration used by Auto Scaling groups and Spot Fleets |
-| **Auto Scaling group (ASG)** | A controller that maintains a desired instance count across AZs and replaces unhealthy instances |
-| **Target tracking scaling** | A policy that adjusts capacity to keep a metric at a target value, analogous to a thermostat |
-| **Warm-up period** | The time a newly launched instance is excluded from aggregate scaling metrics |
-| **Spot Instance** | Spare EC2 capacity at a steep discount, reclaimable with a two-minute notice |
-| **Savings Plan** | A commitment to a dollar-per-hour spend for one or three years in exchange for a discount; Compute Savings Plans also cover Fargate and Lambda |
-| **Placement group** | A logical grouping influencing instance placement: cluster, spread, or partition |
-| **Container image** | An immutable, layered filesystem plus metadata used to instantiate containers |
-| **Amazon ECR** | The AWS private container registry, with IAM access control, scanning, and lifecycle policies |
-| **Task definition** | The immutable, versioned ECS blueprint describing containers, resources, roles, and logging |
-| **Task** | A running instantiation of an ECS task definition revision |
-| **ECS Service** | An ECS controller maintaining a desired task count with load balancer registration and rolling deployments |
-| **Capacity provider** | The ECS abstraction for a source of compute: an Auto Scaling group, `FARGATE`, or `FARGATE_SPOT` |
-| **Task execution role** | The IAM role AWS infrastructure assumes to pull images, fetch secrets, and write logs on your behalf |
-| **Task role** | The IAM role assumed by your application code inside the container |
-| **awsvpc network mode** | ECS networking in which each task receives its own ENI, private IP, and security groups |
-| **AWS Fargate** | A serverless compute engine that provides capacity for ECS tasks and EKS pods without managing instances |
-| **Kubernetes** | An open-source container orchestration platform with a declarative API and reconciliation controllers |
-| **Pod** | The smallest deployable unit in Kubernetes: one or more containers sharing a network namespace and storage |
-| **Deployment** | A Kubernetes controller managing a ReplicaSet to maintain replicas and perform rolling updates |
-| **kubelet** | The Kubernetes node agent that runs pods assigned to its node and reports status |
-| **etcd** | The strongly consistent distributed key-value store holding Kubernetes cluster state |
-| **kube-proxy** | The node component programming iptables or IPVS rules to implement Service virtual IPs |
-| **VPC CNI** | The AWS Kubernetes networking plugin that allocates real VPC IP addresses to pods |
-| **IRSA (IAM Roles for Service Accounts)** | OIDC-based federation granting a Kubernetes service account an IAM role |
-| **EKS Pod Identity** | A newer, simpler mechanism for associating IAM roles with Kubernetes service accounts |
-| **HPA (Horizontal Pod Autoscaler)** | The Kubernetes controller that scales replica count based on metrics |
-| **Cluster Autoscaler** | The controller that adds or removes nodes when pods cannot be scheduled or nodes are underutilised |
-| **Karpenter** | An AWS-developed node provisioner that launches right-sized instances directly in response to pending pods |
-| **PodDisruptionBudget** | A policy limiting how many replicas may be voluntarily disrupted simultaneously |
-| **Taints and tolerations** | Node-side repulsion and pod-side acceptance rules controlling scheduling |
-| **NetworkPolicy** | A Kubernetes resource restricting pod-to-pod and pod-to-external traffic |
-| **Function** | The Lambda unit of deployment: code, runtime, handler, memory, timeout, and role |
-| **Handler** | The entry point in your code that Lambda invokes with an event and a context object |
-| **Execution environment** | The Firecracker microVM in which a Lambda function version runs; serves one invocation at a time |
-| **Cold start** | An invocation that must pay the initialisation cost of creating a new execution environment |
-| **Provisioned concurrency** | Pre-initialised Lambda environments kept warm to eliminate cold starts, at additional cost |
-| **Reserved concurrency** | A per-function cap on concurrency that also guarantees that capacity to the function |
-| **Event source mapping** | A Lambda-managed poller that reads from a stream or queue and invokes the function with batches |
-| **Lambda layer** | A shareable archive of libraries or runtime components mounted into the execution environment |
-| **SnapStart** | A Lambda feature that snapshots and restores an initialised environment to reduce cold starts |
-| **Dead letter queue (DLQ)** | A destination for messages or events that could not be processed after retries |
-| **Control plane** | The management layer that accepts API calls and decides desired state |
-| **Data plane** | The layer that runs workloads and serves user traffic |
-| **Idempotency** | The property that repeating an operation produces the same result, essential for at-least-once delivery systems |
-| **Bin packing** | Placing containers onto hosts so as to maximise resource utilisation |
-| **Blast radius** | The scope of impact of a failure or a compromise |
-| **Infrastructure as Code (IaC)** | Defining infrastructure in version-controlled, machine-readable templates |
-| **Immutable infrastructure** | Replacing rather than modifying running components when changes are needed |
+|---|---|
+| Object storage | Storage abstraction in which data is stored as whole immutable objects with metadata in a flat keyspace, accessed over an API |
+| Block storage | Storage abstraction presenting a linear array of fixed-size blocks that a file system formats and mutates in place |
+| File storage | Storage abstraction presenting a hierarchical directory tree with POSIX or SMB semantics, shareable across hosts |
+| Bucket | Regional container for S3 objects, with a globally unique name in the general purpose namespace |
+| Directory bucket | S3 bucket type supporting the Express One Zone class, with a hierarchical namespace in a single Availability Zone |
+| Key | The complete unique name of an object within a bucket |
+| Prefix | A leading substring of an object key, used for logical grouping, policy scoping, and request-rate partitioning |
+| Delimiter | A character passed to a list operation to group keys into common prefixes, emulating folders |
+| ETag | An identifier returned for an object, equal to the MD5 hash for simple uploads and a composite value for multipart uploads |
+| Versioning | Bucket setting that retains every version of an object and uses delete markers instead of destructive deletes |
+| Delete marker | The placeholder version created when an object is deleted in a versioned bucket |
+| Noncurrent version | Any object version that is not the latest; billed and expirable by lifecycle rules |
+| Storage class | Per-object attribute determining cost, latency, availability, and retrieval behaviour |
+| Lifecycle policy | Bucket rules that transition or expire objects based on age or version status |
+| Multipart upload | Protocol for uploading a large object in independently retryable parts assembled server-side |
+| Presigned URL | Time-limited signed URL granting a specific S3 operation without sharing credentials |
+| Block Public Access | Account and bucket level control that overrides policies and ACLs to prevent public exposure |
+| Object Lock | Write-once-read-many retention control in Governance or Compliance mode |
+| Object Ownership | Setting that disables ACLs and makes the bucket owner the owner of all objects |
+| Access Point | A named, policy-bearing entry point into a bucket for a specific application |
+| Object Lambda Access Point | Access point that invokes a Lambda function to transform objects as they are retrieved |
+| Cross-Region Replication | Asynchronous replication of objects to a bucket in another Region |
+| Replication Time Control | Feature adding a fifteen-minute replication Service Level Agreement and replication metrics |
+| S3 Inventory | Scheduled report listing objects and their metadata, avoiding expensive list operations |
+| S3 Storage Lens | Organisation-wide storage usage and activity analytics |
+| Requester Pays | Bucket setting that charges request and transfer costs to the requester |
+| Transfer Acceleration | Upload path through CloudFront edge locations for distant clients |
+| Mountpoint for Amazon S3 | Client that exposes an S3 bucket as a file system for read-heavy workloads without full POSIX semantics |
+| Volume | An EBS block device created in one Availability Zone and attachable to instances in that zone |
+| Volume type | The EBS performance family, such as gp3, io2 Block Express, st1, or sc1 |
+| IOPS | Input output operations per second, measured against a 16 KiB unit on SSD types |
+| Throughput | Bytes transferred per second, bounded by the volume and by the instance |
+| Burst balance | Credit pool allowing gp2, st1, and sc1 volumes to exceed baseline performance temporarily |
+| Snapshot | Incremental, block-level, point-in-time backup of an EBS volume stored in S3 as a Regional resource |
+| Fast Snapshot Restore | Feature that pre-warms a snapshot so restored volumes deliver full performance immediately |
+| Lazy loading | Behaviour whereby a volume restored from a snapshot fetches blocks from S3 on first access |
+| Elastic Volumes | Capability to change size, type, and performance of an attached volume without downtime |
+| Multi-Attach | EBS capability allowing one io1 or io2 volume to attach to up to sixteen Nitro instances in one Availability Zone |
+| EBS-optimised | Instance property providing dedicated network capacity for EBS traffic |
+| Nitro card for EBS | Dedicated hardware on the EC2 host that converts NVMe commands into EBS network operations and performs encryption |
+| Instance store | Ephemeral block storage physically attached to the host, lost on stop or termination |
+| Data Lifecycle Manager | Service automating EBS snapshot creation, retention, and cross-Region copy |
+| Mount target | Elastic network interface in a subnet through which NFS clients in that Availability Zone reach an EFS file system |
+| Access point | EFS entry point enforcing a root directory and POSIX identity for an application |
+| Throughput mode | EFS setting selecting Elastic, Provisioned, or Bursting throughput behaviour |
+| Performance mode | EFS setting selecting General Purpose or Max I/O |
+| efs-utils | AWS-provided mount helper enabling TLS encryption in transit and IAM authorisation for EFS |
+| Close-to-open consistency | NFS semantics guaranteeing that a file closed by one client is fully visible to a client that subsequently opens it |
+| Durability | The probability that stored data is not lost over a period |
+| Availability | The probability that stored data can be accessed at a given moment |
+| Control plane | Subsystem handling resource creation and configuration |
+| Data plane | Subsystem handling the movement of data, engineered for static stability |
+| Erasure coding | Technique splitting data into data and parity fragments so the original is recoverable from a subset |
+| Gateway VPC endpoint | Route-table-based private path from a VPC to S3 or DynamoDB with no additional charge |
+| Interface VPC endpoint | PrivateLink elastic network interface providing a private path to an AWS service, reachable from on-premises |
+| SSE-S3 | Server-side encryption using keys managed entirely by S3 |
+| SSE-KMS | Server-side encryption using an AWS KMS key, providing auditable and controllable key usage |
+| DSSE-KMS | Dual-layer server-side encryption applying two independent layers of KMS encryption |
+| S3 Bucket Keys | Feature that reduces KMS request volume and cost by deriving short-lived bucket-level keys |
+| SSE-C | Server-side encryption with a customer-provided key supplied on every request |
+| CSI driver | Container Storage Interface plugin allowing Kubernetes to provision and attach EBS or EFS volumes |
 
 ---
 
 ## Configuration Options
 
-### EC2 Configuration
+### Amazon S3 configuration
 
-| Setting | Options | How to decide |
+| Setting | Options | Architectural guidance |
 |---|---|---|
-| **Instance family** | M, T, C, R, X, I, P, G, Inf, Trn | Profile the workload: CPU-bound (C), memory-bound (R/X), balanced (M), bursty and low-average (T), I/O-bound (I), ML (P/G/Inf/Trn) |
-| **Architecture** | x86_64 or arm64 (Graviton) | Prefer Graviton where your build pipeline and dependencies support arm64 |
-| **Purchase option** | On-Demand, Spot, Savings Plan, Reserved, Capacity Reservation | Baseline on a Savings Plan, burst on On-Demand, fault-tolerant work on Spot |
-| **Tenancy** | Shared, Dedicated Instance, Dedicated Host | Only leave shared when regulation or per-socket licensing requires it |
-| **Storage** | gp3, io2, st1, sc1, instance store | gp3 by default (IOPS and throughput decoupled from size); io2 for high, consistent IOPS; instance store for scratch |
-| **Auto Scaling policy** | Target tracking, step, simple, scheduled, predictive | Target tracking by default; scheduled for known patterns; predictive for cyclical load |
-| **Health check type** | EC2 or ELB | Always `ELB` for load-balanced applications, so application-level failure triggers replacement |
-| **Metadata options** | IMDSv1 optional or IMDSv2 required, hop limit | Always require IMDSv2 |
-| **Termination policy** | Default, OldestInstance, NewestInstance, ClosestToNextInstanceHour | `OldestInstance` supports rolling out newer AMIs naturally |
+| Storage class | Standard, Intelligent-Tiering, Standard-IA, One Zone-IA, Glacier Instant, Glacier Flexible, Deep Archive, Express One Zone | Set at upload for known patterns; use Intelligent-Tiering when patterns are unknown |
+| Versioning | Disabled, Enabled, Suspended | Enable for any bucket holding non-reproducible data; pair with lifecycle expiry of noncurrent versions |
+| Default encryption | SSE-S3, SSE-KMS, DSSE-KMS | SSE-S3 for general data, SSE-KMS with Bucket Keys where audit and key control are required |
+| Block Public Access | Four independent toggles at account and bucket level | Enable all four unless a documented public-hosting requirement exists |
+| Object Ownership | ACLs disabled — bucket owner enforced, or ACLs enabled | Keep ACLs disabled; use bucket policies exclusively |
+| Lifecycle rules | Transition, expiration, noncurrent expiration, abort incomplete multipart uploads | Always include an abort-incomplete-multipart rule |
+| Replication | Cross-Region, Same-Region, with or without Replication Time Control | Replicate to a separate account for ransomware resilience |
+| Event notifications | Lambda, SQS, SNS, EventBridge | Prefer EventBridge for richer filtering and multiple targets |
+| Object Lock | Governance or Compliance mode, with retention period or legal hold | Compliance mode is irreversible; test in a sandbox first |
+| Transfer Acceleration | Enabled or disabled | Only worthwhile for geographically distant, large uploads |
+| Requester Pays | Enabled or disabled | Useful for publishing large public datasets |
+| Static website hosting | Enabled with index and error documents | Prefer CloudFront with Origin Access Control over public website endpoints |
 
-### ECS Configuration
+### Amazon EBS configuration
 
-| Setting | Options | How to decide |
+| Setting | Options | Architectural guidance |
 |---|---|---|
-| **Launch type / capacity provider** | EC2 ASG, `FARGATE`, `FARGATE_SPOT` | Fargate unless you need host control, GPUs, or very high steady utilisation |
-| **Network mode** | `awsvpc`, `bridge`, `host`, `none` | `awsvpc` for security and observability; `bridge` only for legacy density needs |
-| **Task size** | Discrete Fargate vCPU/memory pairs, or CPU units and memory on EC2 | Size from observed p95 utilisation plus headroom, not from guesswork |
-| **Deployment controller** | ECS rolling, CodeDeploy blue/green, external | Rolling with circuit breaker for most; blue/green where instant rollback is required |
-| **Deployment parameters** | `minimumHealthyPercent`, `maximumPercent` | 100/200 gives a fully additive deployment; 50/100 saves capacity but reduces availability during deploys |
-| **Placement strategy** | `spread`, `binpack`, `random`, with constraints | `spread` across AZ for availability, then `binpack` on memory for cost |
-| **Service discovery** | Service Connect, Cloud Map, ALB | Service Connect for service-to-service with built-in metrics and retries |
-| **Logging** | `awslogs`, `awsfirelens`, `splunk` | `awslogs` for simplicity; FireLens where routing or filtering is needed |
-| **Secrets** | `secrets` block referencing Secrets Manager or SSM | Never plaintext `environment` entries for credentials |
+| Volume type | gp3, gp2, io1, io2 Block Express, st1, sc1 | Default to gp3; escalate to io2 only with measured evidence |
+| Size | 1 GiB to 64 TiB depending on type | Size for capacity plus growth; remember volumes cannot shrink |
+| Provisioned IOPS | Up to 16,000 on gp3, 256,000 on io2 Block Express | Provision to the measured peak, not the average |
+| Provisioned throughput | Up to 1,000 MiB/s on gp3 | Increase for sequential workloads such as log ingestion |
+| Encryption | Enabled with an AWS managed or customer managed KMS key | Enable encryption by default at the account level |
+| Delete on termination | True or false | True for root volumes, false for data volumes |
+| Multi-Attach | Enabled on io1 and io2 | Only with a cluster-aware file system |
+| Snapshot schedule | Data Lifecycle Manager or AWS Backup policy | Tag-driven policies scale better than per-volume configuration |
 
-### EKS Configuration
+### Amazon EFS configuration
 
-| Setting | Options | How to decide |
+| Setting | Options | Architectural guidance |
 |---|---|---|
-| **Data plane** | Managed node groups, self-managed nodes, Fargate profiles, Karpenter, Auto Mode | Karpenter for cost-efficient dynamic scaling; managed node groups for simplicity |
-| **API endpoint access** | Public, public with CIDR restriction, private | Private or CIDR-restricted for production |
-| **Networking** | VPC CNI, prefix delegation, custom networking, security groups for pods | Enable prefix delegation to increase pod density and preserve IP space |
-| **Identity** | `aws-auth` ConfigMap, access entries, IRSA, Pod Identity | Access entries plus Pod Identity for new clusters |
-| **Add-ons** | VPC CNI, CoreDNS, kube-proxy, EBS CSI, EFS CSI, Pod Identity agent | Use managed add-ons so lifecycle is handled by EKS |
-| **Ingress** | AWS Load Balancer Controller with Ingress or Gateway API | Share one ALB across Ingresses with IngressGroup to reduce cost |
-| **Autoscaling** | HPA, VPA, KEDA, Cluster Autoscaler, Karpenter | HPA plus Karpenter is the common modern pairing |
-| **Storage** | EBS CSI (single-attach block), EFS CSI (shared POSIX) | EBS for per-pod state; EFS where many pods need the same filesystem |
+| Throughput mode | Elastic, Provisioned, Bursting | Elastic is the correct default for variable workloads |
+| Performance mode | General Purpose, Max I/O | General Purpose unless a measured parallel-throughput ceiling is reached |
+| Storage class and lifecycle | Standard, IA, Archive, One Zone variants, with transition and return policies | Transition after thirty days of no access; enable return on first access for unpredictable reads |
+| Availability | Regional or One Zone | One Zone only for recreatable development and test data |
+| Encryption | At rest with KMS, in transit with TLS through efs-utils | Enable both; in-transit encryption is not the default for a raw NFS mount |
+| Access points | Root directory and enforced POSIX user and group | One per application for tenant isolation |
+| File system policy | Resource policy controlling mount and access actions | Use to deny non-TLS access and enforce access point usage |
 
-### Lambda Configuration
+### Mount and attachment options
 
-| Setting | Options | How to decide |
-|---|---|---|
-| **Memory** | 128 MB to 10,240 MB | Tune empirically with Power Tuning; higher memory often lowers total cost |
-| **Architecture** | x86_64, arm64 | arm64 for lower price per GB-second where dependencies allow |
-| **Timeout** | 1 s to 900 s | Set slightly above observed p99, not at the maximum  a long timeout turns a hang into an expensive hang |
-| **Packaging** | ZIP or container image | Container image for large dependencies or existing container pipelines |
-| **Concurrency** | Unreserved, reserved, provisioned | Reserved to protect downstream databases; provisioned for latency-critical paths |
-| **VPC** | None, or subnets plus security groups | Attach only when you must reach private resources; it adds NAT cost and complexity |
-| **Event source** | API Gateway, Function URL, ALB, S3, SQS, SNS, EventBridge, Kinesis, DynamoDB Streams | Choose synchronous only where the caller genuinely needs the result |
-| **Error handling** | Retry attempts, DLQ, on-failure destination, `maxBatchingWindow`, `functionResponseTypes` | Use partial batch responses for SQS to avoid reprocessing successful messages |
-| **Tracing** | Active X-Ray tracing, Lambda Insights, Powertools | Enable at least active tracing in production |
+Common Linux mount options for EFS include `nfsvers=4.1`, `rsize=1048576`, `wsize=1048576`, `hard`, `timeo=600`, and `retrans=2`. The `hard` option makes I/O retry indefinitely rather than returning errors, which preserves data integrity but can hang processes if the file system becomes unreachable — an important trade-off to state explicitly in a design review.
 
 ---
 
 ## Design Considerations
 
-### The Compute Selection Decision Framework
+### The decision framework
 
-This is the central architectural skill of this chapter. Work through the questions in order; the first constraint that binds determines the answer.
+This is the section to internalise. Given a workload, walk the questions in order.
 
 ```mermaid
-flowchart TD
-    S["Start: characterise the workload"] --> Q1{"Does it require OS level control, GPUs, licensed per host software, or a custom kernel"}
-    Q1 -->|"Yes"| EC2["Amazon EC2"]
-    Q1 -->|"No"| Q2{"Is the work event driven, short lived, and under 15 minutes"}
-    Q2 -->|"Yes"| Q3{"Is cold start latency acceptable or mitigable"}
-    Q3 -->|"Yes"| LAM["AWS Lambda"]
-    Q3 -->|"No"| Q4
-    Q2 -->|"No"| Q4{"Is the application containerised or containerisable"}
-    Q4 -->|"No"| EC2
-    Q4 -->|"Yes"| Q5{"Does the team need Kubernetes portability, extensibility, or existing K8s tooling"}
-    Q5 -->|"Yes"| EKS["Amazon EKS"]
-    Q5 -->|"No"| ECS["Amazon ECS"]
-    ECS --> Q6{"Do you need host access, GPUs, or very high steady utilisation"}
-    EKS --> Q6
-    Q6 -->|"Yes"| EC2CAP["Run on EC2 capacity"]
-    Q6 -->|"No"| FAR["Run on AWS Fargate"]
+graph TD
+    A["What storage does this workload need"] --> B{"Is the data needed after the compute instance dies"}
+    B -->|"No, purely temporary"| C["Instance store or ephemeral container storage"]
+    B -->|"Yes"| D{"Do multiple hosts need concurrent read and write access"}
+    D -->|"Yes, POSIX required"| E{"Windows SMB or Active Directory"}
+    E -->|"Yes"| F["Amazon FSx for Windows File Server"]
+    E -->|"No"| G{"Extreme HPC throughput needed"}
+    G -->|"Yes"| H["Amazon FSx for Lustre"]
+    G -->|"No"| I["Amazon EFS"]
+    D -->|"No, single host"| J{"Does the application require a block device or a POSIX file path"}
+    J -->|"Yes"| K["Amazon EBS"]
+    J -->|"No, API access is acceptable"| L{"Whole-object read and write"}
+    L -->|"Yes"| M["Amazon S3"]
+    L -->|"No, random in-place updates"| K
 ```
 
-!!! question "Apply the framework"
-    A team is building a nightly report generator that reads 40 GB from S3, performs a join, and writes a CSV. Peak runtime is 40 minutes. Lambda is eliminated at the 15-minute constraint. The work is containerisable and stateless, runs once per day, and needs no host control  an **ECS task on Fargate, triggered by EventBridge Scheduler**, is the natural answer. If the same job needed GPUs, it would move to **AWS Batch on EC2 Spot**.
+### Comparative decision table
 
-### Comparative Matrix
-
-| Dimension | EC2 | ECS on Fargate | EKS | Lambda |
+| Criterion | Amazon S3 | Amazon EBS | Amazon EFS | Instance Store |
 |---|---|---|---|---|
-| Operational burden | Highest | Low | Highest of the container options | Lowest |
-| Time to first deployment | Days | Hours | Days to weeks | Minutes |
-| Granularity of billing | Per instance-second | Per task-second | Per node-second plus cluster hour | Per millisecond |
-| Idle cost | Full | Full while task runs | Cluster fee plus node cost | Zero |
-| Cold start | Minutes (boot) | Tens of seconds (task start) | Seconds to minutes | Milliseconds to seconds |
-| Maximum execution duration | Unbounded | Unbounded | Unbounded | 15 minutes |
-| Statefulness supported | Yes | Limited (EFS) | Yes (StatefulSets, EBS/EFS) | No |
-| Portability off AWS | Low (AMI-bound) | Medium (images port, definitions do not) | High | Low operationally |
-| Scaling speed | Minutes | Tens of seconds | Seconds (pods), minutes (nodes) | Sub-second |
-| Team skill required | Linux and systems administration | Docker and AWS | Kubernetes, deep | Application code plus event modelling |
-| Best fit | Legacy, licensed, GPU, steady heavy load | Microservices with modest operational appetite | Large platforms, many teams, extensibility | Event glue, APIs, spiky and bursty work |
+| Abstraction | Object | Block | File | Block |
+| Scope | Regional | Single Availability Zone | Regional, multi-AZ | Single host |
+| Concurrent access | Unlimited clients over HTTP | One instance, or up to sixteen with Multi-Attach | Thousands of clients | One instance |
+| Capacity model | Unlimited, pay for stored bytes | Provisioned, pay for provisioned bytes | Elastic, pay for stored bytes | Fixed by instance type, included in instance price |
+| Latency | Tens of milliseconds; single-digit for Express One Zone | Sub-millisecond to low milliseconds | Low milliseconds | Microseconds |
+| Throughput ceiling | Effectively unlimited with parallelism | Up to 4,000 MiB/s per volume | Multiple GiB/s aggregate | Highest available |
+| Durability | Eleven nines across three or more AZs | Replicated within one AZ; snapshots for cross-AZ | Eleven nines across three or more AZs | None |
+| Survives instance termination | Yes | Yes | Yes | No |
+| Survives AZ failure | Yes | No, data preserved but inaccessible | Yes | No |
+| In-place partial update | No | Yes | Yes | Yes |
+| POSIX semantics | No | Yes, via the guest file system | Yes | Yes, via the guest file system |
+| Typical relative cost per GiB-month | Lowest | Moderate | Highest | Included |
+| Best for | Data lakes, backups, media, artefacts, logs | Boot volumes, databases, single-host state | Shared content, CMS, ML datasets, container shared volumes | Cache, scratch, shuffle, replicated NoSQL |
+| Worst for | Transactional writes, POSIX applications | Multi-AZ shared state | Latency-critical databases | Anything that must survive |
+
+!!! question "Apply the framework"
+    A team asks you to store user-uploaded profile photographs for a web application running on ECS Fargate across three Availability Zones. Work through the questions. The data must outlive the task, so it is not instance store. Multiple tasks must read it, but only through the application over HTTP, and each photograph is written whole and never partially updated. Therefore the answer is S3, fronted by CloudFront, with uploads performed by presigned URL directly from the browser so that the application tier never handles the bytes. Choosing EFS here would be a common but incorrect answer — it works, but it costs more, scales worse, and provides no CDN integration.
 
 ### Scalability
 
-Design for **horizontal scaling** at every tier, and know your bottleneck. Adding compute nodes is useless if the relational database connection pool is exhausted  which is exactly what happens when a Lambda function with 1,000 concurrency talks directly to RDS. Use **RDS Proxy** for Lambda-to-relational access, or place a queue between the scalable tier and the constrained tier.
+S3 scales without any action on your part; the design question is how to spread keys across prefixes and how to parallelise clients. EFS scales throughput automatically in Elastic mode; the design question is whether your workload is metadata-bound rather than throughput-bound. EBS does **not** scale automatically; the design question is whether you have measured the peak IOPS requirement and whether the instance type can deliver it.
 
-Understand the **scaling latency** of each service, because it determines how much headroom you must carry:
+### Availability and fault tolerance
 
-| Service | Time from demand signal to serving capacity |
-|---|---|
-| Lambda | Milliseconds to a few seconds |
-| ECS/EKS pod on existing capacity | Seconds to tens of seconds |
-| ECS task on Fargate (new microVM) | Tens of seconds |
-| EKS node via Karpenter | Under a minute typically |
-| EC2 via Auto Scaling group | One to several minutes |
+An architecture built on a single EBS volume has an availability ceiling set by one Availability Zone. Moving state to EFS or S3 raises that ceiling to the Region. Moving beyond a single Region requires S3 Cross-Region Replication, EFS replication, or snapshot copies, along with a documented Recovery Time Objective and Recovery Point Objective.
 
-### Availability and Fault Tolerance
+| Failure scenario | S3 impact | EBS impact | EFS impact |
+|---|---|---|---|
+| Single storage device fails | None, transparent repair | None, replica serves | None, redundant copies |
+| Single Availability Zone fails | None for multi-AZ classes | Volume inaccessible until the zone recovers | None; other mount targets serve |
+| Region fails | Requires replication to another Region | Requires cross-Region snapshot copies | Requires EFS replication |
+| Accidental deletion | Versioning and Object Lock protect | Snapshots and Recycle Bin protect | AWS Backup protects |
+| Credential compromise | Replication to a separate account and Object Lock protect | Cross-account snapshot copies protect | Cross-account backup vault protects |
 
-- Deploy across at least two, preferably three, AZs. This is the single highest-value availability decision.
-- Set health checks that test the application, not merely the process. An HTTP endpoint that verifies downstream dependencies is more useful than a TCP port check  but beware of cascading failure, where a dependency outage marks every instance unhealthy and the platform terminates your entire fleet. A common compromise is a shallow liveness check and a deeper readiness check.
-- Assume every compute node is disposable. Design graceful shutdown: handle `SIGTERM`, stop accepting new work, drain in-flight requests, and deregister from the load balancer within the configured deregistration delay.
-- Use **at least two replicas** of everything. A single-replica Deployment has no availability at all during a rolling update or node drain.
+### Durability, latency, cost, and maintainability
 
-### Reliability
+Durability is a property you buy through redundancy and verify through restore testing — a backup that has never been restored is a hypothesis, not a control. Latency is determined primarily by the abstraction, secondarily by proximity, and only thirdly by configuration. Cost is dominated by different dimensions in each service: storage class for S3, provisioned capacity for EBS, and storage class plus throughput mode for EFS. Maintainability favours managed, elastic services, which is why EFS and S3 impose far less operational load than a self-managed NFS cluster on EC2 with EBS volumes.
 
-Reliability is about behaviour under partial failure. Implement retries with **exponential backoff and jitter**, set client timeouts shorter than server timeouts, apply **circuit breakers** so a failing dependency does not consume all your threads, and make every operation reachable by a retry **idempotent**. In event-driven systems, delivery is at-least-once, so duplicate processing is not an exception case  it is normal traffic.
+### Operational complexity
 
-### Latency
-
-Latency budgets should be allocated explicitly across hops. Edge caching removes hops entirely. Keep chatty services in the same AZ where possible (cross-AZ traffic adds sub-millisecond latency but does incur data transfer charges). Reuse connections  creating a new TLS connection per request is often the dominant latency cost in a microservice call chain, and connection reuse is a major reason to initialise SDK clients outside a Lambda handler.
-
-### Cost
-
-Cost is a design constraint, not an afterthought. The dominant levers in order of typical impact are: **eliminate idle capacity**, **right-size**, **commit to a baseline** with Savings Plans, **use Spot for interruptible work**, **choose Graviton**, and **reduce data transfer** (NAT Gateway processing and cross-AZ transfer are frequent silent cost centres).
-
-### Maintainability and Operational Complexity
-
-Every service you operate has a fixed cognitive cost independent of scale. A three-engineer team running a self-managed Kubernetes platform will spend most of its time on the platform rather than on the product. Choose the **highest level of abstraction that satisfies your constraints**, and revisit the choice only when a constraint actually binds. "We might need Kubernetes later" is not a constraint; it is speculation.
-
-!!! tip "The architect's default"
-    For a new, containerisable, stateless microservice with no unusual requirements, the sensible 2026 default is **ECS on Fargate**, with **Lambda** for event glue. Move to **EKS** when you have multiple teams needing a shared, extensible platform, or genuine multi-cloud portability requirements. Move to **EC2** when a hard constraint forces it.
+Ranked from least to most operationally demanding: S3 requires almost nothing beyond policy hygiene; EFS requires network and access point configuration but no capacity management; EBS requires capacity planning, file system growth, snapshot scheduling, and Availability Zone-aware failover design. This ranking should influence design decisions in teams with limited operational capacity.
 
 ---
 
 ## AWS Best Practices
 
-The AWS Well-Architected Framework provides six pillars. Below, each is expressed as concrete compute practice.
+The AWS Well-Architected Framework provides six pillars. The following table maps concrete storage practices to each.
 
-### Operational Excellence
+| Pillar | Storage practices |
+|---|---|
+| Operational Excellence | Define all storage in CloudFormation or Terraform; tag every bucket, volume, and file system with owner, environment, and data classification; automate snapshots through Data Lifecycle Manager or AWS Backup; test restores on a schedule; use S3 Inventory and Storage Lens rather than ad hoc listing |
+| Security | Enable Block Public Access at the account level; keep ACLs disabled; enforce TLS through bucket and file system policies; encrypt everything at rest with KMS; apply least privilege to actions, resources, and conditions; enable CloudTrail data events for sensitive buckets; use VPC endpoints; use Object Lock for regulated retention |
+| Reliability | Place state in multi-AZ services wherever the latency budget allows; snapshot EBS volumes and copy the snapshots to a second Region; enable S3 versioning; replicate critical buckets across Regions and accounts; document Recovery Time Objective and Recovery Point Objective and validate them |
+| Performance Efficiency | Choose the abstraction that matches the access pattern before tuning; use gp3 rather than gp2; use multipart upload and byte-range reads for large objects; use CloudFront to cache; use EFS Elastic throughput; measure before provisioning IOPS |
+| Cost Optimization | Apply lifecycle policies from day one; use Intelligent-Tiering for unknown patterns; delete incomplete multipart uploads; expire noncurrent versions; right-size EBS volumes and migrate gp2 to gp3; add a Gateway VPC endpoint for S3; review Storage Lens and Cost Explorer monthly |
+| Sustainability | Delete data that has no retention requirement; use colder storage classes, which consume less energy per stored byte; avoid over-provisioned EBS capacity that occupies physical media without serving requests; compress and use columnar formats such as Parquet to reduce both cost and energy |
 
-- Define **all** infrastructure as code. Console changes are undiscoverable, unreviewable, and unreproducible.
-- Make deployments small, frequent, and reversible. Use ECS deployment circuit breakers, CodeDeploy blue/green, or Lambda alias weighted routing so rollback is a single, fast, well-rehearsed action.
-- Externalise configuration to SSM Parameter Store or AppConfig, and secrets to Secrets Manager.
-- Emit structured, correlated logs and treat log format as an interface contract.
-- Automate patching with Systems Manager Patch Manager, or eliminate the need through immutable AMIs and Fargate.
-- Run game days: deliberately terminate an instance, drain a node, and fail an AZ in a test environment, and verify that the system behaves as designed.
-
-### Security
-
-- Least privilege everywhere: per-task roles, per-pod roles, per-function roles. Never a shared "application role" across services.
-- No long-lived access keys on compute. Use instance profiles, task roles, IRSA/Pod Identity, and execution roles, all of which supply short-lived credentials.
-- Run compute in **private subnets**. Only load balancers and NAT gateways belong in public subnets.
-- Enforce IMDSv2, drop unnecessary Linux capabilities, run containers as non-root with a read-only root filesystem.
-- Scan images in ECR, and block deployment of images with critical vulnerabilities in the pipeline.
-- Encrypt everything: EBS with KMS, environment variables with KMS, traffic in transit with TLS.
-
-### Reliability
-
-- Multi-AZ by default; design for AZ loss as an expected event.
-- Health checks, automatic replacement, and self-healing controllers rather than human intervention.
-- Decouple with queues so that a downstream failure degrades throughput rather than availability.
-- Set and test **service quotas** ahead of a launch. Being throttled at 1,000 Lambda concurrency during your busiest hour is a self-inflicted outage.
-- Back up and test recovery for anything stateful. Compute should hold nothing that needs backing up.
-
-### Performance Efficiency
-
-- Select the instance family and size from measurements, not intuition. Use Compute Optimizer recommendations.
-- Prefer Graviton where compatible.
-- Cache aggressively at the edge (CloudFront), in front of the database (ElastiCache), and inside the process where safe.
-- Use asynchronous processing so that user-facing latency is decoupled from work duration.
-- Benchmark Lambda memory settings; the cost-optimal setting is frequently also the latency-optimal setting.
-
-### Cost Optimization
-
-- Turn off non-production environments outside working hours  often a 60–70 percent saving on those environments.
-- Apply Savings Plans to the steady baseline only, and leave the variable portion On-Demand or Spot.
-- Use Fargate Spot and EC2 Spot for anything interruptible.
-- Set ECR lifecycle policies and CloudWatch Logs retention policies; both accumulate cost silently.
-- Tag everything with a cost allocation tag scheme and enforce it with AWS Config or SCPs.
-
-### Sustainability
-
-- Higher utilisation is directly lower energy consumption per unit of work. Right-sizing and bin-packing are sustainability practices as much as cost practices.
-- Graviton delivers more work per watt.
-- Serverless architectures that scale to zero consume no energy when idle.
-- Choose Regions with a higher proportion of renewable energy where latency and data-residency requirements permit.
+!!! tip "The two practices with the highest return"
+    If you adopt only two practices from this chapter, adopt these. First, enable S3 versioning together with a lifecycle rule expiring noncurrent versions — this converts accidental deletion from a disaster into an inconvenience at bounded cost. Second, add a Gateway VPC endpoint for S3 in every VPC — this is free, improves security posture, and frequently eliminates a significant NAT Gateway bill.
 
 ---
 
 ## Security Considerations
 
-### Identity and Least Privilege
+### Layered authorisation for S3
 
-Every compute service has a mechanism for obtaining **temporary, automatically rotated credentials**. Using any other mechanism is a defect.
-
-| Compute service | Credential mechanism | Granularity |
-|---|---|---|
-| EC2 | Instance profile, retrieved via IMDSv2 | Per instance |
-| ECS on EC2 | Container instance role, task execution role, task role | Per task (via the task role) |
-| ECS on Fargate | Task execution role, task role | Per task |
-| EKS | Node instance role, IRSA, EKS Pod Identity | Per pod (via IRSA or Pod Identity) |
-| Lambda | Execution role | Per function |
-
-!!! danger "The node role anti-pattern in EKS"
-    If you attach broad permissions to the EKS **node instance role**, every pod on that node inherits them, because pods can reach the instance metadata service by default. This defeats per-pod isolation entirely. The correct configuration is a minimal node role plus IRSA or Pod Identity for workload permissions, together with blocking pod access to IMDS (for example, by setting the metadata hop limit to 1 or using the VPC CNI setting that disables pod IMDS access).
-
-Least privilege in practice means: scope actions narrowly, scope resource ARNs to specific resources rather than `*`, use IAM condition keys (`aws:SourceVpce`, `aws:PrincipalTag`, `aws:RequestedRegion`), and use **permissions boundaries** and **Service Control Policies** to place a ceiling on what any role in an account can do.
-
-### Network Security
-
-The layered model, from outside in:
+Access to an S3 object is the result of evaluating several policy types together. An explicit `Deny` in any of them wins, and access is granted only if at least one policy allows it and none denies it.
 
 ```mermaid
 graph TD
-    A["Internet"] --> B["AWS Shield and WAF at the edge"]
-    B --> C["CloudFront"]
-    C --> D["Public subnet: ALB or NLB only"]
-    D --> E["Security group allows only ALB SG"]
-    E --> F["Private subnet: ECS tasks, EKS pods, EC2 instances"]
-    F --> G["VPC endpoints to AWS services"]
-    F --> H["Isolated subnet: RDS with SG allowing only app SG"]
+    A["Request arrives"] --> B["Service Control Policy in the Organization"]
+    B --> C["VPC Endpoint Policy if applicable"]
+    C --> D["IAM Identity Policy or Role"]
+    D --> E["Bucket Policy"]
+    E --> F["Access Point Policy if used"]
+    F --> G["Block Public Access evaluation"]
+    G --> H{"Any explicit Deny"}
+    H -->|"Yes"| I["Request denied"]
+    H -->|"No"| J{"At least one Allow"}
+    J -->|"Yes"| K["Request allowed"]
+    J -->|"No"| I
 ```
 
-Key rules:
+### Least privilege in practice
 
-- **Security groups reference other security groups**, not CIDR blocks, for internal traffic. This makes the rule self-maintaining as IP addresses change.
-- **Compute lives in private subnets.** If a resource has a public IP address and does not need one, that is a finding.
-- **VPC endpoints** (interface endpoints for ECR, ECS, Secrets Manager, CloudWatch Logs, STS; a gateway endpoint for S3) keep traffic on the AWS network, remove the NAT Gateway dependency, and allow endpoint policies to restrict which resources can be reached.
-- **NACLs** are a coarse, stateless second layer  useful for blanket denials such as blocking a known-malicious CIDR, not for application-level segmentation.
-- In EKS, add **NetworkPolicy** for east-west control; the default is fully open.
+Least privilege means constraining three things: **actions**, **resources**, and **conditions**. A policy that grants `s3:*` on `arn:aws:s3:::*` violates all three. A least-privilege policy grants `s3:GetObject` on `arn:aws:s3:::app-uploads/tenant-42/*` with a condition requiring `aws:SecureTransport` to be true and optionally requiring a specific `aws:SourceVpce`.
 
-### Data Protection
+Note the frequently missed distinction between **bucket-level** and **object-level** actions. `s3:ListBucket` is a bucket-level action and its resource is the bucket ARN; `s3:GetObject` is an object-level action and its resource is the object ARN with a wildcard. A policy that lists only the object ARN will produce confusing `AccessDenied` errors on list operations.
 
-Encrypt at rest with KMS: EBS volumes, EFS filesystems, ECR repositories, Lambda environment variables, and EKS secrets envelope encryption. Prefer **customer-managed keys** where you need key policies, rotation control, and the ability to revoke access by disabling the key. Encrypt in transit with TLS everywhere, including between the load balancer and the application where the data is sensitive.
+### Encryption strategy
 
-Secrets belong in **AWS Secrets Manager** (with automatic rotation for supported databases) or **SSM Parameter Store SecureString**, referenced at runtime. They must never be in the container image, in a Git repository, in a plaintext environment variable, or in a task definition's `environment` block, all of which are readable by anyone with `DescribeTaskDefinition` permission.
+| Option | Key ownership | Audit trail | Cost | When to choose |
+|---|---|---|---|---|
+| SSE-S3 | AWS managed, invisible | No per-request KMS trail | No additional charge | Default for non-regulated data |
+| SSE-KMS with an AWS managed key | AWS managed within your account | CloudTrail records key usage | KMS request charges | Baseline auditability with minimal setup |
+| SSE-KMS with a customer managed key | You control the key policy, rotation, and deletion | Full CloudTrail trail | Key charge plus request charges | Regulated data, separation of duties, cross-account control |
+| DSSE-KMS | Two independent KMS layers | Full trail | Highest | Requirements mandating dual-layer encryption |
+| SSE-C | You supply the key on every request | Limited | No key charge | Rare; you accept full key management burden |
+| Client-side encryption | You encrypt before upload | AWS sees only ciphertext | Application complexity | Zero-trust requirements where AWS must not be able to decrypt |
 
-### Runtime Hardening
+!!! tip "Enable S3 Bucket Keys with SSE-KMS"
+    Without Bucket Keys, every object `PUT` and `GET` under SSE-KMS makes a KMS API call, which adds latency, consumes the KMS request quota, and generates a per-request charge. S3 Bucket Keys derive a short-lived bucket-level key, reducing KMS request volume by up to ninety-nine percent. For high-request-rate buckets this is both a cost and a throughput consideration.
 
-| Control | Applies to | Effect |
-|---|---|---|
-| Non-root user in the image | Containers | Limits damage from application compromise |
-| `readonlyRootFilesystem` | ECS and Kubernetes | Prevents an attacker writing tools to disk |
-| Drop Linux capabilities | ECS and Kubernetes | Removes unnecessary kernel privileges |
-| Pod Security Admission (`restricted`) | EKS | Enforces a hardened baseline at admission time |
-| Image signing and Code Signing for Lambda | All | Ensures only trusted artefacts are deployed |
-| ECR scan on push plus a pipeline gate | All container services | Blocks known-vulnerable images from reaching production |
-| Amazon GuardDuty (EKS Protection, Runtime Monitoring, Lambda Protection) | All | Detects anomalous behaviour at runtime |
+### Network isolation
 
-### Logging, Audit and Compliance
+For S3, network isolation is achieved through VPC endpoints combined with endpoint policies and with bucket policy conditions on `aws:SourceVpce` or `aws:SourceVpc`. For EFS, isolation is achieved with security groups permitting TCP 2049 only from the application's security group, subnet placement of mount targets in private subnets, and Network ACLs that permit both the request and the ephemeral response range. For EBS, there is no network configuration; isolation is achieved through IAM control of attach and snapshot operations.
 
-**CloudTrail** records every control-plane API call and is the primary forensic source: who launched an instance, who modified a security group, who invoked a function. Enable it in all Regions, deliver to a dedicated, access-restricted S3 bucket with object lock, and consider CloudTrail Lake for querying. **VPC Flow Logs** capture network metadata. **EKS control-plane audit logs** record every Kubernetes API request. **AWS Config** records resource configuration over time and evaluates it against rules, which is how you evidence compliance rather than merely assert it.
+!!! danger "The three classic storage security failures"
+    First, a bucket policy with `"Principal": "*"` and no condition, which exposes data to the internet — Block Public Access exists specifically to prevent this. Second, a snapshot shared publicly, which exposes an entire disk image including credentials baked into it. Third, an over-broad IAM role attached to an EC2 instance, allowing a compromised web application to read every bucket in the account. All three are configuration errors, not platform weaknesses, and all three are detectable with IAM Access Analyzer and AWS Config.
+
+### Logging and compliance
+
+CloudTrail records **management events** — `CreateBucket`, `PutBucketPolicy`, `CreateVolume`, `DeleteSnapshot` — by default. It does **not** record **data events** such as `GetObject` unless you explicitly enable them, because the volume and cost would be substantial. For sensitive buckets, enable data events and send them to a separate, locked logging account. S3 server access logging provides a lower-cost, best-effort alternative delivered as log files into another bucket.
+
+Compliance controls include Object Lock in Compliance mode for regulatory retention such as SEC Rule 17a-4, KMS customer managed keys for key separation of duties, AWS Config rules for continuous conformance checking, and Macie for discovering sensitive data such as personally identifiable information within buckets.
 
 ---
 
 ## Performance Optimization
 
-### Caching
+### Amazon S3
 
-Caching is the highest-leverage performance technique because a cache hit consumes no compute at all.
+- **Parallelise.** Aggregate throughput comes from concurrency. Use multipart upload with many concurrent parts, and byte-range `GET` requests to read one large object with several connections.
+- **Choose part size deliberately.** Parts smaller than about 8 MiB waste requests; very large parts reduce retry granularity. A part size between 8 MiB and 100 MiB suits most workloads, subject to the ten-thousand-part limit.
+- **Spread across prefixes** only when a single prefix demonstrably saturates the per-prefix request rate.
+- **Cache with CloudFront** for read-heavy public or semi-public content; this reduces latency, origin request cost, and egress cost simultaneously.
+- **Avoid tiny objects.** Millions of one-kilobyte objects incur enormous per-request and per-object overhead. Aggregate them into larger files, ideally in a columnar format such as Parquet for analytics.
+- **Use S3 Transfer Acceleration** only for geographically distant large uploads, and measure whether it actually helps for your client population.
+- **Use Express One Zone** for workloads where request latency dominates, such as iterative machine learning training over many small reads.
 
-| Layer | Service | What it caches |
-|---|---|---|
-| Edge | CloudFront | Static assets and cacheable API responses, close to the user |
-| API | API Gateway caching | Responses keyed by request parameters |
-| Application data | ElastiCache (Redis or Valkey, Memcached) | Query results, session state, computed aggregates |
-| Database read scaling | RDS read replicas, DynamoDB DAX | Read-heavy access patterns |
-| In-process | Lambda global scope, container process memory | Configuration, secrets, compiled artefacts  per environment, not shared |
+### Amazon EBS
 
-### Connection Reuse
+- **Match the volume to the workload shape.** Random small I/O needs SSD types; large sequential streaming needs st1.
+- **Respect the instance ceiling.** Instance EBS bandwidth caps are frequently the true bottleneck. Check the instance type's documented EBS bandwidth before provisioning high IOPS.
+- **Use RAID 0 across multiple volumes** only when a single volume cannot deliver the required throughput; accept that this multiplies the failure surface and complicates consistent snapshots.
+- **Enable Fast Snapshot Restore** when Recovery Time Objective depends on restored volumes performing immediately.
+- **Tune the file system.** Use appropriate mount options, align partitions, and consider `noatime` to eliminate metadata writes on every read.
+- **Monitor `BurstBalance`** on gp2, st1, and sc1 and migrate to gp3 or io2 when it is regularly depleted.
 
-Establishing a TCP connection and a TLS session costs one or more round trips. Reuse matters more than most teams realise:
+### Amazon EFS
 
-- In Lambda, construct SDK clients, database connections, and HTTP agents **outside the handler** so they persist across warm invocations, and enable HTTP keep-alive.
-- Between microservices, use connection pooling and HTTP/2 where supported.
-- Between Lambda and a relational database, use **RDS Proxy**, which multiplexes many Lambda connections onto a small pool, preventing connection exhaustion.
+- **Use Elastic throughput** unless you have a steady, predictable load that Provisioned mode serves more cheaply.
+- **Increase parallelism.** A single-threaded client cannot saturate EFS; throughput scales with concurrent operations and clients.
+- **Increase `rsize` and `wsize`** to 1 MiB in mount options to reduce round trips.
+- **Avoid metadata-heavy patterns.** Very large directories, recursive `find`, and compiling large source trees perform poorly. Restructure into shallower hierarchies where possible.
+- **Cache read-mostly data locally** on the instance or in the container where correctness allows.
 
-### Right-Sizing and Hardware Selection
+### Cross-cutting techniques
 
-Use **AWS Compute Optimizer** for EC2, ECS on Fargate, and Lambda recommendations; it analyses CloudWatch metrics and proposes concrete changes. Move to Graviton where builds permit. For CPU-bound workloads, prefer compute-optimised families over general purpose. For latency-critical inter-node communication, use cluster placement groups.
-
-### Autoscaling Tuning
-
-The commonest performance failure is not the absence of autoscaling but its misconfiguration:
-
-- **Scale-out should be aggressive; scale-in should be conservative.** The cost of being briefly over-provisioned is small; the cost of being under-provisioned during a spike is an outage.
-- Set **warm-up** and **cooldown** so metrics are not polluted by instances that are still booting, and so the group does not oscillate.
-- Scale on the metric that reflects the bottleneck. `ALBRequestCountPerTarget` is usually a better signal than CPU for a web tier, and SQS `ApproximateNumberOfMessagesVisible` (or, better, a backlog-per-instance custom metric) is the right signal for a queue consumer.
-
-### Parallelism and Asynchrony
-
-Decompose work so it can run in parallel: Lambda fan-out from SNS or EventBridge, Step Functions **Map** state for distributed iteration, Kinesis shards for parallel stream processing, and multiple ECS tasks consuming a shared SQS queue. Move anything that need not be in the request path out of it  email sending, thumbnail generation, analytics writes.
-
-### Storage Optimization
-
-Choose gp3 over gp2 (IOPS and throughput are configurable independently of size, and it is usually cheaper). Use instance store for scratch data that can be regenerated. For containers, keep images small  a multi-stage Dockerfile producing a distroless or Alpine-based final image reduces pull time, attack surface, and Fargate task start latency. Enable **SOCI** lazy loading for large images on Fargate.
-
-### Measurement Discipline
-
-Optimise against measurements, never assumptions. Establish p50, p90, p99, and p99.9 latency; averages hide the tail, and the tail is what users complain about. Load-test before launch with realistic traffic shapes, including a cold-start scenario for serverless components.
+Connection reuse matters everywhere: reusing HTTPS connections in the AWS SDK avoids repeated TLS handshakes, which can dominate latency for small-object workloads. Compression reduces both transfer time and storage cost. Placing compute in the same Region — and, for EFS, the same Availability Zone — as the data removes both latency and cross-zone transfer charges.
 
 ---
 
 ## Cost Optimization
 
-### Understanding What You Actually Pay For
+### Understanding where the money goes
 
-| Service | Primary cost dimensions | Frequently overlooked costs |
+| Service | Dominant cost driver | Most effective lever |
 |---|---|---|
-| EC2 | Instance-seconds by type, EBS GB-months and provisioned IOPS | Unattached EBS volumes, unattached Elastic IPs, cross-AZ transfer, snapshots |
-| ECS on EC2 | Underlying EC2 and EBS | Idle capacity from poor bin packing |
-| ECS on Fargate | vCPU-seconds, GB-seconds, ephemeral storage above 20 GiB | Over-provisioned task sizes; per-task ENI does not cost but NAT processing does |
-| EKS | Cluster hour, plus data plane | Cluster fee per cluster, NAT Gateway, one ALB per Ingress if not grouped, extended version support surcharge |
-| Lambda | Requests, GB-seconds, provisioned concurrency | CloudWatch Logs ingestion and storage, NAT for VPC functions, API Gateway requests |
+| S3 with large objects | Storage per GiB-month | Lifecycle transitions to IA and Glacier classes |
+| S3 with many small objects | Request charges and per-object overhead | Aggregate objects; batch writes |
+| S3 serving public content | Data transfer out to the internet | CloudFront in front of the bucket |
+| EBS | Provisioned capacity, whether used or not | Right-size volumes; delete unattached volumes; migrate gp2 to gp3 |
+| EBS snapshots | Accumulated changed blocks over long retention | Enforce retention policies; use the snapshot archive tier for long-term copies |
+| EFS | Storage in the Standard class | Lifecycle transition to Infrequent Access and Archive |
+| Any service reached through NAT | NAT data processing charges | Gateway VPC endpoint for S3 |
 
-!!! warning "Data transfer and NAT are the classic surprise line items"
-    A NAT Gateway costs an hourly rate per AZ **plus a per-GB processing charge**. A container fleet pulling large images from ECR through NAT, or a Lambda fleet calling S3 through NAT, can generate a NAT bill that exceeds the compute bill. Gateway VPC endpoints for S3 and DynamoDB are free and should always be present; interface endpoints for ECR, CloudWatch Logs, and Secrets Manager pay for themselves quickly in a busy cluster.
+### Concrete optimisation actions
 
-### Purchase Commitments
+1. **Delete unattached EBS volumes.** Volumes left behind after instance termination continue billing indefinitely. Detect them with a Config rule or a scheduled Lambda function.
+2. **Migrate every gp2 volume to gp3.** This is an online operation delivering roughly twenty percent savings with equal or better performance.
+3. **Apply an abort-incomplete-multipart-upload lifecycle rule.** Failed uploads leave parts that are billed but invisible in standard listings — a genuinely common source of untraceable cost.
+4. **Expire noncurrent versions.** Versioning without lifecycle expiry means storage grows without bound.
+5. **Adopt S3 Intelligent-Tiering** for buckets with unpredictable access, accepting the small per-object monitoring charge in exchange for automatic tiering without retrieval fees.
+6. **Compress and columnarise analytics data.** Converting JSON logs to compressed Parquet routinely reduces both storage and Athena scan costs by an order of magnitude.
+7. **Use One Zone classes for recreatable data** such as derived thumbnails, transcoding intermediates, and test fixtures.
+8. **Review Storage Lens** for buckets with high noncurrent-version ratios, high incomplete-multipart counts, or large volumes of objects never retrieved.
 
-```mermaid
-graph TD
-    A["Total compute demand over time"] --> B["Steady baseline"]
-    A --> C["Predictable daily peak"]
-    A --> D["Unpredictable spikes"]
-    A --> E["Interruptible batch work"]
-    B --> F["Compute Savings Plan, one or three year"]
-    C --> G["Scheduled scaling on On Demand"]
-    D --> H["On Demand with target tracking"]
-    E --> I["Spot or Fargate Spot"]
-```
+### Pricing instruments beyond the storage services
 
-**Compute Savings Plans** are the most flexible commitment: they apply across EC2 instance families, Regions, ECS Fargate, and Lambda duration. **EC2 Instance Savings Plans** give a deeper discount but lock you to a family in a Region. **Reserved Instances** are the least flexible. Commit only to the portion of demand you are confident will persist  typically the trailing minimum of the last several months.
+Reserved Instances and Savings Plans apply to compute, not to storage capacity, but they reduce the cost of the instances performing the I/O. Spot Instances suit storage-adjacent batch processing such as transcoding, provided intermediate results are checkpointed to S3. Cost Explorer with resource-level granularity and Trusted Advisor's underutilised-volume checks are the standard tools for finding waste.
 
-### Spot Strategy
-
-Spot capacity is reclaimed with a two-minute warning delivered through instance metadata (EC2) or a task state change (Fargate Spot). To use it safely: diversify across many instance types and AZs, use capacity-optimised allocation, handle `SIGTERM` and the interruption notice by draining gracefully, and never place a workload on Spot whose interruption would be user-visible without a fallback. A common production pattern is a capacity provider strategy with a base of On-Demand tasks plus a weighted majority on Spot.
-
-### Elimination and Right-Sizing
-
-- Schedule non-production environments off outside working hours with EventBridge Scheduler and a small Lambda that sets ASG and ECS desired counts to zero.
-- Right-size using Compute Optimizer; the most common finding in real estates is systematic over-provisioning of memory.
-- Set **CloudWatch Logs retention** on every log group. The default is "never expire", and log storage silently accumulates for years.
-- Set **ECR lifecycle policies** to expire untagged and old images.
-- Use **S3 Intelligent-Tiering** for artefact and data buckets.
-
-### Governance and Visibility
-
-**AWS Cost Explorer** for trend analysis and rightsizing recommendations, **AWS Budgets** with alerts and actions, **Cost Anomaly Detection** for unexpected changes, **Trusted Advisor** for idle-resource and commitment checks, and **cost allocation tags** enforced with AWS Config rules or tag policies so that spend can be attributed to a team, service, and environment. Untagged spend is unmanageable spend.
+!!! warning "The retrieval-cost trap"
+    Moving data to Glacier Deep Archive appears to reduce cost dramatically until someone runs an analytics job over it. Retrieval charges plus the temporary restored copy can exceed a year of Standard storage. Cold classes are for data you are confident you will rarely read. If you are uncertain, Intelligent-Tiering is the safer choice because it has no retrieval fee between its frequent and infrequent tiers.
 
 ---
 
 ## Monitoring and Observability
 
-Observability rests on three signals  **metrics** (aggregated numbers over time), **logs** (discrete events), and **traces** (the path of one request across services)  plus, increasingly, **profiles**.
+### What to monitor and why
 
-### CloudWatch Metrics
-
-| Service | Metrics that matter | What they tell you |
+| Service | Key metrics | What a problem looks like |
 |---|---|---|
-| EC2 | `CPUUtilization`, `NetworkIn/Out`, `StatusCheckFailed`, `CPUCreditBalance` | Saturation, health, T-family credit exhaustion |
-| EC2 (agent required) | Memory and disk utilisation | The hypervisor cannot see guest memory; you **must** install the CloudWatch agent |
-| ECS | `CPUUtilization`, `MemoryUtilization`, `RunningTaskCount`, `PendingTaskCount` | Sustained pending tasks mean insufficient cluster capacity |
-| EKS / Container Insights | Node and pod CPU/memory, pod restarts, cluster failed node count | Restart loops, resource pressure, scheduling failures |
-| Lambda | `Invocations`, `Duration`, `Errors`, `Throttles`, `ConcurrentExecutions`, `IteratorAge` | `Throttles` means you hit a concurrency limit; rising `IteratorAge` means stream processing is falling behind |
-| ALB | `TargetResponseTime`, `HTTPCode_Target_5XX_Count`, `UnHealthyHostCount`, `RequestCountPerTarget` | Application health independent of instance health |
-| SQS | `ApproximateNumberOfMessagesVisible`, `ApproximateAgeOfOldestMessage` | Backlog and processing lag; the best scaling signal for consumers |
+| S3 | `BucketSizeBytes`, `NumberOfObjects` (daily); request metrics `AllRequests`, `4xxErrors`, `5xxErrors`, `FirstByteLatency`, `TotalRequestLatency`; replication metrics | Rising `4xxErrors` indicates permission or key errors; rising `5xxErrors` warrants retries with exponential backoff; latency spikes suggest a hot prefix |
+| EBS | `VolumeReadOps`, `VolumeWriteOps`, `VolumeQueueLength`, `VolumeThroughputPercentage`, `BurstBalance`, `VolumeIdleTime` | A persistently high `VolumeQueueLength` means the volume is the bottleneck; a falling `BurstBalance` predicts an imminent performance collapse |
+| EFS | `TotalIOBytes`, `PercentIOLimit`, `BurstCreditBalance`, `ClientConnections`, `MeteredIOBytes`, `StorageBytes` by class | `PercentIOLimit` near one hundred indicates the General Purpose IOPS ceiling; a falling `BurstCreditBalance` predicts throttling |
 
-!!! tip "The four alarms every compute service should have"
-    (1) Error rate above a threshold, (2) latency p99 above the service-level objective, (3) saturation of the binding resource (CPU, memory, concurrency, or queue age), and (4) a capacity alarm indicating that scaling cannot keep up (pending tasks, unschedulable pods, or Lambda throttles). Alarms should be actionable; an alarm with no runbook is noise.
+### Logging and tracing
 
-### Logs
+CloudTrail management events give you the audit trail of configuration changes and are the first place to look when a bucket policy changed unexpectedly. CloudTrail data events give per-object access records for forensic investigation. S3 server access logs are a cheaper, best-effort alternative. AWS X-Ray traces show how much of a request's latency is attributable to an S3 call, which is essential when diagnosing a slow API endpoint in a microservices architecture. CloudWatch Logs Insights over VPC Flow Logs helps confirm whether S3 traffic is actually traversing the endpoint rather than the NAT Gateway.
 
-- EC2: install the CloudWatch agent to ship OS and application logs; do not rely on logs sitting on a disposable instance.
-- ECS: the `awslogs` driver, or FireLens with Fluent Bit for routing, filtering, and multi-destination delivery.
-- EKS: Fluent Bit as a DaemonSet shipping to CloudWatch Logs or OpenSearch, plus control-plane audit logs.
-- Lambda: automatic delivery to a per-function log group; use advanced logging controls to set log level and JSON format natively.
+### Alarms worth creating
 
-Log in **structured JSON** with a consistent schema including timestamp, level, service, version, request or trace ID, and message. This makes CloudWatch Logs Insights queries possible and turns logs into a queryable dataset rather than prose.
-
-### Tracing
-
-**AWS X-Ray** propagates a trace ID across service boundaries, producing a service map and per-segment timings that show exactly which hop consumed the latency budget. Enable active tracing on Lambda, add the X-Ray daemon or the ADOT collector as a sidecar for ECS, and deploy ADOT as a DaemonSet or via the operator for EKS. **AWS Distro for OpenTelemetry (ADOT)** is the vendor-neutral path and is the right default for new systems, allowing export to X-Ray, Amazon Managed Prometheus, or third-party backends.
-
-**Powertools for AWS Lambda** (Python, TypeScript, Java, .NET) provides structured logging, custom metrics via the Embedded Metric Format, tracing, and idempotency helpers with minimal code, and should be considered standard equipment for serverless work.
-
-### Dashboards and Synthetic Monitoring
-
-Build a dashboard per service showing the RED metrics  **Rate, Errors, Duration**  alongside saturation. Add **CloudWatch Synthetics canaries** that exercise critical user journeys continuously from outside the system, because a canary detects an outage that internal metrics can miss (for example, a DNS or certificate failure). Use **CloudWatch ServiceLens** to join traces, metrics, and logs in one view.
+- EBS `BurstBalance` below twenty percent for fifteen minutes.
+- EBS `VolumeQueueLength` above a workload-specific threshold sustained for ten minutes.
+- EFS `BurstCreditBalance` trending toward zero.
+- S3 `5xxErrors` rate exceeding a small percentage of requests.
+- S3 replication latency exceeding the Replication Time Control threshold.
+- AWS Config rules alarming on unencrypted volumes, public buckets, or buckets without versioning.
 
 ```mermaid
-flowchart LR
-    A["EC2, ECS, EKS, Lambda"] --> B["CloudWatch Metrics"]
-    A --> C["CloudWatch Logs"]
-    A --> D["X-Ray or ADOT Traces"]
-    E["Control plane API calls"] --> F["CloudTrail"]
-    B --> G["Alarms and Dashboards"]
-    C --> H["Logs Insights queries"]
-    D --> I["Service map"]
-    G --> J["SNS to on call"]
-    H --> J
-    I --> J
-    F --> K["Security investigation and audit"]
+graph LR
+    A["S3, EBS, EFS"] --> B["CloudWatch Metrics"]
+    A --> C["CloudTrail Events"]
+    A --> D["Access Logs"]
+    B --> E["Alarms"]
+    B --> F["Dashboards"]
+    C --> G["Security Analytics in a Logging Account"]
+    D --> G
+    E --> H["SNS Notification"]
+    H --> I["On-call Engineer or Automated Remediation"]
 ```
+
+!!! note "Observability is a design requirement, not an afterthought"
+    A storage layer without metrics and alarms is a storage layer whose failures you will learn about from users. Define, at design time, which metric indicates saturation for each storage resource and what the threshold is. This is a direct DSO303 observability outcome.
 
 ---
 
 ## Integration with Other AWS Services
 
-Compute is never deployed alone. The table below explains **why** each integration exists, which is the examinable and interview-relevant part.
-
-| Service | Integrates with | Why |
+| Service | Nature of the integration | Why the pairing exists |
 |---|---|---|
-| **Elastic Load Balancing** | EC2, ECS, EKS, Lambda | Distributes traffic, performs health checks, terminates TLS. ALB can invoke Lambda directly as a target, which is a useful alternative to API Gateway for simple HTTP workloads |
-| **API Gateway** | Lambda, ECS/EKS via VPC Link, HTTP endpoints | Adds authorisation, throttling, request validation, and usage plans in front of compute |
-| **Amazon ECR** | ECS, EKS, Lambda container images, App Runner | The authenticated, scanned, lifecycle-managed source of container artefacts |
-| **Amazon S3** | All | Deployment artefacts, static assets, data lake input/output; also an event source for Lambda |
-| **Amazon EFS** | EC2, ECS, EKS, Lambda | Shared POSIX filesystem across many compute nodes; enables large ML models on Lambda |
-| **Amazon EBS** | EC2, EKS via CSI driver | Durable block storage for stateful workloads |
-| **Amazon RDS / Aurora** | All | Relational state. Use RDS Proxy with Lambda to avoid connection exhaustion |
-| **Amazon DynamoDB** | All, especially Lambda | Serverless key-value store whose scaling model matches Lambda's; DynamoDB Streams is a first-class Lambda event source |
-| **Amazon SQS** | All | Buffering and decoupling; the standard way to convert an availability problem into a latency problem |
-| **Amazon SNS** | All | Pub/sub fan-out to many subscribers, including Lambda and SQS |
-| **Amazon EventBridge** | All | Content-based event routing, schema registry, third-party SaaS events, and scheduling; the backbone of event-driven architecture |
-| **AWS Step Functions** | Lambda, ECS tasks, and 200-plus AWS APIs directly | Durable orchestration of long-running or multi-step workflows with built-in retry, catch, and parallelism; the correct answer when a workflow exceeds Lambda's 15 minutes |
-| **Amazon Kinesis / MSK** | Lambda, ECS, EKS | High-throughput ordered stream processing |
-| **AWS Secrets Manager / SSM Parameter Store** | All | Runtime injection of secrets and configuration without baking them into artefacts |
-| **AWS IAM / STS** | All | Temporary credentials and authorisation for everything |
-| **AWS KMS** | All | Encryption key management for storage, secrets, and envelope encryption |
-| **Amazon CloudWatch / X-Ray / CloudTrail** | All | Metrics, logs, traces, and audit |
-| **AWS CodePipeline, CodeBuild, CodeDeploy** | All | CI/CD: build images, push to ECR, and deploy with blue/green or rolling strategies |
-| **AWS CloudFormation / CDK / SAM / Terraform** | All | Declarative provisioning; SAM specialises in serverless, CDK generates CloudFormation from general-purpose languages |
-| **AWS Systems Manager** | EC2, ECS via ECS Exec | Patching, inventory, and keyless shell access |
-| **AWS App Mesh / VPC Lattice / Istio** | ECS, EKS | Service-to-service traffic management, mTLS, retries, and observability |
-| **Amazon Route 53** | All | DNS, health checks, and failover routing including multi-Region active-active or active-passive |
-| **AWS Batch** | EC2, Fargate | Managed batch job queues and compute environments for large-scale batch and HPC |
-| **Amazon Bedrock and SageMaker** | Lambda, ECS, EKS | Model inference invoked from application compute; SageMaker endpoints for hosted models |
+| Amazon CloudFront | Caches S3 objects globally; Origin Access Control lets the bucket stay private | Reduces latency, origin load, and egress cost while removing the need for a public bucket |
+| AWS Lambda | Triggered by S3 events; can mount EFS through an access point | Enables serverless event-driven processing of uploaded objects and shared state or large dependencies beyond the deployment package limit |
+| Amazon ECS and Amazon EKS | Mount EFS volumes; attach EBS through the CSI driver | Provides persistent volumes to containers, allowing stateful workloads on an otherwise ephemeral platform |
+| Amazon RDS and Amazon Aurora | RDS uses EBS internally; both export snapshots and logs to S3 | Managed databases inherit EBS durability while S3 holds backups and exports |
+| Amazon DynamoDB | Exports tables to S3; imports from S3 | Enables analytics over operational data without affecting the table's provisioned capacity |
+| Amazon Athena, AWS Glue, Amazon EMR, Redshift Spectrum | Query data directly in S3 | The data lake pattern — compute and storage scale and are billed independently |
+| Amazon SNS, Amazon SQS, Amazon EventBridge | Receive S3 event notifications | Decouple producers from consumers and enable fan-out |
+| AWS Step Functions | Orchestrates multi-step processing over S3 objects | Coordinates long-running workflows with retries and error handling |
+| AWS Backup | Central policy for EBS, EFS, RDS, DynamoDB, and S3 | Unifies backup, retention, cross-Region copy, and compliance reporting |
+| AWS KMS | Supplies encryption keys for all three services | Centralises key policy, rotation, and audit |
+| AWS CloudFormation and Terraform | Declare storage resources | Makes environments reproducible and reviewable |
+| Amazon SageMaker | Reads training data from S3 and FSx for Lustre; writes models to S3 | Decouples the training cluster's lifetime from the dataset |
+| AWS DataSync | Transfers data between on-premises, S3, EFS, and FSx | Automates large-scale migration and ongoing synchronisation |
+| AWS Transfer Family | Provides SFTP, FTPS, and FTP endpoints backed by S3 and EFS | Supports partners who cannot adopt the S3 API |
+| Amazon CloudWatch and AWS CloudTrail | Metrics, logs, and audit records | Provide the observability and audit surface |
+| Amazon Macie | Discovers sensitive data in S3 | Supports data classification and compliance obligations |
 
-### A Representative Integrated Architecture
+### Reference integration architecture
 
 ```mermaid
-flowchart TD
-    U["Users"] --> R53["Route 53"]
-    R53 --> CF["CloudFront with WAF"]
-    CF --> S3S["S3 static assets"]
-    CF --> ALB["Application Load Balancer"]
-    ALB --> SVC1["ECS Fargate: Orders service"]
-    ALB --> SVC2["ECS Fargate: Catalog service"]
-    SVC1 --> DDB["DynamoDB Orders table"]
-    SVC2 --> RDS["Aurora Catalog cluster"]
-    SVC1 --> EB["EventBridge OrderPlaced event"]
-    EB --> SQS["SQS fulfilment queue"]
-    EB --> SNSN["SNS notifications topic"]
-    SQS --> LFUL["Lambda fulfilment processor"]
-    SNSN --> LEMAIL["Lambda email sender"]
-    LFUL --> SFN["Step Functions shipping workflow"]
-    SFN --> ECSJOB["ECS task: label generation"]
-    SVC1 --> CW["CloudWatch and X-Ray"]
-    LFUL --> CW
-    ECR["ECR"] --> SVC1
-    ECR --> SVC2
-    CP["CodePipeline and CodeBuild"] --> ECR
+graph TD
+    U["Browser"] -->|"Presigned URL upload"| S3R["S3 Raw Bucket"]
+    S3R --> EB["EventBridge Rule"]
+    EB --> L1["Lambda Validator"]
+    L1 --> SQ["SQS Queue"]
+    SQ --> ECS["ECS Fargate Transcoder"]
+    ECS --> EFS["EFS Shared Working Set"]
+    ECS --> S3P["S3 Processed Bucket"]
+    S3P --> CFD["CloudFront Distribution"]
+    CFD --> U2["Global Viewers"]
+    S3P --> GLU["Glue Catalog"]
+    GLU --> ATH["Athena Queries"]
+    S3R --> LC["Lifecycle to Glacier Deep Archive"]
 ```
 
-!!! info "Reading this diagram architecturally"
-    Note that the synchronous path (user to ALB to service to database) is deliberately short. Everything that does not need to complete before responding to the user  fulfilment, notifications, shipping  is pushed behind EventBridge and SQS. This keeps user-facing latency low and makes the system resilient to failures in the downstream components. This is the essence of cloud-native design.
+This single diagram exercises most DSO303 outcomes at once: browser uploads bypass the application tier through presigned URLs; the compute tier is stateless because all state lives in S3 and EFS; processing is event-driven and asynchronous; the CDN handles global delivery; the analytics layer reads the same objects without a separate copy; and lifecycle policies control long-term cost.
 
 ---
 
 ## Common Architecture Patterns
 
-### Three-Tier Web Architecture
+### Externalised state and the stateless service
 
-The classic pattern: a presentation tier (CloudFront and S3, or a web service), an application tier (EC2 ASG, ECS service, or EKS Deployment in private subnets), and a data tier (RDS Multi-AZ or DynamoDB in isolated subnets). Each tier scales independently and is separated by security groups. Still the correct starting point for most conventional applications.
+The foundational cloud-native pattern. Application servers hold no durable state; sessions live in ElastiCache or DynamoDB, uploads live in S3, and shared files live in EFS. Because any instance can serve any request, the tier can be scaled horizontally, replaced during deployment, and terminated by Spot reclamation without data loss. Every other pattern in this section depends on this one.
 
-### Microservices
+### Static website hosting with a private origin
 
-Independently deployable services, each owning its data, communicating over well-defined APIs or events. Container orchestration is the natural substrate because it provides a uniform deployment contract. The architectural cost is distributed-systems complexity: network partitions, partial failures, eventual consistency, distributed tracing, and versioned API contracts. **Do not adopt microservices for a small team building a single product**; the coordination overhead exceeds the benefit until organisational scale demands independent deployment.
+S3 stores the built front-end assets; CloudFront serves them globally; Origin Access Control ensures the bucket itself remains private and accessible only to the distribution. This pattern eliminates web servers entirely, costs a small fraction of an EC2-based equivalent, and scales to any traffic level with no configuration change.
 
-### Serverless Event-Driven
+### Event-driven object processing
+
+An object is uploaded; S3 emits an event; a Lambda function or a queue-backed consumer processes it and writes a derived object. This is the standard image-thumbnailing, video-transcoding, virus-scanning, and log-parsing architecture.
 
 ```mermaid
-flowchart LR
-    A["S3 upload"] --> B["EventBridge"]
-    C["API Gateway"] --> D["Lambda validate"]
-    B --> E["Lambda transform"]
-    D --> F["DynamoDB"]
-    F --> G["DynamoDB Streams"]
-    G --> H["Lambda projection builder"]
-    E --> I["SQS"]
-    I --> J["Lambda enrich"]
-    J --> K["S3 curated"]
+sequenceDiagram
+    participant B as "Browser"
+    participant API as "API Gateway"
+    participant S3 as "S3 Uploads Bucket"
+    participant EB as "EventBridge"
+    participant L as "Lambda Worker"
+    participant D as "DynamoDB Metadata"
+    B->>API: "Request upload URL"
+    API-->>B: "Presigned PUT URL"
+    B->>S3: "PUT object directly"
+    S3->>EB: "ObjectCreated event"
+    EB->>L: "Invoke worker"
+    L->>S3: "GET original and PUT derivative"
+    L->>D: "Conditional write to record processing"
+    L-->>EB: "Success"
 ```
 
-Producers emit events; a router (EventBridge) delivers them to consumers; consumers are functions that scale independently. Loose coupling, zero idle cost, and independent evolution. The cost is harder end-to-end reasoning and debugging, which is why tracing is mandatory rather than optional here.
+!!! tip "Why the presigned URL matters architecturally"
+    Routing uploads through the application tier means every byte crosses your compute, consuming memory, bandwidth, and request duration, and coupling upload throughput to instance count. Presigned URLs let the client write directly to S3 while the application retains full control over who may upload, where, and for how long. This is a canonical example of using a managed service's capability instead of writing code.
 
-### Fan-Out and Fan-In
+### Fan-out and fan-in
 
-**Fan-out**: one event triggers many parallel consumers via SNS (push) or EventBridge (routing) or Kinesis (shards). **Fan-in**: many parallel results are aggregated, typically by writing to a common store and using a Step Functions Map state with a final aggregation step. Used heavily in media processing, where one uploaded video fans out into multiple transcoding jobs and fans back in to a manifest.
+An S3 event is published to SNS, which fans out to several SQS queues, each feeding an independent consumer — a thumbnail generator, an indexer, and an audit logger. Fan-in is the reverse: many producers write objects under a common prefix, and a scheduled job aggregates them. Fan-out decouples consumers so that adding one requires no change to the producer.
 
-### Queue-Based Load Levelling
+### Data lake with medallion layering
 
-A queue between producer and consumer absorbs spikes, allowing the consumer to process at its own sustainable rate. Scale consumers on queue depth or message age. This is the correct answer to "our database cannot handle the write spike".
+Raw, cleansed, and curated data occupy distinct prefixes or buckets. Glue crawlers catalogue the schema; Athena and EMR query in place; lifecycle rules archive the raw layer aggressively because it can always be re-derived if the source system retains it. The defining benefit is that compute engines attach and detach without moving the data.
 
-### Strangler Fig Migration
+### Shared persistent volumes for containers
 
-Place a routing layer (ALB listener rules or API Gateway) in front of a monolith, then progressively route individual paths to new services running on Fargate or Lambda while the monolith continues to serve the rest. The monolith is retired only when the last route has moved. This is the standard, low-risk modernisation path from EC2 to containers.
+An EKS deployment mounts an EFS `ReadWriteMany` persistent volume so that all replicas see the same directory, while a StatefulSet uses EBS `ReadWriteOnce` volumes for per-pod state. The EFS CSI driver and the EBS CSI driver implement dynamic provisioning so that a `PersistentVolumeClaim` produces real AWS storage automatically.
 
-### Sidecar
+```mermaid
+graph TD
+    A["Kubernetes PersistentVolumeClaim"] --> B{"Access mode requested"}
+    B -->|"ReadWriteMany"| C["EFS CSI Driver"]
+    B -->|"ReadWriteOnce"| D["EBS CSI Driver"]
+    C --> E["EFS Access Point per claim"]
+    D --> F["EBS volume in the pod node AZ"]
+    F --> G["Pod must be scheduled in that AZ"]
+```
 
-A helper container deployed alongside the application container in the same task or pod, sharing its network namespace  used for log shipping (Fluent Bit), tracing (ADOT collector), or service mesh proxying (Envoy). It keeps cross-cutting concerns out of application code. Not available on EKS Fargate for DaemonSet-style agents, which is a common reason to choose EC2 nodes.
+!!! warning "EBS volumes constrain Kubernetes scheduling"
+    Because an EBS volume exists in one Availability Zone, a pod bound to an EBS-backed persistent volume can only be scheduled onto a node in that same zone. If that zone has no capacity, the pod stays `Pending`. This is why `WaitForFirstConsumer` volume binding mode exists and why multi-AZ StatefulSets need careful topology configuration.
 
-### Circuit Breaker, Retry with Backoff, and Bulkhead
+### CI/CD artefact storage
 
-- **Retry with exponential backoff and jitter** prevents a thundering herd from converting a brief blip into a sustained outage.
-- **Circuit breaker** stops calling a failing dependency after a threshold, failing fast and allowing recovery.
-- **Bulkhead** partitions resources  separate connection pools, separate thread pools, separate ECS services, or reserved Lambda concurrency per function  so that one saturated component cannot consume all capacity. Lambda's reserved concurrency is a bulkhead implemented by the platform.
+Build pipelines store compiled artefacts, container image layers, test reports, and Terraform state in S3, with versioning enabled so a prior release can always be redeployed, and with lifecycle rules removing artefacts older than the retention policy. Terraform state in S3 with DynamoDB-based locking is the standard remote backend.
 
-### Saga
+### Backup, disaster recovery, and the ransomware-resilient copy
 
-For a transaction spanning multiple services with their own databases, a distributed two-phase commit is impractical. A **saga** executes a sequence of local transactions, each with a compensating action to undo it if a later step fails. Step Functions is the natural implementation on AWS, with the workflow definition making the compensation logic explicit and auditable.
+EBS snapshots and EFS backups are copied to a second Region for disaster recovery, and critical S3 data is replicated into a **separate AWS account** whose credentials the production workload does not hold, with Object Lock applied. This separation is what defends against a compromised production identity deleting both the data and its backups.
 
-### CQRS and Event Sourcing
+### Additional applicable patterns
 
-Separate the write model from the read model. Writes go to DynamoDB; DynamoDB Streams trigger a Lambda that projects into an optimised read store (OpenSearch, a materialised view, or a cache). Reads and writes then scale and evolve independently. The trade-off is eventual consistency in the read path, which must be acceptable to the business.
-
-### Blue/Green and Canary Deployment
-
-**Blue/green** stands up an entire parallel environment and shifts traffic atomically, giving near-instant rollback  implemented with CodeDeploy for ECS and Lambda, or two target groups on an ALB. **Canary** shifts a small percentage of traffic to the new version, monitors alarms, and rolls forward or back automatically  implemented with Lambda alias weights or ALB weighted target groups. Both depend on having good alarms; automated rollback is only as good as the signal that triggers it.
+**Circuit breaker and retry with exponential backoff and jitter** should wrap every storage call, since `503 SlowDown` responses from S3 are expected under sudden load spikes and are resolved by backing off. **Bulkhead** isolation separates critical and non-critical workloads onto different buckets, volumes, or file systems so that one saturating the other is impossible. **CQRS** appears when writes go to a transactional database on EBS while reads are served from denormalised objects in S3. **Saga** compensation frequently involves deleting objects written by an earlier step when a later step fails.
 
 ---
 
 ## Industry Use Cases
 
-| Sector | Workload | Typical compute choice | Reasoning |
-|---|---|---|---|
-| Media streaming | Video transcoding | EC2 Spot or AWS Batch, or MediaConvert | Interruptible, parallel, compute-intensive, long-running |
-| Media streaming | Recommendation API | ECS Fargate or EKS | Steady low-latency traffic, containerised microservices |
-| E-commerce | Storefront web tier | ECS Fargate or EC2 ASG behind ALB | Elastic, stateless, spiky at campaign times |
-| E-commerce | Order processing | SQS plus Lambda or Fargate consumers | Must absorb spikes and never lose an order |
-| E-commerce | Image thumbnailing | Lambda on S3 events | Short, parallel, event-shaped, bursty |
-| Banking | Core ledger | EC2 with Dedicated Hosts | Licensing, auditability, tenancy isolation |
-| Banking | Fraud scoring | Lambda or Fargate with SageMaker endpoint | Low-latency per-transaction inference |
-| Insurance | Nightly actuarial batch | AWS Batch on EC2 Spot | Massive, interruptible, cost-sensitive |
-| Healthcare | Genomics pipelines | AWS Batch or EKS with Spot | Huge bursty parallel compute |
-| Healthcare | Patient portal | ECS Fargate in private subnets | Compliance-friendly, moderate scale, low ops burden |
-| Government | Citizen services portal | EC2 with Savings Plans or ECS | Predictable load, data residency, procurement constraints |
-| IoT | Telemetry ingestion | IoT Core plus Kinesis plus Lambda | Millions of tiny events, highly parallel, zero idle cost |
-| Gaming | Real-time game servers | EC2 or GameLift with NLB | UDP, stateful sessions, latency-critical |
-| Gaming | Leaderboards and matchmaking | Lambda plus DynamoDB | Spiky, stateless, event-driven |
-| SaaS platform | Multi-tenant application platform | EKS with namespace isolation | Many teams, extensibility, portability |
-| Logistics | Route optimisation | ECS tasks or Batch on Spot | Long-running compute, not latency-critical |
-| Analytics | ETL orchestration | Step Functions plus Lambda plus Glue | Multi-step, long-running, needs retries and visibility |
+| Industry or company profile | Workload | Storage design and rationale |
+|---|---|---|
+| Video streaming, as at Netflix | Transcoded video segment delivery | S3 for masters and renditions, CloudFront for edge delivery, Intelligent-Tiering for the long tail of catalogue content that is rarely watched |
+| Global e-commerce, as at Amazon | Product images, order events, clickstream | S3 for images behind CloudFront, S3 data lake for events, EBS-backed relational databases for the transactional order ledger |
+| Ride-hailing, as at Uber | Trip telemetry and geospatial history | S3 as the landing zone for high-volume event data, queried by Athena and EMR; hot operational state in DynamoDB rather than in storage |
+| Music streaming, as at Spotify | Audio catalogue and machine learning training sets | S3 for audio objects, FSx for Lustre or EFS to feed distributed training jobs at high aggregate throughput |
+| Accommodation marketplace, as at Airbnb | Property photographs and user uploads | Presigned URL uploads directly to S3, Lambda-based derivative generation, CloudFront for delivery |
+| Financial services | Core ledger, trade records, regulatory archive | io2 Block Express for the database, S3 with Object Lock in Compliance mode for the seven-year regulatory archive, cross-Region replication for continuity |
+| Healthcare | Medical imaging and electronic records | S3 with SSE-KMS customer managed keys, CloudTrail data events, Glacier classes for studies beyond the active window, strict least-privilege access |
+| Government and public sector | Document management and citizen records | EFS for legacy applications requiring POSIX shared access, S3 for archival, Object Lock for statutory retention |
+| Internet of Things | Device telemetry at high ingest rates | Kinesis or IoT Core into S3 in partitioned prefixes, lifecycle to Glacier, Athena for analysis |
+| Genomics and scientific computing | Reference genomes and analysis pipelines | S3 as the durable store, FSx for Lustre linked to S3 as the high-throughput scratch layer for the compute cluster |
+| Software as a Service platforms | Per-tenant document storage | A single bucket with tenant prefixes and IAM session policies or S3 Access Points, giving isolation without a bucket-per-tenant explosion |
+| Gaming | Game assets, patches, player save data | S3 with CloudFront for patch distribution, DynamoDB for save state, EFS for shared build assets in the studio pipeline |
 
 ---
 
 ## Advantages
 
-### Amazon EC2
+**Durability that is impractical to build yourself.** Eleven nines of durability across three Availability Zones with continuous background integrity verification is not something an organisation can replicate with a storage appliance and a backup schedule. It is the product of a reliability engineering programme at a scale only a hyperscaler can sustain.
 
-Complete control over the operating system means any software can run, including legacy applications, custom kernels, and commercial software with host-based licensing. The breadth of instance types  hundreds of combinations including GPU, FPGA, high-memory, and bare metal  means hardware can be matched precisely to workload shape. The purchase-option flexibility (Spot, Savings Plans, Reserved) enables the deepest cost optimisation of any compute service for steady workloads. It is also the most predictable performance model, since you own the entire instance.
+**Elasticity that removes capacity planning as a discipline.** S3 and EFS have no size to provision. This eliminates the entire operational category of forecasting, procurement, expansion, and emergency capacity incidents.
 
-### Amazon ECS
+**Separation of storage from compute.** Because data lives independently of any instance, compute can be scaled, replaced, moved between instance types, or run as Spot capacity without touching the data. This is the mechanism by which cloud-native elasticity is achieved.
 
-The control plane is free and requires no operational effort at all  there is no version to upgrade, no etcd to worry about, and no cluster fee. Integration with IAM, VPC, ELB, CloudWatch, and Auto Scaling is native and requires no controllers or add-ons. Task-level IAM roles provide fine-grained security with a very simple mental model. The conceptual surface area is small enough that a team can be productive in days, and combined with Fargate it removes host management entirely. For a team whose objective is to ship an application rather than to build a platform, ECS delivers the best ratio of capability to complexity.
+**Performance decoupled from capacity.** gp3 lets you buy 16,000 IOPS on a 20 GiB volume. On-premises, IOPS came from spindles, so performance and capacity were fused. This decoupling frequently reduces cost substantially.
 
-### Amazon EKS
+**Security integrated with identity and audited by default.** Access is granted to IAM principals with conditions, encrypted with keys whose usage is logged, and every configuration change is recorded in CloudTrail.
 
-You get the upstream Kubernetes API, which means the entire cloud-native ecosystem  Helm, Argo CD, Istio, Prometheus, Kyverno, thousands of operators  works without modification. Workloads and manifests are portable across clouds and on-premises, which matters for genuine multi-cloud or hybrid strategies. Kubernetes is extensible through CRDs and controllers, so a platform team can encode organisational policy as software and offer self-service abstractions to product teams. Kubernetes skills are widely available in the labour market. AWS operates the hardest part  a highly available, backed-up control plane.
+**Programmability and Infrastructure as Code.** Every storage resource is an API call and therefore expressible in CloudFormation or Terraform, reviewable in a pull request, and reproducible across environments.
 
-### AWS Lambda
+**Rich ecosystem integration.** S3 in particular is the interchange format of AWS: dozens of services read from and write to it natively, which means choosing S3 preserves future optionality in a way that a proprietary storage appliance never does.
 
-There is no infrastructure to manage at all, and scaling is automatic, immediate, and requires no configuration. Billing is per millisecond with genuinely zero cost when idle, which makes low-traffic and spiky workloads dramatically cheaper than any provisioned model. Time from idea to running code is minutes. The per-function IAM role is the finest-grained security boundary available. Native integration with more than 200 AWS services makes Lambda the natural glue for event-driven architecture, and built-in multi-AZ redundancy means high availability requires no design work.
-
-### Fargate
-
-Removes an entire class of operational work  AMI management, patching, node scaling, capacity providers, cluster autoscaler tuning  while retaining the container packaging model. Each task runs in its own microVM, giving stronger isolation than shared-kernel container hosting. Billing matches the resources tasks actually request, which is far more honest than paying for partly empty instances.
+**Pay-for-what-you-use economics with fine-grained control.** Storage classes, lifecycle policies, and provisioned performance dimensions allow cost to be tuned continuously rather than fixed at purchase time.
 
 ---
 
 ## Limitations
 
-### Amazon EC2
+**S3 has no POSIX semantics.** Applications expecting file locking, atomic rename, partial writes, or append cannot use S3 without modification. Mountpoint for Amazon S3 narrows this gap for read-heavy workloads but does not close it.
 
-You own the operating system, and therefore patching, hardening, agent management, and vulnerability response  a continuing cost measured in engineer-hours. Boot time is minutes, so reactive scaling always lags demand and you must carry headroom. Idle instances cost full price. Capacity planning does not disappear; it merely becomes faster to act on. Instances are AZ-bound, so multi-AZ design is entirely your responsibility. Configuration drift is a constant risk unless you enforce immutable AMIs.
+**S3 latency is unsuitable for transactional writes.** Tens of milliseconds per operation makes S3 wrong for a database write-ahead log, no matter how attractive its durability figures are.
 
-### Amazon ECS
+**S3 request charges dominate for small objects.** A workload writing billions of small objects can pay more in requests than in storage, and per-object overheads for Intelligent-Tiering monitoring or Object Lock compound this.
 
-It is AWS-proprietary; task and service definitions do not transfer to another platform, though container images do. The extensibility model is limited  there is no equivalent of CRDs, operators, or admission webhooks, so you cannot easily encode custom platform behaviour. The third-party ecosystem is much smaller than Kubernetes'. For very large, multi-team platform engineering efforts, the abstractions ECS offers may prove too thin.
+**EBS is confined to a single Availability Zone.** This single fact constrains every high-availability design built on EC2 and is the most consequential limitation in this chapter.
 
-### Amazon EKS
+**EBS bills for provisioned, not consumed, capacity.** Over-provisioned volumes are pure waste, and volumes cannot be shrunk, so the error is not easily corrected.
 
-Kubernetes is genuinely complex and its failure modes are numerous and subtle  CrashLoopBackOff, ImagePullBackOff, pending pods due to insufficient resources or taints, DNS failures under load, misconfigured probes causing rolling restarts. The control plane has a per-cluster hourly cost that penalises many-small-cluster designs. **Version upgrades are mandatory, recurring work**, requiring validation of deprecated APIs and coordination with add-on versions. The VPC CNI consumes real VPC IPs, so subnet sizing becomes an architectural constraint. EKS Fargate cannot run DaemonSets, privileged containers, or GPU workloads. The total cost of ownership, including the platform team required to run it well, is the highest of the four services.
+**EBS performance is capped by the instance as well as the volume.** Provisioning 64,000 IOPS on a volume attached to an instance limited to 20,000 IOPS wastes money and confuses benchmarking.
 
-### AWS Lambda
+**EFS is more expensive and higher-latency than EBS.** The multi-AZ metadata coordination that gives EFS its availability is the same mechanism that makes it slower and costlier per gigabyte.
 
-The 15-minute maximum duration excludes long-running work outright. Cold starts add tail latency that is difficult to eliminate entirely without paying for provisioned concurrency. Payload limits (6 MB synchronous, 256 KB asynchronous) force an S3-reference pattern for large data. There is no persistent local state, and `/tmp` is per-environment and ephemeral. Concurrency limits are account-wide by default and can throttle unrelated functions. High-volume, steady workloads can be **more expensive** than an equivalently sized Fargate or EC2 deployment, because you pay a premium for elasticity you are not using. Debugging distributed serverless systems is harder than debugging a monolith, and local testing is an approximation. Vendor lock-in at the operational level is real: the business logic ports, but the event wiring, IAM, and observability do not.
+**EFS performs poorly on metadata-intensive workloads.** Large directories, recursive traversals, and compilation workloads exhibit latency that surprises teams migrating from local disks.
 
-### Fargate
+**Cross-Region replication is asynchronous everywhere.** No AWS storage service offers synchronous cross-Region replication, so any multi-Region design has a non-zero Recovery Point Objective that must be stated explicitly.
 
-Higher per-vCPU cost than EC2, so it loses on price for high, steady utilisation. No GPU support. No privileged containers, host path mounts, or DaemonSets. Limited to discrete CPU/memory combinations rather than arbitrary sizing. Task start time is longer than starting a container on a warm host, because a microVM must be created and the image pulled. You cannot install host-level agents, so some third-party security and monitoring products either do not work or require a sidecar variant.
+**Lifecycle transitions are not instantaneous.** Rules are evaluated approximately daily, and minimum storage durations mean that transitioning short-lived objects can increase cost.
+
+**Eventual consistency persists for configuration.** Bucket policy and replication configuration changes propagate over time, which can produce confusing behaviour immediately after a change.
 
 ---
 
 ## Common Mistakes
 
-### Beginner Mistakes
+### Beginner mistakes
 
-| Mistake | Why it is wrong | Correct approach |
-|---|---|---|
-| Placing application servers in public subnets with public IPs | Directly exposes compute to the internet | Compute in private subnets; only load balancers are public |
-| Security group rules with `0.0.0.0/0` on port 22 or 3389 | Invites credential-stuffing attacks | Use Systems Manager Session Manager; no inbound SSH at all |
-| Storing AWS access keys in code, environment variables, or AMIs | Long-lived credentials leak and rarely get rotated | Instance profiles, task roles, IRSA, execution roles |
-| Deploying into one Availability Zone | An AZ event becomes a full outage | Minimum two AZs, preferably three |
-| Using the `latest` image tag | Non-deterministic deployments and no reliable rollback | Immutable tags with the Git SHA, plus ECR tag immutability |
-| Writing application state to a container's filesystem | Lost on every restart, scale event, or deployment | Externalise to S3, DynamoDB, RDS, or EFS |
-| No health checks, or health checks that always return 200 | The platform cannot detect a broken application | Meaningful readiness and liveness checks |
-| Console-driven infrastructure | Undocumented, unreproducible, drifts immediately | Infrastructure as Code from day one |
-| Ignoring CloudWatch Logs retention | Silent, unbounded cost growth | Set retention on every log group |
-| Assuming Lambda is always cheapest | Steady high-throughput workloads can cost more on Lambda | Model the cost with real volumes before deciding |
+- Believing S3 has folders, and therefore assuming a prefix rename is a cheap metadata operation rather than a full copy and delete.
+- Making a bucket public in order to serve a website, instead of using CloudFront with Origin Access Control.
+- Trying to attach one EBS volume to instances in two Availability Zones, or to two instances simultaneously without Multi-Attach and a cluster file system.
+- Formatting an EBS volume that already contains data, destroying it — `mkfs` is not idempotent and gives no warning.
+- Forgetting to add the volume to `/etc/fstab`, so the mount disappears after the next reboot; or adding it by device name rather than UUID, so a device renumbering breaks boot.
+- Attempting to mount EFS without opening TCP 2049 in the security group, then reporting that "EFS does not work".
+- Using EFS as a database data directory because it is shared, and being surprised by the latency.
+- Enabling versioning without a lifecycle rule, then discovering storage costs growing without any apparent increase in data.
 
-### Production Mistakes
+### Production mistakes
 
-| Mistake | Consequence | Mitigation |
-|---|---|---|
-| Lambda at high concurrency connecting directly to RDS | Database connection exhaustion, cascading failure | RDS Proxy, or reserved concurrency as a bulkhead, or a queue |
-| No reserved concurrency on any function | One runaway function throttles every other function in the account | Reserve concurrency for critical functions; cap non-critical ones |
-| No dead-letter queue on asynchronous processing | Events are silently lost after retries | DLQ or on-failure destination plus an alarm on DLQ depth |
-| Scaling on CPU when the bottleneck is I/O or queue depth | The system never scales when it needs to | Scale on the metric that reflects the actual constraint |
-| No PodDisruptionBudget in EKS | A node drain during an upgrade takes all replicas down | PDB plus multiple replicas plus topology spread |
-| Setting Kubernetes CPU limits equal to requests on latency-sensitive services | Aggressive CPU throttling under burst | Set requests accurately; consider omitting CPU limits while always setting memory limits |
-| No graceful shutdown handling | In-flight requests dropped on every deployment and scale-in | Handle `SIGTERM`, drain, and align deregistration delay with the drain period |
-| Single NAT Gateway for all AZs | An AZ failure removes egress for the whole VPC, and cross-AZ data charges accrue | One NAT Gateway per AZ, or VPC endpoints |
-| Deploying without a rollback mechanism | An outage becomes a long outage | Deployment circuit breaker, blue/green, or canary with automatic rollback |
-| Not testing at the concurrency limit | Throttling discovered during the launch event | Load-test to the quota, then request a quota increase in advance |
-| Treating Kubernetes namespaces as a security boundary | Lateral movement across tenants | NetworkPolicy, RBAC, resource quotas, Pod Security Admission |
-| Long Lambda timeouts "to be safe" | A hung dependency burns 15 minutes of billed duration per invocation | Timeout slightly above observed p99 |
+- Retaining snapshots forever with no policy, accumulating years of incremental blocks.
+- Leaving unattached EBS volumes and orphaned snapshots after instance termination.
+- Never testing a restore, so the Recovery Time Objective is unvalidated until an actual incident.
+- Failing to add a Gateway VPC endpoint, paying NAT data-processing charges on all S3 traffic.
+- Granting `s3:*` on `*` to an instance role, converting an application vulnerability into a full account data breach.
+- Applying a lifecycle rule that moves short-lived objects into Standard-IA or Glacier, increasing cost due to minimum duration charges.
+- Storing backups in the same account and Region as the production data, so a single credential compromise destroys both.
+- Not enabling `AbortIncompleteMultipartUpload`, accumulating invisible billed storage from failed uploads.
+- Ignoring `BurstBalance` on gp2 volumes until performance collapses under sustained load.
+- Assuming S3 event notifications are exactly-once and ordered, producing duplicate or corrupted derived data.
 
-### Certification Traps
+### Certification traps
 
-| Trap | The reality |
-|---|---|
-| "ECS costs more than EKS because it is managed" | ECS has **no** control-plane charge; EKS charges per cluster hour |
-| "Fargate is a container orchestrator" | Fargate is a **capacity mode** for ECS and EKS, not an orchestrator |
-| "Lambda can run for up to 15 minutes, so it suits any batch job" | 15 minutes is a **hard** limit; longer jobs need Fargate, Batch, or Step Functions |
-| "Security groups can deny traffic" | Security groups are **allow-only** and **stateful**; NACLs are stateless and support deny |
-| "The task execution role is what my application code uses" | The **task role** is used by your code; the execution role is used by the ECS/Fargate infrastructure |
-| "Reserved concurrency and provisioned concurrency are the same" | Reserved **caps and guarantees** concurrency; provisioned **pre-warms** environments to remove cold starts |
-| "Spot Instances are terminated without warning" | There is a **two-minute** interruption notice |
-| "You can enable detailed memory metrics on EC2 in the console" | Memory and disk metrics require the **CloudWatch agent** in the guest OS |
-| "Multi-AZ means multi-Region" | Multi-AZ is within one Region; multi-Region requires separate deployments and Route 53 or Global Accelerator routing |
-| "EKS Fargate supports DaemonSets" | It does not; use EC2 node groups where DaemonSets are required |
-| "An ASG health check type of EC2 detects application failure" | Only `ELB` health check type detects application-level failure |
-| "IAM roles can be attached directly to an EC2 instance" | A role is delivered via an **instance profile** |
+- Confusing **durability** with **availability** in a question that specifies one of them precisely.
+- Choosing S3 One Zone-IA for data that cannot be recreated — the durability figure applies only within a single Availability Zone, which is destroyed if the zone is lost.
+- Selecting EBS for a requirement that says "shared across multiple instances in multiple Availability Zones", where the answer is EFS.
+- Selecting EFS for a requirement that says "lowest latency block storage for a relational database", where the answer is io2 Block Express.
+- Selecting instance store where the requirement says "must persist after the instance is stopped".
+- Overlooking that Glacier Flexible Retrieval and Deep Archive require a restore step before the object is readable.
+- Assuming a Gateway VPC endpoint works from on-premises over Direct Connect — it does not; that requires an Interface endpoint.
+- Missing that a question describing millisecond retrieval of archival data points to Glacier Instant Retrieval rather than Glacier Flexible Retrieval.
+- Forgetting that Object Lock requires versioning to be enabled.
+- Believing that S3 Cross-Region Replication replicates existing objects automatically — it applies to new objects unless S3 Batch Replication is used for the backlog.
 
+---
 
 ## Interview Questions
 
 ### Conceptual Questions
 
-**1. Explain the difference between vertical and horizontal scaling, and why cloud-native design prefers the latter.**
+**1. Explain the difference between object, block, and file storage, and why AWS provides three separate services rather than one.**
+Object storage stores immutable whole items in a flat keyspace accessed by API and scales without bound because it forgoes in-place mutation. Block storage exposes a raw device supporting random in-place writes with sub-millisecond latency, at the cost of being attached to one host in one Availability Zone. File storage provides shared POSIX semantics through a distributed metadata service, at the cost of higher latency and price. The trade-offs are mutually exclusive, so a single service cannot satisfy all three access patterns.
 
-Vertical scaling increases the capacity of a single instance (a larger instance type); horizontal scaling adds more instances. Vertical scaling is bounded by the largest available instance, usually requires a restart, and leaves a single failure domain. Horizontal scaling is effectively unbounded, allows in-place replacement of unhealthy members, and distributes failure risk across Availability Zones. Cloud-native design prefers horizontal scaling because it makes capacity a runtime property managed by a control loop rather than a procurement decision. The precondition is statelessness: session and durable state must be externalised to DynamoDB, ElastiCache, RDS, or S3.
+**2. What does eleven nines of durability actually mean, and what does it not protect against?**
+It is a statistical design target for annual data loss from hardware and facility failure, achieved through erasure coding across at least three Availability Zones with continuous background repair. It provides no protection against accidental deletion, malicious deletion, application bugs, or misconfigured permissions. Those require versioning, MFA Delete, Object Lock, cross-account replication, and backups.
 
-**2. What is the difference between an ECS task, a task definition, and a service?**
+**3. Why can an EBS volume not be attached to an instance in another Availability Zone?**
+Because EBS replicates synchronously within a single Availability Zone to preserve sub-millisecond write latency. Replicating across zones separated by tens of kilometres would add round-trip latency that would defeat the purpose of block storage. Cross-zone movement is therefore achieved asynchronously through snapshots.
 
-A task definition is an immutable, versioned blueprint: container images, CPU and memory reservations, port mappings, environment variables, logging configuration, and the task and execution IAM roles. A task is a running instantiation of one revision of that blueprint  one or more containers scheduled together on the same host and sharing a network namespace. A service is a controller that maintains a desired count of tasks, replaces unhealthy ones, registers them with a load balancer target group, and orchestrates rolling or blue/green deployments. The mental model is class, object, and supervisor.
+**4. Describe S3's consistency model and how it changed.**
+S3 now provides strong read-after-write consistency for `PUT`, overwrite, and `DELETE` operations on all objects in all Regions, with no performance penalty. Previously, overwrites and deletes were eventually consistent. Bucket configuration changes and Cross-Region Replication remain eventually consistent and asynchronous respectively.
 
-**3. Why does AWS Lambda have a cold start, and what determines its duration?**
-
-A cold start occurs when no warm execution environment exists for an invocation, so Lambda must allocate a Firecracker microVM, download and decrypt the deployment package or container image, initialise the runtime, and execute the function's initialisation code before the handler runs. Duration is driven by package or image size, runtime choice (interpreted runtimes such as Python and Node.js initialise faster than JVM or .NET), the amount of work performed outside the handler, the memory setting (which proportionally allocates vCPU, so more memory means faster initialisation), and whether the function is attached to a VPC. Provisioned concurrency and SnapStart eliminate or drastically reduce this latency.
-
-**4. Distinguish the ECS task execution role from the ECS task role.**
-
-The execution role is assumed by the ECS agent and Fargate infrastructure, not by application code. It grants permission to pull images from ECR, retrieve secrets from Secrets Manager or SSM Parameter Store for injection into the container environment, and write to CloudWatch Logs. The task role is assumed by the application process inside the container and is what the AWS SDK picks up through the container credential provider. Least privilege requires two distinct roles; conflating them grants the application infrastructure permissions it should never hold.
-
-**5. What does AWS Fargate actually remove from the operational burden, and what does it not?**
-
-Fargate removes the EC2 layer: no AMI patching, no instance right-sizing, no cluster capacity management, no bin-packing, no SSH access, and per-task rather than per-instance billing granularity. It does not remove container image hygiene, application-level patching, IAM design, networking design (tasks still occupy subnets and ENIs), observability, or cost governance. It also does not remove the need to understand orchestration semantics  deployment strategies, health checks, and draining still apply.
-
-**6. Explain the concept of a control plane and a data plane using ECS and EKS as examples.**
-
-The control plane holds desired state, makes scheduling and placement decisions, and reconciles actual state toward desired state; the data plane executes workloads and carries request traffic. In ECS, the control plane is an AWS-managed regional service holding cluster, service, and task-definition state, while the data plane is EC2 instances running the ECS agent, or Fargate capacity. In EKS, the control plane is a managed, multi-AZ Kubernetes API server and etcd cluster, and the data plane is managed node groups, self-managed nodes, or Fargate profiles. The distinction matters operationally: a control-plane outage generally stops new deployments and scaling decisions, but already-running data-plane workloads continue serving traffic.
-
-**7. Why is an Auto Scaling group with `ELB` health check type materially different from one with `EC2` health check type?**
-
-The `EC2` health check reports only on hypervisor-level instance status  whether the instance is running and passing system and instance status checks. An instance whose application process has crashed, deadlocked, or is returning HTTP 500 still passes. The `ELB` health check type delegates the decision to the load balancer's target group health check, which probes an application endpoint. Only the latter detects application-level failure and triggers replacement. This is a very common production defect and a recurring certification trap.
+**5. What is the difference between the control plane and the data plane, and why does it matter?**
+The control plane provisions and configures resources; the data plane moves bytes. AWS engineers data planes for static stability so they continue functioning during control plane impairment. The design implication is to pre-provision resources and never place control plane calls on a user request's critical path.
 
 ### Scenario Questions
 
-**1. A team runs a nightly report that takes 45 minutes and reads several gigabytes from S3. They propose AWS Lambda. Evaluate.**
+**1. A team stores ten million one-kilobyte log files per day in S3 Standard and complains the bill is dominated by requests. What do you recommend?**
+Aggregate the logs into larger compressed objects, ideally per five-minute or hourly window, before writing. This reduces `PUT` request count by orders of magnitude, reduces per-object overheads, and makes subsequent analytics far cheaper because Athena scans fewer, larger files. Kinesis Data Firehose performs this buffering natively.
 
-Lambda is unsuitable as a single invocation: the maximum execution duration is 15 minutes, which is a hard limit, and ephemeral storage is bounded. Three viable redesigns exist. First, decompose the job into a map-reduce shape  a Step Functions Distributed Map fanning out many short Lambda invocations over S3 key ranges, then a reduce step. Second, run it as an ECS or EKS task on Fargate, invoked on a schedule by EventBridge Scheduler, which has no duration limit and generous memory. Third, if the work is fundamentally an analytical query over S3 data, replace the compute entirely with Athena or an EMR Serverless job. The architectural lesson is that a duration limit is a signal to reconsider the decomposition, not merely to pick a bigger runtime.
+**2. A relational database on EC2 shows increasing query latency during nightly batch jobs. `BurstBalance` on the gp2 data volume drops to zero at 02:00. What is happening and how do you fix it?**
+The gp2 volume is exhausting its I/O credits and falling back to baseline performance of three IOPS per GiB. Migrate the volume to gp3 with explicitly provisioned IOPS and throughput sized to the measured peak, which removes the credit mechanism entirely. Verify that the instance type's EBS bandwidth can deliver the provisioned figure.
 
-**2. A microservice receives steady traffic of roughly 200 requests per second with brief 10x spikes at lunchtime. Cost is a first-class concern. Which compute model?**
+**3. A legacy Java application requires a shared directory across a fleet of servers in three Availability Zones and uses POSIX file locking. Migration to object storage is not funded. What do you propose?**
+Amazon EFS with mount targets in all three Availability Zones, Elastic throughput, encryption at rest and in transit, an access point enforcing the application's root directory and POSIX identity, and a security group permitting TCP 2049 only from the application security group. No application change is required.
 
-Steady baseline plus predictable spikes favours containers on ECS or EKS with Fargate for burst capacity, or EC2 with a Savings Plan covering the baseline and Spot or on-demand for the peak. Lambda's per-invocation pricing becomes expensive at sustained high request rates compared with a continuously utilised container, so at 200 requests per second sustained, containers usually win on cost while Lambda wins on operational simplicity. A defensible answer states the crossover reasoning explicitly: Lambda is optimal for spiky, low-duty-cycle workloads; containers are optimal once utilisation is high and steady. Compute Savings Plans apply across EC2, Fargate, and Lambda, so the baseline can be committed regardless of the model chosen.
+**4. Auditors require that financial records be immutable for seven years and that no administrator can delete them early. Design the storage.**
+An S3 bucket with versioning enabled and Object Lock in Compliance mode with a seven-year retention period, SSE-KMS with a customer managed key whose key policy separates duties, CloudTrail data events delivered to a separate logging account, Block Public Access fully enabled, and replication to a second Region for continuity. Compliance mode cannot be shortened or removed by any principal, including the account root user.
 
-**3. A regulated financial customer requires that no other tenant's workload share the physical host. What are the options and their trade-offs?**
-
-Dedicated Instances guarantee hardware isolation at the account level but do not give visibility of or control over socket and core placement. Dedicated Hosts additionally expose the physical server, enabling per-socket or per-core software licensing (bring-your-own-license for Windows Server or Oracle) and affinity so an instance returns to the same host after a stop and start. Both carry a substantial cost premium and reduce placement flexibility, which weakens elasticity. On Fargate each task runs in its own isolation boundary with dedicated kernel, which satisfies many isolation requirements without dedicated hardware, but does not satisfy a literal "no shared physical hardware" clause. The architect's job is to determine whether the requirement is genuinely about physical hardware or about isolation and compliance evidence, because the answer changes the cost by an order of magnitude.
-
-**4. An EKS cluster experiences pods stuck in `Pending` with the event `too many pods`. Diagnose.**
-
-This is almost always the ENI-based IP address limit of the Amazon VPC CNI. Each node can host a number of pods bounded by the number of ENIs its instance type supports multiplied by the IP addresses per ENI, minus one for the node itself. Small instance types therefore host very few pods regardless of free CPU and memory. Remedies include selecting larger instance types, enabling prefix delegation on the VPC CNI (which assigns /28 prefixes rather than individual secondary IPs and greatly increases pod density), or adopting custom networking with a secondary CIDR. A secondary possibility is that the subnets themselves have exhausted their IP space, which is a CIDR planning failure.
-
-**5. A Lambda function attached to a VPC intermittently fails to reach an RDS database, and the team observes connection exhaustion on the database.**
-
-Lambda scales horizontally by creating concurrent execution environments, each of which opens its own database connection. At high concurrency this multiplies into thousands of connections and exceeds the RDS `max_connections` parameter, which itself scales with instance memory. The correct remedy is Amazon RDS Proxy, which maintains a pooled, multiplexed set of connections to the database and lets Lambda functions borrow from the pool. Supporting measures include setting reserved concurrency on the function to bound the blast radius, opening the connection outside the handler so it is reused across warm invocations, and confirming that the security groups allow traffic from the Lambda ENIs' security group on the database port.
+**5. A machine learning team runs distributed training across two hundred GPU instances reading the same fifty-terabyte dataset. S3 reads are too slow for their epoch times. What do you propose?**
+Stage the dataset from S3 into Amazon FSx for Lustre, which links directly to the S3 bucket and provides hundreds of gigabytes per second of aggregate throughput with POSIX semantics. S3 remains the durable system of record; FSx for Lustre is the high-performance scratch layer for the duration of the training run.
 
 ### Architecture Questions
 
-**1. Design a compute layer for a three-tier e-commerce application that must survive the loss of an Availability Zone.**
+**1. Design storage for a multi-tenant SaaS document platform serving ten thousand tenants.**
+Use a single bucket with a `tenant-id/` prefix per tenant rather than a bucket per tenant, because bucket count is a limited resource. Enforce isolation through IAM session policies scoped to the tenant prefix, issued by an identity broker, or through S3 Access Points with per-tenant policies. Encrypt with SSE-KMS, enable versioning with noncurrent expiry, apply Intelligent-Tiering, and serve reads through CloudFront with signed URLs.
 
-Place an Application Load Balancer across at least two, preferably three, Availability Zones in public subnets. Run the application tier as an ECS service on Fargate, or an Auto Scaling group, spread across the same Availability Zones in private subnets, with a desired count set so that N-1 zones can carry full peak load. Target tracking scaling on request count per target or on CPU maintains headroom. Externalise session state to ElastiCache or DynamoDB so any instance can serve any request. Use RDS Multi-AZ or Aurora with reader instances in each zone. Verify that the ASG or service uses `ELB` health checks, that deployment uses rolling or blue/green with a minimum healthy percentage, and that the NAT Gateway is provisioned per zone so that the loss of one zone does not break egress for the others.
+**2. Design a disaster recovery strategy for a system whose Recovery Point Objective is fifteen minutes and Recovery Time Objective is one hour.**
+For S3, enable Cross-Region Replication with Replication Time Control, which provides a fifteen-minute Service Level Agreement. For EBS-backed databases, take snapshots more frequently than the Recovery Point Objective or use database-native replication such as an RDS cross-Region read replica, which is the better answer given a fifteen-minute target. For EFS, enable EFS replication. Maintain the target Region's infrastructure as code so it can be provisioned within the Recovery Time Objective, and rehearse the failover.
 
-**2. When would you choose EKS over ECS, given that ECS is simpler?**
+**3. How would you architect persistent storage for a Kubernetes platform hosting both stateless web services and a Prometheus monitoring stack?**
+Stateless services keep no volumes and externalise state to S3 and RDS. Prometheus runs as a StatefulSet with EBS `ReadWriteOnce` persistent volumes provisioned by the EBS CSI driver, using `WaitForFirstConsumer` binding so the volume is created in the zone the pod is scheduled into. Shared configuration or plugin directories used by multiple replicas use an EFS `ReadWriteMany` volume through the EFS CSI driver with an access point per claim. Long-term metrics are shipped to S3 through Thanos or Amazon Managed Service for Prometheus.
 
-Choose EKS when the organisation needs the Kubernetes API and ecosystem  Helm charts, operators, custom resource definitions, service meshes such as Istio, GitOps tooling such as Argo CD or Flux  or when workload portability across clouds and on-premises is a genuine requirement, or when the engineering organisation already has Kubernetes expertise and multi-cluster tooling. Choose ECS when the priority is minimal operational surface, deep and native AWS integration, no control-plane charge, and a smaller learning curve. The decision is fundamentally about ecosystem leverage and existing skills, not about technical capability, because both can run the same containers with comparable reliability.
+**4. A media company must serve five hundred terabytes of video globally at minimum cost while keeping the origin private.**
+Store the renditions in S3 with Intelligent-Tiering, serve through CloudFront with Origin Access Control so the bucket is never public, use signed URLs or signed cookies for entitlement enforcement, and set a long cache TTL so the origin request rate and egress cost collapse. Archive masters to Glacier Deep Archive. The dominant saving comes from CloudFront egress pricing being lower than S3 internet egress plus the near-elimination of origin requests.
 
-**3. Design an event-driven image-processing pipeline and justify the compute choice at each stage.**
-
-An upload lands in S3, which emits an event to EventBridge or directly to SQS. A Lambda function consumes the queue, generates thumbnails, and writes results back to S3 and metadata to DynamoDB  Lambda is correct here because the work is short, stateless, embarrassingly parallel, and bursty, and the cost at low duty cycle is negligible. If a stage requires heavy machine-learning inference exceeding 15 minutes or requiring GPUs, that stage moves to an ECS Fargate task or an EC2 GPU instance triggered by Step Functions, because Lambda does not offer GPUs. A dead-letter queue captures poison messages, and Step Functions orchestrates multi-stage workflows so that retries, timeouts, and error paths are declarative rather than embedded in application code.
-
-**4. How would you achieve zero-downtime deployment for a containerised service, and what are the trade-offs of each strategy?**
-
-Rolling update with a minimum healthy percentage of 100 and a maximum percent above 100 launches new tasks before draining old ones; it is cheap and simple but briefly runs two versions concurrently, which requires backward-compatible schemas and APIs. Blue/green through CodeDeploy stands up a complete replacement task set behind a second target group and shifts traffic all at once, linearly, or canary, with automatic rollback on CloudWatch alarms; it doubles capacity cost during deployment but gives a clean and fast rollback. Canary within a rolling update, or Lambda weighted aliases for serverless, exposes a small traffic percentage to the new version first, which minimises blast radius at the cost of a longer deployment window and more complex observability.
+**5. Design the storage layer for an IoT platform ingesting one million messages per second.**
+Ingest through IoT Core into Kinesis Data Streams, buffer with Kinesis Data Firehose which aggregates records into large compressed Parquet objects, and write to S3 with prefixes partitioned by date and device group. Catalogue with Glue, query with Athena, and apply lifecycle rules moving data older than ninety days to Glacier Flexible Retrieval. Hot device state that must be read per request lives in DynamoDB, not in S3.
 
 ### Troubleshooting Questions
 
-**1. An ECS Fargate task repeatedly stops with `CannotPullContainerError`.**
+**1. An EC2 instance cannot mount an EFS file system; the command hangs and eventually times out. How do you diagnose it?**
+Check in order: does a mount target exist in the instance's Availability Zone; does the mount target's security group allow inbound TCP 2049 from the instance's security group; do the subnet's Network ACLs permit both directions including ephemeral ports; is the DNS name resolving, which requires DNS hostnames and DNS resolution enabled on the VPC; and is `amazon-efs-utils` installed if TLS or IAM authorisation is requested.
 
-The task cannot reach ECR. In a private subnet without a NAT Gateway, create interface VPC endpoints for `ecr.api` and `ecr.dkr`, a Gateway endpoint for S3 (ECR layers are stored in S3), and an interface endpoint for `logs` if CloudWatch Logs is the log driver. Alternatively confirm the route to a NAT Gateway. Secondary causes are an execution role lacking `ecr:GetAuthorizationToken` and the ECR read permissions, an incorrect image tag, or a task launched with `assignPublicIp` disabled in a public subnet.
+**2. An application receives intermittent `503 SlowDown` responses from S3 during a bulk load. What is happening?**
+The request rate against a single partitioned prefix has exceeded the current partition's capacity, and S3 is signalling that it is splitting the partition. The correct response is exponential backoff with jitter, which the AWS SDKs implement by default, combined with spreading writes across more prefixes and ramping up load gradually rather than instantaneously.
 
-**2. An EC2 instance in a private subnet cannot install packages from the internet.**
+**3. A restored EBS volume performs far worse than the original for the first hour. Why?**
+Volumes created from snapshots are lazily loaded; blocks are fetched from S3 on first access, so initial reads incur additional latency. Enable Fast Snapshot Restore for that snapshot in the target Availability Zone, or force hydration by sequentially reading the whole device with a tool such as `dd` or `fio` before putting the volume into service.
 
-Confirm a NAT Gateway exists in a public subnet in the same Availability Zone, that the private subnet's route table has a `0.0.0.0/0` route to that NAT Gateway, that the public subnet's route table has a `0.0.0.0/0` route to an Internet Gateway, that the NAT Gateway subnet is genuinely public, and that the outbound security group and the network ACLs on both subnets permit the traffic  remembering that NACLs are stateless and therefore need an inbound ephemeral-port rule for return traffic.
+**4. A user reports `AccessDenied` on `ListObjectsV2` but can successfully `GetObject` on known keys. Why?**
+`s3:ListBucket` is a bucket-level action whose resource must be the bucket ARN, whereas `s3:GetObject` is an object-level action whose resource is the object ARN. The policy almost certainly grants both actions against the object ARN pattern only. Add a statement granting `s3:ListBucket` on the bucket ARN, optionally constrained with the `s3:prefix` condition key.
 
-**3. A Lambda function reports `Task timed out after 3.00 seconds` only in production.**
-
-The default timeout of three seconds is almost never appropriate for a function performing network calls. Raise the timeout to a value above the observed p99 duration but below the caller's tolerance, and set it deliberately rather than by default. Then investigate why production is slower: cold starts, VPC-attached ENI behaviour, a downstream dependency with higher latency at scale, connection establishment inside the handler rather than outside it, or insufficient memory throttling the vCPU allocation. Enable AWS X-Ray to attribute the latency to a specific downstream segment.
-
-**4. An Auto Scaling group continuously launches and terminates instances.**
-
-This is a scaling or health-check thrash loop. The common causes are a health check grace period shorter than the application's boot time, so instances are terminated before they become healthy; a failing user-data bootstrap script; an `ELB` health check pointing at a path that the application does not serve, or one that requires authentication; step or simple scaling policies without adequate cooldown fighting each other; or an unhealthy AMI. Inspect the Auto Scaling activity history, the target group health-check reason codes, and the instance console output.
-
-**5. An EKS pod cannot assume its IAM role and receives `AccessDenied` from the AWS SDK.**
-
-Verify the full IRSA or EKS Pod Identity chain: the cluster has an OIDC identity provider registered in IAM; the IAM role's trust policy references that provider and constrains the `sub` claim to the correct namespace and service account; the Kubernetes ServiceAccount carries the `eks.amazonaws.com/role-arn` annotation; the pod spec sets `serviceAccountName`; and the SDK version supports web identity token credentials. A frequent error is a trust policy that matches the wrong namespace, which fails silently and falls back to the node instance role.
+**5. Storage costs for a bucket are far higher than the sum of visible object sizes. What do you investigate?**
+Three likely causes: noncurrent object versions accumulating because versioning is on without a lifecycle expiry rule; incomplete multipart upload parts, which are billed but not shown by a standard list operation; and delete markers combined with retained versions. Use S3 Storage Lens or an S3 Inventory report including noncurrent versions, then add lifecycle rules for `NoncurrentVersionExpiration` and `AbortIncompleteMultipartUpload`.
 
 ### Certification-style Questions
 
-**1.** A company runs a stateless web tier that must scale automatically and minimise cost. Traffic is unpredictable and frequently idle for hours. Which is MOST cost-effective?
+**1. A company needs to store backups that must be retrievable within twelve hours at the lowest possible cost, with a retention period of ten years. Which storage class is most appropriate?**
+S3 Glacier Deep Archive. It offers the lowest storage price with standard retrieval in approximately twelve hours, and the one-hundred-and-eighty-day minimum duration is irrelevant given a ten-year retention.
 
-- A. EC2 On-Demand instances in an Auto Scaling group with a minimum of two
-- B. AWS Lambda behind Amazon API Gateway
-- C. ECS on EC2 with Reserved Instances
-- D. EC2 Dedicated Hosts
+**2. An application running on EC2 in three Availability Zones must write to a shared file system with POSIX semantics and must remain available if one Availability Zone fails. Which service should be used?**
+Amazon EFS in Regional mode with mount targets in all three Availability Zones. EBS cannot span zones, and S3 does not provide POSIX semantics.
 
-**Answer: B.** Long idle periods mean any always-on capacity is wasted. Lambda charges only for invocations and duration and scales to zero. Reserved Instances and Dedicated Hosts commit to capacity that is unused most of the time.
+**3. Which combination provides the most cost-effective private access to S3 from instances in a private subnet?**
+A Gateway VPC endpoint for S3. It carries no hourly or data-processing charge and removes the NAT Gateway from the path entirely.
 
-**2.** An application must run for approximately 30 minutes per job, requires 8 GB of memory, and is triggered a few times per day. Which service requires the LEAST operational overhead while meeting the requirement?
+**4. A workload requires 100,000 IOPS with sub-millisecond latency for a single relational database instance. Which EBS volume type meets this?**
+io2 Block Express, which supports up to 256,000 IOPS per volume with sub-millisecond latency. gp3 is limited to 16,000 IOPS and cannot meet the requirement.
 
-- A. AWS Lambda
-- B. Amazon EC2 with an Auto Scaling group
-- C. Amazon ECS on AWS Fargate triggered by EventBridge Scheduler
-- D. Amazon EKS with managed node groups
+**5. A company stores derived thumbnail images that can be regenerated from originals at any time, and wants to minimise cost while keeping millisecond access. Which storage class fits?**
+S3 One Zone-IA. The data is recreatable, so the single-Availability-Zone risk is acceptable, and it provides millisecond retrieval at a lower price than Standard-IA.
 
-**Answer: C.** Lambda cannot run for 30 minutes. EC2 and EKS both introduce node management. Fargate has no duration limit, no servers to manage, and is billed only while the task runs.
+**6. Which feature ensures that objects cannot be deleted by any principal, including the account root user, for a defined period?**
+S3 Object Lock in Compliance mode, which requires versioning to be enabled on the bucket.
 
-**3.** A workload can tolerate interruption and must minimise cost for a large batch of independent jobs. Which purchasing option is MOST appropriate?
+**7. An organisation must audit every read of objects in a sensitive bucket. What must be configured?**
+CloudTrail data events for that bucket. Management events, which are on by default, do not record `GetObject`.
 
-- A. On-Demand
-- B. Reserved Instances
-- C. Spot Instances
-- D. Dedicated Hosts
-
-**Answer: C.** Spot offers the deepest discount and is designed for interruption-tolerant, fault-tolerant, and stateless workloads, with a two-minute interruption notice.
-
-**4.** Which of the following is required for an EC2 instance to write objects to Amazon S3 following security best practice?
-
-- A. Store access keys in the user data script
-- B. Attach an IAM role through an instance profile
-- C. Store credentials in `~/.aws/credentials` on the instance
-- D. Make the S3 bucket public
-
-**Answer: B.** Roles delivered through an instance profile provide temporary, automatically rotated credentials retrieved from IMDS. Long-lived keys embedded on the instance are a credential-management liability.
-
-**5.** A containerised service must reduce cold-start latency for a synchronous, user-facing Lambda function written in Java. Which feature addresses this MOST directly?
-
-- A. Reserved concurrency
-- B. Provisioned concurrency or Lambda SnapStart
-- C. Increasing the function timeout
-- D. Attaching the function to a VPC
-
-**Answer: B.** Provisioned concurrency keeps initialised environments warm; SnapStart restores a pre-initialised snapshot and is specifically effective for JVM runtimes. Reserved concurrency caps concurrency and does not warm environments, and attaching to a VPC generally increases rather than decreases latency.
-
-**6.** An Auto Scaling group must replace instances whose application has crashed although the operating system is still running. What must be configured?
-
-- A. Health check type `EC2`
-- B. Health check type `ELB` with a target group health check on an application endpoint
-- C. A shorter cooldown period
-- D. Termination protection
-
-**Answer: B.** Only the load balancer health check observes application-level behaviour.
-
-**7.** Which statement about AWS Fargate is correct?
-
-- A. Fargate is an alternative container orchestrator to ECS and EKS
-- B. Fargate allows SSH access to the underlying host
-- C. Fargate is a serverless compute engine used as a capacity type by both ECS and EKS
-- D. Fargate supports DaemonSets on EKS
-
-**Answer: C.** Fargate is a capacity provider, not an orchestrator; there is no host access, and EKS on Fargate does not support DaemonSets.
+---
 
 ## Hands-on Lab
 
 ### Objective
 
-Deploy a containerised web service on Amazon ECS with the AWS Fargate launch type, behind an Application Load Balancer, in a two-Availability-Zone VPC, with target-tracking auto scaling and centralised logging. Then deploy an equivalent AWS Lambda function behind a Function URL and compare cold-start latency, scaling behaviour, and cost characteristics. The comparison is the pedagogical point: the same business capability delivered under two compute models.
+Build a small but complete storage architecture that exercises all three services. You will create a secure, versioned, encrypted S3 bucket with a lifecycle policy; upload an object using a presigned URL; attach, format, and mount an EBS volume and take a snapshot; create an EFS file system and mount it from two instances in different Availability Zones to prove shared access; and confirm that the S3 traffic uses a Gateway VPC endpoint.
 
-!!! info "Environment"
-    This lab is designed for the AWS Academy Learner Lab sandbox. The Learner Lab provides a pre-existing `LabRole` and restricts IAM role creation, so the steps below reuse `LabRole` where a task role or execution role is required. In a full AWS account, create least-privilege roles instead.
+The lab is designed to complete within an AWS Academy Learner Lab session using the `LabRole` and default VPC, and to remain within sandbox service restrictions.
 
 ### Architecture
 
 ```mermaid
 graph TD
-    U["Internet User"] --> ALB["Application Load Balancer"]
-    ALB --> TG["Target Group of type ip"]
-    TG --> T1["Fargate Task in AZ a"]
-    TG --> T2["Fargate Task in AZ b"]
-    T1 --> CW["CloudWatch Logs"]
-    T2 --> CW
-    ASG["Application Auto Scaling Target Tracking"] --> SVC["ECS Service"]
-    SVC --> T1
-    SVC --> T2
-    ECR["Amazon ECR Repository"] --> T1
-    ECR --> T2
-    U --> FURL["Lambda Function URL"]
-    FURL --> LF["Lambda Function"]
-    LF --> CW
+    subgraph "VPC"
+        subgraph "Availability Zone A"
+            E1["EC2 Instance A"]
+            MT1["EFS Mount Target A"]
+        end
+        subgraph "Availability Zone B"
+            E2["EC2 Instance B"]
+            MT2["EFS Mount Target B"]
+        end
+        VPCE["Gateway VPC Endpoint for S3"]
+    end
+    E1 --> EBS["EBS gp3 Data Volume"]
+    E1 --> MT1
+    E2 --> MT2
+    MT1 --> EFS["EFS File System"]
+    MT2 --> EFS
+    E1 --> VPCE
+    VPCE --> S3["S3 Bucket with Versioning and Lifecycle"]
+    EBS --> SNAP["EBS Snapshot in S3"]
 ```
 
-### AWS Services Used
+### AWS services used
 
-| Service | Role in the lab |
-|---|---|
-| Amazon VPC | Two public and two private subnets across two Availability Zones |
-| Amazon ECR | Private registry holding the application image |
-| Amazon ECS | Cluster, task definition, and service |
-| AWS Fargate | Serverless capacity for the tasks |
-| Elastic Load Balancing | Application Load Balancer and target group |
-| Application Auto Scaling | Target-tracking policy on the ECS service |
-| AWS Lambda | Serverless comparison implementation |
-| Amazon CloudWatch | Logs, metrics, and the scaling alarms |
-| AWS IAM | Task role and task execution role |
+Amazon S3, Amazon EBS, Amazon EFS, Amazon EC2, Amazon VPC with a Gateway endpoint, AWS IAM, AWS KMS through default encryption, and Amazon CloudWatch for verification.
 
-### Implementation Steps
+### Implementation steps
 
-**Step 1  Prepare the container image.**
+**Part one — the S3 bucket**
 
-Create a minimal application and Dockerfile locally, then build and push it to Amazon ECR.
+1. Choose a globally unique bucket name, for example `dso303-lab-<your-student-id>`, and create the bucket in your lab Region.
+2. Enable versioning on the bucket.
+3. Confirm that Block Public Access is fully enabled and that default encryption is active.
+4. Apply a bucket policy that denies any request not using TLS.
+5. Apply a lifecycle configuration that transitions objects under the `archive/` prefix to Standard-IA after thirty days, expires noncurrent versions after thirty days, and aborts incomplete multipart uploads after seven days.
+6. Upload a small file and then upload a modified version of the same key. List object versions and observe that both versions exist.
+7. Delete the object and observe that a delete marker was created rather than the data being destroyed. Restore the object by deleting the delete marker.
 
-```dockerfile
-# Dockerfile - a deliberately small image to keep pull time short
-FROM public.ecr.aws/docker/library/python:3.12-slim
-WORKDIR /app
-COPY app.py .
-RUN pip install --no-cache-dir flask gunicorn
-EXPOSE 8080
-CMD ["gunicorn", "--bind", "0.0.0.0:8080", "--workers", "2", "app:app"]
-```
+**Part two — presigned URL**
 
-```python
-# app.py - exposes a health endpoint and a CPU-burning endpoint used to trigger scaling
-import os, socket, time
-from flask import Flask, jsonify
+8. Generate a presigned `PUT` URL valid for five minutes using the CLI or the boto3 example in the next section.
+9. Upload a file using `curl` with that URL and no AWS credentials, proving that the delegation works.
+10. Wait for expiry, retry, and observe the `AccessDenied` response, proving that the delegation is time-bounded.
 
-app = Flask(__name__)
+**Part three — EBS**
 
-@app.get("/health")
-def health():
-    return jsonify(status="ok", host=socket.gethostname()), 200
+11. Launch a `t3.micro` Amazon Linux instance in Availability Zone A with an IAM instance profile granting S3 read access to your bucket.
+12. Create a 10 GiB encrypted gp3 volume in the same Availability Zone and attach it to the instance as `/dev/sdf`.
+13. On the instance, identify the device with `lsblk`, create an XFS file system, create a mount point, mount it, and add a UUID-based entry to `/etc/fstab`.
+14. Write a test file to the volume.
+15. Create a snapshot of the volume and observe that the API returns immediately while the snapshot state transitions from `pending` to `completed`.
+16. Attempt to attach the volume to an instance in Availability Zone B and observe the error. This is the single most important observation in the lab.
 
-@app.get("/")
-def index():
-    return jsonify(message="Hello from ECS Fargate",
-                   host=socket.gethostname(),
-                   az=os.environ.get("AWS_AVAILABILITY_ZONE", "unknown")), 200
+**Part four — EFS**
 
-@app.get("/burn")
-def burn():
-    # Generates CPU load so that the target-tracking policy has something to react to
-    end = time.time() + 5
-    while time.time() < end:
-        pow(2, 20000)
-    return jsonify(burned_seconds=5), 200
-```
+17. Create an EFS file system with Elastic throughput, General Purpose performance mode, and encryption at rest enabled.
+18. Create a security group `efs-sg` allowing inbound TCP 2049 from the instance security group, and create mount targets in the subnets of both Availability Zone A and Availability Zone B using that security group.
+19. Launch a second instance in Availability Zone B.
+20. On both instances, install `amazon-efs-utils` and mount the file system with TLS enabled.
+21. Write a file from instance A and read it immediately from instance B, demonstrating cross-Availability-Zone shared access — the property EBS cannot provide.
+22. Enable a lifecycle policy transitioning files to Infrequent Access after thirty days.
 
-```bash
-ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
-REGION=$(aws configure get region)
-REPO=dso303-demo
+**Part five — network path and observability**
 
-aws ecr create-repository --repository-name "$REPO"
-aws ecr get-login-password --region "$REGION" \
-  | docker login --username AWS --password-stdin "$ACCOUNT_ID.dkr.ecr.$REGION.amazonaws.com"
+23. Create a Gateway VPC endpoint for S3 and associate it with the route table used by your subnets.
+24. From the instance, run an S3 copy and confirm connectivity.
+25. In CloudWatch, inspect the EBS `VolumeWriteOps` metric and the EFS `StorageBytes` metric for your resources.
+26. Clean up: terminate instances, delete the EFS file system and mount targets, delete the volume and snapshot, empty and delete the bucket including all versions.
 
-docker build -t "$REPO":v1 .
-docker tag "$REPO":v1 "$ACCOUNT_ID.dkr.ecr.$REGION.amazonaws.com/$REPO:v1"
-docker push "$ACCOUNT_ID.dkr.ecr.$REGION.amazonaws.com/$REPO:v1"
-```
+### Expected output
 
-**Step 2  Create the ECS cluster.**
+- A versioned bucket containing at least two versions of one key and a delete marker you subsequently removed.
+- A successful anonymous upload through a presigned URL, followed by an `AccessDenied` after expiry.
+- `df -h` on instance A showing both the mounted EBS volume and the mounted EFS file system.
+- An explicit error when attempting to attach the EBS volume across Availability Zones, with the message indicating the volume and instance are not in the same Availability Zone.
+- A file written on instance A visible from instance B within seconds.
+- A completed EBS snapshot listed in the console.
+- CloudWatch metrics showing non-zero write operations on the volume and non-zero stored bytes on the file system.
 
-```bash
-aws ecs create-cluster --cluster-name dso303-cluster \
-  --capacity-providers FARGATE FARGATE_SPOT \
-  --default-capacity-provider-strategy capacityProvider=FARGATE,weight=1
-```
+!!! tip "The conceptual takeaway from the lab"
+    Steps 16 and 21 together are the entire lesson. EBS is Availability-Zone-bound and single-attach; EFS is Regional and multi-attach. Everything else in this chapter about high availability follows from that single contrast.
 
-**Step 3  Register the task definition.** Save the JSON from the Code Examples section as `taskdef.json`, then register it.
-
-```bash
-aws ecs register-task-definition --cli-input-json file://taskdef.json
-```
-
-**Step 4  Create the load balancer and target group.** The target group type must be `ip` because `awsvpc` tasks receive their own ENI and are not registered by instance ID.
-
-```bash
-aws elbv2 create-target-group \
-  --name dso303-tg --protocol HTTP --port 8080 \
-  --vpc-id "$VPC_ID" --target-type ip \
-  --health-check-path /health \
-  --health-check-interval-seconds 15 \
-  --healthy-threshold-count 2 --unhealthy-threshold-count 3
-```
-
-Create the Application Load Balancer in the two public subnets, then create a listener on port 80 forwarding to the target group.
-
-**Step 5  Create the ECS service.** Place tasks in the private subnets, attach them to the target group, and spread them across Availability Zones.
-
-```bash
-aws ecs create-service \
-  --cluster dso303-cluster \
-  --service-name dso303-svc \
-  --task-definition dso303-task \
-  --desired-count 2 \
-  --launch-type FARGATE \
-  --network-configuration "awsvpcConfiguration={subnets=[$PRIV_A,$PRIV_B],securityGroups=[$TASK_SG],assignPublicIp=DISABLED}" \
-  --load-balancers "targetGroupArn=$TG_ARN,containerName=web,containerPort=8080" \
-  --health-check-grace-period-seconds 60 \
-  --deployment-configuration "minimumHealthyPercent=100,maximumPercent=200" \
-  --placement-strategy "type=spread,field=attribute:ecs.availability-zone"
-```
-
-!!! warning "Private subnets require egress for image pull"
-    Because `assignPublicIp` is `DISABLED`, the tasks have no route to the public internet unless the private subnets route through a NAT Gateway, or unless interface VPC endpoints exist for `ecr.api`, `ecr.dkr`, and `logs`, plus a Gateway endpoint for S3. Omitting this is the single most common cause of `CannotPullContainerError` in this lab.
-
-**Step 6  Configure target-tracking auto scaling.**
-
-```bash
-aws application-autoscaling register-scalable-target \
-  --service-namespace ecs \
-  --resource-id service/dso303-cluster/dso303-svc \
-  --scalable-dimension ecs:service:DesiredCount \
-  --min-capacity 2 --max-capacity 10
-
-aws application-autoscaling put-scaling-policy \
-  --service-namespace ecs \
-  --resource-id service/dso303-cluster/dso303-svc \
-  --scalable-dimension ecs:service:DesiredCount \
-  --policy-name cpu-target-50 \
-  --policy-type TargetTrackingScaling \
-  --target-tracking-scaling-policy-configuration '{
-    "TargetValue": 50.0,
-    "PredefinedMetricSpecification": {"PredefinedMetricType": "ECSServiceAverageCPUUtilization"},
-    "ScaleOutCooldown": 60,
-    "ScaleInCooldown": 180
-  }'
-```
-
-**Step 7  Generate load and observe scaling.**
-
-```bash
-ALB_DNS=$(aws elbv2 describe-load-balancers --names dso303-alb \
-  --query 'LoadBalancers[0].DNSName' --output text)
-
-for i in $(seq 1 200); do curl -s "http://$ALB_DNS/burn" > /dev/null & done; wait
-
-watch -n 10 "aws ecs describe-services --cluster dso303-cluster \
-  --services dso303-svc --query 'services[0].[desiredCount,runningCount]'"
-```
-
-**Step 8  Deploy the Lambda equivalent and compare.** Deploy the handler from the Code Examples section, create a Function URL, and measure latency for the first request after a period of inactivity versus subsequent requests.
-
-```bash
-for i in 1 2 3 4 5; do
-  curl -s -o /dev/null -w "%{time_total}\n" "$FUNCTION_URL"
-done
-```
-
-**Step 9  Record observations and clean up.** Delete the ECS service, the load balancer, the target group, the Lambda function, and the ECR repository. In a Learner Lab, leaving a NAT Gateway or an Application Load Balancer running will exhaust the budget quickly, because both bill per hour regardless of traffic.
-
-### Expected Output
-
-| Observation | Expected result |
-|---|---|
-| Initial ECS service state | `desiredCount` 2, `runningCount` 2, both tasks healthy in the target group |
-| Response body across repeated requests | The `host` field alternates, demonstrating load distribution across tasks |
-| Under `/burn` load | `desiredCount` rises toward 10 within two to four minutes, then returns to 2 after the scale-in cooldown |
-| ECS task placement | Tasks distributed across both Availability Zones |
-| Lambda first request after idle | Noticeably higher `time_total`, typically several hundred milliseconds, reflecting the cold start |
-| Lambda subsequent requests | Substantially lower `time_total`, typically tens of milliseconds |
-| CloudWatch Logs | One log stream per task and per Lambda execution environment |
-
-!!! tip "What the lab is really teaching"
-    The ECS path required roughly a dozen resources and explicit decisions about subnets, health checks, and scaling thresholds. The Lambda path required almost none of that but imposed a cold-start penalty and a duration ceiling. Neither is superior; the exercise is to feel the trade-off physically rather than read about it.
+---
 
 ## Code Examples
 
-### AWS CLI  launching an EC2 instance with a launch template
+### AWS CLI — creating and securing an S3 bucket
+
+Creates a bucket, enables versioning, enforces default encryption, and blocks all public access. This is the minimum secure baseline for any production bucket.
 
 ```bash
-# Launch templates are versioned and are required for mixed-instances policies.
-aws ec2 create-launch-template \
-  --launch-template-name dso303-web-lt \
-  --version-description v1 \
-  --launch-template-data '{
-    "ImageId": "resolve:ssm:/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64",
-    "InstanceType": "t3.micro",
-    "IamInstanceProfile": {"Name": "LabInstanceProfile"},
-    "SecurityGroupIds": ["sg-0123456789abcdef0"],
-    "MetadataOptions": {"HttpTokens": "required", "HttpPutResponseHopLimit": 2},
-    "Monitoring": {"Enabled": true},
-    "TagSpecifications": [{
-      "ResourceType": "instance",
-      "Tags": [{"Key": "Name", "Value": "dso303-web"}, {"Key": "Module", "Value": "DSO303"}]
-    }],
-    "UserData": "'"$(base64 -w0 <<'UD'
-#!/bin/bash
-dnf -y install nginx
-systemctl enable --now nginx
-UD
-)"'"
+REGION="ap-south-1"
+BUCKET="dso303-lab-example-bucket"
+
+aws s3api create-bucket \
+  --bucket "$BUCKET" \
+  --region "$REGION" \
+  --create-bucket-configuration LocationConstraint="$REGION"
+
+aws s3api put-bucket-versioning \
+  --bucket "$BUCKET" \
+  --versioning-configuration Status=Enabled
+
+aws s3api put-bucket-encryption \
+  --bucket "$BUCKET" \
+  --server-side-encryption-configuration '{
+    "Rules": [{
+      "ApplyServerSideEncryptionByDefault": {"SSEAlgorithm": "AES256"},
+      "BucketKeyEnabled": true
+    }]
   }'
+
+aws s3api put-public-access-block \
+  --bucket "$BUCKET" \
+  --public-access-block-configuration \
+    BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true
 ```
 
-!!! note "Why `HttpTokens: required`"
-    This enforces IMDSv2, which requires a session token obtained by a `PUT` request. IMDSv1 is vulnerable to server-side request forgery, where a compromised application is tricked into fetching instance credentials. Enforcing IMDSv2 is a baseline security control and is checked by AWS Config and Security Hub.
+### AWS CLI — high-throughput transfer configuration
 
-### AWS CLI  Auto Scaling group with a mixed-instances policy
+Tunes the CLI's concurrency and multipart thresholds before a large sync. Default settings are conservative; raising concurrency is the single most effective way to increase aggregate throughput.
 
 ```bash
-# Combines On-Demand baseline with Spot for cost efficiency, across three AZs.
-aws autoscaling create-auto-scaling-group \
-  --auto-scaling-group-name dso303-asg \
-  --min-size 2 --max-size 12 --desired-capacity 2 \
-  --vpc-zone-identifier "subnet-aaa,subnet-bbb,subnet-ccc" \
-  --health-check-type ELB --health-check-grace-period 120 \
-  --target-group-arns "$TG_ARN" \
-  --mixed-instances-policy '{
-    "LaunchTemplate": {
-      "LaunchTemplateSpecification": {"LaunchTemplateName": "dso303-web-lt", "Version": "$Latest"},
-      "Overrides": [
-        {"InstanceType": "t3.medium"},
-        {"InstanceType": "t3a.medium"},
-        {"InstanceType": "m6i.large"}
-      ]
-    },
-    "InstancesDistribution": {
-      "OnDemandBaseCapacity": 2,
-      "OnDemandPercentageAboveBaseCapacity": 20,
-      "SpotAllocationStrategy": "price-capacity-optimized"
-    }
-  }'
+aws configure set default.s3.max_concurrent_requests 40
+aws configure set default.s3.multipart_threshold 64MB
+aws configure set default.s3.multipart_chunksize 32MB
+
+aws s3 sync ./local-dataset "s3://$BUCKET/dataset/" \
+  --storage-class STANDARD_IA \
+  --exclude "*.tmp"
 ```
 
-### ECS task definition (JSON)
+### S3 bucket policy — denying non-TLS access and enforcing encryption
+
+Two explicit `Deny` statements. The first rejects any request not made over HTTPS; the second rejects uploads that do not request KMS encryption. Explicit denies cannot be overridden by any identity policy, which makes this pattern a reliable guardrail.
 
 ```json
 {
-  "family": "dso303-task",
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "DenyInsecureTransport",
+      "Effect": "Deny",
+      "Principal": "*",
+      "Action": "s3:*",
+      "Resource": [
+        "arn:aws:s3:::dso303-lab-example-bucket",
+        "arn:aws:s3:::dso303-lab-example-bucket/*"
+      ],
+      "Condition": {
+        "Bool": {"aws:SecureTransport": "false"}
+      }
+    },
+    {
+      "Sid": "DenyUnencryptedObjectUploads",
+      "Effect": "Deny",
+      "Principal": "*",
+      "Action": "s3:PutObject",
+      "Resource": "arn:aws:s3:::dso303-lab-example-bucket/*",
+      "Condition": {
+        "StringNotEquals": {"s3:x-amz-server-side-encryption": "aws:kms"}
+      }
+    }
+  ]
+}
+```
+
+### S3 lifecycle configuration
+
+Transitions objects through progressively cheaper classes, expires noncurrent versions to bound the cost of versioning, and aborts abandoned multipart uploads. The last rule in particular should be present in every bucket.
+
+```json
+{
+  "Rules": [
+    {
+      "ID": "TierApplicationLogs",
+      "Filter": {"Prefix": "logs/"},
+      "Status": "Enabled",
+      "Transitions": [
+        {"Days": 30, "StorageClass": "STANDARD_IA"},
+        {"Days": 90, "StorageClass": "GLACIER_IR"},
+        {"Days": 365, "StorageClass": "DEEP_ARCHIVE"}
+      ],
+      "Expiration": {"Days": 2555}
+    },
+    {
+      "ID": "ExpireNoncurrentVersions",
+      "Filter": {},
+      "Status": "Enabled",
+      "NoncurrentVersionExpiration": {
+        "NoncurrentDays": 30,
+        "NewerNoncurrentVersions": 3
+      }
+    },
+    {
+      "ID": "AbortIncompleteMultipartUploads",
+      "Filter": {},
+      "Status": "Enabled",
+      "AbortIncompleteMultipartUpload": {"DaysAfterInitiation": 7}
+    }
+  ]
+}
+```
+
+### Python boto3 — presigned URLs
+
+Generates a time-limited URL that lets an anonymous client upload or download one specific object. This keeps large payloads off the application tier entirely.
+
+```python
+import boto3
+from botocore.config import Config
+
+s3 = boto3.client("s3", config=Config(signature_version="s3v4"))
+
+def presigned_upload_url(bucket: str, key: str, expires: int = 300) -> str:
+    """Return a URL allowing a single PUT of one object for a bounded time."""
+    return s3.generate_presigned_url(
+        ClientMethod="put_object",
+        Params={
+            "Bucket": bucket,
+            "Key": key,
+            "ContentType": "application/octet-stream",
+            "ServerSideEncryption": "AES256",
+        },
+        ExpiresIn=expires,
+    )
+
+def presigned_download_url(bucket: str, key: str, expires: int = 300) -> str:
+    """Return a URL allowing a single GET of one object for a bounded time."""
+    return s3.generate_presigned_url(
+        ClientMethod="get_object",
+        Params={"Bucket": bucket, "Key": key},
+        ExpiresIn=expires,
+    )
+
+if __name__ == "__main__":
+    print(presigned_upload_url("dso303-lab-example-bucket", "uploads/report.pdf"))
+```
+
+The generated URL is used with no credentials at all.
+
+```bash
+curl -X PUT \
+  -H "Content-Type: application/octet-stream" \
+  -H "x-amz-server-side-encryption: AES256" \
+  --upload-file ./report.pdf \
+  "<the-presigned-url>"
+```
+
+### Python boto3 — managed multipart upload with progress
+
+`upload_file` transparently performs a multipart upload above the configured threshold, uploading parts concurrently and retrying individual parts. Writing multipart logic by hand is almost never necessary.
+
+```python
+import os
+import threading
+import boto3
+from boto3.s3.transfer import TransferConfig
+
+s3 = boto3.client("s3")
+
+transfer_config = TransferConfig(
+    multipart_threshold=64 * 1024 * 1024,   # start multipart above 64 MiB
+    multipart_chunksize=32 * 1024 * 1024,   # 32 MiB parts
+    max_concurrency=16,                     # parallel part uploads
+    use_threads=True,
+)
+
+class ProgressReporter:
+    def __init__(self, filename: str):
+        self._filename = filename
+        self._size = float(os.path.getsize(filename))
+        self._seen = 0
+        self._lock = threading.Lock()
+
+    def __call__(self, bytes_amount: int) -> None:
+        with self._lock:
+            self._seen += bytes_amount
+            pct = (self._seen / self._size) * 100
+            print(f"{self._filename}: {self._seen} of {int(self._size)} bytes, {pct:.1f} percent")
+
+s3.upload_file(
+    Filename="large-dataset.tar.gz",
+    Bucket="dso303-lab-example-bucket",
+    Key="datasets/large-dataset.tar.gz",
+    ExtraArgs={"StorageClass": "INTELLIGENT_TIERING", "ServerSideEncryption": "AES256"},
+    Config=transfer_config,
+    Callback=ProgressReporter("large-dataset.tar.gz"),
+)
+```
+
+### Python boto3 — low-level multipart upload
+
+Shown to make the underlying protocol explicit: initiate, upload parts collecting each `ETag`, then complete with the ordered part list. Note the `abort` on failure, without which the parts remain billed.
+
+```python
+import boto3
+
+s3 = boto3.client("s3")
+BUCKET, KEY, PART_SIZE = "dso303-lab-example-bucket", "big/archive.bin", 16 * 1024 * 1024
+
+response = s3.create_multipart_upload(Bucket=BUCKET, Key=KEY)
+upload_id = response["UploadId"]
+parts = []
+
+try:
+    with open("archive.bin", "rb") as handle:
+        part_number = 1
+        while True:
+            chunk = handle.read(PART_SIZE)
+            if not chunk:
+                break
+            result = s3.upload_part(
+                Bucket=BUCKET, Key=KEY, PartNumber=part_number,
+                UploadId=upload_id, Body=chunk,
+            )
+            parts.append({"ETag": result["ETag"], "PartNumber": part_number})
+            part_number += 1
+
+    s3.complete_multipart_upload(
+        Bucket=BUCKET, Key=KEY, UploadId=upload_id,
+        MultipartUpload={"Parts": parts},
+    )
+except Exception:
+    # Without this abort the uploaded parts remain in storage and are billed.
+    s3.abort_multipart_upload(Bucket=BUCKET, Key=KEY, UploadId=upload_id)
+    raise
+```
+
+### Python boto3 — paginated listing and EBS snapshot automation
+
+Paginators handle the thousand-key page limit correctly; naive `list_objects_v2` calls silently truncate. The second function demonstrates a tag-driven snapshot routine.
+
+```python
+import boto3
+
+s3 = boto3.client("s3")
+ec2 = boto3.client("ec2")
+
+def total_bytes_under_prefix(bucket: str, prefix: str) -> int:
+    """Sum object sizes under a prefix, handling pagination correctly."""
+    paginator = s3.get_paginator("list_objects_v2")
+    total = 0
+    for page in paginator.paginate(Bucket=bucket, Prefix=prefix):
+        for obj in page.get("Contents", []):
+            total += obj["Size"]
+    return total
+
+def snapshot_tagged_volumes(tag_key: str = "Backup", tag_value: str = "daily") -> list:
+    """Create snapshots of all volumes carrying a given tag."""
+    volumes = ec2.describe_volumes(
+        Filters=[{"Name": f"tag:{tag_key}", "Values": [tag_value]}]
+    )["Volumes"]
+
+    created = []
+    for volume in volumes:
+        snapshot = ec2.create_snapshot(
+            VolumeId=volume["VolumeId"],
+            Description=f"Automated snapshot of {volume['VolumeId']}",
+            TagSpecifications=[{
+                "ResourceType": "snapshot",
+                "Tags": [
+                    {"Key": "Name", "Value": f"auto-{volume['VolumeId']}"},
+                    {"Key": "CreatedBy", "Value": "dso303-automation"},
+                ],
+            }],
+        )
+        created.append(snapshot["SnapshotId"])
+    return created
+```
+
+### Shell — partitioning, formatting, and mounting an EBS volume
+
+The critical detail is using the file system UUID in `/etc/fstab` rather than the device name, because NVMe device naming is not guaranteed stable across reboots. The `nofail` option prevents an unbootable instance if the volume is absent.
+
+```bash
+# Identify the attached device; on Nitro instances it appears as an NVMe device.
+lsblk
+sudo nvme list
+
+DEVICE="/dev/nvme1n1"
+MOUNT_POINT="/data"
+
+# Verify the device is empty. If this prints "data" the device has no file system.
+sudo file -s "$DEVICE"
+
+# Create an XFS file system. This DESTROYS existing data - never run on a volume with data.
+sudo mkfs -t xfs "$DEVICE"
+
+sudo mkdir -p "$MOUNT_POINT"
+sudo mount "$DEVICE" "$MOUNT_POINT"
+
+# Persist the mount using the UUID so device renaming cannot break boot.
+UUID=$(sudo blkid -s UUID -o value "$DEVICE")
+echo "UUID=$UUID  $MOUNT_POINT  xfs  defaults,noatime,nofail  0  2" | sudo tee -a /etc/fstab
+
+sudo mount -a
+df -hT "$MOUNT_POINT"
+```
+
+### Shell — growing an EBS volume online
+
+After `ModifyVolume` increases the volume size, the partition table and the file system must be grown separately. Forgetting this is why a resized volume often shows no additional space.
+
+```bash
+aws ec2 modify-volume --volume-id vol-0123456789abcdef0 --size 200 --volume-type gp3 --iops 6000
+
+# On the instance, after the modification reaches the optimizing state:
+sudo growpart /dev/nvme1n1 1     # only if the volume is partitioned
+sudo xfs_growfs /data            # XFS
+# sudo resize2fs /dev/nvme1n1    # ext4 equivalent
+df -hT /data
+```
+
+### Shell — mounting Amazon EFS with TLS
+
+The `efs-utils` helper resolves the zone-local mount target, establishes a TLS tunnel, and can sign requests with the instance's IAM role. A plain `mount -t nfs4` works but transmits data unencrypted.
+
+```bash
+sudo yum install -y amazon-efs-utils      # or: sudo apt-get install -y amazon-efs-utils
+
+FS_ID="fs-0123456789abcdef0"
+sudo mkdir -p /mnt/shared
+
+# Mount with encryption in transit and IAM authorization.
+sudo mount -t efs -o tls,iam "$FS_ID":/ /mnt/shared
+
+# Persist across reboots. The _netdev option delays the mount until networking is up.
+echo "$FS_ID:/ /mnt/shared efs _netdev,tls,iam 0 0" | sudo tee -a /etc/fstab
+
+# Mount through an access point, which enforces a root directory and POSIX identity.
+sudo mount -t efs -o tls,iam,accesspoint=fsap-0123456789abcdef0 "$FS_ID":/ /mnt/app-data
+
+df -hT /mnt/shared
+```
+
+### CloudFormation — a secure bucket, an EBS volume, and an EFS file system
+
+Declarative definition means the environment is reproducible, reviewable in a pull request, and destroyable in one operation. Note the deletion policy on the bucket, which prevents an accidental stack deletion from destroying data.
+
+```yaml
+AWSTemplateFormatVersion: "2010-09-09"
+Description: DSO303 storage baseline - S3, EBS and EFS
+
+Parameters:
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+  SubnetAId:
+    Type: AWS::EC2::Subnet::Id
+  SubnetBId:
+    Type: AWS::EC2::Subnet::Id
+  AvailabilityZoneA:
+    Type: AWS::EC2::AvailabilityZone::Name
+
+Resources:
+  DataBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      VersioningConfiguration:
+        Status: Enabled
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - BucketKeyEnabled: true
+            ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerEnforced
+      LifecycleConfiguration:
+        Rules:
+          - Id: TierAndExpire
+            Status: Enabled
+            Transitions:
+              - StorageClass: STANDARD_IA
+                TransitionInDays: 30
+              - StorageClass: GLACIER_IR
+                TransitionInDays: 120
+            NoncurrentVersionExpirationInDays: 30
+            AbortIncompleteMultipartUpload:
+              DaysAfterInitiation: 7
+
+  BucketTlsPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref DataBucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: DenyInsecureTransport
+            Effect: Deny
+            Principal: "*"
+            Action: "s3:*"
+            Resource:
+              - !GetAtt DataBucket.Arn
+              - !Sub "${DataBucket.Arn}/*"
+            Condition:
+              Bool:
+                "aws:SecureTransport": "false"
+
+  ApplicationDataVolume:
+    Type: AWS::EC2::Volume
+    DeletionPolicy: Snapshot
+    Properties:
+      AvailabilityZone: !Ref AvailabilityZoneA
+      Size: 100
+      VolumeType: gp3
+      Iops: 6000
+      Throughput: 250
+      Encrypted: true
+      Tags:
+        - Key: Backup
+          Value: daily
+
+  EfsSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allow NFS from application instances
+      VpcId: !Ref VpcId
+
+  SharedFileSystem:
+    Type: AWS::EFS::FileSystem
+    Properties:
+      Encrypted: true
+      PerformanceMode: generalPurpose
+      ThroughputMode: elastic
+      BackupPolicy:
+        Status: ENABLED
+      LifecyclePolicies:
+        - TransitionToIA: AFTER_30_DAYS
+        - TransitionToPrimaryStorageClass: AFTER_1_ACCESS
+
+  MountTargetA:
+    Type: AWS::EFS::MountTarget
+    Properties:
+      FileSystemId: !Ref SharedFileSystem
+      SubnetId: !Ref SubnetAId
+      SecurityGroups:
+        - !Ref EfsSecurityGroup
+
+  MountTargetB:
+    Type: AWS::EFS::MountTarget
+    Properties:
+      FileSystemId: !Ref SharedFileSystem
+      SubnetId: !Ref SubnetBId
+      SecurityGroups:
+        - !Ref EfsSecurityGroup
+
+Outputs:
+  BucketName:
+    Value: !Ref DataBucket
+  FileSystemId:
+    Value: !Ref SharedFileSystem
+  VolumeId:
+    Value: !Ref ApplicationDataVolume
+```
+
+### Terraform — equivalent storage baseline
+
+The same intent expressed in HCL, including the Gateway VPC endpoint for S3 that removes NAT charges from the S3 path.
+
+```hcl
+terraform {
+  required_providers {
+    aws = {
+      source  = "hashicorp/aws"
+      version = "~> 5.0"
+    }
+  }
+}
+
+variable "vpc_id" { type = string }
+variable "subnet_ids" { type = list(string) }
+variable "route_table_ids" { type = list(string) }
+variable "availability_zone" { type = string }
+
+resource "aws_s3_bucket" "data" {
+  bucket = "dso303-data-${data.aws_caller_identity.current.account_id}"
+}
+
+data "aws_caller_identity" "current" {}
+
+resource "aws_s3_bucket_versioning" "data" {
+  bucket = aws_s3_bucket.data.id
+  versioning_configuration {
+    status = "Enabled"
+  }
+}
+
+resource "aws_s3_bucket_server_side_encryption_configuration" "data" {
+  bucket = aws_s3_bucket.data.id
+  rule {
+    apply_server_side_encryption_by_default {
+      sse_algorithm = "AES256"
+    }
+    bucket_key_enabled = true
+  }
+}
+
+resource "aws_s3_bucket_public_access_block" "data" {
+  bucket                  = aws_s3_bucket.data.id
+  block_public_acls       = true
+  block_public_policy     = true
+  ignore_public_acls      = true
+  restrict_public_buckets = true
+}
+
+resource "aws_s3_bucket_lifecycle_configuration" "data" {
+  bucket = aws_s3_bucket.data.id
+
+  rule {
+    id     = "tier-and-expire"
+    status = "Enabled"
+    filter {}
+
+    transition {
+      days          = 30
+      storage_class = "STANDARD_IA"
+    }
+    transition {
+      days          = 120
+      storage_class = "GLACIER_IR"
+    }
+    noncurrent_version_expiration {
+      noncurrent_days = 30
+    }
+    abort_incomplete_multipart_upload {
+      days_after_initiation = 7
+    }
+  }
+}
+
+resource "aws_vpc_endpoint" "s3" {
+  vpc_id            = var.vpc_id
+  service_name      = "com.amazonaws.${data.aws_region.current.name}.s3"
+  vpc_endpoint_type = "Gateway"
+  route_table_ids   = var.route_table_ids
+}
+
+data "aws_region" "current" {}
+
+resource "aws_ebs_volume" "app_data" {
+  availability_zone = var.availability_zone
+  size              = 100
+  type              = "gp3"
+  iops              = 6000
+  throughput        = 250
+  encrypted         = true
+
+  tags = {
+    Name   = "dso303-app-data"
+    Backup = "daily"
+  }
+}
+
+resource "aws_efs_file_system" "shared" {
+  encrypted        = true
+  performance_mode = "generalPurpose"
+  throughput_mode  = "elastic"
+
+  lifecycle_policy {
+    transition_to_ia = "AFTER_30_DAYS"
+  }
+
+  tags = {
+    Name = "dso303-shared"
+  }
+}
+
+resource "aws_security_group" "efs" {
+  name        = "dso303-efs-sg"
+  description = "Allow NFS from application tier"
+  vpc_id      = var.vpc_id
+}
+
+resource "aws_efs_mount_target" "shared" {
+  count           = length(var.subnet_ids)
+  file_system_id  = aws_efs_file_system.shared.id
+  subnet_id       = var.subnet_ids[count.index]
+  security_groups = [aws_security_group.efs.id]
+}
+
+resource "aws_efs_access_point" "app" {
+  file_system_id = aws_efs_file_system.shared.id
+
+  posix_user {
+    uid = 1000
+    gid = 1000
+  }
+
+  root_directory {
+    path = "/app"
+    creation_info {
+      owner_uid   = 1000
+      owner_gid   = 1000
+      permissions = "0750"
+    }
+  }
+}
+```
+
+### Kubernetes YAML — EFS shared volume and EBS per-pod volume
+
+Demonstrates the two access modes side by side. `ReadWriteMany` on EFS lets every replica share one directory; `ReadWriteOnce` on EBS gives each StatefulSet pod its own volume, bound in the zone where the pod is scheduled.
+
+```yaml
+---
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: efs-shared
+provisioner: efs.csi.aws.com
+parameters:
+  provisioningMode: efs-ap
+  fileSystemId: fs-0123456789abcdef0
+  directoryPerms: "750"
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: shared-content
+spec:
+  accessModes:
+    - ReadWriteMany
+  storageClassName: efs-shared
+  resources:
+    requests:
+      storage: 20Gi
+---
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: ebs-gp3
+provisioner: ebs.csi.aws.com
+volumeBindingMode: WaitForFirstConsumer
+parameters:
+  type: gp3
+  iops: "3000"
+  throughput: "125"
+  encrypted: "true"
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: metrics-store
+spec:
+  serviceName: metrics-store
+  replicas: 2
+  selector:
+    matchLabels:
+      app: metrics-store
+  template:
+    metadata:
+      labels:
+        app: metrics-store
+    spec:
+      containers:
+        - name: server
+          image: public.ecr.aws/docker/library/alpine:3.20
+          command: ["sleep", "infinity"]
+          volumeMounts:
+            - name: local-state
+              mountPath: /var/lib/state
+            - name: shared-content
+              mountPath: /mnt/shared
+      volumes:
+        - name: shared-content
+          persistentVolumeClaim:
+            claimName: shared-content
+  volumeClaimTemplates:
+    - metadata:
+        name: local-state
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        storageClassName: ebs-gp3
+        resources:
+          requests:
+            storage: 50Gi
+```
+
+### Docker and ECS — mounting EFS into a Fargate task
+
+The ECS task definition mounts EFS through an access point with TLS and IAM authorisation, giving containers durable shared state without any node-level configuration.
+
+```json
+{
+  "family": "dso303-web",
   "networkMode": "awsvpc",
   "requiresCompatibilities": ["FARGATE"],
   "cpu": "512",
   "memory": "1024",
-  "runtimePlatform": {"cpuArchitecture": "X86_64", "operatingSystemFamily": "LINUX"},
-  "executionRoleArn": "arn:aws:iam::111122223333:role/LabRole",
-  "taskRoleArn": "arn:aws:iam::111122223333:role/LabRole",
+  "executionRoleArn": "arn:aws:iam::123456789012:role/ecsTaskExecutionRole",
+  "taskRoleArn": "arn:aws:iam::123456789012:role/dso303TaskRole",
+  "volumes": [
+    {
+      "name": "shared-content",
+      "efsVolumeConfiguration": {
+        "fileSystemId": "fs-0123456789abcdef0",
+        "transitEncryption": "ENABLED",
+        "authorizationConfig": {
+          "accessPointId": "fsap-0123456789abcdef0",
+          "iam": "ENABLED"
+        }
+      }
+    }
+  ],
   "containerDefinitions": [
     {
       "name": "web",
-      "image": "111122223333.dkr.ecr.us-east-1.amazonaws.com/dso303-demo:v1",
+      "image": "123456789012.dkr.ecr.ap-south-1.amazonaws.com/dso303-web:1.0.0",
       "essential": true,
       "portMappings": [{"containerPort": 8080, "protocol": "tcp"}],
-      "environment": [{"name": "APP_ENV", "value": "lab"}],
-      "secrets": [
-        {"name": "DB_PASSWORD", "valueFrom": "arn:aws:secretsmanager:us-east-1:111122223333:secret:dso303/db-AbCdEf"}
+      "mountPoints": [
+        {"sourceVolume": "shared-content", "containerPath": "/srv/content", "readOnly": false}
       ],
-      "healthCheck": {
-        "command": ["CMD-SHELL", "curl -f http://localhost:8080/health || exit 1"],
-        "interval": 30, "timeout": 5, "retries": 3, "startPeriod": 30
-      },
       "logConfiguration": {
         "logDriver": "awslogs",
         "options": {
-          "awslogs-group": "/ecs/dso303",
-          "awslogs-region": "us-east-1",
-          "awslogs-stream-prefix": "web",
-          "awslogs-create-group": "true"
+          "awslogs-group": "/ecs/dso303-web",
+          "awslogs-region": "ap-south-1",
+          "awslogs-stream-prefix": "web"
         }
       }
     }
@@ -2170,383 +2553,142 @@ aws autoscaling create-auto-scaling-group \
 }
 ```
 
-!!! tip "Secrets belong in `secrets`, never in `environment`"
-    Values placed in `environment` are visible in the task definition, which is readable by anyone with `ecs:DescribeTaskDefinition`. The `secrets` block causes the execution role to fetch the value at task start and inject it, so the ciphertext reference rather than the plaintext is stored.
+### Shell — useful diagnostic and cost-hygiene commands
 
-### Kubernetes manifests for EKS
-
-```yaml
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: dso303-web
-  labels: {app: dso303-web}
-spec:
-  replicas: 3
-  selector:
-    matchLabels: {app: dso303-web}
-  template:
-    metadata:
-      labels: {app: dso303-web}
-    spec:
-      serviceAccountName: dso303-sa      # bound to an IAM role via IRSA
-      topologySpreadConstraints:
-        - maxSkew: 1
-          topologyKey: topology.kubernetes.io/zone
-          whenUnsatisfiable: DoNotSchedule
-          labelSelector:
-            matchLabels: {app: dso303-web}
-      containers:
-        - name: web
-          image: 111122223333.dkr.ecr.us-east-1.amazonaws.com/dso303-demo:v1
-          ports: [{containerPort: 8080}]
-          resources:
-            requests: {cpu: "250m", memory: "256Mi"}
-            limits:   {cpu: "500m", memory: "512Mi"}
-          readinessProbe:
-            httpGet: {path: /health, port: 8080}
-            initialDelaySeconds: 5
-            periodSeconds: 10
-          livenessProbe:
-            httpGet: {path: /health, port: 8080}
-            initialDelaySeconds: 30
-            periodSeconds: 20
----
-apiVersion: v1
-kind: Service
-metadata:
-  name: dso303-web
-spec:
-  type: ClusterIP
-  selector: {app: dso303-web}
-  ports: [{port: 80, targetPort: 8080}]
----
-apiVersion: v1
-kind: ServiceAccount
-metadata:
-  name: dso303-sa
-  annotations:
-    eks.amazonaws.com/role-arn: arn:aws:iam::111122223333:role/dso303-pod-role
-```
-
-!!! note "Requests versus limits"
-    `requests` drive scheduling  the scheduler places a pod only on a node with that much unreserved capacity. `limits` drive enforcement  exceeding a memory limit terminates the container with `OOMKilled`, while exceeding a CPU limit throttles it. Setting requests too high wastes cluster capacity; setting them too low causes noisy-neighbour contention.
-
-### AWS Lambda handler (Python)
-
-```python
-import json, os, time
-import boto3
-
-# Initialised once per execution environment, reused across warm invocations.
-# Moving client construction inside the handler is a classic performance defect.
-_ddb = boto3.resource("dynamodb")
-_table = _ddb.Table(os.environ["TABLE_NAME"])
-COLD_START_AT = time.time()
-
-def handler(event, context):
-    is_cold = (time.time() - COLD_START_AT) < 0.5
-    try:
-        _table.put_item(Item={
-            "pk": context.aws_request_id,
-            "received_at": int(time.time()),
-            "source": event.get("requestContext", {}).get("http", {}).get("sourceIp", "unknown"),
-        })
-    except Exception as exc:
-        # Returning 5xx allows the caller or the event source to retry.
-        return {"statusCode": 500, "body": json.dumps({"error": str(exc)})}
-
-    return {
-        "statusCode": 200,
-        "headers": {"Content-Type": "application/json"},
-        "body": json.dumps({
-            "message": "Hello from Lambda",
-            "cold_start": is_cold,
-            "remaining_ms": context.get_remaining_time_in_millis(),
-            "memory_mb": context.memory_limit_in_mb,
-        }),
-    }
-```
-
-### Python (boto3)  driving ECS and inspecting scaling
-
-```python
-import boto3
-
-ecs = boto3.client("ecs")
-
-def deploy_new_revision(cluster: str, service: str, image: str) -> str:
-    """Register a new task definition revision and update the service in place.
-
-    ECS deployments are declarative: we change desired state and the service
-    scheduler reconciles toward it using the deployment configuration.
-    """
-    svc = ecs.describe_services(cluster=cluster, services=[service])["services"][0]
-    td = ecs.describe_task_definition(taskDefinition=svc["taskDefinition"])["taskDefinition"]
-
-    for key in ("taskDefinitionArn", "revision", "status", "requiresAttributes",
-                "compatibilities", "registeredAt", "registeredBy", "deregisteredAt"):
-        td.pop(key, None)
-
-    td["containerDefinitions"][0]["image"] = image
-    new_arn = ecs.register_task_definition(**td)["taskDefinition"]["taskDefinitionArn"]
-
-    ecs.update_service(cluster=cluster, service=service,
-                       taskDefinition=new_arn, forceNewDeployment=True)
-    waiter = ecs.get_waiter("services_stable")
-    waiter.wait(cluster=cluster, services=[service])
-    return new_arn
-```
-
-### CloudFormation  ECS service on Fargate behind an ALB (abridged)
-
-```yaml
-AWSTemplateFormatVersion: '2010-09-09'
-Description: DSO303 ECS Fargate service with target-tracking auto scaling
-
-Parameters:
-  VpcId:        {Type: AWS::EC2::VPC::Id}
-  PrivateSubnets: {Type: List<AWS::EC2::Subnet::Id>}
-  PublicSubnets:  {Type: List<AWS::EC2::Subnet::Id>}
-  ImageUri:     {Type: String}
-
-Resources:
-  Cluster:
-    Type: AWS::ECS::Cluster
-    Properties:
-      ClusterName: dso303-cluster
-      ClusterSettings: [{Name: containerInsights, Value: enabled}]
-
-  LogGroup:
-    Type: AWS::Logs::LogGroup
-    Properties:
-      LogGroupName: /ecs/dso303
-      RetentionInDays: 14        # unbounded retention is a silent, growing cost
-
-  TaskDefinition:
-    Type: AWS::ECS::TaskDefinition
-    Properties:
-      Family: dso303-task
-      Cpu: '512'
-      Memory: '1024'
-      NetworkMode: awsvpc
-      RequiresCompatibilities: [FARGATE]
-      ExecutionRoleArn: !Sub 'arn:aws:iam::${AWS::AccountId}:role/LabRole'
-      TaskRoleArn: !Sub 'arn:aws:iam::${AWS::AccountId}:role/LabRole'
-      ContainerDefinitions:
-        - Name: web
-          Image: !Ref ImageUri
-          Essential: true
-          PortMappings: [{ContainerPort: 8080}]
-          LogConfiguration:
-            LogDriver: awslogs
-            Options:
-              awslogs-group: !Ref LogGroup
-              awslogs-region: !Ref AWS::Region
-              awslogs-stream-prefix: web
-
-  Service:
-    Type: AWS::ECS::Service
-    DependsOn: Listener
-    Properties:
-      Cluster: !Ref Cluster
-      DesiredCount: 2
-      LaunchType: FARGATE
-      TaskDefinition: !Ref TaskDefinition
-      HealthCheckGracePeriodSeconds: 60
-      DeploymentConfiguration:
-        MinimumHealthyPercent: 100
-        MaximumPercent: 200
-        DeploymentCircuitBreaker: {Enable: true, Rollback: true}
-      NetworkConfiguration:
-        AwsvpcConfiguration:
-          Subnets: !Ref PrivateSubnets
-          SecurityGroups: [!Ref TaskSecurityGroup]
-          AssignPublicIp: DISABLED
-      LoadBalancers:
-        - ContainerName: web
-          ContainerPort: 8080
-          TargetGroupArn: !Ref TargetGroup
-
-  ScalableTarget:
-    Type: AWS::ApplicationAutoScaling::ScalableTarget
-    Properties:
-      MinCapacity: 2
-      MaxCapacity: 10
-      ResourceId: !Sub 'service/${Cluster}/${Service.Name}'
-      ScalableDimension: ecs:service:DesiredCount
-      ServiceNamespace: ecs
-      RoleARN: !Sub 'arn:aws:iam::${AWS::AccountId}:role/aws-service-role/ecs.application-autoscaling.amazonaws.com/AWSServiceRoleForApplicationAutoScaling_ECSService'
-
-  ScalingPolicy:
-    Type: AWS::ApplicationAutoScaling::ScalingPolicy
-    Properties:
-      PolicyName: cpu-target-50
-      PolicyType: TargetTrackingScaling
-      ScalingTargetId: !Ref ScalableTarget
-      TargetTrackingScalingPolicyConfiguration:
-        TargetValue: 50.0
-        PredefinedMetricSpecification:
-          PredefinedMetricType: ECSServiceAverageCPUUtilization
-        ScaleInCooldown: 180
-        ScaleOutCooldown: 60
-```
-
-!!! tip "Deployment circuit breaker"
-    `DeploymentCircuitBreaker` with `Rollback: true` instructs ECS to detect a deployment whose tasks repeatedly fail to become healthy and automatically revert to the last known-good task definition. Without it, a bad image can leave a service stuck in a failing deployment loop indefinitely.
-
-### Terraform  Lambda function with an alias and weighted deployment
-
-```hcl
-resource "aws_lambda_function" "api" {
-  function_name    = "dso303-api"
-  role             = aws_iam_role.lambda.arn
-  handler          = "app.handler"
-  runtime          = "python3.12"
-  filename         = data.archive_file.pkg.output_path
-  source_code_hash = data.archive_file.pkg.output_base64sha256
-
-  memory_size = 512   # memory also determines vCPU allocation
-  timeout     = 15
-  publish     = true  # required to create immutable versions for aliases
-
-  environment {
-    variables = { TABLE_NAME = aws_dynamodb_table.items.name }
-  }
-
-  tracing_config { mode = "Active" }  # enables AWS X-Ray
-
-  # Bounds blast radius: this function can never consume more than 100
-  # concurrent executions from the account pool.
-  reserved_concurrent_executions = 100
-}
-
-resource "aws_lambda_alias" "live" {
-  name             = "live"
-  function_name    = aws_lambda_function.api.function_name
-  function_version = aws_lambda_function.api.version
-
-  # Canary: 10 percent of traffic to the new version, 90 percent to the old.
-  routing_config {
-    additional_version_weights = {
-      (aws_lambda_function.api.version) = 0.1
-    }
-  }
-}
-
-resource "aws_lambda_provisioned_concurrency_config" "warm" {
-  function_name                     = aws_lambda_alias.live.function_name
-  qualifier                         = aws_lambda_alias.live.name
-  provisioned_concurrent_executions = 5
-}
-```
-
-### Shell  EC2 user data for a resilient bootstrap
+Everyday operational commands that surface the two most common sources of hidden storage cost.
 
 ```bash
-#!/bin/bash
-set -euxo pipefail
-# Fail fast and log everything; a silent bootstrap failure produces an instance
-# that passes EC2 health checks but never serves traffic.
-exec > >(tee /var/log/user-data.log | logger -t user-data) 2>&1
+# List EBS volumes that are not attached to anything and are therefore pure waste.
+aws ec2 describe-volumes \
+  --filters Name=status,Values=available \
+  --query 'Volumes[].{ID:VolumeId,Size:Size,Type:VolumeType,AZ:AvailabilityZone}' \
+  --output table
 
-dnf -y update
-dnf -y install nginx amazon-cloudwatch-agent
+# List incomplete multipart uploads, which are billed but hidden from normal listings.
+aws s3api list-multipart-uploads --bucket "$BUCKET" \
+  --query 'Uploads[].{Key:Key,Initiated:Initiated,UploadId:UploadId}' --output table
 
-TOKEN=$(curl -sX PUT "http://169.254.169.254/latest/api/token" \
-  -H "X-aws-ec2-metadata-token-ttl-seconds: 21600")
-AZ=$(curl -sH "X-aws-ec2-metadata-token: $TOKEN" \
-  http://169.254.169.254/latest/meta-data/placement/availability-zone)
+# Convert every gp2 volume in the Region to gp3.
+for VOL in $(aws ec2 describe-volumes --filters Name=volume-type,Values=gp2 \
+             --query 'Volumes[].VolumeId' --output text); do
+  aws ec2 modify-volume --volume-id "$VOL" --volume-type gp3
+done
 
-echo "<h1>DSO303</h1><p>AZ: $AZ</p>" > /usr/share/nginx/html/index.html
-echo "ok" > /usr/share/nginx/html/health
-
-systemctl enable --now nginx
-systemctl enable --now amazon-cloudwatch-agent
+# Show total size of all object versions, including noncurrent ones.
+aws s3api list-object-versions --bucket "$BUCKET" \
+  --query 'sum(Versions[].Size)' --output text
 ```
+
+---
 
 ## AWS Certification Tips
 
-### Exam tips
+### Reading the question correctly
 
-- Read the question for the discriminating constraint. Words such as *least operational overhead*, *most cost-effective*, *minimum change*, *highest availability*, and *fully managed* almost always eliminate two of the four options immediately.
-- "Least operational overhead" points toward serverless: Lambda over Fargate, Fargate over EC2, managed services over self-managed.
-- "Most cost-effective for interruption-tolerant work" points to Spot. "Most cost-effective for steady, predictable, long-running work" points to Savings Plans or Reserved Instances.
-- A stated duration above 15 minutes eliminates Lambda. A stated GPU requirement eliminates Lambda. A stated requirement for a specific kernel, kernel module, or a licensed operating system points to EC2, possibly on Dedicated Hosts.
-- If the question mentions Kubernetes, Helm, operators, or portability to on-premises, the answer is EKS. If it mentions deep AWS integration with no Kubernetes requirement, the answer is ECS.
+Associate-level examinations rarely test recall of numbers. They test whether you can map a set of requirements onto the correct service. Train yourself to extract the discriminating keywords.
 
-### Frequently confused services and concepts
+| Phrase in the question | What it points to |
+|---|---|
+| "shared across multiple instances" or "shared file system" | Amazon EFS, or FSx for Windows if SMB is mentioned |
+| "POSIX", "NFS", "mount", "directory hierarchy" | EFS or FSx, never S3 |
+| "block storage", "boot volume", "attach to an instance" | Amazon EBS |
+| "lowest latency", "sub-millisecond", "highest IOPS", "mission-critical database" | io2 Block Express |
+| "temporary", "scratch", "cache", "can be lost" | Instance store |
+| "millions of objects", "static assets", "data lake", "unlimited storage" | Amazon S3 |
+| "archive", "retrieve within twelve hours", "lowest cost" | S3 Glacier Deep Archive |
+| "archive but must be retrieved in milliseconds" | S3 Glacier Instant Retrieval |
+| "access pattern is unknown or changes" | S3 Intelligent-Tiering |
+| "can be recreated", "non-critical", "reduce cost" with millisecond access | S3 One Zone-IA |
+| "immutable", "WORM", "regulatory retention", "cannot be deleted" | S3 Object Lock in Compliance mode |
+| "private access from a VPC without internet" and cost sensitivity | Gateway VPC endpoint for S3 |
+| "private access from on-premises over Direct Connect" | Interface VPC endpoint with PrivateLink |
+| "high-performance computing", "hundreds of GB per second", "Lustre" | FSx for Lustre |
+| "Windows", "Active Directory", "SMB" | FSx for Windows File Server |
+| "on-premises appliance", "hybrid", "virtual tape" | AWS Storage Gateway |
+
+### Frequently confused pairs
 
 | Pair | The distinguishing fact |
 |---|---|
-| ECS versus EKS | ECS is AWS-proprietary orchestration with no control-plane charge; EKS is upstream-conformant Kubernetes with a per-cluster hourly charge |
-| Fargate versus EC2 launch type | Fargate is a capacity mode with no host access and per-task billing; EC2 launch type gives host access and per-instance billing |
-| Reserved concurrency versus provisioned concurrency | Reserved caps and guarantees a concurrency share; provisioned pre-initialises environments to remove cold starts and is separately billed |
-| Lambda version versus alias | A version is an immutable snapshot; an alias is a movable pointer supporting weighted traffic shifting |
-| Launch template versus launch configuration | Launch templates are versioned, support the full EC2 API, and are required for mixed-instances policies; launch configurations are legacy |
-| Auto Scaling group versus Application Auto Scaling | The former scales EC2 instances; the latter scales ECS services, DynamoDB tables, Aurora replicas, and similar |
-| Target tracking versus step scaling | Target tracking maintains a metric at a set point and is the default recommendation; step scaling responds to alarm breach magnitude and suits non-linear responses |
-| Instance store versus EBS | Instance store is physically attached, extremely fast, and ephemeral; EBS is network-attached, persistent, and snapshot-capable |
-| Spot Instance versus Spot Fleet versus capacity-optimized allocation | The first is a single interruptible instance; the second a managed collection; the third an allocation strategy that reduces interruption probability |
-| Task role versus task execution role | The application uses the task role; the ECS and Fargate infrastructure uses the execution role |
-| Cluster Autoscaler versus Karpenter versus HPA | The first two add nodes; HPA adds pods. Karpenter provisions right-sized nodes directly rather than adjusting Auto Scaling groups |
-| Placement group types | Cluster for low latency in one AZ, spread for maximum hardware isolation, partition for large distributed systems such as HDFS and Cassandra |
+| Durability versus availability | Durability is about not losing data; availability is about being able to reach it |
+| S3 Standard-IA versus S3 One Zone-IA | One Zone-IA stores data in a single Availability Zone and is only appropriate for recreatable data |
+| Glacier Instant versus Glacier Flexible | Instant retrieves in milliseconds; Flexible requires a restore taking minutes to hours |
+| gp2 versus gp3 | gp3 decouples IOPS and throughput from size, costs less, and has no burst-credit mechanism |
+| io1 versus io2 Block Express | io2 Block Express offers higher durability, a higher IOPS-to-size ratio, and up to 256,000 IOPS |
+| EBS snapshot versus AMI | A snapshot is volume data; an AMI is a launch template referencing one or more snapshots plus metadata |
+| Gateway endpoint versus Interface endpoint | Gateway is free, route-table based, and not reachable from on-premises; Interface uses an ENI, costs money, and is reachable from on-premises |
+| SSE-S3 versus SSE-KMS | SSE-KMS gives you key policy control and a CloudTrail record of every key use |
+| EFS versus FSx for Lustre | EFS is general-purpose shared storage; FSx for Lustre is for extreme-throughput HPC and machine learning |
+| Instance store versus EBS | Instance store is ephemeral and host-local; EBS persists independently of the instance |
 
 ### Memory aids
 
-- **The compute ladder.** EC2 (you manage the OS) to ECS/EKS on EC2 (you manage the nodes) to Fargate (you manage the container) to Lambda (you manage the function). Each rung trades control for reduced operational burden.
-- **The 15-minute rule.** Lambda 15 minutes, API Gateway REST integration timeout 29 seconds, ALB idle timeout 60 seconds by default. If a stated duration exceeds one of these, that component is eliminated.
-- **"Roles, not keys."** Any option embedding long-lived access keys is wrong on a security question.
-- **"Multi-AZ for availability, Multi-Region for disaster recovery."** These are different problems with different costs.
-- **`awsvpc` means the task gets its own ENI**, which is why target groups must be of type `ip` and why ENI limits bound task density on EC2 launch type.
+- **Object, Block, File maps to S3, EBS, EFS** in that order — the most useful single mapping in the examination.
+- **EBS is one zone, one instance; EFS is every zone, every instance.**
+- **The colder the storage class, the longer the minimum duration and the higher the retrieval cost.**
+- **Versioning is a prerequisite for Object Lock and for replication.**
+- **Snapshots are Regional; volumes are zonal.**
 
-!!! danger "Common certification traps"
-    - An Auto Scaling group with `EC2` health checks does **not** detect application failure.
-    - Fargate is **not** an orchestrator and does **not** support DaemonSets on EKS.
-    - Spot Instances **do** receive a two-minute interruption notice; "no warning" is wrong.
-    - Lambda's 15-minute timeout is a **hard** limit that cannot be raised by a support request.
-    - IAM roles attach to EC2 through an **instance profile**, not directly.
-    - Increasing Lambda memory increases vCPU proportionally, so a higher memory setting can be **cheaper** overall by shortening duration.
-    - Placing a Lambda function in a VPC does **not** make it more secure by default and generally **adds** latency; do it only when private resource access is required.
+!!! warning "Two traps that catch most candidates"
+    First, a question that says data "must survive the loss of an Availability Zone" eliminates every single-zone option — a lone EBS volume, One Zone-IA, EFS One Zone, and instance store — regardless of how attractive their cost is. Second, a question that says data is "accessed once a quarter but must be available immediately" is describing Glacier Instant Retrieval, not Glacier Flexible Retrieval, and not Standard-IA.
+
+---
 
 ## Summary
 
-AWS compute is best understood not as four unrelated products but as a single spectrum of abstraction. At one end, Amazon EC2 hands over a virtual machine and, with it, complete control and complete responsibility for the operating system, patching, capacity, and scaling. At the other end, AWS Lambda hands over nothing but a function and takes responsibility for everything beneath it, in exchange for accepting a constrained execution model: short duration, no persistent local state, and a cold-start penalty. Amazon ECS and Amazon EKS occupy the middle, standardising the unit of deployment as a container image and delegating placement, health, and reconciliation to a control plane  with AWS Fargate available in both to remove the node layer entirely.
+Storage is the durable substrate on which cloud-native architectures are built, and the storage decision is made before, not after, the compute decision. This chapter established three ideas that generalise far beyond AWS.
 
-The architectural lessons generalise well beyond these four services.
+The first idea is that **access pattern determines abstraction**. Object, block, and file storage exist because they make different, mutually incompatible trade-offs. Object storage abandons in-place mutation to gain unbounded scale and eleven nines of durability. Block storage abandons sharing and cross-zone reach to gain sub-millisecond random-access latency. File storage accepts higher cost and latency to gain shared POSIX semantics across many hosts. Once you know how your data is read and written, the service follows.
 
-First, **every managed service is a trade of control for operational leverage**, and the correct position on that spectrum depends on what the team actually needs to control. Choosing EC2 because it feels familiar imports years of patching and capacity work; choosing Lambda because it is fashionable imports a 15-minute ceiling and a cold-start tax into a workload that may tolerate neither.
+The second idea is that **scope determines availability**. Amazon S3 and Amazon EFS are Regional services replicating across at least three Availability Zones and therefore survive the loss of one. Amazon EBS is bound to a single Availability Zone by a deliberate engineering decision that preserves its latency profile, and instance store is bound to a single host. Every high-availability design on AWS is shaped by this hierarchy, and the correct response to an EBS volume's zonal scope is snapshots for durability and database-level or file-system-level replication for availability.
 
-Second, **elasticity requires statelessness**. Horizontal scaling, rolling deployment, health-based replacement, Spot interruption tolerance, and multi-AZ resilience are all consequences of the same design property: any request can be served by any instance, and losing an instance loses nothing durable. Externalising session and durable state to DynamoDB, ElastiCache, RDS, S3, or EFS is the enabling decision that makes every other compute capability available.
+The third idea is that **durability, availability, cost, and latency are dials, not defaults**. Storage classes, volume types, throughput modes, lifecycle policies, replication, and encryption choices are all levers an architect sets deliberately against explicit requirements. A design that has not stated its Recovery Point Objective, Recovery Time Objective, latency budget, and cost ceiling has not made these choices — it has merely accepted whichever defaults the console offered.
 
-Third, **the control plane and the data plane fail differently, and designs should reflect that**. A managed control plane outage typically prevents new deployments and scaling actions while running workloads continue to serve. Understanding this separation explains why AWS invests so heavily in control-plane resilience, why data-plane capacity should carry N-1 headroom, and why a deployment freeze is a survivable incident while a data-plane collapse is not.
+Three architectural lessons deserve particular emphasis. Externalising state into managed storage is what makes compute stateless, and stateless compute is what makes elasticity, rolling deployments, and Spot capacity possible. Durability figures describe hardware failure only; protection against human and application error requires versioning, Object Lock, cross-account replication, and tested restores. And security must be designed in from the first line of Infrastructure as Code — Block Public Access, default encryption, TLS enforcement, least-privilege policies, and VPC endpoints cost nothing to enable at creation time and are painful to retrofit after an incident.
 
-Fourth, **cost is an architectural property, not a billing afterthought**. The purchasing model (On-Demand, Savings Plans, Reserved, Spot), the memory setting on a Lambda function, the choice between a continuously utilised container and a per-invocation function, the decision to run one NAT Gateway or three, and the log retention period are all design decisions made at architecture time whose consequences appear on an invoice months later.
+!!! info "Connecting back to the module"
+    Every subsequent DSO303 topic depends on this one. Container platforms need persistent volumes from EBS and EFS. Serverless architectures are triggered by S3 events and read their data from S3. Continuous delivery pipelines store artefacts and Terraform state in S3. Observability pipelines land logs in S3 for analysis. Security and compliance controls are expressed largely as storage policies. Master this chapter and the rest of the module becomes an exercise in composition.
 
-Finally, **compute choices should be reversible where possible**. Containerising an application, externalising state, defining infrastructure as code, and instrumenting for observability all preserve the ability to move down or up the abstraction ladder as requirements change. The best compute decision an architect makes is often the one that keeps the next decision cheap.
+---
 
 ## Practice Questions
 
 ### Beginner Questions
 
-1. Define an Amazon Machine Image, an instance type, and an instance profile, and explain the role each plays when an EC2 instance launches.
-2. Explain the difference between object-level responsibility in the AWS shared responsibility model for EC2 versus for AWS Lambda. Name three things that become the customer's responsibility with EC2 but not with Lambda.
-3. What is a container image, and why does immutability of that image matter for reproducible deployments? Contrast this with configuring a server after launch.
-4. List the four purchasing options for EC2 capacity and give one workload that suits each.
-5. An AWS Lambda function is configured with 128 MB of memory and takes 4 seconds to run. The team increases it to 512 MB and it now takes 1 second. Explain why the total cost may be unchanged or lower, and why the user-perceived latency improves.
+1. Define object storage, block storage, and file storage, and name the primary AWS service that implements each. For each, give one workload that suits it and one that does not.
+
+2. A colleague states that "S3 buckets contain folders". Explain why this is inaccurate, describe what the S3 console is actually displaying, and state one practical consequence of the misunderstanding.
+
+3. What is the difference between durability and availability? Give an example of a situation in which data is fully durable but temporarily unavailable.
+
+4. An EBS volume was created in `us-east-1a`. Can it be attached to an EC2 instance in `us-east-1b`? Justify your answer with reference to how EBS replication works, and explain how you would move the data to another Availability Zone.
+
+5. List the four Block Public Access settings conceptually and explain why AWS enables them by default on new buckets. What alternative should be used to serve public web content?
 
 ### Intermediate Questions
 
-1. A service currently runs on three EC2 instances behind an Application Load Balancer with a fixed desired count. Describe how you would convert it to an elastic architecture, naming the specific components, the health-check configuration, and the scaling policy you would select, and justify each choice.
-2. Compare ECS on Fargate with ECS on EC2 across cost, security isolation, operational overhead, task density, and support for GPU and DaemonSet-style workloads. State the conditions under which each becomes the correct choice.
-3. Explain the full sequence of events, including control-plane and data-plane actions, that occurs between an `UpdateService` API call with a new task definition and the point at which all traffic reaches the new version under a rolling deployment with `minimumHealthyPercent` 100 and `maximumPercent` 200.
-4. An EKS cluster's pods must call Amazon S3. Describe the IRSA mechanism end to end  the OIDC provider, the IAM trust policy, the ServiceAccount annotation, and the token projection  and explain why this is superior to attaching permissions to the node instance role.
-5. A team reports that their Lambda function occasionally returns duplicate results to downstream systems. Explain the delivery semantics involved for asynchronous invocation and for an SQS event source, and describe how you would make the function idempotent.
+1. A bucket holds four hundred terabytes of application logs. Recent logs are queried daily for two weeks, then almost never, but must be retained for seven years for audit. Design a lifecycle configuration, justify each transition point, and identify the risk if the objects were on average only 20 KiB in size.
+
+2. Compare gp2 and gp3 across price, performance model, maximum IOPS, maximum throughput, and burst behaviour. Explain why gp3 is generally the better default and describe the operational steps needed to migrate an in-use gp2 volume.
+
+3. An EC2 instance cannot mount an EFS file system and the `mount` command hangs. Produce a systematic diagnostic checklist in the order you would work through it, explaining what each check rules out.
+
+4. Explain what a presigned URL is, how it is validated by S3, and why using presigned URLs for uploads is architecturally superior to routing uploads through an application tier. State two security controls you would apply to presigned URL issuance.
+
+5. A team enabled S3 versioning six months ago and is now surprised that storage costs have tripled while the visible object count is unchanged. Explain the likely causes and write the lifecycle rules that would bound the cost without losing recent recoverability.
 
 ### Advanced Questions
 
-1. Design a compute architecture for a global video-streaming platform's metadata API. It must serve 50,000 requests per second at peak with a p99 latency budget of 100 milliseconds, tolerate the loss of a full Availability Zone with no capacity degradation, deploy 30 times per day with automatic rollback, and minimise cost. Specify the compute model, the scaling strategy, the deployment strategy, the purchasing model, and the failure domains, and justify every choice against a stated alternative you rejected.
-2. A monolithic Java application currently runs on eight large EC2 instances at 20 percent average CPU utilisation with sharp quarter-end peaks. Propose a migration path across at least three stages, from rehosting through containerisation to selective serverless decomposition. For each stage, state what it costs, what it improves, what new failure modes it introduces, and what would justify stopping at that stage rather than continuing.
-3. Critically evaluate the claim that "serverless is always cheaper". Construct a quantitative crossover argument comparing AWS Lambda against ECS on Fargate for a workload of average duration 200 milliseconds and 512 MB of memory. Identify the approximate request rate at which the continuously provisioned container becomes cheaper, state your assumptions explicitly, and then explain why the purely financial crossover is not by itself sufficient grounds for the architectural decision.
-4. An organisation runs a stateful, latency-sensitive trading engine that requires sub-millisecond inter-node communication, cannot tolerate noisy neighbours, and must satisfy a regulatory requirement for hardware isolation and detailed audit evidence. Design the compute layer, addressing placement groups, instance tenancy, enhanced networking with Elastic Fabric Adapter or SR-IOV, IMDS hardening, and the observability and audit trail required. Explain which cloud-native principles you are deliberately sacrificing and why that sacrifice is defensible here.
-5. Design the control loop for a multi-tenant SaaS platform in which each tenant's workload must be isolated, tenants have wildly different load profiles, and the platform must scale from 10 to 10,000 tenants without a linear increase in operational effort. Compare a pool model (shared compute, logical isolation), a silo model (dedicated compute per tenant), and a hybrid bridge model. Address noisy neighbours, blast radius, cost attribution per tenant, deployment strategy, and the specific AWS compute primitives you would use for each model.
+1. Design the complete storage layer for a multi-tenant SaaS platform serving five thousand tenants, each storing documents. Address tenant isolation, encryption and key strategy, cost control, backup and ransomware resilience, and the Recovery Point and Recovery Time Objectives. Justify why you did or did not create one bucket per tenant.
+
+2. A financial services firm must run a PostgreSQL database on EC2 sustaining 80,000 IOPS at sub-millisecond latency, survive the loss of an Availability Zone with a Recovery Point Objective of one minute, and retain regulatory records immutably for seven years. Produce an architecture covering the volume type and sizing, the instance selection constraint, the replication mechanism, the backup strategy, and the archival control. Explain each trade-off you accept.
+
+3. An EKS platform hosts both stateless web services and a stateful analytics workload. Explain how the EBS and EFS CSI drivers differ in access mode, provisioning behaviour, and scheduling implications. Describe the failure mode that occurs when an EBS-backed pod cannot be scheduled in its volume's Availability Zone, and design around it.
+
+4. A machine learning team's training jobs are bottlenecked reading a fifty-terabyte dataset from S3 across two hundred instances. Analyse where the bottleneck could be — client concurrency, prefix partitioning, instance network capacity, or storage throughput — and describe how you would measure each. Then propose a solution and explain why the durable system of record should remain S3.
+
+5. Your organisation's monthly AWS bill shows storage costs growing twenty percent per quarter while data volume grows only five percent. Design a systematic investigation using Storage Lens, S3 Inventory, Cost Explorer, and Trusted Advisor. Identify at least six specific, distinct sources of waste you would expect to find, and give the remediation for each. State which remediations are safe to automate and which require human judgement.
+
+---
+
+*End of Unit 1.2.2 — Storage Services.*
