@@ -4,7 +4,7 @@ unit2:
   - Explain the principles of asymptotic analysis and the role of algorithms in computing.
 
 unit3:
-  - Assess the efficiency of different approaches to solving recurrence relations, including the substitution method, recursion-tree method, and master method.
+  - Design and implement containerized applications using Amazon Elastic Container Service (ECS) and Elastic Kubernetes Service (EKS), demonstrating proficiency in container orchestration and management on AWS.
 
 unit4:
   - Implement divide-and-conquer algorithms such as Strassen's algorithm for matrix multiplication and the Fast Fourier Transform.

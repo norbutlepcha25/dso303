@@ -1,34 +1,5 @@
 # Database Services on AWS — Amazon RDS and Aurora, Amazon DynamoDB, and Amazon ElastiCache
 
-!!! info "Module Context"
-    This chapter belongs to DSO303 *Cloud Native Solution Design (AWS)*, Unit 1.2.3. It assumes you understand relational databases, SQL, indexing, transactions, and the ACID properties from your Database Systems module, and TCP/IP, DNS, and latency from Computer Networks. It does **not** assume any prior cloud experience.
-
-    The purpose of this chapter is not to make you fluent in the AWS Console. It is to make you capable of *choosing* a data store, *justifying* that choice against measurable engineering criteria, and *defending* it in a design review, an examination, or a job interview.
-
----
-
-## Learning Objectives
-
-After studying this chapter, you should be able to:
-
-- Explain **why the data layer is the hardest part of any distributed system to scale**, and why cloud providers offer managed database services rather than leaving databases to the customer.
-- Articulate the **shared responsibility model** as it applies to databases, and explain precisely which operational duties AWS assumes and which remain yours.
-- Describe AWS's **purpose-built database philosophy** and argue for or against the "one database to rule them all" approach in a given scenario.
-- Compare **relational and NoSQL data models** in terms of schema, query flexibility, scaling axis, consistency, and cost, and select between them with justification.
-- State the **CAP theorem** precisely, explain why it is frequently misapplied, and extend it with **PACELC** to reason about latency in the absence of partitions.
-- Explain the **internal architecture of Amazon RDS**: Multi-AZ synchronous replication, DNS-based failover, read replicas with asynchronous replication and replica lag, automated backups, and point-in-time recovery mechanics.
-- Explain **Amazon Aurora's** decoupled compute-and-storage architecture, its six-way replication across three Availability Zones, quorum-based reads and writes, and the "the log is the database" design that eliminates full-page writes.
-- Explain **Amazon DynamoDB's** partitioning by hash of the partition key, request routing, replicated storage nodes with Paxos-based leader election, adaptive capacity, and DynamoDB Streams.
-- Perform **DynamoDB data modelling** at a professional level: partition key and sort key selection, single-table design, LSI versus GSI, avoidance of hot partitions, and correct **RCU/WCU capacity calculations**.
-- Explain **Amazon ElastiCache** for Redis and Memcached: replication groups, cluster mode enabled versus disabled, hash slots and sharding, and the correct application of the **cache-aside**, **write-through**, and **write-behind** patterns.
-- Distinguish the **control plane from the data plane** for each service and trace the **networking path** a query takes inside a VPC.
-- Apply the **AWS Well-Architected Framework** to database design decisions across all six pillars.
-- Design **secure** data layers using IAM, KMS encryption at rest, TLS in transit, Secrets Manager, security groups, and private subnets.
-- Reason about **cost** in terms of the actual pricing dimensions of each service, and identify the most common sources of unexpected database spend.
-- Connect the data layer to broader cloud-native concerns: **database-per-service** in microservices, **connection pooling and RDS Proxy** for Lambda and ECS/EKS workloads, **event-driven architecture** via DynamoDB Streams, **schema migration in CI/CD**, and **observability**.
-
----
-
 ## Definition
 
 A **database service** on AWS is a managed data persistence and retrieval capability in which AWS operates the underlying infrastructure — hardware provisioning, operating system installation and patching, database engine installation and patching, backup orchestration, failure detection, and failover — while the customer retains responsibility for data modelling, schema design, query performance, access control policy, and capacity or cost decisions.

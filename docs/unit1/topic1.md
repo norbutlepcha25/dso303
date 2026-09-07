@@ -4,7 +4,7 @@
 
 **Cloud computing** is the on-demand delivery of IT resources (compute, storage, networking, databases, analytics, and higher-level services) over the Internet with pay-as-you-go pricing. Instead of purchasing, installing, and operating physical servers, an organization provisions resources programmatically from a provider that operates the physical infrastructure at massive scale.
 
-Cloud computing enables you to stop thinking of your infrastructure as hardware and instead think of (and use) it as software. 
+Cloud computing enables you to stop thinking of your infrastructure as hardware and instead think of (and use) it as software.
 
 <figure markdown="span">
     ![PHYSICALSERVER](../img/U1/physicalServer.png){width="80%"}
@@ -24,7 +24,6 @@ Before cloud computing, running a production application required:
 4. **Undifferentiated heavy lifting:** engineers spent their time racking servers, patching hypervisors, and replacing failed disks rather than building product features.
 5. **Global reach was unaffordable:** serving users in Asia, Europe, and the Americas with low latency required building or leasing data centres on every continent — feasible only for the largest corporations.
 
-
 ### The AWS approach
 
 AWS inverts each of these problems:
@@ -37,8 +36,8 @@ AWS inverts each of these problems:
 | Build your own global footprint                    | 30+ Regions, 100+ AZs, 700+ PoPs already built | Global deployment in minutes             |
 | Operate power, cooling, physical security yourself | AWS operates the facility layer                | Teams focus on applications              |
 
-
 ## Cloud Service Model
+
 <figure markdown="span">
     ![PHYSICALSERVER](../img/U1/CloudServiceModel.png){width="80%"}
     <figcaption>Cloud Service Model</figcaption>
@@ -49,7 +48,7 @@ There are three main cloud service models. Each model represents a different par
 
 1. **Infrastructure as a service (IaaS)**: Services in this category are the basic building blocks for cloud IT and typically provide you with access to networking features, computers (virtual or on dedicated hardware), and data storage space. IaaS provides you with the highest level of flexibility and management control over your IT resources. It is the most similar to existing IT resources that many IT departments and developers are familiar with today.
 
-2. **Platform as a service (PaaS)**: Services in this category reduce the need for you to manage the underlying infrastructure (usually hardware and operating systems) and enable you to focus on the deployment and management of your applications. 
+2. **Platform as a service (PaaS)**: Services in this category reduce the need for you to manage the underlying infrastructure (usually hardware and operating systems) and enable you to focus on the deployment and management of your applications.
 
 3. **Software as a service (SaaS)**: Services in this category provide you with a completed product that the service provider runs and manages. In most cases, software as a service refers to end-user applications. With a SaaS offering, you do not have to think about how the service is maintained or how the underlying infrastructure is managed. You need to think only about how you plan to use that particular piece of software. A common example of a SaaS application is web-based email, where you can send and receive email without managing feature additions to the email product or maintaining the servers and operating systems that the email program runs on.
 
@@ -63,9 +62,9 @@ There are three main cloud computing deployment models, which represent the clou
     <!-- <p align='right' style="font-size:0.8em"><i>NA</i></p> -->
 </figure>
 
-1. Cloud: A cloud-based application is fully deployed in the cloud, and all parts of the application run in the cloud. Applications in the cloud have either been created in the cloud or have been migrated from an existing infrastructure to take advantage of the benefits of cloud computing ([Read More](see https://aws.amazon.com/what-is-cloud-computing/)). Cloud-based applications can be built on low-level infrastructure pieces or they can use higher-level services that provide abstraction from the management, architecting, and scaling requirements of core infrastructure.
+1. Cloud: A cloud-based application is fully deployed in the cloud, and all parts of the application run in the cloud. Applications in the cloud have either been created in the cloud or have been migrated from an existing infrastructure to take advantage of the benefits of cloud computing ([Read More](see <https://aws.amazon.com/what-is-cloud-computing/>)). Cloud-based applications can be built on low-level infrastructure pieces or they can use higher-level services that provide abstraction from the management, architecting, and scaling requirements of core infrastructure.
 
-2. Hybrid: A hybrid deployment is a way to connect infrastructure and applications between cloud-based resources and existing resources that are not located in the cloud. The most common method of hybrid deployment is between the cloud and existing on-premises infrastructure. This model enables an organization to extend and grow their infrastructure into the cloud while connecting cloud resources to internal systems. 
+2. Hybrid: A hybrid deployment is a way to connect infrastructure and applications between cloud-based resources and existing resources that are not located in the cloud. The most common method of hybrid deployment is between the cloud and existing on-premises infrastructure. This model enables an organization to extend and grow their infrastructure into the cloud while connecting cloud resources to internal systems.
 
 3. On-premises: Deploying resources on-premises, using virtualization and resource management tools, is sometimes called private cloud. While on-premises deployment does not provide many of the benefits of cloud computing, it is sometimes sought for its ability to provide dedicated resources. In most cases, this deployment model is the same as legacy IT infrastructure, but it might also use application management and virtualization technologies to increase resource utilization.
 
@@ -84,7 +83,7 @@ AWS services are designed to work together to support virtually any type of appl
     - 15 years of consecutive market leader
     - 1 Million plus active users in the world
 
-## AWS Global Infrastructure 
+## AWS Global Infrastructure
 
 The **AWS Global Infrastructure** ([Explore AWS Infrstructure](https://aws.amazon.com/about-aws/global-infrastructure/))is the physical and logical foundation on which every AWS service runs. It consists of three principal layers:
 
@@ -101,9 +100,6 @@ Where these fit in AWS architecture: every resource you create (an EC2 instance,
 !!! info "Architecture-first framing"
 
     Regions, AZs, and Edge Locations are not merely trivia to memorize. They are **fault domains** and **latency domains**. Every availability, disaster-recovery, latency, and compliance decision you will ever make on AWS is ultimately a decision about how to place workloads across these three layers.
-
-
-
 
 ### Why the specific Region/AZ/Edge structure?
 
@@ -248,7 +244,7 @@ Every AWS service is internally split into:
 AWS deliberately engineers data planes to keep working even when the control plane is impaired — an architectural principle called **static stability**. A statically stable multi-AZ design pre-provisions capacity in each AZ so that surviving an AZ failure requires _no_ control-plane action (no new instance launches) at the exact moment when the control plane may itself be under stress.
 
 !!! tip "Static stability in your own designs"
-    
+
     If your recovery plan for an AZ failure is "the Auto Scaling group will launch replacement instances," you depend on the EC2 control plane during a Regional bad day. A stricter design runs N+1 capacity spread across three AZs so that losing one AZ leaves enough already-running capacity. Route 53's data plane (answering queries) is similarly designed to survive control-plane failure — health-check-driven failover works even if the Route 53 API is down.
 
 ### How CloudFront works internally
@@ -287,30 +283,11 @@ The reference architecture for this topic is the standard entry path of a produc
 | **CloudTrail**                      | Regional/global                 | Audit log of every API call                                                                                                                |
 | **CloudFormation / Terraform**      | Control plane                   | Infrastructure as Code — the professional way to create all of the above reproducibly across Regions                                       |
 
-```mermaid
-flowchart LR
-    U[Client] -->|DNS query| R53[Route 53<br/>Global DNS]
-    R53 -->|returns nearest PoP IP| U
-    U -->|HTTPS| CF[CloudFront Edge Location]
-    CF --> WAF[AWS WAF + Shield]
-    CF -->|cache miss| REC[Regional Edge Cache]
-    REC -->|miss, AWS backbone| ALB[ALB across AZs]
-    subgraph Region["AWS Region (e.g. eu-west-1)"]
-        subgraph AZa["AZ a"]
-            ALB --> T1[ECS tasks / EC2]
-        end
-        subgraph AZb["AZ b"]
-            ALB --> T2[ECS tasks / EC2]
-        end
-        subgraph AZc["AZ c"]
-            ALB --> T3[ECS tasks / EC2]
-        end
-        T1 & T2 & T3 --> RDS[(RDS Multi-AZ)]
-    end
-    REC -->|static assets| S3[(S3 origin)]
-```
-
----
+<figure markdown="span">
+    ![PHYSICALSERVER](../img/U1/Globalinfra.png){width="80%"}
+    <figcaption>Architectural Components of Global Infra</figcaption>
+    <p align='right' style="font-size:0.8em"><i>Image Source: Ai Generated(Chatgpt)</i></p>
+</figure>
 
 ## Request Lifecycle
 
@@ -326,44 +303,18 @@ Consider `https://www.example.com/products/42` served by the architecture above.
 8. **Response and cache population.** The response flows back: task → ALB → backbone → REC (cached) → edge (cached) → client. `Cache-Control` headers set by the application govern how long each layer may reuse it.
 9. **Asynchronous side effects.** Cloud-native designs push non-critical work off the synchronous path: the task publishes an "ProductViewed" event to SNS/EventBridge, consumed later by analytics via SQS — the user does not wait for this.
 
-```mermaid
-sequenceDiagram
-    participant B as Browser
-    participant D as Route 53 (DNS)
-    participant E as CloudFront Edge
-    participant C as Regional Edge Cache
-    participant L as ALB (multi-AZ)
-    participant A as App (ECS task)
-    participant DB as RDS Multi-AZ
 
-    B->>D: Resolve www.example.com
-    D-->>B: IP of nearest Edge PoP
-    B->>E: TLS handshake + GET /products/42
-    E->>E: WAF rules, cache lookup
-    alt Cache hit at edge
-        E-->>B: 200 OK (from cache, ~10 ms)
-    else Miss
-        E->>C: Forward request
-        alt Hit at Regional Edge Cache
-            C-->>E: Cached object
-        else Miss
-            C->>L: Fetch over AWS backbone
-            L->>A: Route to healthy target
-            A->>DB: SQL query
-            DB-->>A: Rows (standby replicated)
-            A-->>L: 200 OK + Cache-Control
-            L-->>C: Response (cached)
-        end
-        C-->>E: Response (cached)
-        E-->>B: 200 OK
-    end
-```
+
+<figure markdown="span">
+    ![PHYSICALSERVER](../img/U1/SequenceDiagram.png){width="80%"}
+    <figcaption>Example Sequence Diagram</figcaption>
+    <p align='right' style="font-size:0.8em"><i>Image Source: Ai Generated(Chatgpt)</i></p>
+</figure>
 
 !!! note "Synchronous vs asynchronous"
 
     Everything on the numbered path above is **synchronous** — the user is waiting. The architectural goal is to make the synchronous path as short as possible (ideally: edge cache hit) and move everything else to **asynchronous** patterns (queues, events), which you will study with SQS, SNS, and EventBridge later in this module.
 
----
 
 ## AWS Service Deep Dive
 
@@ -664,221 +615,14 @@ The global infrastructure is the substrate for everything; the most instructive 
 - Ignoring per-AZ metrics, so a single degraded AZ hides inside averaged dashboards.
 - Leaving default quotas in the DR Region.
 
-**Certification traps**
+<!-- **Certification traps**
 
 - Confusing **Edge Locations** with **Availability Zones** ("CloudFront caches content in AZs" — false).
 - Confusing **CloudFront** (HTTP caching CDN) with **Global Accelerator** (anycast TCP/UDP routing, no caching, static IPs).
 - Believing data automatically replicates between Regions (it never does without explicit configuration).
 - "Multi-AZ improves read performance" — RDS Multi-AZ standby serves **no reads** (read replicas do; the newer Multi-AZ DB _cluster_ is the exception).
 - Forgetting that S3 bucket _names_ are global but buckets _live_ in one Region.
-- Mixing up durability (11 nines, data loss) with availability (99.9x%, reachability).
-
-<!-- ---
-
-## Interview Questions
-
-**Conceptual**
-
-1. Explain the difference between a Region, an Availability Zone, and an Edge Location, and give one architectural decision driven by each.
-2. Why does synchronous replication generally stop at the Region boundary? What physical constant is responsible?
-3. What is static stability, and why does it matter during an AZ event?
-
-**Scenario**
-
-4. A South African fintech must keep customer data in-country, survive a data-centre fire with zero data loss, and serve a marketing site quickly worldwide. Design the placement. _(Expected: af-south-1, Multi-AZ synchronous DB, private S3 + CloudFront for the site.)_
-5. Your CloudFront hit ratio is 12%. What are the three most likely configuration causes and their fixes?
-
-**Architecture**
-
-6. Design a two-Region architecture with RTO 15 minutes and RPO 1 minute for a REST API + relational data. Justify warm standby vs active-active, the replication technology, and the failover trigger.
-7. How would you guarantee that _only_ CloudFront can reach your ALB origin?
-
-**Troubleshooting**
-
-8. Users in one city report errors; your Regional dashboards look healthy. Walk through your diagnosis. _(Edge PoP issue → CloudFront metrics in us-east-1, synthetics from multiple geographies, AWS Health.)_
-9. After deploying new JavaScript, some users worldwide still receive the old file for hours. Why, and what are the short-term and long-term fixes?
-
-**Certification-style**
-
-10. A company needs static IP addresses for a global TCP (non-HTTP) application with fast regional failover. CloudFront or Global Accelerator? Why?
-
---- -->
-<!-- 
-## Hands-on Lab
-
-**Objective.** Deploy a globally accelerated static website with a private origin, and empirically observe edge caching.
-
-**Architecture.** Private S3 bucket (origin) → CloudFront distribution with OAC → default cache behaviour, HTTPS redirect → tested from your location; latency compared against direct Regional access.
-
-**AWS services.** S3, CloudFront, (optionally Route 53 + ACM if you own a domain), CloudWatch.
-
-**Implementation steps.**
-
-1. Create a bucket in a Region _far_ from you (e.g., `us-west-2` if you are in Africa/Europe) with **Block Public Access ON**. Upload `index.html` and a ~1 MB image.
-2. Create a CloudFront distribution: origin = the bucket, **Origin access = OAC (create new)**, viewer protocol = Redirect HTTP to HTTPS, default root object `index.html`.
-3. Apply the bucket policy CloudFront offers (allows `cloudfront.amazonaws.com` with the distribution ARN condition). Confirm the direct S3 URL now returns **403** — the origin is private.
-4. Wait for deployment; fetch the distribution URL twice and inspect headers:
-
-```bash
-curl -s -D - -o /dev/null https://dxxxxxxxx.cloudfront.net/image.jpg | grep -iE "x-cache|age"
-# 1st: X-Cache: Miss from cloudfront
-# 2nd: X-Cache: Hit from cloudfront   Age: <seconds>
-```
-
-5. Time cached vs origin-Region latency (`curl -w "%{time_total}\n"` against CloudFront vs a same-Region EC2/S3 endpoint if available) and record the difference.
-6. Create an invalidation for `/index.html`, observe the next request become a Miss, and note the eventual-consistency delay.
-7. In CloudWatch (us-east-1), open the distribution's `Requests` and `CacheHitRate` metrics and correlate with your tests.
-
-**Expected output.** A working HTTPS site whose bucket is unreachable directly; measured multi-hundred-millisecond improvement on cache hits from a distant Region; first-hand evidence of the Miss→Hit lifecycle and of invalidation behaviour.
-
----
-
-## Code Examples
-
-**AWS CLI — explore the infrastructure programmatically**
-
-```bash
-# List all Regions your account can see
-aws ec2 describe-regions --query "Regions[].RegionName" --output table
-
-# List AZs in a Region, including the account-independent AZ IDs
-aws ec2 describe-availability-zones --region eu-west-1 \
-  --query "AvailabilityZones[].{Name:ZoneName,ID:ZoneId,Type:ZoneType,State:State}" \
-  --output table
-```
-
-**Python (boto3) — verify multi-AZ spread of running instances**
-
-```python
-import boto3
-from collections import Counter
-
-ec2 = boto3.client("ec2", region_name="eu-west-1")
-reservations = ec2.describe_instances(
-    Filters=[{"Name": "instance-state-name", "Values": ["running"]}]
-)["Reservations"]
-
-azs = Counter(
-    inst["Placement"]["AvailabilityZone"]
-    for r in reservations for inst in r["Instances"]
-)
-print("Instances per AZ:", dict(azs))
-if len(azs) < 2:
-    print("WARNING: single-AZ deployment — no zonal fault tolerance.")
-```
-
-**CloudFormation — private S3 origin + CloudFront with OAC (core of the lab)**
-
-```yaml
-AWSTemplateFormatVersion: "2010-09-09"
-Description: Static site - private S3 origin behind CloudFront (OAC)
-
-Resources:
-  SiteBucket:
-    Type: AWS::S3::Bucket
-    Properties:
-      PublicAccessBlockConfiguration:
-        BlockPublicAcls: true
-        BlockPublicPolicy: true
-        IgnorePublicAcls: true
-        RestrictPublicBuckets: true
-
-  OAC:
-    Type: AWS::CloudFront::OriginAccessControl
-    Properties:
-      OriginAccessControlConfig:
-        Name: site-oac
-        OriginAccessControlOriginType: s3
-        SigningBehavior: always
-        SigningProtocol: sigv4
-
-  Distribution:
-    Type: AWS::CloudFront::Distribution
-    Properties:
-      DistributionConfig:
-        Enabled: true
-        DefaultRootObject: index.html
-        HttpVersion: http2and3
-        Origins:
-          - Id: s3-origin
-            DomainName: !GetAtt SiteBucket.RegionalDomainName
-            OriginAccessControlId: !Ref OAC
-            S3OriginConfig: { OriginAccessIdentity: "" }
-        DefaultCacheBehavior:
-          TargetOriginId: s3-origin
-          ViewerProtocolPolicy: redirect-to-https
-          # AWS managed "CachingOptimized" policy
-          CachePolicyId: 658327ea-f89d-4fab-a63d-7e88639e58f6
-
-  BucketPolicy:
-    Type: AWS::S3::BucketPolicy
-    Properties:
-      Bucket: !Ref SiteBucket
-      PolicyDocument:
-        Statement:
-          - Effect: Allow
-            Principal: { Service: cloudfront.amazonaws.com }
-            Action: s3:GetObject
-            Resource: !Sub "${SiteBucket.Arn}/*"
-            Condition:
-              StringEquals:
-                AWS:SourceArn: !Sub "arn:aws:cloudfront::${AWS::AccountId}:distribution/${Distribution}"
-
-Outputs:
-  URL:
-    Value: !Sub "https://${Distribution.DomainName}"
-```
-
-**Terraform — multi-AZ subnet layout as code (Region as a variable)**
-
-```hcl
-variable "region" { default = "eu-west-1" }
-
-provider "aws" { region = var.region }
-
-data "aws_availability_zones" "available" { state = "available" }
-
-resource "aws_vpc" "main" {
-  cidr_block = "10.0.0.0/16"
-}
-
-# One private subnet per AZ - the multi-AZ pattern expressed as code
-resource "aws_subnet" "private" {
-  count             = 3
-  vpc_id            = aws_vpc.main.id
-  cidr_block        = cidrsubnet(aws_vpc.main.cidr_block, 4, count.index)
-  availability_zone = data.aws_availability_zones.available.names[count.index]
-  tags = { Name = "private-${count.index}" }
-}
-```
-
-**Kubernetes YAML — spreading pods across AZs on EKS (DSO303 link-forward)**
-
-```yaml
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: web
-spec:
-  replicas: 6
-  selector: { matchLabels: { app: web } }
-  template:
-    metadata: { labels: { app: web } }
-    spec:
-      topologySpreadConstraints:
-        - maxSkew: 1
-          topologyKey: topology.kubernetes.io/zone # the AZ label
-          whenUnsatisfiable: DoNotSchedule
-          labelSelector: { matchLabels: { app: web } }
-      containers:
-        - name: web
-          image: public.ecr.aws/nginx/nginx:latest
-```
-
-!!! note "The same idea at every layer"
-Notice that the CloudFormation subnets, the Terraform `count = 3`, and the Kubernetes `topologySpreadConstraints` all encode the _same architectural decision_ — spread across AZ fault domains — at different layers of the stack. Infrastructure as Code makes the decision explicit, reviewable, and repeatable.
-
---- -->
+- Mixing up durability (11 nines, data loss) with availability (99.9x%, reachability). -->
 
 ## Architecture Diagrams
 
@@ -890,7 +634,6 @@ Notice that the CloudFormation subnets, the Terraform `count = 3`, and the Kuber
     <p align='right' style="font-size:0.8em"><i>Image Source: AI Generaed (Google Gemini)</i></p>
 </figure>
 
-
 **Fault domains and blast radius**
 
 <figure markdown="span">
@@ -899,7 +642,6 @@ Notice that the CloudFormation subnets, the Terraform `count = 3`, and the Kuber
     <p align='right' style="font-size:0.8em"><i>Image Source: AI Generaed (Google Gemini)</i></p>
 </figure>
 
-
 **Region selection decision flow**
 
 <figure markdown="span">
@@ -907,7 +649,6 @@ Notice that the CloudFormation subnets, the Terraform `count = 3`, and the Kuber
     <figcaption>Region Selectio Work Flow</figcaption>
     <p align='right' style="font-size:0.8em"><i>Image Source: AI Generaed (Google Gemini)</i></p>
 </figure>
-
 
 **CloudFront cache decision (per request)**
 
@@ -931,29 +672,3 @@ The architectural lessons to carry into every subsequent DSO303 topic:
 6. **Encode placement in code.** Regions, AZ spreads, and CloudFront behaviours belong in version-controlled IaC, not in console memory.
 
 ---
-<!-- 
-## Practice Questions
-
-**Beginner**
-
-1. Define Region, Availability Zone, and Edge Location, and state the primary purpose of each layer.
-2. Why does AWS require (in modern Regions) a minimum of three AZs rather than one large data centre?
-3. What is the difference between the AZ _name_ `eu-west-1a` and the AZ _ID_ `euw1-az1`, and why does the difference exist?
-4. List four factors an architect evaluates when selecting a Region, in a sensible priority order.
-5. When a CloudFront edge receives a request for an object it does not hold, describe the sequence of lookups before the origin is contacted.
-
-**Intermediate**
-
-6. Your application runs six EC2 instances in `ap-southeast-1a` behind an ALB whose subnets span three AZs. Identify the availability flaw and describe two concrete fixes, including the Auto Scaling configuration involved.
-7. A distribution forwards all cookies and all query strings to a dynamic origin. Explain the effect on cache hit ratio, origin load, and cost, and propose a corrected cache-policy design for a site with `/static/*` and `/api/*` paths.
-8. Compare RDS Multi-AZ, RDS read replicas, and cross-Region read replicas along three axes: replication mode (sync/async), purpose (HA/scale/DR), and effect on RPO.
-9. Explain how you would restrict an AWS Organization to two approved Regions, and why `iam:*`, `cloudfront:*`, and `route53:*` typically must be exempted from that restriction.
-10. Your team claims "we are multi-AZ, therefore we survive AZ failure." Name three hidden single-AZ dependencies that could falsify this claim (consider NAT, data, and control-plane assumptions).
-
-**Advanced**
-
-11. Design a multi-Region architecture for a payments API with RPO ≤ 1 second and RTO ≤ 5 minutes. Specify the data technology, the traffic-steering mechanism and its health signal, and how you avoid control-plane dependence during failover. State the consistency trade-off you accepted.
-12. Explain _static stability_ and redesign the following to satisfy it: "On AZ failure, a Lambda triggered by a CloudWatch alarm updates the Auto Scaling group to launch replacements and calls the Route 53 API to change weights."
-13. A microservices platform on EKS shows large inter-AZ data-transfer charges and elevated p99 latency. Discuss the tension between AZ-spread for resilience and AZ-affinity for cost/latency, and describe a topology-aware routing approach that balances them.
-14. Your global user base is 60% in regions where you have no AWS Region within 150 ms. Compare three remedies — additional Regions (active-active), CloudFront with an aggressive caching strategy, and Global Accelerator — for a workload that is 80% cacheable reads and 20% authenticated writes. Recommend and justify a combination.
-15. During a partial edge-network event, some users receive errors while all Regional metrics are green and synthetic canaries in-Region pass. Construct the observability strategy (metrics locations, log types, external vantage points, AWS Health integration) that would have detected this class of failure, and the automated mitigation you would attach to it. -->

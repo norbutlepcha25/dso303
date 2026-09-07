@@ -1,50 +1,5 @@
 # AWS Questions — Solutions, Explanations & Revision Guide
 
-**Question set:** 2.1 Docker Fundamentals — container images, the Linux mechanisms beneath them, Amazon ECR, and Amazon ECS/AWS Fargate.
-
-**A note on scope.** This set is a *containers-on-AWS* assessment rather than a general AWS services assessment. The answering method is unchanged — classify first, match depth to difficulty, reason from requirements rather than from memorised answers — but the service vocabulary is concentrated in ECR, ECS, Fargate, IAM, VPC networking and the supply-chain services around them. Where a question is about Docker itself rather than about AWS, the answer still lands the AWS consequence, because that is where the marks are.
-
----
-
-## How to read this document
-
-Every question below uses the same skeleton, and headings that do not earn their place are omitted rather than padded:
-
-```
-Question  →  Explanation  →  Reasoning / Analysis  →  Solution
-          →  Why This Is Correct  →  Why the Alternatives Are Less Suitable
-          →  Sample Exam Answer
-```
-
-A definition question uses three of those headings. An architecture question uses all of them. The **Sample Exam Answer** is present in all fifteen, and it is deliberately *not* a summary of the explanation — it is what a student could realistically write under time pressure and still earn full marks.
-
----
-
-## Classification of the question set
-
-Read end to end, the fifteen questions form a ladder. Questions 1–5 build vocabulary. Questions 6–10 apply it to operational work. Questions 11–15 stop asking *what* and start asking *should* — more than one answer is technically workable, and the marks live in the justification.
-
-| Q | Difficulty | Type | Cognitive level | Depth applied |
-|---|---|---|---|---|
-| 1 | Beginner | Definition / conceptual | Recall + Understanding | Short |
-| 2 | Intermediate | Conceptual / operational | Understanding + Application | Moderate |
-| 3 | Intermediate | Conceptual (OS internals) | Understanding + Analysis | Moderate |
-| 4 | Beginner | Conceptual / build | Understanding | Short |
-| 5 | Beginner | Definition / comparison | Recall + Understanding | Short |
-| 6 | Intermediate | Troubleshooting / networking / security | Application + Analysis | Moderate–detailed |
-| 7 | Intermediate | Conceptual / security | Understanding + Application | Moderate |
-| 8 | Intermediate | Comparison / security | Analysis | Moderate |
-| 9 | Intermediate | Cost optimisation / operations | Application + Analysis | Moderate |
-| 10 | Advanced | Performance / reliability | Analysis | Detailed |
-| 11 | Advanced | Evaluation / release engineering | Evaluation | Detailed |
-| 12 | Advanced | Architecture / compliance | Design | Full structured analysis |
-| 13 | Advanced | Architecture / migration | Design | Full structured analysis |
-| 14 | Advanced | Performance / scaling | Analysis + Design | Full structured analysis |
-| 15 | Advanced | Critique / design | Evaluation | Full structured analysis |
-
-**Repeated concepts to watch for.** Digests recur in Q2, Q11, Q12 and Q15. The execution-role-versus-task-role distinction recurs in Q6, Q8 and Q13. Layer immutability underpins Q1, Q7 and Q9. Fargate's absence of layer caching drives Q10 and Q14. Answering one of these well makes its siblings faster.
-
----
 
 ## Question 1
 

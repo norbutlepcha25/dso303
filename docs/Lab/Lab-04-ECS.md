@@ -32,8 +32,7 @@ Lab 01  IAM ..................... roles, policies, instance profile
 Lab 02  VPC ..................... the network: subnets, NAT, route tables, security groups
 Lab 03  EC2 .................... usms-web-01 and usms-db-01 in that network
 Lab 04  ECS + Auto Scaling ..... THIS LAB — containers that scale themselves
-Lab 05  S3 ...................... the bucket both usms-ec2-app-role and usms-ecs-task-role name
-Lab 06  Lambda .................. functions triggered from that bucket
+
 ```
 
 !!! info "A note on the numbering"

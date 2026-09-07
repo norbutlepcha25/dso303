@@ -159,33 +159,30 @@ plugins:
 nav:
   - Home: index.md
 
-  # - Unit 1:
-  #     - Overview: unit1/overview.md
-  #     - 1.1 AWS Cloud overview: unit1/topic1.md
-  #     - 1.2 AWS IAM: unit1/topic2.md
-  #     - 1.3 AWS Compute Services: unit1/topic3.md
-  #     - 1.4 AWS Storage Services: unit1/topic4.md
-  #     - 1.5 AWS Datebase Services: unit1/topic5.md
-  #     - 1.6 AWS Network Services: unit1/topic6.md
-  #     - 1.7 Cloud Native Design Patterns: unit1/topic7.md
+  - Unit 1:
+      - Overview: unit1/overview.md
+      - 1.1 AWS Cloud overview: unit1/topic1.md
+      - 1.2 AWS IAM: unit1/topic2.md
+      - 1.3 AWS Compute Services: unit1/topic3.md
+      - 1.4 AWS Storage Services: unit1/topic4.md
+      - 1.5 AWS Datebase Services: unit1/topic5.md
+      - 1.6 AWS Network Services: unit1/topic6.md
+      - 1.7 Cloud Native Design Patterns: unit1/topic7.md
       
 
   - Unit 2:
       - Overview: unit2/overview.md
       - 2.1 Docker Fundamentals: unit2/topic1.md
-      # - 2.2 AWS ECS: unit2/topic2.md
-      # - 2.3 Container Orchestration with Amazon ECS: unit2/topic3.md
+      - 2.2 AWS ECS: unit2/topic2.md
+      - 2.3 Container Orchestration with Amazon ECS: unit2/topic3.md
 
 
   # - Unit 3:
   #     - Overview: unit3/overview.md
-  #     - 3.1 Recurrences & Master Theorem (Analysis): unit3/topic1.md
-  #     - 3.2 Iterative Method: unit3/topic2.md
-  #     - 3.3 Recursion Trees: unit3/topic3.md
-  #     - 3.4 Solving Recurrences (Substitution Method): unit3/topic4.md
-  #     - 3.5 Solving Recurrences (Master Method): unit3/topic5.md
-  #     - 3.6 Merge Sort Analysis: unit3/topic6.md
-  #     - Summary: unit3/summary.md
+  #     - 3.1 EKS Architecture: unit3/topic1.md
+  #     - 3.2 Deploying App in EKS: unit3/topic2.md
+  #     - 3.3 EKS advanced concepts: unit3/topic3.md
+
 
   # - Unit 4:
   #     - Overview: unit4/overview.md
@@ -231,9 +228,9 @@ nav:
       - Services: Services/services.md 
       - Groups: Services/groups.md 
 
-  # - Questions:
-  #     - Unit 1 : Questions/unit1.md
-  #     - Unit 2 : Questions/unit2.md
+  - Practice Questions:
+      - Unit 1 : Questions/unit1.md
+      - Unit 2 : Questions/unit2.md
       # - Unit 3 : unit9_misc/unit3.md
       # - Unit 4 : unit9_misc/unit4.md
       # - Unit 5 : unit9_misc/unit5.md
@@ -248,6 +245,7 @@ nav:
       - Lab 1 - IAM: Lab/Lab-01-IAM.md
       - Lab 2 - VPC: Lab/Lab-02_VPC.md
       - Lab 3 - EC2+VPC: Lab/Lab-03_VPC2.md
-      # - "Lab 3 — VPC": Lab/vpc.md
-      # - "Lab 4": Lab/vps.md
-      # - "Lab 5": Lab/stats.md
+      - Lab 4 — ECS: Lab/Lab-04-ECS.md
+      - Lab 5 -  ALB: Lab/Lab-05-ALB.md
+      - Lab 6 - Auto scaling: Lab/Lab-06-autoscaling.md 
+       # - "Lab 5": Lab/stats.md

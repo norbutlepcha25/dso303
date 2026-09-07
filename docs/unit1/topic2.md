@@ -40,38 +40,3 @@ IAM exists so that you can express, precisely and in machine-readable form, stat
 | An auditor needs read-only access to everything | An **AWS managed policy** (`ReadOnlyAccess`) |
 | A contractor must only touch one project's resources | A **customer managed policy** scoped by resource ARN |
 | Temporary 1-hour access for an emergency | **STS** temporary credentials |
-
-### 1.5 What you will build in this lab
-
-By the end of Lab 1 you will have a complete, working local AWS environment **and** a realistic IAM
-foundation for USMS:
-
-- 3 IAM groups (admins, developers, auditors)
-- 3 IAM users, each in the correct group
-- 3 customer managed policies + 1 AWS managed policy + 1 inline policy
-- 3 IAM roles with three different trust policies (EC2, Lambda, human developers)
-- 1 instance profile (which Lab 3 will attach to an EC2 instance)
-- 1 set of programmatic access keys, handled safely
-- A reusable project directory, configuration files and helper scripts
-
-### 1.6 How this lab connects to the rest of the course
-
-```text
-LAB 01  IAM          ← you are here. Creates identities + the project skeleton.
-   ↓
-LAB 02  VPC          ← the developer identity builds the network
-   ↓
-LAB 03  EC2          ← servers launch using the instance profile created here
-   ↓
-LAB 04  S3           ← the policies written here finally get enforced against buckets
-   ↓
-LAB 05+ Lambda / DynamoDB / CloudWatch / SNS / SQS ...
-```
-
-!!! warning "Do not delete anything at the end of this lab"
-    Almost every resource you create today is **required by later labs**. Section 16 tells you
-    exactly what to KEEP and what to CLEAN UP.
-
----
-
-## 2. Learning Objectives

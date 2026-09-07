@@ -1,9 +1,5 @@
 # Compute Services on AWS  EC2, ECS, EKS, Lambda and Fargate
 
-!!! info "Where this topic sits in DSO303"
-    Compute is the **first of the four foundational resource classes in any cloud architecture  compute, storage, networking, and identity**. Every later topic in this module (microservices, CI/CD pipelines, observability, event-driven design, security hardening) ultimately runs on one of the compute models introduced here. Choosing the compute model is one of the highest-leverage architectural decisions you will make, because it constrains your deployment pipeline, your scaling behaviour, your failure modes, your operational burden, and your monthly bill for years afterwards.
-
-
 ## Definition
 
 **Compute** in AWS is the family of services that execute your application code  that provide CPU cycles, memory, and an execution context in which a process runs. Storage services hold bytes at rest, networking services move bytes between endpoints, and compute services transform bytes.
@@ -2471,7 +2467,7 @@ systemctl enable --now nginx
 systemctl enable --now amazon-cloudwatch-agent
 ```
 
-## AWS Certification Tips
+<!-- ## AWS Certification Tips
 
 ### Exam tips
 
@@ -2479,7 +2475,7 @@ systemctl enable --now amazon-cloudwatch-agent
 - "Least operational overhead" points toward serverless: Lambda over Fargate, Fargate over EC2, managed services over self-managed.
 - "Most cost-effective for interruption-tolerant work" points to Spot. "Most cost-effective for steady, predictable, long-running work" points to Savings Plans or Reserved Instances.
 - A stated duration above 15 minutes eliminates Lambda. A stated GPU requirement eliminates Lambda. A stated requirement for a specific kernel, kernel module, or a licensed operating system points to EC2, possibly on Dedicated Hosts.
-- If the question mentions Kubernetes, Helm, operators, or portability to on-premises, the answer is EKS. If it mentions deep AWS integration with no Kubernetes requirement, the answer is ECS.
+- If the question mentions Kubernetes, Helm, operators, or portability to on-premises, the answer is EKS. If it mentions deep AWS integration with no Kubernetes requirement, the answer is ECS. -->
 
 ### Frequently confused services and concepts
 
@@ -2530,31 +2526,3 @@ Third, **the control plane and the data plane fail differently, and designs shou
 Fourth, **cost is an architectural property, not a billing afterthought**. The purchasing model (On-Demand, Savings Plans, Reserved, Spot), the memory setting on a Lambda function, the choice between a continuously utilised container and a per-invocation function, the decision to run one NAT Gateway or three, and the log retention period are all design decisions made at architecture time whose consequences appear on an invoice months later.
 
 Finally, **compute choices should be reversible where possible**. Containerising an application, externalising state, defining infrastructure as code, and instrumenting for observability all preserve the ability to move down or up the abstraction ladder as requirements change. The best compute decision an architect makes is often the one that keeps the next decision cheap.
-
-## Practice Questions
-
-### Beginner Questions
-
-1. Define an Amazon Machine Image, an instance type, and an instance profile, and explain the role each plays when an EC2 instance launches.
-2. Explain the difference between object-level responsibility in the AWS shared responsibility model for EC2 versus for AWS Lambda. Name three things that become the customer's responsibility with EC2 but not with Lambda.
-3. What is a container image, and why does immutability of that image matter for reproducible deployments? Contrast this with configuring a server after launch.
-4. List the four purchasing options for EC2 capacity and give one workload that suits each.
-5. An AWS Lambda function is configured with 128 MB of memory and takes 4 seconds to run. The team increases it to 512 MB and it now takes 1 second. Explain why the total cost may be unchanged or lower, and why the user-perceived latency improves.
-
-### Intermediate Questions
-
-1. A service currently runs on three EC2 instances behind an Application Load Balancer with a fixed desired count. Describe how you would convert it to an elastic architecture, naming the specific components, the health-check configuration, and the scaling policy you would select, and justify each choice.
-2. Compare ECS on Fargate with ECS on EC2 across cost, security isolation, operational overhead, task density, and support for GPU and DaemonSet-style workloads. State the conditions under which each becomes the correct choice.
-3. Explain the full sequence of events, including control-plane and data-plane actions, that occurs between an `UpdateService` API call with a new task definition and the point at which all traffic reaches the new version under a rolling deployment with `minimumHealthyPercent` 100 and `maximumPercent` 200.
-4. An EKS cluster's pods must call Amazon S3. Describe the IRSA mechanism end to end  the OIDC provider, the IAM trust policy, the ServiceAccount annotation, and the token projection  and explain why this is superior to attaching permissions to the node instance role.
-5. A team reports that their Lambda function occasionally returns duplicate results to downstream systems. Explain the delivery semantics involved for asynchronous invocation and for an SQS event source, and describe how you would make the function idempotent.
-
-### Advanced Questions
-
-1. Design a compute architecture for a global video-streaming platform's metadata API. It must serve 50,000 requests per second at peak with a p99 latency budget of 100 milliseconds, tolerate the loss of a full Availability Zone with no capacity degradation, deploy 30 times per day with automatic rollback, and minimise cost. Specify the compute model, the scaling strategy, the deployment strategy, the purchasing model, and the failure domains, and justify every choice against a stated alternative you rejected.
-2. A monolithic Java application currently runs on eight large EC2 instances at 20 percent average CPU utilisation with sharp quarter-end peaks. Propose a migration path across at least three stages, from rehosting through containerisation to selective serverless decomposition. For each stage, state what it costs, what it improves, what new failure modes it introduces, and what would justify stopping at that stage rather than continuing.
-3. Critically evaluate the claim that "serverless is always cheaper". Construct a quantitative crossover argument comparing AWS Lambda against ECS on Fargate for a workload of average duration 200 milliseconds and 512 MB of memory. Identify the approximate request rate at which the continuously provisioned container becomes cheaper, state your assumptions explicitly, and then explain why the purely financial crossover is not by itself sufficient grounds for the architectural decision.
-4. An organisation runs a stateful, latency-sensitive trading engine that requires sub-millisecond inter-node communication, cannot tolerate noisy neighbours, and must satisfy a regulatory requirement for hardware isolation and detailed audit evidence. Design the compute layer, addressing placement groups, instance tenancy, enhanced networking with Elastic Fabric Adapter or SR-IOV, IMDS hardening, and the observability and audit trail required. Explain which cloud-native principles you are deliberately sacrificing and why that sacrifice is defensible here.
-5. Design the control loop for a multi-tenant SaaS platform in which each tenant's workload must be isolated, tenants have wildly different load profiles, and the platform must scale from 10 to 10,000 tenants without a linear increase in operational effort. Compare a pool model (shared compute, logical isolation), a silo model (dedicated compute per tenant), and a hybrid bridge model. Address noisy neighbours, blast radius, cost attribution per tenant, deployment strategy, and the specific AWS compute primitives you would use for each model.
-
-![alt text](image-1.png)

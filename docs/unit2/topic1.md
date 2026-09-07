@@ -385,46 +385,16 @@ On EC2 capacity, layers already present on the instance are not re-downloaded, s
 
 Read architecturally, these fall into three groups. The **build group** — workstation, CI, BuildKit — produces an artefact and should be the only thing that can write to the registry. The **registry group** — ECR with its immutability, scanning, lifecycle, and policy settings — is the control point where an organisation decides what is allowed to reach production, and it is the cheapest place to enforce that decision. The **runtime group** — EC2 or Fargate, the agent, the roles, the endpoints, the log destination — consumes the artefact and must never modify it. When these three groups are cleanly separated, "what is running in production" has a single, checkable answer: a digest.
 
----
 
 ## Request Lifecycle
 
 The lifecycle in this chapter is not a user request but the journey of a change from a developer's commit to a container serving traffic.
 
-```mermaid
-sequenceDiagram
-    participant DEV as "Developer"
-    participant GIT as "Source repository"
-    participant CB as "AWS CodeBuild"
-    participant ECR as "Amazon ECR"
-    participant INS as "Amazon Inspector"
-    participant ECS as "Amazon ECS control plane"
-    participant TASK as "Fargate task"
-    participant ALB as "Application Load Balancer"
-    participant U as "End user"
-    DEV->>GIT: "commit application and Dockerfile changes"
-    GIT->>CB: "webhook triggers the build"
-    CB->>CB: "multi stage build for linux/amd64, run unit tests"
-    CB->>ECR: "GetAuthorizationToken using the CodeBuild role"
-    CB->>ECR: "push image tagged with the commit SHA"
-    ECR-->>CB: "manifest digest sha256:aaa..."
-    ECR->>INS: "enhanced scanning on push, and continuously thereafter"
-    INS-->>CB: "findings, and the pipeline fails on CRITICAL"
-    CB->>ECS: "RegisterTaskDefinition pinned to sha256:aaa..."
-    ECS-->>CB: "family:revision N"
-    CB->>ECS: "UpdateService to revision N"
-    ECS->>TASK: "launch task: attach ENI, assume execution role, pull, start"
-    TASK->>TASK: "container health check passes"
-    ECS->>ALB: "register task IP in the target group"
-    ALB->>TASK: "target group health check on /health"
-    ALB-->>ECS: "target healthy"
-    ECS->>ALB: "deregister one old task, wait deregistration delay"
-    ECS->>TASK: "SIGTERM to the old task, SIGKILL after stopTimeout"
-    U->>ALB: "GET /orders"
-    ALB->>TASK: "forward to a healthy target"
-    TASK-->>U: "200 OK"
-```
-Generate a professional with proper symbol in whie background image 
+<figure markdown="span">
+    ![3layerglobalinfra](../img/U2/t1/requestLifecycle.png){width="80%"}
+    <figcaptiona>Request Lifecycle</figcaption>
+    <p align='right' style="font-size:0.8em"><i>Image Source: AI Generaed (Google Gemini)</i></p>
+</figure>
 
 
 The reasoning at each stage:
@@ -577,8 +547,6 @@ The reasoning at each stage:
 | **SBOM** | Software Bill of Materials; the inventory of components in an image |
 | **Image signing** | Cryptographic attestation of an image's provenance, verified before deployment |
 
----
-
 ## Configuration Options
 
 ### Dockerfile and build configuration
@@ -635,22 +603,11 @@ The reasoning at each stage:
 
 ## Design Considerations
 
-```mermaid
-flowchart TD
-    A["Is the workload long lived and request serving?"] -->|"no, short and event shaped"| B["Consider AWS Lambda; container images are supported there too"]
-    A -->|"yes"| C["Does it need a specific kernel feature, GPU, or host daemon?"]
-    C -->|"yes"| D["EC2 capacity under ECS, or a self managed host"]
-    C -->|"no"| E["AWS Fargate"]
-    E --> F["Is image pull time hurting scale out?"]
-    D --> F
-    F -->|"yes"| G["Multi stage build, minimal base, VPC endpoints, same Region ECR"]
-    F -->|"no"| H["Pin by digest, enable immutability and scanning"]
-    G --> H
-    H --> I["Is state written inside the container?"]
-    I -->|"yes"| J["Move it to RDS, DynamoDB, S3, or EFS before going further"]
-    I -->|"no"| K["Ready for a service definition in 2.2"]
-```
-Generate a professional with proper symbol in whie background image 
+<figure markdown="span">
+    ![3layerglobalinfra](../img/U2/t1/designconsideration.png){width="80%"}
+    <figcaptiona>Design Consideration Flow</figcaption>
+    <p align='right' style="font-size:0.8em"><i>Image Source: AI Generaed (Chatgpt)</i></p>
+</figure>
 
 
 | Quality | What it means here | Design levers | The trade-off you accept |
