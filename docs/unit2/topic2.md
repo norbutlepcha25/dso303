@@ -567,6 +567,53 @@ The critical property is the note at the top: **endpoint discovery happens in th
 
 The decision rule that holds up in practice: **start on Fargate, and move a workload to EC2 capacity when a measured constraint requires it** — a hardware requirement Fargate cannot meet, a sustained-utilisation profile where the premium is material, or a start-latency requirement that only a warm cache satisfies. The reverse migration path — starting on EC2 because it is cheaper per vCPU and discovering you have accidentally acquired a platform team — is the more expensive mistake, because the cost appears as engineering time rather than as a line on an invoice.
 
+Amazon ECS offers two primary compute launch types: **EC2 Launch Type** (customer-managed compute) and **AWS Fargate** (serverless compute). The fundamental split lies between having direct control over the host virtual machines versus abstracting them away entirely.
+
+```
+       ECS on EC2 (Customer-Managed)               ECS on AWS Fargate (Serverless)
+   ┌─────────────────────────────────────┐      ┌───────────────────────────────────┐
+   │             ECS Cluster             │      │            ECS Cluster            │
+   │                                     │      │                                   │
+   │  ┌───────────────────────────────┐  │      │  ┌─────────────┐ ┌─────────────┐  │
+   │  │       EC2 Instance (VM)       │  │      │  │  Task / Pod │ │  Task / Pod │  │
+   │  │  ┌───────────┐ ┌───────────┐  │  │      │  │ ┌─────────┐ │ │ ┌─────────┐ │  │
+   │  │  │Container A│ │Container B│  │  │      │  │ │Container│ │ │ │Container│ │  │
+   │  │  └───────────┘ └───────────┘  │  │      │  │ └─────────┘ │ │ └─────────┘ │  │
+   │  │    ECS Container Agent        │  │      │  │  Dedicated  │ │  Dedicated  │  │
+   │  │    OS (Linux / Windows)       │  │      │  │  MicroVM    │ │  MicroVM    │  │
+   │  └───────────────────────────────┘  │      │  └─────────────┘ └─────────────┘  │
+   │  [User manages OS, patching, VM]    │      │  [AWS manages all underlying infra]│
+   └─────────────────────────────────────┘      └───────────────────────────────────┘
+
+```
+
+---
+
+### Core Differences
+
+| Dimension | ECS EC2 Launch Type | ECS Fargate Launch Type |
+| --- | --- | --- |
+| **Infrastructure Management** | Customer manages EC2 instances, OS patching, AMI updates, instance sizing, and cluster autoscaling. | Fully managed by AWS (Serverless). No EC2 instances, OS updates, or host patching to maintain. |
+| **Workload Execution** | Multiple containers/tasks share the resources of a single EC2 host; agent schedules tasks onto existing nodes. | Each task runs in its own isolated microVM with dedicated compute and memory allocated on demand. |
+| **Scaling Mechanism** | Two-tier: Scale container tasks (ECS Service Autoscaling) **and** scale EC2 host nodes (Auto Scaling Group / Capacity Providers). | Single-tier: Scale container tasks only; compute scales automatically per task definition. |
+| **Host Access & Control** | Full root/SSH access to underlying EC2 hosts; support for specialized hardware (GPUs) and custom kernel configs. | No host-level access (no SSH/OS visibility). Runtime debugging is handled via **ECS Exec**. |
+| **Billing Model** | Pay for the EC2 instances and attached EBS volumes running in the cluster, regardless of container utilization. | Pay solely for the vCPU and memory allocated per running task, measured down to per-second granularity. |
+
+---
+
+### Working Mechanisms
+
+**1. ECS EC2 Launch Type**
+
+* **Cluster Bootstrapping:** You define an Auto Scaling Group (ASG) of EC2 instances registered to an ECS cluster via the pre-installed `amazon-ecs-agent`.
+* **Task Placement:** When you launch a task or service, the ECS control plane inspects the cluster's registered instances. Using placement strategies (such as `binpack`, `spread`, or `random`), it schedules the task onto an EC2 node that has sufficient unreserved CPU and memory.
+* **Execution:** The ECS agent on that specific instance interacts with the local container runtime (Docker/containerd) to pull the image and run the container alongside other co-located workloads.
+
+**2. ECS Fargate Launch Type**
+
+* **Resource Specification:** You define your task with precise resource requirements (e.g., `0.5 vCPU`, `1 GB RAM`) and launch type set to `FARGATE`.
+* **Seamless Provisioning:** The ECS control plane directly contacts the Fargate fleet infrastructure. It provisions an ephemeral, purpose-built microVM (using Firecracker) matching your required task boundaries.
+* **Execution & Isolation:** The container executes inside its dedicated microVM boundary with its own Elastic Network Interface (ENI) provisioned in your VPC (`awsvpc` network mode), completely isolated from all other customer workloads. When the task stops, the underlying compute is automatically deprovisioned.
 ---
 
 ## Important AWS Terminology
