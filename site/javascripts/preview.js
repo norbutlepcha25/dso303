@@ -3,7 +3,7 @@
    but a plain click opens a dismissible preview instead of navigating away. */
 
 (function () {
-  var overlay, imgEl, titleEl, pathEl, openEl, dlEl, copyBtn, lastFocus;
+  var overlay, imgEl, titleEl, descEl, openEl, dlEl, lastFocus;
 
   function build() {
     overlay = document.createElement('div');
@@ -17,9 +17,7 @@
       '  <button class="aws-modal-close" type="button" aria-label="Close preview">&times;</button>',
       '  <div class="aws-modal-stage"><img alt=""></div>',
       '  <h3 class="aws-modal-title"></h3>',
-      '  <div class="aws-modal-path"><code></code>',
-      '    <button class="aws-modal-copy" type="button">Copy path</button>',
-      '  </div>',
+      '  <p class="aws-modal-desc"></p>',
       '  <div class="aws-modal-actions">',
       '    <a class="aws-modal-btn" target="_blank" rel="noopener">Open SVG</a>',
       '    <a class="aws-modal-btn" download>Download</a>',
@@ -32,8 +30,7 @@
 
     imgEl = overlay.querySelector('.aws-modal-stage img');
     titleEl = overlay.querySelector('.aws-modal-title');
-    pathEl = overlay.querySelector('.aws-modal-path code');
-    copyBtn = overlay.querySelector('.aws-modal-copy');
+    descEl = overlay.querySelector('.aws-modal-desc');
     var btns = overlay.querySelectorAll('.aws-modal-actions a');
     openEl = btns[0];
     dlEl = btns[1];
@@ -43,29 +40,6 @@
     });
     overlay.querySelector('.aws-modal-close').addEventListener('click', close);
     overlay.querySelector('.aws-modal-dismiss').addEventListener('click', close);
-    copyBtn.addEventListener('click', function () {
-      var text = pathEl.textContent;
-      var done = function () {
-        copyBtn.textContent = 'Copied';
-        setTimeout(function () { copyBtn.textContent = 'Copy path'; }, 1400);
-      };
-      if (navigator.clipboard && navigator.clipboard.writeText) {
-        navigator.clipboard.writeText(text).then(done, fallback);
-      } else {
-        fallback();
-      }
-      function fallback() {
-        var ta = document.createElement('textarea');
-        ta.value = text;
-        ta.style.position = 'fixed';
-        ta.style.opacity = '0';
-        document.body.appendChild(ta);
-        ta.select();
-        try { document.execCommand('copy'); done(); } catch (err) { /* no-op */ }
-        document.body.removeChild(ta);
-      }
-    });
-
     document.addEventListener('keydown', function (e) {
       if (overlay.hidden) return;
       if (e.key === 'Escape') {
@@ -105,8 +79,9 @@
     imgEl.src = tile.href || href;
     imgEl.alt = name;
     titleEl.textContent = name;
-    // Path as written from a docs page, e.g. assets/icons/service/amazon-ec2.svg
-    pathEl.textContent = tile.dataset.path || href.replace(/^(\.\.\/|\.\/)+/, '');
+    var desc = tile.dataset.desc || '';
+    descEl.textContent = desc;
+    descEl.hidden = !desc;
     openEl.href = tile.href || href;
     dlEl.href = tile.href || href;
     dlEl.setAttribute('download', slug ? slug + '.svg' : '');

@@ -613,7 +613,9 @@ Amazon ECS offers two primary compute launch types: **EC2 Launch Type** (custome
 
 * **Resource Specification:** You define your task with precise resource requirements (e.g., `0.5 vCPU`, `1 GB RAM`) and launch type set to `FARGATE`.
 * **Seamless Provisioning:** The ECS control plane directly contacts the Fargate fleet infrastructure. It provisions an ephemeral, purpose-built microVM (using Firecracker) matching your required task boundaries.
-* **Execution & Isolation:** The container executes inside its dedicated microVM boundary with its own Elastic Network Interface (ENI) provisioned in your VPC (`awsvpc` network mode), completely isolated from all other customer workloads. When the task stops, the underlying compute is automatically deprovisioned.
+
+- **Execution & Isolation:** The container executes inside its dedicated microVM boundary with its own Elastic Network Interface (ENI) provisioned in your VPC (`awsvpc` network mode), completely isolated from all other customer workloads. When the task stops, the underlying compute is automatically deprovisioned.
+
 ---
 
 ## Important AWS Terminology

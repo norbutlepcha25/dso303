@@ -231,7 +231,7 @@ nav:
   - Practice Questions:
       - Unit 1 : Questions/unit1.md
       - Unit 2 : Questions/unit2.md
-      # - Unit 3 : unit9_misc/unit3.md
+      - Unit 3 : Questions/mids.md
       # - Unit 4 : unit9_misc/unit4.md
       # - Unit 5 : unit9_misc/unit5.md
       # - Unit 6 : unit9_misc/unit6.md
@@ -241,11 +241,14 @@ nav:
 
   - Lab:
       - Lab Overview: Lab/overview.md
-      - Lab 0: Lab/lab1_iam.md
       - Lab 1 - IAM: Lab/Lab-01-IAM.md
       - Lab 2 - VPC: Lab/Lab-02_VPC.md
       - Lab 3 - EC2+VPC: Lab/Lab-03_VPC2.md
       - Lab 4 — ECS: Lab/Lab-04-ECS.md
       - Lab 5 -  ALB: Lab/Lab-05-ALB.md
-      - Lab 6 - Auto scaling: Lab/Lab-06-autoscaling.md 
+      - Lab 6 - Auto scaling: Lab/Lab-06-autoscaling.md
+      - Lab 7 - EKS: Lab/Lab-07-EKS.md
+      - Lab 8 - EKS Scaling: Lab/Lab-08-EKS-scaling.md
        # - "Lab 5": Lab/stats.md
+
+  - Solutions: Solutions.md
