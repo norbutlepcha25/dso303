@@ -1,22 +1,22 @@
-# Lab 05A — Deploying a Microservices Application on Amazon EKS
+# Lab 07 - Deploying a Microservices Application on Amazon EKS
 
-*Practical 4, Part A — the same USMS workload, a different control plane*
+*Practical 4 - the same USMS workload, a different control plane*
 
-!!! info "Numbering — read this once"
+!!! info "Numbering - read this once"
     Your module descriptor numbers this practical **3**. This course delivers it as **Practical 4**,
-    because Practical 2 (Labs 04A, 04B and 04C) ran to three documents. The laboratory numbering
+    because Practical 2 (Labs 04, 05 and 06) ran to three documents. The laboratory numbering
     below follows the *dependency graph*, not the practical numbering:
 
     ```text
     Practical 1  ->  Lab 02 (VPC), Lab 03 (EC2)
-    Practical 2  ->  Lab 04A, Lab 04B, Lab 04C   (ECS, ALB, service auto scaling)
-    Practical 4  ->  Lab 05A, Lab 05B            (EKS)   <- this practical, descriptor Practical 3
-    then         ->  Lab 06 (S3), Lab 07 (Lambda), ...
+    Practical 2  ->  Lab 04, Lab 05, Lab 06   (ECS, ALB, service auto scaling)
+    Practical 4  ->  Lab 07, Lab 08            (EKS)   <- this practical, descriptor Practical 3
+    then         ->  Lab 09 (security), Lab 10 (Lambda), Lab 11-12 (CI/CD), Lab 13 (monitoring)
     ```
 
-    Kubernetes belongs immediately after ECS, because the whole point of it is the comparison. That
-    pushes S3 from Lab 05 to **Lab 06** and Lambda to **Lab 07**. Lab 04C's closing section still
-    calls S3 "Lab 05"; that reference means Lab 06 now, and nothing else about it changes.
+    Kubernetes belongs immediately after ECS and its scaling policies, because the whole point of it
+    is the comparison. The S3 configuration lab has not been delivered as its own document; Lab 10
+    builds the bucket and its notification as part of the Lambda work instead.
 
 ---
 
@@ -28,10 +28,10 @@ handed it to a service controller whose entire job was to keep `runningCount` eq
 Scaling. Three laboratories, and by the end the system ran itself.
 
 Every one of those pieces was an **AWS-shaped** piece. `TaskDefinition`, `Service`, `TargetGroup`,
-`ScalableTarget` — those nouns exist in Amazon's API and nowhere else. Move that workload to Azure or
+`ScalableTarget` - those nouns exist in Amazon's API and nowhere else. Move that workload to Azure or
 to a rack in the Faculty of Engineering and none of it comes with you.
 
-This laboratory rebuilds the same USMS application on **Amazon EKS** — Elastic Kubernetes Service —
+This laboratory rebuilds the same USMS application on **Amazon EKS** - Elastic Kubernetes Service -
 where the nouns are `Deployment`, `Service`, `ConfigMap`, `Ingress`, `HorizontalPodAutoscaler`. Those
 are **Kubernetes** objects. They are identical on EKS, on Google's GKE, on a k3s cluster running on a
 Raspberry Pi under someone's desk, and on the four-node cluster the university might one day run in
@@ -77,16 +77,19 @@ Compare that with Practical 2's four, and the mapping is close but not exact:
 **Where this sits in the course**
 
 ```text
-Lab 01   IAM ................. roles, policies, instance profile
-Lab 02   VPC ................. subnets, NAT, route tables, security groups
-Lab 03   EC2 ................. usms-web-01 and usms-db-01
-Lab 04A  ECS + Fargate ....... cluster, task definition, service
-Lab 04B  ECS + ALB ........... load balancer, target group, listener
-Lab 04C  Service Auto Scaling  target tracking, step, scheduled
-Lab 05A  EKS ................. THIS LAB — cluster, node group, three microservices, service discovery
-Lab 05B  EKS scaling and exposure   HPA, node group scaling, NodePort, LoadBalancer, Ingress
-Lab 06   S3 .................. the bucket that two IAM policies already name
-Lab 07   Lambda .............. functions triggered from that bucket
+Lab 01   IAM ...................... roles, policies, instance profile
+Lab 02   VPC ...................... subnets, NAT, route tables, security groups
+Lab 03   EC2 ...................... usms-web-01 and usms-db-01
+Lab 04   ECS + Fargate ............ cluster, task definition, service
+Lab 05   ECS + ALB ................ load balancer, target group, listener
+Lab 06   Service Auto Scaling ..... target tracking, step, scheduled
+Lab 07   EKS ...................... THIS LAB - cluster, node group, three microservices, service discovery
+Lab 08   EKS scaling and exposure . HPA, node group scaling, NodePort, LoadBalancer, Ingress
+Lab 09   Security ................. least-privilege review of the IAM and security-group estate
+Lab 10   Lambda ................... functions triggered from usms-student-data, S3 built inline
+Lab 11   CI/CD (CodePipeline) ..... source and build stages
+Lab 12   CI/CD (ECS deploy) ....... the deploy stage that closes the loop
+Lab 13   Monitoring ............... CloudWatch and X-Ray
 ```
 
 !!! warning "Read Section 8 Step 2 before you start building"
@@ -131,12 +134,12 @@ By the end of this laboratory you will be able to:
 
 ### 3.1 Completed laboratories
 
-- **Lab 01** — IAM. You need `usms-developer-role` and the `USMSStudentDataReadWrite` policy.
-- **Lab 02** — VPC. You need all four subnets and the VPC ID. `USMS_PRIVATE_SUBNET_B` was Lab 2
+- **Lab 01** - IAM. You need `usms-developer-role` and the `USMSStudentDataReadWrite` policy.
+- **Lab 02** - VPC. You need all four subnets and the VPC ID. `USMS_PRIVATE_SUBNET_B` was Lab 2
   Exercise 5 and `USMS_PUBLIC_SUBNET_B` was its Step 11 "Your turn" task; **both are required here**,
   because EKS refuses a cluster confined to a single Availability Zone.
-- **Lab 03** — EC2. Not consumed directly, but its `verify` script must still pass.
-- **Lab 04A** — ECS. Section 12 compares against it throughout, and Step 20 asks you to write the
+- **Lab 03** - EC2. Not consumed directly, but its `verify` script must still pass.
+- **Lab 04** - ECS. Section 12 compares against it throughout, and Step 20 asks you to write the
   comparison down.
 
 If `USMS_PRIVATE_SUBNET_B` or `USMS_PUBLIC_SUBNET_B` is missing from `configs/lab-02.env`, create it
@@ -204,16 +207,16 @@ entry 4.
 
 ```text
 Created in previous labs:
-- Lab 01: IAM foundation — 3 groups, 3 users, 3 roles, 5 policies, 1 instance profile
+- Lab 01: IAM foundation - 3 groups, 3 users, 3 roles, 5 policies, 1 instance profile
 - Lab 01: usms-developer-role, assumed before every build since Lab 02
-- Lab 01: USMSStudentDataReadWrite — still naming a bucket that does not exist
+- Lab 01: USMSStudentDataReadWrite - still naming a bucket that does not exist
 - Lab 02: usms-vpc 10.0.0.0/16; public-a/-b, private-a/-b; usms-igw, usms-nat,
           usms-private-rt, usms-public-rt, usms-s3-endpoint
 - Lab 03: usms-web-01, usms-db-01, usms-web-golden AMI
-- Lab 04A: usms-ecs-cluster, usms-enrolment-svc on usms-enrolment:2,
+- Lab 04: usms-ecs-cluster, usms-enrolment-svc on usms-enrolment:2,
            usms-ecs-exec-role, usms-ecs-task-role, /usms/ecs/enrolment
-- Lab 04B: usms-enrolment-alb, usms-enrolment-tg, listener HTTP:80, usms-alb-sg
-- Lab 04C: scalable target min 2 max 10, two target-tracking policies,
+- Lab 05: usms-enrolment-alb, usms-enrolment-tg, listener HTTP:80, usms-alb-sg
+- Lab 06: scalable target min 2 max 10, two target-tracking policies,
            one step policy, two scheduled actions
 
 Created in this lab:
@@ -229,15 +232,15 @@ Created in this lab:
 - usms-results               Deployment (2 replicas) + ClusterIP Service + ConfigMap
 - usms-gateway               Deployment (1 replica)  + ClusterIP Service + ConfigMap
 - usms-app-config            ConfigMap shared by all three
-- usms-enrolment-secret      Secret — and an honest account of what it protects
+- usms-enrolment-secret      Secret - and an honest account of what it protects
 
 Required for future labs:
-- usms-eks-cluster        -> Lab 05B scales it and exposes it; every kubectl command needs it
-- usms-eks-nodes          -> Lab 05B changes its scaling config from the AWS side
-- _lb_ports_ cluster tag  -> Lab 05B Step 15 cannot expose a LoadBalancer Service without it
-- namespace usms          -> Lab 05B works entirely inside it
-- usms-enrolment          -> Lab 05B attaches a HorizontalPodAutoscaler to this Deployment
-- usms-gateway            -> Lab 05B turns this Service into a LoadBalancer and an Ingress
+- usms-eks-cluster        -> Lab 08 scales it and exposes it; every kubectl command needs it
+- usms-eks-nodes          -> Lab 08 changes its scaling config from the AWS side
+- _lb_ports_ cluster tag  -> Lab 08 Step 15 cannot expose a LoadBalancer Service without it
+- namespace usms          -> Lab 08 works entirely inside it
+- usms-enrolment          -> Lab 08 attaches a HorizontalPodAutoscaler to this Deployment
+- usms-gateway            -> Lab 08 turns this Service into a LoadBalancer and an Ingress
 - resource requests       -> set in this lab's Step 13, because an HPA without them reads nothing
 ```
 
@@ -249,16 +252,16 @@ Five places, and each is a real dependency rather than a gesture:
 | From | Used in | Consequence if it is missing |
 | --- | --- | --- |
 | Lab 01 `usms-developer-role` | Step 8, assumed before creating the cluster | The build runs as the root identity, and the lab stops modelling least privilege |
-| Lab 01 `USMSStudentDataReadWrite` | Step 7, attached to `usms-eks-node-role` | The node role carries no route to the transcript bucket, and Lab 06 has one fewer chain to resolve |
-| Lab 02 all four subnets | Step 8's `resourcesVpcConfig`, Step 10's `--subnets` | `InvalidParameterException` — EKS requires subnets in at least two Availability Zones |
+| Lab 01 `USMSStudentDataReadWrite` | Step 7, attached to `usms-eks-node-role` | The node role carries no route to the transcript bucket, and Lab 10 has one fewer chain to resolve |
+| Lab 02 all four subnets | Step 8's `resourcesVpcConfig`, Step 10's `--subnets` | `InvalidParameterException` - EKS requires subnets in at least two Availability Zones |
 | Lab 02 `usms-vpc` | Step 6, the cluster security group is created in it | The security group lands in the default VPC and the cluster cannot use it |
-| Lab 04A `usms-ecs-cluster` | Section 12 and Step 20 | Nothing breaks; you simply lose the comparison, which is most of the point |
+| Lab 04 `usms-ecs-cluster` | Section 12 and Step 20 | Nothing breaks; you simply lose the comparison, which is most of the point |
 
 The sentence worth saying out loud, and the one Step 7 will ask you to write down: **Lab 1's
 `USMSStudentDataReadWrite` is now attached to a third role.** It was written for an EC2 instance
-profile, reused unchanged for a Fargate task role in Lab 04A, and is reused unchanged again here for
+profile, reused unchanged for a Fargate task role in Lab 04, and is reused unchanged again here for
 an EKS node role. The policy has never been edited. One document, three completely different compute
-models, and it still names a bucket that does not exist. Lab 06 creates that bucket, and three chains
+models, and it still names a bucket that does not exist. Lab 10 creates that bucket, and three chains
 resolve at once.
 
 ---
@@ -288,9 +291,9 @@ Concretely, by the end of Section 8 you will have created:
   and rollback.
 - One persistence proof, in the shape the course has used since Lab 1: create, perturb, read back.
 
-What you will **not** build here, because it is Part B: any autoscaler, any NodePort, any
+What you will **not** build here, because it is Lab 08's job: any autoscaler, any NodePort, any
 LoadBalancer, and any Ingress. Everything in this lab is reachable only from inside the cluster. That
-is deliberate — it forces you to prove service discovery from inside, which is where it actually
+is deliberate - it forces you to prove service discovery from inside, which is where it actually
 matters, before you put a front door on it.
 
 ---
@@ -315,7 +318,7 @@ matters, before you put a front door on it.
    |                       +-----------------------------+                     |
    +---------------------------------------------------------------------------+
 
-                      INSIDE THE CLUSTER — namespace "usms"
+                      INSIDE THE CLUSTER - namespace "usms"
 
    +----------------------------------------------------------------------------+
    |                                                                            |
@@ -377,11 +380,11 @@ This lab adds the following. It restructures nothing, and it needs one new top-l
 ```text
 aws-floci-course/
 ├── labs/
-│   └── lab-05a-eks/
+│   └── lab-07-eks/
 │       ├── README.md                          # this document
 │       └── exercises.md                       # Section 13
-├── manifests/                                 # NEW TOP-LEVEL FOLDER — see the note below
-│   └── lab-05a/
+├── manifests/                                 # NEW TOP-LEVEL FOLDER - see the note below
+│   └── lab-07/
 │       ├── 00-namespace.yaml
 │       ├── 10-configmap-app.yaml
 │       ├── 20-enrolment.yaml
@@ -389,23 +392,23 @@ aws-floci-course/
 │       ├── 40-gateway.yaml
 │       └── 50-secret.yaml
 ├── policies/
-│   ├── trust-eks-cluster.json                 # NEW — trust policy for eks.amazonaws.com
-│   ├── trust-eks-node.json                    # NEW — trust policy for ec2.amazonaws.com
-│   ├── usms-eks-cluster-policy.json           # NEW — USMSEKSClusterPolicy document
-│   └── usms-eks-node-policy.json              # NEW — USMSEKSNodePolicy document
+│   ├── trust-eks-cluster.json                 # NEW - trust policy for eks.amazonaws.com
+│   ├── trust-eks-node.json                    # NEW - trust policy for ec2.amazonaws.com
+│   ├── usms-eks-cluster-policy.json           # NEW - USMSEKSClusterPolicy document
+│   └── usms-eks-node-policy.json              # NEW - USMSEKSNodePolicy document
 ├── templates/
-│   ├── lab-05a-create-cluster.json            # NEW — --cli-input-json body for create-cluster
-│   └── lab-05a-create-nodegroup.json          # NEW — --cli-input-json body for create-nodegroup
+│   ├── lab-07-create-cluster.json            # NEW - --cli-input-json body for create-cluster
+│   └── lab-07-create-nodegroup.json          # NEW - --cli-input-json body for create-nodegroup
 ├── configs/
-│   └── lab-05a.env                            # NEW
+│   └── lab-07.env                            # NEW
 ├── scripts/
 │   ├── utilities/
-│   │   ├── verify-lab-05a.sh                  # NEW — Section 9
-│   │   └── eks-support-probe.sh               # NEW — Step 2
+│   │   ├── verify-lab-07.sh                  # NEW - Section 9
+│   │   └── eks-support-probe.sh               # NEW - Step 2
 │   └── cleanup/
-│       └── lab-05a-cleanup.sh                 # NEW — end of course only
+│       └── lab-07-cleanup.sh                 # NEW - end of course only
 └── outputs/
-    └── lab-05a-*.json / *.txt                 # command output, git-ignored
+    └── lab-07-*.json / *.txt                 # command output, git-ignored
 ```
 
 !!! info "Why `manifests/` is a new top-level folder, and why that is justified"
@@ -416,7 +419,7 @@ aws-floci-course/
     consumes would put two different tools' inputs in one directory. Everything else in this lab
     lands in the folders that already exist.
 
-Note the numeric prefixes on the manifest filenames. `kubectl apply -f manifests/lab-05a/` applies
+Note the numeric prefixes on the manifest filenames. `kubectl apply -f manifests/lab-07/` applies
 every file in a directory **in lexical order**, so `00-`, `10-`, `20-` is not decoration: it is how
 you guarantee the namespace exists before anything is created inside it.
 
@@ -424,16 +427,16 @@ Create the two new folders now:
 
 ```bash
 cd ~/aws-floci-course
-mkdir -p labs/lab-05a-eks manifests/lab-05a
+mkdir -p labs/lab-07-eks manifests/lab-07
 ls -d labs/* manifests/*
 ```
 
 > Example output:
 
 ```text
-labs/lab-01-iam  labs/lab-02-vpc  labs/lab-03-ec2  labs/lab-04a-ecs-fargate
-labs/lab-04b-ecs-alb  labs/lab-04c-ecs-autoscaling  labs/lab-05a-eks
-manifests/lab-05a
+labs/lab-01-iam  labs/lab-02-vpc  labs/lab-03-ec2  labs/lab-04-ecs-fargate
+labs/lab-05-ecs-alb  labs/lab-06-ecs-autoscaling  labs/lab-07-eks
+manifests/lab-07
 ```
 
 ---
@@ -452,16 +455,16 @@ manifests/lab-05a
     Two habits from Practical 2, restated because this lab creates a dozen things whose identifiers
     matter. **Capture every identifier into a shell variable** with `$(...)`, `--query` and
     `--output text`; never copy one by hand. And remember that **shell variables die with the
-    terminal**, which is why Step 23 writes them all to `configs/lab-05a.env`.
+    terminal**, which is why Step 23 writes them all to `configs/lab-07.env`.
 
     One habit that is new here: `kubectl` has its own idea of "where am I", called a **context**, and
-    it is stored in `~/.kube/config` — outside this repository, and therefore outside Git. Step 11
+    it is stored in `~/.kube/config` - outside this repository, and therefore outside Git. Step 11
     sets it. If a `kubectl` command in a later step behaves strangely, `kubectl config
     current-context` is the first thing to check, exactly as `pwd` is for a shell.
 
 ---
 
-### Step 1 — Start the environment and confirm the ground you are standing on
+### Step 1 - Start the environment and confirm the ground you are standing on
 
 **Purpose**
 
@@ -484,7 +487,7 @@ source configs/course.env
 source configs/lab-01.env
 source configs/lab-02.env
 source configs/lab-03.env
-source configs/lab-04a.env
+source configs/lab-04.env
 
 ./scripts/utilities/whoami.sh
 ./scripts/utilities/floci-storage-check.sh
@@ -492,7 +495,7 @@ source configs/lab-04a.env
 
 **What the command does**
 
-`floci-up.sh` starts or resumes the Compose service. It is idempotent — running it when Floci is
+`floci-up.sh` starts or resumes the Compose service. It is idempotent - running it when Floci is
 already up is harmless, and it refuses to adopt a container that was not created by Compose. This is
 the only supported way to start Floci in this course; `floci start` is forbidden, for the reason in
 §5.5 of the course contract.
@@ -509,7 +512,7 @@ Endpoint : http://localhost:4566
 Region   : us-east-1
 ```
 
-> Example output — your `Identity` line may differ if you left an assumed role in the environment.
+> Example output - your `Identity` line may differ if you left an assumed role in the environment.
 
 If `Account` is anything other than `000000000000`, `whoami.sh` exits 1 and you are pointed at
 something that is not your local emulator. Stop and fix that before continuing.
@@ -518,7 +521,7 @@ something that is not your local emulator. Stop and fix that before continuing.
 
 ```bash
 ./scripts/utilities/verify-lab-02.sh | tail -2
-./scripts/utilities/verify-lab-04a.sh | tail -2
+./scripts/utilities/verify-lab-04.sh | tail -2
 
 echo "public-a=$USMS_PUBLIC_SUBNET_A"
 echo "public-b=$USMS_PUBLIC_SUBNET_B"
@@ -526,7 +529,7 @@ echo "private-a=$USMS_PRIVATE_SUBNET_A"
 echo "private-b=$USMS_PRIVATE_SUBNET_B"
 ```
 
-**What to look for:** `FAIL=0` from `verify-lab-02.sh`, and four subnet IDs — **four**, all beginning
+**What to look for:** `FAIL=0` from `verify-lab-02.sh`, and four subnet IDs - **four**, all beginning
 `subnet-`, none of them the word `None` and none of them empty.
 
 If `USMS_PUBLIC_SUBNET_B` or `USMS_PRIVATE_SUBNET_B` is empty, do Lab 2's Step 11 "Your turn" task
@@ -534,12 +537,12 @@ and Lab 2 Exercise 5 now, then regenerate `configs/lab-02.env` from Lab 2 Step 2
 create a cluster whose subnets all sit in one Availability Zone, and the error it returns names
 neither the subnet nor the zone.
 
-`verify-lab-04a.sh` reporting `FAIL=1` is expected if you never did Lab 04B Exercise 2 — Lab 04B says
+`verify-lab-04.sh` reporting `FAIL=1` is expected if you never did Lab 05 Exercise 2 - Lab 05 says
 so. Any other failure is real.
 
 ---
 
-### Step 2 — Probe what your build actually supports, and record the answer
+### Step 2 - Probe what your build actually supports, and record the answer
 
 **Purpose**
 
@@ -547,12 +550,12 @@ This is the step described in the Section 1 warning. Kubernetes emulation is the
 of Floci, and there are three plausible states your build can be in. Every later step tells you what
 to do on each path, but only if you know which one you are on.
 
-**Concept first — what "EKS on an emulator" can possibly mean**
+**Concept first - what "EKS on an emulator" can possibly mean**
 
 A real EKS cluster is a fleet of API servers, an etcd cluster and a scheduler, all run by AWS in an
 account you cannot see, plus EC2 instances in *your* account running kubelets. An emulator cannot
 reproduce that, and does not try. What Floci does instead is start a genuine, small Kubernetes
-distribution in Docker containers on your machine — k3s, wrapped by k3d — and then answer
+distribution in Docker containers on your machine - k3s, wrapped by k3d - and then answer
 `aws eks ...` calls by manipulating it.
 
 That has a consequence worth understanding before you meet it: **the Kubernetes half of this lab is
@@ -566,8 +569,8 @@ The three paths:
 | Path | What it means | How the lab proceeds |
 | --- | --- | --- |
 | **A** | `aws eks create-cluster` works and starts a cluster | Everything as written. The AWS half and the Kubernetes half both run |
-| **B** | The `eks` API is absent or refuses; `k3d` is available | You create the cluster with `k3d` directly in Step 8B. Steps 6, 7 and 22 still create the IAM objects, so the ledger and Lab 05B still hold. Steps 10 and 22 note what is unavailable |
-| **C** | Neither works | You cannot run Steps 8 to 21. Do Section 8.4's paper path: write every manifest, validate them client-side, and answer Section 15 in full. This is a genuine outcome, not a failure — record it |
+| **B** | The `eks` API is absent or refuses; `k3d` is available | You create the cluster with `k3d` directly in Step 8B. Steps 6, 7 and 22 still create the IAM objects, so the ledger and Lab 08 still hold. Steps 10 and 22 note what is unavailable |
+| **C** | Neither works | You cannot run Steps 8 to 21. Do Section 8.4's paper path: write every manifest, validate them client-side, and answer Section 15 in full. This is a genuine outcome, not a failure - record it |
 
 **Run from**
 
@@ -575,7 +578,7 @@ The three paths:
 aws-floci-course/
 ```
 
-**Command — write the probe**
+**Command - write the probe**
 
 ````markdown
 {% raw %}```bash
@@ -624,7 +627,7 @@ fi
 EOF
 
 chmod +x scripts/utilities/eks-support-probe.sh
-./scripts/utilities/eks-support-probe.sh | tee outputs/lab-05a-support-probe.txt
+./scripts/utilities/eks-support-probe.sh | tee outputs/lab-07-support-probe.txt
 ```{% endraw %}
 ````
 
@@ -633,7 +636,7 @@ chmod +x scripts/utilities/eks-support-probe.sh
 Three read-only questions and a verdict. `aws eks list-clusters` is chosen deliberately as the probe:
 it is the cheapest `eks` call there is, it creates nothing, and if the service is unimplemented it
 fails immediately rather than after a two-minute timeout. Note that a *failure* here is information,
-not an error — which is why the script sets `set -uo pipefail` and not `set -e`. A script that aborts
+not an error - which is why the script sets `set -uo pipefail` and not `set -e`. A script that aborts
 on the first failing command cannot report on failures.
 
 `tee` writes the verdict to `outputs/` while still showing it to you, so the answer survives the
@@ -658,7 +661,7 @@ eks list-clusters      : OK
 PATH A  - use aws eks throughout
 ```
 
-> Example output — your paths will differ, and `k3d` being `MISSING` is fine on Path A.
+> Example output - your paths will differ, and `k3d` being `MISSING` is fine on Path A.
 
 **Verify**
 
@@ -667,16 +670,16 @@ Write the verdict into your notes, because Section 14 asks for it and Section 12
 ```bash
 mkdir -p notes
 {
-  echo "## Lab 05A support path"
+  echo "## Lab 07 support path"
   echo "Probed on $(date -u +%Y-%m-%dT%H:%M:%SZ)"
-  grep -A1 '== Verdict ==' outputs/lab-05a-support-probe.txt | tail -1
-} >> notes/lab-05a-notes.md
+  grep -A1 '== Verdict ==' outputs/lab-07-support-probe.txt | tail -1
+} >> notes/lab-07-notes.md
 
-tail -3 notes/lab-05a-notes.md
+tail -3 notes/lab-07-notes.md
 ```
 
 **What to look for:** a line beginning `PATH A`, `PATH B` or `PATH C` in
-`notes/lab-05a-notes.md`. From here on, wherever a step is labelled **Path A** or **Path B**, do the
+`notes/lab-07-notes.md`. From here on, wherever a step is labelled **Path A** or **Path B**, do the
 one that matches.
 
 **Checkpoint 1**
@@ -684,16 +687,16 @@ one that matches.
 ```text
 aws-floci-course/
  ├── Floci running under Compose, storage mode hybrid
- ├── configs/{course,lab-01,lab-02,lab-03,lab-04a}.env  all sourced
+ ├── configs/{course,lab-01,lab-02,lab-03,lab-04}.env  all sourced
  ├── verify-lab-02.sh  FAIL=0
  ├── four subnet IDs, two AZs
  ├── kubectl installed
- └── notes/lab-05a-notes.md records PATH A, B or C
+ └── notes/lab-07-notes.md records PATH A, B or C
 ```
 
 ---
 
-### Step 3 — Understand the control plane / data plane split before you create either
+### Step 3 - Understand the control plane / data plane split before you create either
 
 **Purpose**
 
@@ -702,9 +705,9 @@ something you do to the data plane. If you cannot say which, you cannot debug th
 
 **Run from**
 
-Nothing to run. Read this, then answer the question at the end in `notes/lab-05a-notes.md`.
+Nothing to run. Read this, then answer the question at the end in `notes/lab-07-notes.md`.
 
-**Concept — the line AWS draws**
+**Concept - the line AWS draws**
 
 ```text
         CONTROL PLANE                    |            DATA PLANE
@@ -737,12 +740,12 @@ Three consequences follow directly from that table, and all three appear later i
 
 **Compare with Practical 2.** On ECS with Fargate, the equivalent table has almost nothing in the
 right-hand column: AWS runs the scheduler *and* the machines, and your only IAM roles are the
-execution role and the task role. That is exactly what made Lab 04A short. EKS gives you a data plane
+execution role and the task role. That is exactly what made Lab 04 short. EKS gives you a data plane
 back, and everything in this lab that is longer than its ECS equivalent is the price of that.
 
 ✏️ **Your turn**
 
-In `notes/lab-05a-notes.md`, answer in two or three sentences: *a colleague says "EKS is just ECS
+In `notes/lab-07-notes.md`, answer in two or three sentences: *a colleague says "EKS is just ECS
 with different names". Name one thing in the table above that makes that statement false, and one
 thing that makes it nearly true.*
 
@@ -754,7 +757,7 @@ asks a harder version of this, so a good answer here is worth the four minutes.
 
 ---
 
-### Step 4 — Write the two trust policies
+### Step 4 - Write the two trust policies
 
 **Purpose**
 
@@ -805,13 +808,13 @@ python3 -m json.tool policies/trust-eks-node.json    > /dev/null && echo "node t
 
 **What the command does**
 
-**The heredoc is quoted** — `<< 'EOF'`, not `<< EOF`. Every policy document in this course uses the
+**The heredoc is quoted** - `<< 'EOF'`, not `<< EOF`. Every policy document in this course uses the
 quoted form, because a policy may legitimately contain `$` characters (`${aws:username}` in Lab 1's
 inline policy is the standing example) and an unquoted heredoc would let the shell eat them. Step 8
 uses the *unquoted* form for a JSON file, deliberately, and says why. Getting this backwards is
 silent: the file is written, the command succeeds, and the document is wrong.
 
-The two `Principal` values are the whole lesson. `eks.amazonaws.com` is the EKS service itself —
+The two `Principal` values are the whole lesson. `eks.amazonaws.com` is the EKS service itself -
 the AWS-run control plane, assuming a role in your account to do work on your behalf. `ec2.amazonaws.com`
 is the EC2 service, assuming a role on behalf of an instance. Compare with `policies/trust-ec2.json`
 from Lab 1, which is byte-identical to `trust-eks-node.json`: a node is an EC2 instance, so the trust
@@ -839,20 +842,20 @@ for f in ('policies/trust-eks-cluster.json','policies/trust-eks-node.json'):
 ```
 
 **What to look for:** two lines, naming `eks.amazonaws.com` and `ec2.amazonaws.com` respectively,
-each with `sts:AssumeRole`. If both say the same service, you have copied one heredoc twice — a
+each with `sts:AssumeRole`. If both say the same service, you have copied one heredoc twice - a
 mistake that will not surface until Step 10 fails with a message about node registration.
 
 ---
 
-### Step 5 — Write the two permissions policies
+### Step 5 - Write the two permissions policies
 
 **Purpose**
 
 On real AWS you would attach AWS managed policies here and write nothing. Floci may not carry them,
-so this step writes local equivalents — and in doing so, shows you what those managed policies
+so this step writes local equivalents - and in doing so, shows you what those managed policies
 actually contain, which is more educational than attaching an ARN you have never read.
 
-**Concept first — what the AWS managed policies are for**
+**Concept first - what the AWS managed policies are for**
 
 | Real AWS managed policy | Attached to | What it lets that principal do |
 | --- | --- | --- |
@@ -863,7 +866,7 @@ actually contain, which is more educational than attaching an ARN you have never
 
 That third row is the interesting one. On EKS, **a pod gets a real VPC IP address**, from your
 subnet's range, on a secondary ENI attached to the node. That is why EKS pods can be targets in an
-ALB target group with target-type `ip` — exactly the target type Lab 04B used for Fargate tasks — and
+ALB target group with target-type `ip` - exactly the target type Lab 05 used for Fargate tasks - and
 it is why a node's instance type caps how many pods it can run. Kubernetes elsewhere usually gives
 pods addresses from an overlay network that the VPC knows nothing about.
 
@@ -873,7 +876,7 @@ pods addresses from an overlay network that the VPC knows nothing about.
 aws-floci-course/
 ```
 
-**Command — part 1, write the documents**
+**Command - part 1, write the documents**
 
 ```bash
 cat > policies/usms-eks-cluster-policy.json << 'EOF'
@@ -998,22 +1001,22 @@ done
 
 Read the `Resource` fields, because they are not uniform and the difference is the lesson.
 
-Most statements here use `"Resource": "*"`. That is not laziness — the EC2 network actions genuinely
+Most statements here use `"Resource": "*"`. That is not laziness - the EC2 network actions genuinely
 cannot be scoped in advance, because the ENIs they operate on do not exist until the CNI plugin
 creates them, and their ARNs are unknowable at the time you write the policy. AWS's own
 `AmazonEKS_CNI_Policy` has the same shape for the same reason. This is the honest case for a wildcard
 resource, and it is worth being able to recognise it, because most wildcards are not this.
 
 The `WriteContainerLogs` statement is the counter-example. Its resource is
-`arn:aws:logs:us-east-1:000000000000:log-group:/usms/eks/*` — one log-group prefix and no other.
-Compare with Lab 04A's `USMSECSTaskExecution`, which scoped `logs` to `/usms/ecs/enrolment` for the
+`arn:aws:logs:us-east-1:000000000000:log-group:/usms/eks/*` - one log-group prefix and no other.
+Compare with Lab 04's `USMSECSTaskExecution`, which scoped `logs` to `/usms/ecs/enrolment` for the
 same reason. When a resource ARN *is* knowable, name it.
 
 The trailing `Deny` with `aws:RequestedRegion` mirrors `USMSDeveloperBase` from Lab 1. An explicit
-`Deny` always wins over any `Allow`, anywhere, including one in a different policy — which is what
+`Deny` always wins over any `Allow`, anywhere, including one in a different policy - which is what
 makes it the right tool for a guardrail and the wrong tool for ordinary permission-granting.
 
-!!! note "Floci Limitation — policies are stored, not enforced"
+!!! note "Floci Limitation - policies are stored, not enforced"
     Floci accepts any non-empty credentials and, by default, does not authorize requests against your
     IAM policies. Every statement above is stored faithfully and returned faithfully by
     `aws iam get-policy-version`, and none of it will stop a single API call.
@@ -1046,13 +1049,13 @@ for f in ('policies/usms-eks-cluster-policy.json','policies/usms-eks-node-policy
 ```
 
 **What to look for:** the cluster policy shows three statements, the last one `Deny`; the node policy
-shows five, the last one `Deny`. If a `Deny` is not last in the printed order it still works — order
-is irrelevant to IAM evaluation — but keeping guardrails last is a readability convention worth
+shows five, the last one `Deny`. If a `Deny` is not last in the printed order it still works - order
+is irrelevant to IAM evaluation - but keeping guardrails last is a readability convention worth
 holding to.
 
 ---
 
-### Step 6 — Create the cluster role and the cluster security group
+### Step 6 - Create the cluster role and the cluster security group
 
 **Purpose**
 
@@ -1066,7 +1069,7 @@ CLI.
 aws-floci-course/
 ```
 
-**Command — part 1, the role**
+**Command - part 1, the role**
 
 ```bash
 EKS_CLUSTER_ROLE=usms-eks-cluster-role
@@ -1075,11 +1078,11 @@ aws iam create-role \
   --role-name "$EKS_CLUSTER_ROLE" \
   --assume-role-policy-document file://policies/trust-eks-cluster.json \
   --description "Assumed by the EKS control plane to manage network resources for usms-eks-cluster" \
-  --tags Key=Project,Value=USMS Key=Tier,Value=app Key=Lab,Value=05A \
+  --tags Key=Project,Value=USMS Key=Tier,Value=app Key=Lab,Value=07 \
   --query 'Role.Arn' --output text
 ```
 
-**Command — part 2, the permissions policy, with a fallback**
+**Command - part 2, the permissions policy, with a fallback**
 
 ```bash
 EKS_CLUSTER_POLICY_ARN=$(aws iam create-policy \
@@ -1100,7 +1103,7 @@ aws iam attach-role-policy \
 **What the command does**
 
 The `||` fallback is a pattern you will see three more times in this lab. `create-policy` fails with
-`EntityAlreadyExists` if you run the step twice — which students do, constantly, after a mistake
+`EntityAlreadyExists` if you run the step twice - which students do, constantly, after a mistake
 further down. Rather than making the lab non-repeatable, the fallback looks the ARN up instead. The
 `| [0]` at the end of the JMESPath expression takes the first match of the filter and turns a
 one-element list into a scalar, so `--output text` prints a bare ARN rather than a list.
@@ -1122,14 +1125,14 @@ Note the account field in that ARN: `aws`, not a number. That is how you tell an
 from a customer managed one at a glance, and it is why an AWS managed policy is identical in every
 account on earth while `USMSEKSClusterPolicy` exists only in yours.
 
-**Command — part 3, the cluster security group, in Lab 02's VPC**
+**Command - part 3, the cluster security group, in Lab 02's VPC**
 
 ```bash
 EKS_CLUSTER_SG=$(aws ec2 create-security-group \
   --group-name usms-eks-cluster-sg \
   --description "Control-plane endpoint for usms-eks-cluster" \
   --vpc-id "$USMS_VPC_ID" \
-  --tag-specifications 'ResourceType=security-group,Tags=[{Key=Name,Value=usms-eks-cluster-sg},{Key=Project,Value=USMS},{Key=Tier,Value=app},{Key=Lab,Value=05A}]' \
+  --tag-specifications 'ResourceType=security-group,Tags=[{Key=Name,Value=usms-eks-cluster-sg},{Key=Project,Value=USMS},{Key=Tier,Value=app},{Key=Lab,Value=07}]' \
   --query 'GroupId' --output text 2>/dev/null \
   || aws ec2 describe-security-groups \
        --filters "Name=group-name,Values=usms-eks-cluster-sg" "Name=vpc-id,Values=$USMS_VPC_ID" \
@@ -1147,12 +1150,12 @@ aws ec2 authorize-security-group-ingress \
 
 `--vpc-id "$USMS_VPC_ID"` is the reuse that matters. Omit it and the group is created in the account's
 default VPC, where the cluster cannot use it, and the error at Step 8 says only that the security
-group is invalid for the subnets — never that it is in the wrong VPC.
+group is invalid for the subnets - never that it is in the wrong VPC.
 
-The ingress rule admits TCP 443 from `10.0.0.0/16` — the whole VPC, sourced from `USMS_VPC_CIDR` in
+The ingress rule admits TCP 443 from `10.0.0.0/16` - the whole VPC, sourced from `USMS_VPC_CIDR` in
 `configs/lab-02.env` rather than typed. Port 443 because the Kubernetes API server speaks HTTPS, and
 the VPC CIDR rather than `0.0.0.0/0` because nothing outside the VPC has any business reaching the
-control-plane endpoint. Note the contrast with Lab 04B's `usms-alb-sg`, which *did* admit
+control-plane endpoint. Note the contrast with Lab 05's `usms-alb-sg`, which *did* admit
 `0.0.0.0/0`: that group fronted a public website, this one fronts an administrative API.
 
 **Expected result**
@@ -1162,7 +1165,7 @@ EKS_CLUSTER_POLICY_ARN = arn:aws:iam::000000000000:policy/USMSEKSClusterPolicy
 EKS_CLUSTER_SG = sg-0a1b2c3d4e5f67890
 ```
 
-> Example output — your security group ID will differ.
+> Example output - your security group ID will differ.
 
 **Verify**
 
@@ -1177,14 +1180,14 @@ aws ec2 describe-security-groups --group-ids "$EKS_CLUSTER_SG" \
   --query 'SecurityGroups[0].{Id:GroupId,Vpc:VpcId,Ports:IpPermissions[].FromPort}' --output json
 ```
 
-**What to look for:** `USMSEKSClusterPolicy` from the first; `eks.amazonaws.com` from the second —
+**What to look for:** `USMSEKSClusterPolicy` from the first; `eks.amazonaws.com` from the second -
 if it says `ec2.amazonaws.com` you attached the wrong trust document and must fix it now with
 `aws iam update-assume-role-policy`; and from the third, a `Vpc` value equal to `$USMS_VPC_ID` and
 `Ports` containing `443`.
 
 ---
 
-### Step 7 — Create the node role, and attach Lab 1's policy to it
+### Step 7 - Create the node role, and attach Lab 1's policy to it
 
 **Purpose**
 
@@ -1197,7 +1200,7 @@ gains its third holder, which is the connection Section 4.2 promised.
 aws-floci-course/
 ```
 
-**Command — part 1, the role and its own policy**
+**Command - part 1, the role and its own policy**
 
 ```bash
 EKS_NODE_ROLE=usms-eks-node-role
@@ -1206,7 +1209,7 @@ aws iam create-role \
   --role-name "$EKS_NODE_ROLE" \
   --assume-role-policy-document file://policies/trust-eks-node.json \
   --description "Assumed by EC2 instances in usms-eks-nodes so they can join the cluster" \
-  --tags Key=Project,Value=USMS Key=Tier,Value=app Key=Lab,Value=05A \
+  --tags Key=Project,Value=USMS Key=Tier,Value=app Key=Lab,Value=07 \
   --query 'Role.Arn' --output text
 
 EKS_NODE_POLICY_ARN=$(aws iam create-policy \
@@ -1220,7 +1223,7 @@ EKS_NODE_POLICY_ARN=$(aws iam create-policy \
 aws iam attach-role-policy --role-name "$EKS_NODE_ROLE" --policy-arn "$EKS_NODE_POLICY_ARN"
 ```
 
-**Command — part 2, attach Lab 1's policy unchanged**
+**Command - part 2, attach Lab 1's policy unchanged**
 
 ```bash
 S3_RW_ARN=$(aws iam list-policies --scope Local \
@@ -1250,21 +1253,21 @@ USMSStudentDataReadWrite = arn:aws:iam::000000000000:policy/USMSStudentDataReadW
 usms-ec2-app-role	usms-ecs-task-role	usms-eks-node-role
 ```
 
-> Example output — the order of the three role names may differ.
+> Example output - the order of the three role names may differ.
 
 **Three roles. One policy. Never edited.** Written in Lab 1 for an EC2 instance profile. Attached
-unchanged in Lab 04A to a Fargate task role. Attached unchanged here to an EKS node role. Three
-compute models — a virtual machine, a serverless container, a Kubernetes node — and the document that
+unchanged in Lab 04 to a Fargate task role. Attached unchanged here to an EKS node role. Three
+compute models - a virtual machine, a serverless container, a Kubernetes node - and the document that
 describes "what USMS code may do to student data" did not need one character changed for any of them.
 
 That is what a well-scoped policy buys you, and it is the single most transferable idea in Practical
 2 and Practical 4 combined.
 
-!!! note "Floci Limitation — a node role is the coarse way to do this, and real EKS has a finer one"
+!!! note "Floci Limitation - a node role is the coarse way to do this, and real EKS has a finer one"
     Attaching `USMSStudentDataReadWrite` to the node role gives **every pod on every node** that
     permission, because every pod inherits the node's instance credentials unless something stops it.
 
-    Real EKS solves this with **IRSA** — IAM Roles for Service Accounts. You associate an OIDC
+    Real EKS solves this with **IRSA** - IAM Roles for Service Accounts. You associate an OIDC
     identity provider with the cluster, annotate a Kubernetes ServiceAccount with a role ARN, and
     only pods using that ServiceAccount get those credentials. Step 21 shows the commands and
     explains why they will not complete here.
@@ -1283,7 +1286,7 @@ aws iam get-role --role-name usms-eks-node-role \
   --query 'Role.AssumeRolePolicyDocument.Statement[0].Principal.Service' --output text
 ```
 
-**What to look for:** two policy names — `USMSEKSNodePolicy` and `USMSStudentDataReadWrite` — and the
+**What to look for:** two policy names - `USMSEKSNodePolicy` and `USMSStudentDataReadWrite` - and the
 service `ec2.amazonaws.com`. A node role that trusts `eks.amazonaws.com` is the single most common
 error in this lab; if you see it, fix it with:
 
@@ -1307,14 +1310,14 @@ EC2
 ```
 
 ---
-### Step 8 — Create the cluster
+### Step 8 - Create the cluster
 
 **Purpose**
 
 This is the step the previous seven were for. It also introduces one Floci-specific control that Part
 B cannot work without, so read the tag discussion even if you are impatient.
 
-**Concept first — `--cli-input-json`, and why the request body goes in a file**
+**Concept first - `--cli-input-json`, and why the request body goes in a file**
 
 `aws eks create-cluster` takes a nested structure (`resourcesVpcConfig`) containing two lists. The
 AWS CLI's shorthand syntax can express that, but it is genuinely ambiguous once list elements and
@@ -1328,27 +1331,27 @@ struct members are separated by the same comma:
 The CLI resolves it correctly, but you should not have to trust that, and a reviewer reading your
 repository should not have to work it out. `--cli-input-json` takes the entire request body as JSON
 from a file. You met it in Lab 3. Here it also means the request you sent is a committed artefact:
-someone can read `templates/lab-05a-create-cluster.json` six months later and see exactly what was
+someone can read `templates/lab-07-create-cluster.json` six months later and see exactly what was
 asked for.
 
-**Concept first — the `_lb_ports_` tag**
+**Concept first - the `_lb_ports_` tag**
 
 Floci reads one tag on the cluster that real AWS ignores completely: `_lb_ports_`. It tells the
 emulator which host ports to publish so that a Kubernetes Service of type `LoadBalancer` or an
 Ingress can be reached from your machine. The default is 8081.
 
-This must be set **at cluster creation**. If you omit it and later discover Lab 05B Step 15 cannot
-reach anything, the remedy is to delete and recreate the cluster — which means redoing Steps 8
+This must be set **at cluster creation**. If you omit it and later discover Lab 08 Step 15 cannot
+reach anything, the remedy is to delete and recreate the cluster - which means redoing Steps 8
 through 22. Set it now.
 
-!!! note "Floci Limitation — `_lb_ports_` is emulator control, not AWS configuration"
+!!! note "Floci Limitation - `_lb_ports_` is emulator control, not AWS configuration"
     Floci treats the cluster tag `_lb_ports_` as an instruction about host port publishing.
 
     Real AWS treats it as what it looks like: an ordinary tag with an unusual name. It appears in
     `describe-cluster`, it can be used in a cost allocation report, and it changes nothing.
 
     Take away that emulators sometimes overload a real API field to carry a local control. When you
-    move this configuration to AWS, the tag is harmless — but the thing it was doing for you is not
+    move this configuration to AWS, the tag is harmless - but the thing it was doing for you is not
     done any more, and a Service of type `LoadBalancer` will provision an actual network load
     balancer instead.
 
@@ -1358,10 +1361,10 @@ through 22. Set it now.
 aws-floci-course/
 ```
 
-**Command — part 1, build the request body**
+**Command - part 1, build the request body**
 
 ```bash
-cat > templates/lab-05a-create-cluster.json << EOF
+cat > templates/lab-07-create-cluster.json << EOF
 {
   "name": "usms-eks-cluster",
   "version": "1.30",
@@ -1381,18 +1384,18 @@ cat > templates/lab-05a-create-cluster.json << EOF
     "Name": "usms-eks-cluster",
     "Project": "USMS",
     "Tier": "app",
-    "Lab": "05A",
+    "Lab": "07",
     "_lb_ports_": "8081,8082"
   }
 }
 EOF
 
-python3 -m json.tool templates/lab-05a-create-cluster.json
+python3 -m json.tool templates/lab-07-create-cluster.json
 ```
 
 **What the command does**
 
-**The heredoc is unquoted here** — `<< EOF`, not `<< 'EOF'`. That is the opposite choice from Steps 4
+**The heredoc is unquoted here** - `<< EOF`, not `<< 'EOF'`. That is the opposite choice from Steps 4
 and 5, and it is deliberate. This file must contain *values*: real subnet IDs, a real role ARN, a real
 security group ID. Every `$(...)` and every `$VAR` inside it is evaluated at the moment the file is
 written, and what lands on disk is the result. The policy documents in Steps 4 and 5 needed the
@@ -1402,16 +1405,16 @@ Get this backwards and the failure is silent in both directions. A quoted heredo
 file containing the literal text `$USMS_PRIVATE_SUBNET_A`, and `create-cluster` fails with an
 invalid-subnet error naming a subnet ID that is obviously not one. An unquoted heredoc in Step 5
 produces a policy in which `${aws:username}` has been replaced by an empty string, and *nothing fails
-at all* — you simply have a broken policy. That asymmetry is why this course restates the rule in
+at all* - you simply have a broken policy. That asymmetry is why this course restates the rule in
 every lab.
 
 Both subnet pairs go in. Real EKS wants subnets in at least two Availability Zones for the control
 plane's cross-zone endpoints, and it wants to know about the public subnets if you will later ask for
-an internet-facing load balancer — which Lab 05B will. The **nodes**, by contrast, go only in the
+an internet-facing load balancer - which Lab 08 will. The **nodes**, by contrast, go only in the
 private subnets, which is Step 10's `--subnets`. Control plane reachability and node placement are
 two different decisions, and this is the step that separates them.
 
-**Command — part 2, assume the developer role and create the cluster**
+**Command - part 2, assume the developer role and create the cluster**
 
 ```bash
 CREDS=$(aws sts assume-role \
@@ -1432,19 +1435,19 @@ aws sts get-caller-identity
     "which credentials did that actually use?" unanswerable.
 
     `sts assume-role` hands you credentials as environment variables by nature; there is no other
-    shape for them. Part 4 below puts things back, and it is not optional. Lab 04A Step 4 made the
+    shape for them. Part 4 below puts things back, and it is not optional. Lab 04 Step 4 made the
     same exception for the same reason.
 
-**Command — part 3 (Path A), create the cluster**
+**Command - part 3 (Path A), create the cluster**
 
 ```bash
 aws eks create-cluster \
-  --cli-input-json file://templates/lab-05a-create-cluster.json \
+  --cli-input-json file://templates/lab-07-create-cluster.json \
   --query 'cluster.{Name:name,Status:status,Version:version,Arn:arn}' \
   --output table
 ```
 
-**Command — part 3 (Path B), create the cluster with k3d instead**
+**Command - part 3 (Path B), create the cluster with k3d instead**
 
 Only if Step 2 gave you Path B. This creates a real Kubernetes cluster with the same name, so every
 `kubectl` step from Step 12 onward works unchanged; what you lose is the `aws eks` half.
@@ -1460,11 +1463,11 @@ k3d cluster create usms-eks-cluster \
 k3d cluster list
 ```
 
-Record in `notes/lab-05a-notes.md` that Steps 9, 10, 21 and the `USMS_EKS_*` entries of Step 23 were
+Record in `notes/lab-07-notes.md` that Steps 9, 10, 21 and the `USMS_EKS_*` entries of Step 23 were
 done on Path B, and which of them you could not complete. That note is what makes your lab report
 honest rather than incomplete.
 
-**Command — part 4, restore your normal identity**
+**Command - part 4, restore your normal identity**
 
 ```bash
 unset AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN
@@ -1483,7 +1486,7 @@ unset AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN
 +---------------------------------------------------------+------------+-----------+
 ```
 
-> Example output — the table is elided for width, and `Status` is `CREATING`, not `ACTIVE`. That is
+> Example output - the table is elided for width, and `Status` is `CREATING`, not `ACTIVE`. That is
 > correct: cluster creation is asynchronous, which is Step 9's subject.
 
 **Verify**
@@ -1493,7 +1496,7 @@ finishes creating.
 
 ---
 
-### Step 9 — Wait for the cluster, and read what it tells you
+### Step 9 - Wait for the cluster, and read what it tells you
 
 **Purpose**
 
@@ -1501,11 +1504,11 @@ Creating an EKS cluster is the slowest single call in this course. On real AWS i
 minutes; locally it takes one to four. Either way it is asynchronous, and this step is where you
 learn what a *waiter* is and what to do when there isn't one.
 
-**Concept first — waiters**
+**Concept first - waiters**
 
 You met `aws ec2 wait instance-running` in Lab 3. A waiter is a client-side poll loop that the CLI
 ships for you: it calls the matching `describe` operation on a fixed interval and returns 0 when the
-resource reaches the expected state, or 255 when it gives up. It is not a server-side feature — it is
+resource reaches the expected state, or 255 when it gives up. It is not a server-side feature - it is
 the CLI doing the loop you would otherwise write. That matters here, because Floci may implement
 `describe-cluster` perfectly well and still not implement the waiter's exact matcher, in which case
 you write the loop yourself.
@@ -1516,12 +1519,12 @@ you write the loop yourself.
 aws-floci-course/
 ```
 
-**Command — the waiter, with an explicit fallback**
+**Command - the waiter, with an explicit fallback**
 
 ```bash
 aws eks wait cluster-active --name usms-eks-cluster 2>/dev/null \
   || {
-    echo "waiter unavailable — polling describe-cluster instead"
+    echo "waiter unavailable - polling describe-cluster instead"
     for i in $(seq 1 60); do
       STATUS=$(aws eks describe-cluster --name usms-eks-cluster \
                  --query 'cluster.status' --output text 2>/dev/null || echo UNKNOWN)
@@ -1560,7 +1563,7 @@ aws eks describe-cluster --name usms-eks-cluster \
                     RoleArn:roleArn,Subnets:resourcesVpcConfig.subnetIds,
                     Sgs:resourcesVpcConfig.securityGroupIds,Vpc:resourcesVpcConfig.vpcId,
                     Tags:tags}' \
-  --output json | tee outputs/lab-05a-cluster.json
+  --output json | tee outputs/lab-07-cluster.json
 ```
 
 **What to look for**, in this order:
@@ -1568,10 +1571,10 @@ aws eks describe-cluster --name usms-eks-cluster \
 - `Status` is `ACTIVE`. Anything else and nothing below will work.
 - `Subnets` has **four** entries and `Vpc` equals your `USMS_VPC_ID`. If `Vpc` is a different ID, the
   security group and the subnets disagreed and EKS chose one.
-- `Endpoint` is a URL. Write it down — Step 11 uses it, and it is the address `kubectl` will talk to.
+- `Endpoint` is a URL. Write it down - Step 11 uses it, and it is the address `kubectl` will talk to.
 - `Tags` contains `_lb_ports_`. **If it does not, stop here and fix it before Step 10.** On Path A
   you can usually add it with `aws eks tag-resource`; if that call is unsupported, delete the cluster
-  and redo Step 8 with the tag present. Discovering this in Lab 05B is much more expensive.
+  and redo Step 8 with the tag present. Discovering this in Lab 08 is much more expensive.
 
 ```bash
 aws eks describe-cluster --name usms-eks-cluster \
@@ -1598,22 +1601,22 @@ Expected result:
 A version such as 1.30, and either an https URL or the word None.
 
 "None" is the interesting answer. Step 21 explains what it means and what it costs
-you. If you get a URL, note that too — your build supports more than most.
+you. If you get a URL, note that too - your build supports more than most.
 ```
 
 Hint: the issuer lives at `cluster.identity.oidc.issuer`, and `[A,B]` builds a two-element list from
-two paths — you used that form in Lab 1.
+two paths - you used that form in Lab 1.
 
 ---
 
-### Step 10 — Create the managed node group
+### Step 10 - Create the managed node group
 
 **Purpose**
 
 Step 3 promised that a healthy control plane with no data plane runs nothing. This step supplies the
 data plane, and it is the last AWS-side creation in the lab.
 
-**Concept first — three ways to get nodes, and why we use the middle one**
+**Concept first - three ways to get nodes, and why we use the middle one**
 
 | Option | What it is | Who patches it |
 | --- | --- | --- |
@@ -1623,8 +1626,8 @@ data plane, and it is the last AWS-side creation in the lab.
 
 Managed node groups are the default choice for a reason: they are the least work that still gives you
 real nodes you can reason about. Note the third row, though, because it is the direct bridge to
-Practical 2 — an EKS cluster running only Fargate profiles is, operationally, very close to the ECS
-cluster you built in Lab 04A, with Kubernetes objects instead of ECS ones.
+Practical 2 - an EKS cluster running only Fargate profiles is, operationally, very close to the ECS
+cluster you built in Lab 04, with Kubernetes objects instead of ECS ones.
 
 **Run from**
 
@@ -1632,10 +1635,10 @@ cluster you built in Lab 04A, with Kubernetes objects instead of ECS ones.
 aws-floci-course/
 ```
 
-**Command — part 1, the request body**
+**Command - part 1, the request body**
 
 ```bash
-cat > templates/lab-05a-create-nodegroup.json << EOF
+cat > templates/lab-07-create-nodegroup.json << EOF
 {
   "clusterName": "usms-eks-cluster",
   "nodegroupName": "usms-eks-nodes",
@@ -1645,18 +1648,18 @@ cat > templates/lab-05a-create-nodegroup.json << EOF
   "amiType": "AL2023_x86_64_STANDARD",
   "nodeRole": "$(aws iam get-role --role-name usms-eks-node-role --query 'Role.Arn' --output text)",
   "labels": { "workload": "usms", "tier": "app" },
-  "tags": { "Name": "usms-eks-nodes", "Project": "USMS", "Tier": "app", "Lab": "05A" }
+  "tags": { "Name": "usms-eks-nodes", "Project": "USMS", "Tier": "app", "Lab": "07" }
 }
 EOF
 
-python3 -m json.tool templates/lab-05a-create-nodegroup.json > /dev/null && echo "valid JSON"
+python3 -m json.tool templates/lab-07-create-nodegroup.json > /dev/null && echo "valid JSON"
 ```
 
-**Command — part 2 (Path A), create it**
+**Command - part 2 (Path A), create it**
 
 ```bash
 aws eks create-nodegroup \
-  --cli-input-json file://templates/lab-05a-create-nodegroup.json \
+  --cli-input-json file://templates/lab-07-create-nodegroup.json \
   --query 'nodegroup.{Name:nodegroupName,Status:status,Desired:scalingConfig.desiredSize}' \
   --output table
 
@@ -1673,34 +1676,34 @@ aws eks wait nodegroup-active \
   }
 ```
 
-**Command — part 2 (Path B)**
+**Command - part 2 (Path B)**
 
 On Path B the agents were created by `k3d cluster create --agents 2` in Step 8, so there is nothing to
-run. Record in your notes that `usms-eks-nodes` does not exist as an AWS object, and that Lab 05B Step
-10 — which changes the node group's scaling config from the AWS side — is unavailable to you. The
-Kubernetes-side scaling in Lab 05B Steps 4 to 9 is unaffected.
+run. Record in your notes that `usms-eks-nodes` does not exist as an AWS object, and that Lab 08 Step
+10 - which changes the node group's scaling config from the AWS side - is unavailable to you. The
+Kubernetes-side scaling in Lab 08 Steps 4 to 9 is unaffected.
 
 **What the command does**
 
-Read `scalingConfig` carefully, because it is the same three numbers you met in Lab 04C and they mean
+Read `scalingConfig` carefully, because it is the same three numbers you met in Lab 06 and they mean
 almost, but not exactly, the same thing:
 
 ```text
-Lab 04C, Application Auto Scaling      This step, managed node group
+Lab 06, Application Auto Scaling      This step, managed node group
   MinCapacity   2                        minSize     2
   MaxCapacity  10                        maxSize     4
   (desired is the service's, and         desiredSize 2
    auto scaling writes it)               (you write it; a cluster autoscaler may too)
 ```
 
-The difference is what moves them. In Lab 04C an autoscaler owned `desiredCount` and you were told
-not to touch it. Here, nothing moves `desiredSize` unless you install a cluster autoscaler — which
-Lab 05B Step 11 discusses and does not install. So this number is yours, and Lab 05B Step 10 changes
+The difference is what moves them. In Lab 06 an autoscaler owned `desiredCount` and you were told
+not to touch it. Here, nothing moves `desiredSize` unless you install a cluster autoscaler - which
+Lab 08 Step 11 discusses and does not install. So this number is yours, and Lab 08 Step 10 changes
 it by hand.
 
 `labels` are **Kubernetes** labels applied to every node in the group, not AWS tags. You will use
-`workload=usms` in Lab 05B when you write a `nodeSelector`. `tags` on the last line are AWS tags on
-the AWS objects. Two labelling systems, one JSON document — read the field names, not the intent.
+`workload=usms` in Lab 08 when you write a `nodeSelector`. `tags` on the last line are AWS tags on
+the AWS objects. Two labelling systems, one JSON document - read the field names, not the intent.
 
 `t3.small` is the smallest instance type with enough memory to run a kubelet plus a few pods
 comfortably. On Floci nothing is actually provisioned at that size; the value is recorded and
@@ -1718,7 +1721,7 @@ returned. Say so in your lab report rather than implying you sized a fleet.
 +-----------+-----------------+----------------+
 ```
 
-> Example output — `Status` becomes `ACTIVE` after the wait above.
+> Example output - `Status` becomes `ACTIVE` after the wait above.
 
 **Verify**
 
@@ -1726,7 +1729,7 @@ returned. Say so in your lab report rather than implying you sized a fleet.
 aws eks describe-nodegroup --cluster-name usms-eks-cluster --nodegroup-name usms-eks-nodes \
   --query 'nodegroup.{Name:nodegroupName,Status:status,Scaling:scalingConfig,
                       Subnets:subnets,Role:nodeRole,Labels:labels,Ami:amiType}' \
-  --output json | tee outputs/lab-05a-nodegroup.json
+  --output json | tee outputs/lab-07-nodegroup.json
 ```
 
 **What to look for:** `Status` is `ACTIVE`; `Subnets` contains exactly the **two private** subnet IDs
@@ -1734,28 +1737,28 @@ and neither public one; `Role` ends in `usms-eks-node-role`; and `Scaling` reads
 min 2, max 4, desired 2.
 
 If `Subnets` contains a public subnet, you edited the wrong template. Nodes in a public subnet is not
-an error AWS will stop you making — it is a design mistake, and on a real account it is the one that
+an error AWS will stop you making - it is a design mistake, and on a real account it is the one that
 ends up in the incident report.
 
 **Checkpoint 3**
 
 ```text
 usms-eks-cluster        ACTIVE, k8s 1.30, vpc usms-vpc, 4 subnets, sg usms-eks-cluster-sg
-  tags: Project=USMS Tier=app Lab=05A Name=usms-eks-cluster _lb_ports_=8081,8082
+  tags: Project=USMS Tier=app Lab=07 Name=usms-eks-cluster _lb_ports_=8081,8082
   └── usms-eks-nodes    ACTIVE, private-a + private-b, min 2 / max 4 / desired 2
                         nodeRole usms-eks-node-role, labels workload=usms tier=app
 ```
 
 ---
 
-### Step 11 — Point `kubectl` at the cluster
+### Step 11 - Point `kubectl` at the cluster
 
 **Purpose**
 
 Everything so far has been AWS-side. From here to Step 21 the tool changes, and this is the step that
 connects the two halves of the diagram in Section 6.
 
-**Concept first — what a kubeconfig is**
+**Concept first - what a kubeconfig is**
 
 `~/.kube/config` is a YAML file holding three lists and one pointer:
 
@@ -1767,14 +1770,14 @@ current-context : which context every kubectl command uses unless told otherwise
 ```
 
 `aws eks update-kubeconfig` writes entries into all three and sets the pointer. The `user` entry it
-writes is the interesting one: rather than a stored token, it records a **command** —
-`aws eks get-token --cluster-name ...` — which `kubectl` executes each time it needs to authenticate.
+writes is the interesting one: rather than a stored token, it records a **command** -
+`aws eks get-token --cluster-name ...` - which `kubectl` executes each time it needs to authenticate.
 That is why your EKS access follows your IAM identity automatically, and why a colleague with the
 same kubeconfig file but different AWS credentials gets different permissions from the same file.
 
 Two things follow. First, the file contains no long-lived secret, which is why it is safe on a laptop
 in a way that a static token would not be. Second, `~/.kube/config` is outside this repository, so it
-is outside Git — no `.gitignore` rule is needed, and none should be added.
+is outside Git - no `.gitignore` rule is needed, and none should be added.
 
 **Run from**
 
@@ -1782,7 +1785,7 @@ is outside Git — no `.gitignore` rule is needed, and none should be added.
 aws-floci-course/
 ```
 
-**Command — part 1 (Path A)**
+**Command - part 1 (Path A)**
 
 ```bash
 aws eks update-kubeconfig --name usms-eks-cluster --alias usms-eks
@@ -1791,7 +1794,7 @@ kubectl config current-context
 kubectl config get-contexts
 ```
 
-**Command — part 1 (Path B)**
+**Command - part 1 (Path B)**
 
 ```bash
 k3d kubeconfig merge usms-eks-cluster --kubeconfig-merge-default
@@ -1799,7 +1802,7 @@ kubectl config use-context k3d-usms-eks-cluster
 kubectl config current-context
 ```
 
-**Command — part 2, prove you can reach the API server**
+**Command - part 2, prove you can reach the API server**
 
 ```bash
 kubectl cluster-info
@@ -1828,17 +1831,17 @@ usms-eks-cluster-ag0    Ready    <none>                 2m    v1.30.x+k3s1   172
 usms-eks-cluster-ag1    Ready    <none>                 2m    v1.30.x+k3s1   172.18.0.5    K3s
 ```
 
-> Example output — node names, addresses and the exact version will differ, and on some builds you
+> Example output - node names, addresses and the exact version will differ, and on some builds you
 > will see only the server node. See the two failure modes below.
 
-**If `kubectl` fails with an exec-plugin error** — something naming `aws eks get-token` or
-`credential plugin` — your build's `get-token` is not implemented. Fall back to the cluster's own
+**If `kubectl` fails with an exec-plugin error** - something naming `aws eks get-token` or
+`credential plugin` - your build's `get-token` is not implemented. Fall back to the cluster's own
 kubeconfig, which is a real k3s kubeconfig with certificate credentials:
 
 ```bash
-k3d kubeconfig get "$(k3d cluster list --no-headers | awk '{print $1}' | head -1)" > outputs/lab-05a-kubeconfig.yaml
-chmod 600 outputs/lab-05a-kubeconfig.yaml
-export KUBECONFIG="$PWD/outputs/lab-05a-kubeconfig.yaml"
+k3d kubeconfig get "$(k3d cluster list --no-headers | awk '{print $1}' | head -1)" > outputs/lab-07-kubeconfig.yaml
+chmod 600 outputs/lab-07-kubeconfig.yaml
+export KUBECONFIG="$PWD/outputs/lab-07-kubeconfig.yaml"
 kubectl cluster-info
 ```
 
@@ -1848,11 +1851,11 @@ key for `usms-dev-01`: written straight into `outputs/`, never onto the screen, 
 Prove it is ignored:
 
 ```bash
-git check-ignore -v outputs/lab-05a-kubeconfig.yaml
+git check-ignore -v outputs/lab-07-kubeconfig.yaml
 ```
 
 **If `kubectl get nodes` shows only a control-plane node**, that is expected on some builds and is
-not yet a problem — it becomes one at Step 13, where pods stay `Pending`. Troubleshooting entry 4 has
+not yet a problem - it becomes one at Step 13, where pods stay `Pending`. Troubleshooting entry 4 has
 the remedy. Do not apply it pre-emptively; meet the failure first, because recognising it is worth
 more than avoiding it.
 
@@ -1871,7 +1874,7 @@ installed.
 
 ---
 
-### Step 12 — Create the namespace, and make it the default for your context
+### Step 12 - Create the namespace, and make it the default for your context
 
 **Purpose**
 
@@ -1879,7 +1882,7 @@ Every object from here on lives in one namespace. Setting it as the context defa
 `-n usms` zero times instead of forty, and it means a forgotten flag cannot silently put a USMS
 Deployment in `kube-system`.
 
-**Concept first — what a namespace is and is not**
+**Concept first - what a namespace is and is not**
 
 A namespace is a **name scope** and a **policy attachment point**. Two Deployments called
 `usms-gateway` can coexist in two namespaces. Resource quotas, network policies and role bindings
@@ -1896,10 +1899,10 @@ convention plus a set of IAM conditions, not an account.
 aws-floci-course/
 ```
 
-**Command — part 1, write the manifest**
+**Command - part 1, write the manifest**
 
 ```bash
-cat > manifests/lab-05a/00-namespace.yaml << 'EOF'
+cat > manifests/lab-07/00-namespace.yaml << 'EOF'
 apiVersion: v1
 kind: Namespace
 metadata:
@@ -1910,10 +1913,10 @@ metadata:
     lab: "05a"
 EOF
 
-kubectl apply -f manifests/lab-05a/00-namespace.yaml
+kubectl apply -f manifests/lab-07/00-namespace.yaml
 ```
 
-**Command — part 2, make it the default**
+**Command - part 2, make it the default**
 
 ```bash
 kubectl config set-context --current --namespace=usms
@@ -1933,7 +1936,7 @@ spec         what you want to be true. The controller's job is to make it so
 ```
 
 There is a fifth, `status`, which you never write and the controller always fills in. The whole of
-Kubernetes is that loop: you write `spec`, a controller reads it, acts, and writes `status`. Lab 04C's
+Kubernetes is that loop: you write `spec`, a controller reads it, acts, and writes `status`. Lab 06's
 target tracking was the same loop with different words.
 
 The label `lab: "05a"` is quoted. YAML would otherwise read `05a` as a string anyway, but `05` alone
@@ -1955,19 +1958,19 @@ kubectl get all -n usms
 ```
 
 **What to look for:** the namespace `Active` with its three labels, and from the second command,
-`No resources found in usms namespace.` — which is correct. `kubectl get all` is a useful habit but a
+`No resources found in usms namespace.` - which is correct. `kubectl get all` is a useful habit but a
 misleading name: it lists the common workload types, not literally everything. It will not show
 ConfigMaps, Secrets or Ingresses, all of which you will create.
 
 ---
-### Step 13 — Deploy the first microservice: `usms-enrolment`
+### Step 13 - Deploy the first microservice: `usms-enrolment`
 
 **Purpose**
 
 This is the largest single manifest in the lab and every later one is a variation on it. Read the
 explanation before applying it, because six ideas appear here for the first time.
 
-**Concept first — the six new ideas, in the order they appear in the file**
+**Concept first - the six new ideas, in the order they appear in the file**
 
 | Idea | What it does | What breaks without it |
 | --- | --- | --- |
@@ -1978,17 +1981,17 @@ explanation before applying it, because six ideas appear here for the first time
 | `readinessProbe` | "Is this pod ready for traffic?" | Requests are sent to a pod that is still starting |
 | `livenessProbe` | "Is this pod wedged?" | A hung pod stays in the Service's endpoint list forever |
 
-The `resources.requests` row is the one to remember. **Lab 05B's HorizontalPodAutoscaler computes
+The `resources.requests` row is the one to remember. **Lab 08's HorizontalPodAutoscaler computes
 "CPU utilisation" as a percentage of the request, not of the node.** A pod with no CPU request has an
 undefined utilisation, the HPA reports `<unknown>`, and it never scales. Half the "my HPA does
-nothing" questions in the world have that as their answer, and it is set here, in Part A, so that
-Part B works.
+nothing" questions in the world have that as their answer, and it is set here, in this lab, so that
+Lab 08 works.
 
 **The two probes are not the same probe.** Readiness controls *membership of the Service*: fail it
 and you are removed from the endpoint list but left running. Liveness controls *restarts*: fail it
 and the kubelet kills the container. Getting them the wrong way round produces a service that
-restarts under load — the readiness probe fails because the pod is busy, but you wired it to
-liveness, so the pod is killed, so the remaining pods get busier. Lab 04B's ALB health check was a
+restarts under load - the readiness probe fails because the pod is busy, but you wired it to
+liveness, so the pod is killed, so the remaining pods get busier. Lab 05's ALB health check was a
 readiness probe in all but name; Kubernetes gives you both, and expects you to know which is which.
 
 **Run from**
@@ -1997,10 +2000,10 @@ readiness probe in all but name; Kubernetes gives you both, and expects you to k
 aws-floci-course/
 ```
 
-**Command — part 1, the shared ConfigMap**
+**Command - part 1, the shared ConfigMap**
 
 ```bash
-cat > manifests/lab-05a/10-configmap-app.yaml << 'EOF'
+cat > manifests/lab-07/10-configmap-app.yaml << 'EOF'
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -2015,14 +2018,14 @@ data:
   APP_REGION: "us-east-1"
 EOF
 
-kubectl apply -f manifests/lab-05a/10-configmap-app.yaml
+kubectl apply -f manifests/lab-07/10-configmap-app.yaml
 kubectl get configmap usms-app-config -o jsonpath='{.data}'; echo
 ```
 
-**Command — part 2, the enrolment service**
+**Command - part 2, the enrolment service**
 
 ```bash
-cat > manifests/lab-05a/20-enrolment.yaml << 'EOF'
+cat > manifests/lab-07/20-enrolment.yaml << 'EOF'
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -2138,7 +2141,7 @@ spec:
       targetPort: http
 EOF
 
-kubectl apply -f manifests/lab-05a/20-enrolment.yaml
+kubectl apply -f manifests/lab-07/20-enrolment.yaml
 ```
 
 **What the command does**
@@ -2149,34 +2152,34 @@ service means deleting one file's worth of objects.
 
 Walk the interesting fields:
 
-**`data.default.conf.template`** — the official `nginx` image runs every file in
+**`data.default.conf.template`** - the official `nginx` image runs every file in
 `/etc/nginx/templates/` ending in `.template` through `envsubst` at container start, writing the
 result into `/etc/nginx/conf.d/`. That is why `${POD_NAME}` in the template becomes the real pod name
 in the response. **The heredoc is quoted**, so the shell leaves `${POD_NAME}` alone and it reaches the
-file intact — the third time this lab has depended on that choice, and the reason it is restated
+file intact - the third time this lab has depended on that choice, and the reason it is restated
 every time.
 
-**`fieldRef`** — the downward API. It injects a value the pod cannot otherwise know: its own name,
-and the node it landed on. This is what makes the load-balancing demonstration in Lab 05B legible;
+**`fieldRef`** - the downward API. It injects a value the pod cannot otherwise know: its own name,
+and the node it landed on. This is what makes the load-balancing demonstration in Lab 08 legible;
 without it, every reply looks identical and you cannot tell whether requests are being spread.
 
-**`envFrom.configMapRef`** — takes every key in `usms-app-config` and makes it an environment
+**`envFrom.configMapRef`** - takes every key in `usms-app-config` and makes it an environment
 variable. Contrast with `env.valueFrom.configMapKeyRef`, which takes one key and lets you rename it.
 `envFrom` is convenient; it is also how an unexpected key in a ConfigMap ends up shadowing something
 in the container's own environment, so use it when you own both ends.
 
 **`selector.matchLabels` and `template.metadata.labels` must agree.** The Deployment finds its pods by
 label, and the Service finds them by label, independently. If they disagree, `kubectl apply` rejects
-the Deployment outright — one of the few places Kubernetes catches this class of mistake for you. If
+the Deployment outright - one of the few places Kubernetes catches this class of mistake for you. If
 the *Service's* selector disagrees, nothing complains and the Service simply has no endpoints, which
 is Troubleshooting entry 5.
 
-**`strategy` with `maxUnavailable: 0`** — during a rolling update, never drop below the current
+**`strategy` with `maxUnavailable: 0`** - during a rolling update, never drop below the current
 replica count; add one new pod, wait for it to be ready, then remove one old one. Compare with Lab
-04A's ECS deployment configuration of `minimumHealthyPercent 100`, `maximumPercent 200`: the same
+04's ECS deployment configuration of `minimumHealthyPercent 100`, `maximumPercent 200`: the same
 policy, expressed as percentages instead of counts.
 
-**`targetPort: http`** — the Service points at the *named* port on the container rather than at the
+**`targetPort: http`** - the Service points at the *named* port on the container rather than at the
 literal number `80`. Names survive a change of port number; numbers do not. This is a small habit
 with a large payoff.
 
@@ -2199,16 +2202,16 @@ kubectl get endpoints usms-enrolment
 **What to look for:**
 
 - `deployment "usms-enrolment" successfully rolled out` from the first command. If it times out, go
-  straight to `kubectl describe pod` and Troubleshooting entry 4 — do not re-run `apply`.
+  straight to `kubectl describe pod` and Troubleshooting entry 4 - do not re-run `apply`.
 - `READY 2/2` on the Deployment, one ReplicaSet, two pods `Running` and `1/1` ready.
 - The Service has a `CLUSTER-IP` and **no** `EXTERNAL-IP`. It is `<none>`, and that is correct: this
-  is a `ClusterIP` Service and nothing outside the cluster can reach it. Lab 05B changes that.
+  is a `ClusterIP` Service and nothing outside the cluster can reach it. Lab 08 changes that.
 - `kubectl get endpoints` lists **two** addresses. This is the single most useful debugging command in
   Kubernetes: it is the Service's answer to "which pods am I actually sending traffic to right now?".
   An empty endpoint list with running pods means the selector is wrong or the readiness probe is
   failing, and it is the difference between guessing and knowing.
 
-**Command — part 3, prove it serves**
+**Command - part 3, prove it serves**
 
 ```bash
 kubectl run usms-curl --rm -it --restart=Never \
@@ -2223,7 +2226,7 @@ kubectl run usms-curl --rm -it --restart=Never \
 pod "usms-curl" deleted
 ```
 
-> Example output — the pod suffix and node name will differ. If you see the literal text
+> Example output - the pod suffix and node name will differ. If you see the literal text
 > `${POD_NAME}` in the response, your `nginx` image is older than 1.19 and does not run the template
 > processor; pin `nginx:1.27-alpine` explicitly, or drop the variables from the template and read pod
 > names from `kubectl get pods -o wide` instead.
@@ -2241,7 +2244,7 @@ namespace usms
 
 ---
 
-### Step 14 — Deploy the second microservice: `usms-results`
+### Step 14 - Deploy the second microservice: `usms-results`
 
 **Purpose**
 
@@ -2257,7 +2260,7 @@ aws-floci-course/
 **Command**
 
 ```bash
-cat > manifests/lab-05a/30-results.yaml << 'EOF'
+cat > manifests/lab-07/30-results.yaml << 'EOF'
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -2356,7 +2359,7 @@ spec:
       targetPort: http
 EOF
 
-kubectl apply -f manifests/lab-05a/30-results.yaml
+kubectl apply -f manifests/lab-07/30-results.yaml
 kubectl rollout status deployment/usms-results --timeout=120s
 ```
 
@@ -2368,7 +2371,7 @@ Almost the same as Step 13, with three deliberate differences:
   every probe you add is a request the pod must serve forever. Probes are not free and not automatic.
 - No explicit `strategy`, so the Deployment takes the default: `RollingUpdate` with `maxUnavailable`
   and `maxSurge` both 25%. With two replicas, 25% rounds such that one pod can be unavailable during
-  an update — a materially different policy from `usms-enrolment`'s. Section 15 asks about this.
+  an update - a materially different policy from `usms-enrolment`'s. Section 15 asks about this.
 - `APP_CAMPUS` in the response instead of `APP_ENVIRONMENT`, so that in Step 16 you can see at a
   glance which backend answered.
 
@@ -2390,14 +2393,14 @@ how you get a table of exactly the fields you care about instead of the ones the
 
 ---
 
-### Step 15 — Deploy the gateway, and meet cluster DNS
+### Step 15 - Deploy the gateway, and meet cluster DNS
 
 **Purpose**
 
 The gateway is the point of the whole exercise. Its configuration contains two hostnames and no
 addresses, and after this step you will be able to say precisely how those hostnames resolve.
 
-**Concept first — the DNS name of a Service**
+**Concept first - the DNS name of a Service**
 
 Every Service gets a DNS record from the cluster's DNS add-on (CoreDNS):
 
@@ -2421,7 +2424,7 @@ for it to one of the current endpoint addresses. When a pod dies and another sta
 changes and the rules are rewritten. The ClusterIP does not move, which is why the gateway can hold a
 name and forget about it.
 
-**Compare with Lab 04B.** An ALB target group did the same job with different machinery: the ECS
+**Compare with Lab 05.** An ALB target group did the same job with different machinery: the ECS
 service registered and deregistered task IPs as they came and went, and the ALB's DNS name stayed
 put. Kubernetes does it without a load balancer, for internal traffic, on every node, for free. That
 is the single biggest practical difference between the two platforms' service models.
@@ -2435,7 +2438,7 @@ aws-floci-course/
 **Command**
 
 ```bash
-cat > manifests/lab-05a/40-gateway.yaml << 'EOF'
+cat > manifests/lab-07/40-gateway.yaml << 'EOF'
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -2546,7 +2549,7 @@ spec:
       targetPort: http
 EOF
 
-kubectl apply -f manifests/lab-05a/40-gateway.yaml
+kubectl apply -f manifests/lab-07/40-gateway.yaml
 kubectl rollout status deployment/usms-gateway --timeout=120s
 ```
 
@@ -2556,7 +2559,7 @@ Two things in the nginx configuration deserve attention.
 
 **`$host` and `$proxy_add_x_forwarded_for` survive the quoted heredoc and the envsubst pass.** They
 are nginx variables, not shell variables and not environment variables, and `envsubst` in the nginx
-image substitutes only names that are actually set in the environment — `host` is not, so it is left
+image substitutes only names that are actually set in the environment - `host` is not, so it is left
 alone. This is a real hazard worth knowing about: if you ever set an environment variable called
 `host` on that container, your proxy configuration would be rewritten under you.
 
@@ -2592,13 +2595,13 @@ kubectl get pods -n usms -o wide
 kubectl logs deploy/usms-gateway --tail=5
 ```
 
-**What to look for:** five pods `Running` — two enrolment, two results, one gateway — and gateway logs
+**What to look for:** five pods `Running` - two enrolment, two results, one gateway - and gateway logs
 with no `emerg` lines. `/docker-entrypoint.sh: Configuration complete; ready for start up` is the line
 that says the template was processed.
 
 ---
 
-### Step 16 — Prove service discovery from inside the cluster
+### Step 16 - Prove service discovery from inside the cluster
 
 **Purpose**
 
@@ -2611,7 +2614,7 @@ the course has used since Lab 1: do not observe a proxy for the property, exerci
 aws-floci-course/
 ```
 
-**Command — part 1, resolve the names from inside a pod**
+**Command - part 1, resolve the names from inside a pod**
 
 ```bash
 kubectl run usms-debug --rm -it --restart=Never --image=busybox:1.36 -- sh -c '
@@ -2621,7 +2624,7 @@ kubectl run usms-debug --rm -it --restart=Never --image=busybox:1.36 -- sh -c '
 '
 ```
 
-**Command — part 2, go through the gateway**
+**Command - part 2, go through the gateway**
 
 ```bash
 kubectl run usms-debug --rm -it --restart=Never --image=busybox:1.36 -- sh -c '
@@ -2632,7 +2635,7 @@ kubectl run usms-debug --rm -it --restart=Never --image=busybox:1.36 -- sh -c '
 '
 ```
 
-**Command — part 3, show that the traffic is spread**
+**Command - part 3, show that the traffic is spread**
 
 ```bash
 kubectl run usms-debug --rm -it --restart=Never --image=busybox:1.36 -- sh -c '
@@ -2644,8 +2647,8 @@ kubectl run usms-debug --rm -it --restart=Never --image=busybox:1.36 -- sh -c '
 
 **What the command does**
 
-Part 1 asks the cluster's DNS directly. The answer is a ClusterIP — a virtual address in the service
-CIDR, typically `10.43.x.x` on k3s — and **not** a pod address. That distinction is the whole of
+Part 1 asks the cluster's DNS directly. The answer is a ClusterIP - a virtual address in the service
+CIDR, typically `10.43.x.x` on k3s - and **not** a pod address. That distinction is the whole of
 Kubernetes service discovery in one line of output.
 
 Part 3 is the proof that matters. Twelve requests through the gateway, counted by which pod answered.
@@ -2664,7 +2667,7 @@ Name:      usms-enrolment.usms.svc.cluster.local
 Address 1: 10.43.118.204 usms-enrolment.usms.svc.cluster.local
 ```
 
-> Example output — both addresses will differ. The Server address is CoreDNS; the Name address is the
+> Example output - both addresses will differ. The Server address is CoreDNS; the Name address is the
 > Service's ClusterIP.
 
 Part 3:
@@ -2674,18 +2677,18 @@ Part 3:
    5 "pod":"usms-enrolment-6f8c9d7b45-p4qtz"
 ```
 
-> Example output — the split will not be exactly even, and does not need to be.
+> Example output - the split will not be exactly even, and does not need to be.
 
 **What to look for:** **two distinct pod names** in the tally. One name means one of three things,
 and they are worth distinguishing: only one pod is ready (check `kubectl get endpoints`); nginx has
-cached the upstream resolution (expected — it resolves once at startup, so the *gateway* always talks
+cached the upstream resolution (expected - it resolves once at startup, so the *gateway* always talks
 to the same ClusterIP, and it is kube-proxy that spreads the load beneath it); or you have twelve
 requests and got unlucky, in which case raise the loop to 40.
 
 That middle possibility is worth dwelling on, because it explains the architecture. nginx resolved
 the name once and holds a ClusterIP. Every request goes to that same virtual address. The spreading
 happens *below* nginx, in the node's packet-rewriting rules. This is why you can scale
-`usms-enrolment` in Lab 05B without touching or restarting the gateway.
+`usms-enrolment` in Lab 08 without touching or restarting the gateway.
 
 ✏️ **Your turn**
 
@@ -2707,7 +2710,7 @@ Hint: `kubectl get rs -n usms` and `kubectl get events -n usms --sort-by=.lastTi
 **Checkpoint 5**
 
 ```text
-namespace usms — three microservices, discoverable by DNS
+namespace usms - three microservices, discoverable by DNS
  ├── usms-gateway    1/1   ClusterIP   -> proxies to the two below BY NAME
  ├── usms-enrolment  2/2   ClusterIP   2 endpoints
  └── usms-results    2/2   ClusterIP   2 endpoints
@@ -2720,12 +2723,12 @@ Not yet true: nothing outside the cluster can reach any of this
 
 ---
 
-### Step 17 — ConfigMaps and Secrets, and an honest account of what a Secret is
+### Step 17 - ConfigMaps and Secrets, and an honest account of what a Secret is
 
 **Purpose**
 
 You have already used a ConfigMap three times. This step adds a Secret, and then immediately shows
-you what it does not do — because a student who believes `kind: Secret` means "encrypted" will one
+you what it does not do - because a student who believes `kind: Secret` means "encrypted" will one
 day commit one.
 
 **Concept first**
@@ -2734,21 +2737,21 @@ day commit one.
 | --- | --- | --- |
 | Holds | Non-sensitive configuration | Credentials, tokens, keys |
 | Stored as | Plain text in etcd | **Base64 in etcd**, encrypted at rest only if you configured that |
-| Shown by `kubectl get -o yaml` | Plain | Base64 — which anyone can decode |
+| Shown by `kubectl get -o yaml` | Plain | Base64 - which anyone can decode |
 | Size limit | About 1 MiB | About 1 MiB |
 | Mounted as | Files or env vars | Files or env vars |
 
 Base64 is an **encoding**, not encryption. `echo dXNtcy10b2tlbg== | base64 -d` reverses it and
-requires no key. A Kubernetes Secret gives you three real things — it keeps the value out of your
+requires no key. A Kubernetes Secret gives you three real things - it keeps the value out of your
 image, it can be RBAC-restricted separately from ConfigMaps, and it is not printed by `kubectl
-describe` — and it gives you no confidentiality at rest unless the cluster operator enabled
+describe` - and it gives you no confidentiality at rest unless the cluster operator enabled
 encryption providers on etcd.
 
 On EKS specifically, you have two better options, and both are worth naming:
 
 - **Envelope encryption with KMS**, enabled at cluster creation, which encrypts Secret data in etcd
   with a key you control.
-- **Not using Secrets for AWS credentials at all** — use IRSA, so that the pod obtains short-lived
+- **Not using Secrets for AWS credentials at all** - use IRSA, so that the pod obtains short-lived
   credentials from STS and there is no stored secret to leak. Step 21 returns to this.
 
 **Run from**
@@ -2757,16 +2760,16 @@ On EKS specifically, you have two better options, and both are worth naming:
 aws-floci-course/
 ```
 
-**Command — part 1, create the Secret from literals, not from a file**
+**Command - part 1, create the Secret from literals, not from a file**
 
 ```bash
 kubectl create secret generic usms-enrolment-secret \
   --namespace usms \
   --from-literal=ENROLMENT_API_TOKEN='floci-dummy-token-not-a-real-secret' \
   --from-literal=ENROLMENT_DB_PASSWORD='floci-dummy-password' \
-  --dry-run=client -o yaml > manifests/lab-05a/50-secret.yaml
+  --dry-run=client -o yaml > manifests/lab-07/50-secret.yaml
 
-kubectl apply -f manifests/lab-05a/50-secret.yaml
+kubectl apply -f manifests/lab-07/50-secret.yaml
 ```
 
 **What the command does**
@@ -2778,7 +2781,7 @@ it.
 
 !!! danger "You have just written a credential into a file inside the repository"
     The values above are deliberately dummies, and the file says so. **In any real system, do not do
-    this.** `manifests/lab-05a/50-secret.yaml` is a committed file, and a base64 value in a committed
+    this.** `manifests/lab-07/50-secret.yaml` is a committed file, and a base64 value in a committed
     file is a plaintext value in your Git history forever, recoverable long after you "removed" it.
 
     The habit that transfers: generate Secret manifests into `outputs/`, which is git-ignored, or do
@@ -2788,12 +2791,12 @@ it.
     If you would rather not commit it at all, move it now and the rest of the lab still works:
 
     ```bash
-    mv manifests/lab-05a/50-secret.yaml outputs/lab-05a-secret.yaml
-    chmod 600 outputs/lab-05a-secret.yaml
-    git check-ignore -v outputs/lab-05a-secret.yaml
+    mv manifests/lab-07/50-secret.yaml outputs/lab-07-secret.yaml
+    chmod 600 outputs/lab-07-secret.yaml
+    git check-ignore -v outputs/lab-07-secret.yaml
     ```
 
-**Command — part 2, demonstrate that base64 is not a lock**
+**Command - part 2, demonstrate that base64 is not a lock**
 
 ```bash
 kubectl get secret usms-enrolment-secret -o jsonpath='{.data.ENROLMENT_API_TOKEN}'; echo
@@ -2814,7 +2817,7 @@ Two commands. No key, no permission beyond `get secret`, no difficulty. That is 
     well. If `-d` fails, use `-D`. This is the same family of difference as `sed -i` and `date`,
     flagged in earlier labs.
 
-**Command — part 3, consume it in the enrolment Deployment**
+**Command - part 3, consume it in the enrolment Deployment**
 
 ```bash
 kubectl set env deployment/usms-enrolment \
@@ -2830,7 +2833,7 @@ kubectl get deploy usms-enrolment -o jsonpath='{.spec.template.spec.containers[0
 
 `kubectl set env --from=secret/...` adds an `envFrom.secretRef` to the pod template. Changing the pod
 template is a change to `spec`, so the Deployment controller does what it always does with a changed
-spec: it rolls out a new ReplicaSet. **That is the answer to a question students always ask** — no,
+spec: it rolls out a new ReplicaSet. **That is the answer to a question students always ask** - no,
 updating a ConfigMap or Secret does not restart your pods, but changing the pod template does, and
 adding a reference to one is a template change.
 
@@ -2849,11 +2852,11 @@ kubectl exec deploy/usms-enrolment -- printenv | grep -E '^(APP_|ENROLMENT_)' | 
 
 **What to look for:** `usms-app-config` and `usms-enrolment-secret` both listed as environment
 sources, and from the second command, the four `APP_*` keys plus the two `ENROLMENT_*` keys. Note
-that `printenv` inside the container shows the token in plain text — because inside the container it
+that `printenv` inside the container shows the token in plain text - because inside the container it
 always was plain text. A Secret protects the value on the way to the pod, not inside it.
 
 ---
-### Step 18 — Roll out a change, then roll it back
+### Step 18 - Roll out a change, then roll it back
 
 **Purpose**
 
@@ -2861,10 +2864,10 @@ Practical 2 taught rolling deployments through ECS's deployment controller. Kube
 job with a different object and, crucially, keeps a history you can move backwards through. This step
 is the one operational skill in this lab that you will use most often.
 
-**Concept first — what a Deployment actually keeps**
+**Concept first - what a Deployment actually keeps**
 
 A Deployment does not update pods. It creates a **new ReplicaSet**, scales it up, and scales the old
-one down according to `strategy`. The old ReplicaSet is kept — scaled to zero, but kept — up to
+one down according to `strategy`. The old ReplicaSet is kept - scaled to zero, but kept - up to
 `revisionHistoryLimit`, which you set to 5 in Step 13. That is what makes rollback instant: nothing is
 rebuilt, an existing ReplicaSet is simply scaled back up.
 
@@ -2882,21 +2885,21 @@ after :  ReplicaSet-B (rev 2)  replicas=2   <- serving
 aws-floci-course/
 ```
 
-**Command — part 1, make a change worth deploying**
+**Command - part 1, make a change worth deploying**
 
 ```bash
-sed -i.bak 's/APP_VERSION: "1.0.0"/APP_VERSION: "1.1.0"/' manifests/lab-05a/10-configmap-app.yaml
-grep APP_VERSION manifests/lab-05a/10-configmap-app.yaml
+sed -i.bak 's/APP_VERSION: "1.0.0"/APP_VERSION: "1.1.0"/' manifests/lab-07/10-configmap-app.yaml
+grep APP_VERSION manifests/lab-07/10-configmap-app.yaml
 
-kubectl apply -f manifests/lab-05a/10-configmap-app.yaml
+kubectl apply -f manifests/lab-07/10-configmap-app.yaml
 ```
 
 !!! note "macOS and Linux differ here too"
     GNU `sed` accepts `sed -i 's/.../.../' file`; BSD `sed` on macOS requires an argument to `-i`.
     Writing `sed -i.bak` works on both and leaves a `.bak` file you can delete. Add `*.bak` to
-    `.gitignore` if it bothers you, or just `rm manifests/lab-05a/*.bak` when you are done.
+    `.gitignore` if it bothers you, or just `rm manifests/lab-07/*.bak` when you are done.
 
-**Command — part 2, observe that nothing happened**
+**Command - part 2, observe that nothing happened**
 
 ```bash
 kubectl run usms-debug --rm -it --restart=Never --image=busybox:1.36 -- \
@@ -2907,7 +2910,7 @@ kubectl run usms-debug --rm -it --restart=Never --image=busybox:1.36 -- \
 pods did not. This is the behaviour Step 17 warned about, and meeting it here is worth more than
 being told about it.
 
-**Command — part 3, trigger the rollout deliberately**
+**Command - part 3, trigger the rollout deliberately**
 
 ```bash
 kubectl annotate deployment/usms-enrolment \
@@ -2933,7 +2936,7 @@ kubectl rollout status deployment/usms-enrolment --timeout=120s
 change, which triggers a normal rolling update. It is the supported way to say "roll my pods without
 changing anything else", and it is what you would put in a pipeline after updating a ConfigMap.
 
-**Command — part 4, confirm the new configuration reached the pods**
+**Command - part 4, confirm the new configuration reached the pods**
 
 ```bash
 kubectl run usms-debug --rm -it --restart=Never --image=busybox:1.36 -- \
@@ -2946,10 +2949,10 @@ kubectl run usms-debug --rm -it --restart=Never --image=busybox:1.36 -- \
 {"service":"usms-enrolment","pod":"usms-enrolment-7d9f4c8b62-w8ntq","node":"usms-eks-cluster-ag1","env":"laboratory","version":"1.1.0"}
 ```
 
-> Example output — note `1.1.0`, and note that the pod name's middle segment changed. That segment is
+> Example output - note `1.1.0`, and note that the pod name's middle segment changed. That segment is
 > the ReplicaSet's hash, and a new hash means a new ReplicaSet.
 
-**Command — part 5, read the history and roll back**
+**Command - part 5, read the history and roll back**
 
 ```bash
 kubectl rollout history deployment/usms-enrolment
@@ -2965,7 +2968,7 @@ kubectl get rs -n usms -l app=usms-enrolment \
     so it is unaffected and needs no change. The Service's endpoint list is rewritten automatically.
     **Reversible?** Yes, completely. `rollout undo` again moves you forward, and every revision up to
     `revisionHistoryLimit` remains available.
-    **Effect on later labs:** none. Lab 05B attaches an HPA to this Deployment and does not care which
+    **Effect on later labs:** none. Lab 08 attaches an HPA to this Deployment and does not care which
     revision it is on. Do leave the Deployment healthy at 2/2 before finishing the lab.
 
 ```bash
@@ -2976,7 +2979,7 @@ kubectl run usms-debug --rm -it --restart=Never --image=busybox:1.36 -- \
   wget -qO- http://usms-enrolment.usms.svc.cluster.local/
 ```
 
-**What to look for:** the response version depends on what the previous revision's environment was —
+**What to look for:** the response version depends on what the previous revision's environment was -
 which is the subtlety worth catching. `rollout undo` reverts the **pod template**, not the ConfigMap.
 The ConfigMap is still at `1.1.0`, so a rolled-back pod that reads `APP_VERSION` from the ConfigMap
 still reports `1.1.0`.
@@ -2990,8 +2993,8 @@ versioned artefact as the workload.
 Restore the ConfigMap so the lab ends in a known state:
 
 ```bash
-sed -i.bak 's/APP_VERSION: "1.1.0"/APP_VERSION: "1.0.0"/' manifests/lab-05a/10-configmap-app.yaml
-kubectl apply -f manifests/lab-05a/10-configmap-app.yaml
+sed -i.bak 's/APP_VERSION: "1.1.0"/APP_VERSION: "1.0.0"/' manifests/lab-07/10-configmap-app.yaml
+kubectl apply -f manifests/lab-07/10-configmap-app.yaml
 kubectl rollout restart deployment/usms-enrolment
 kubectl rollout status deployment/usms-enrolment --timeout=120s
 ```
@@ -3006,7 +3009,7 @@ configuration, then roll it back, and record in your notes how many revisions
 Expected result:
 Two revisions listed, and the Deployment back on the original image.
 Watch `kubectl get pods -w` while it happens and note how many pods exist at the
-peak — usms-results uses the DEFAULT strategy, not usms-enrolment's maxUnavailable 0,
+peak - usms-results uses the DEFAULT strategy, not usms-enrolment's maxUnavailable 0,
 so the shape of the roll is different. Say in one line how it differed.
 ```
 
@@ -3025,14 +3028,14 @@ usms-enrolment
 
 ---
 
-### Step 19 — Break a pod deliberately, and diagnose it
+### Step 19 - Break a pod deliberately, and diagnose it
 
 **Purpose**
 
 Every previous step succeeded. That is not how Kubernetes goes. This step creates each of the three
 most common failures on purpose, so that you have seen the output before you meet it under pressure.
 
-**Concept first — the three questions, in order**
+**Concept first - the three questions, in order**
 
 ```text
 kubectl get pods              is it running? what phase, how many restarts?
@@ -3050,7 +3053,7 @@ the answer is almost always in the last four lines, under `Events`.
 aws-floci-course/
 ```
 
-**Failure 1 — an image that does not exist**
+**Failure 1 - an image that does not exist**
 
 ```bash
 kubectl set image deployment/usms-results results=nginx:this-tag-does-not-exist
@@ -3068,7 +3071,7 @@ usms-results-84cd7f6b59-h4xkz   1/1     Running            0          14m
 usms-results-84cd7f6b59-r9wln   1/1     Running            0          14m
 ```
 
-> Example output. Note that **the old pods are still serving** — `maxUnavailable` protected you, and
+> Example output. Note that **the old pods are still serving** - `maxUnavailable` protected you, and
 > a broken image never reached production. That is the deployment strategy earning its keep.
 
 The `Events` section will contain `Failed to pull image` and `ErrImagePull` before it settles into
@@ -3082,7 +3085,7 @@ kubectl rollout undo deployment/usms-results
 kubectl rollout status deployment/usms-results --timeout=120s
 ```
 
-**Failure 2 — a pod that cannot be scheduled**
+**Failure 2 - a pod that cannot be scheduled**
 
 ```bash
 kubectl apply -f - << 'EOF'
@@ -3121,19 +3124,19 @@ Events:
                                                       3 Insufficient memory.
 ```
 
-> Example output — the node count depends on your cluster.
+> Example output - the node count depends on your cluster.
 
 `Pending` with `FailedScheduling` means the pod is a valid object that no node can accommodate. The
 message names the reason per node, and it is one of a short list: insufficient CPU or memory, a taint
 the pod does not tolerate, a `nodeSelector` that matches nothing, or an unbound persistent volume.
 
-Clean it up — this one is genuinely temporary, so it is a CLEAN UP item in Section 16:
+Clean it up - this one is genuinely temporary, so it is a CLEAN UP item in Section 16:
 
 ```bash
 kubectl delete pod usms-toobig
 ```
 
-**Failure 3 — a container that starts and immediately exits**
+**Failure 3 - a container that starts and immediately exits**
 
 ```bash
 kubectl apply -f - << 'EOF'
@@ -3187,9 +3190,9 @@ kubectl delete pod usms-crasher
 kubectl get events -n usms --sort-by=.lastTimestamp | tail -20
 ```
 
-**What to look for:** the whole story of the last few minutes in one place — scheduling decisions,
+**What to look for:** the whole story of the last few minutes in one place - scheduling decisions,
 image pulls, probe failures, scaling actions. Events expire (one hour by default), which is why this
-is a live-debugging tool and not an audit log. Lab 04A's CloudWatch Logs group is the audit log;
+is a live-debugging tool and not an audit log. Lab 04's CloudWatch Logs group is the audit log;
 these are not the same thing and neither substitutes for the other.
 
 **Checkpoint 7**
@@ -3204,7 +3207,7 @@ All three temporary objects deleted; usms-results back to 2/2 on the correct ima
 
 ---
 
-### Step 20 — Write down the ECS comparison while both are in front of you
+### Step 20 - Write down the ECS comparison while both are in front of you
 
 **Purpose**
 
@@ -3217,10 +3220,10 @@ moment in the course when both are running and you can check a claim instead of 
 aws-floci-course/
 ```
 
-**Command — look at both, side by side**
+**Command - look at both, side by side**
 
 ```bash
-echo "=== ECS (Lab 04A / 04B / 04C) ==="
+echo "=== ECS (Lab 04 / 05 / 06) ==="
 aws ecs describe-services --cluster usms-ecs-cluster --services usms-enrolment-svc \
   --query 'services[0].{Desired:desiredCount,Running:runningCount,TaskDef:taskDefinition,
                         LB:length(loadBalancers),Deployments:length(deployments)}' --output table
@@ -3229,12 +3232,12 @@ echo "=== EKS (this lab) ==="
 kubectl get deploy,svc -n usms -o wide
 ```
 
-**Command — write the comparison**
+**Command - write the comparison**
 
 ```bash
-cat >> notes/lab-05a-notes.md << 'EOF'
+cat >> notes/lab-07-notes.md << 'EOF'
 
-## Step 20 — ECS and Kubernetes, compared with both running
+## Step 20 - ECS and Kubernetes, compared with both running
 
 | Question | ECS answer | Kubernetes answer |
 | --- | --- | --- |
@@ -3250,17 +3253,17 @@ cat >> notes/lab-05a-notes.md << 'EOF'
 Two sentences: which one would I choose for USMS, and why.
 EOF
 
-echo "now fill it in — notes/lab-05a-notes.md"
+echo "now fill it in - notes/lab-07-notes.md"
 ```
 
 **What to look for:** you filling it in. This table is graded in Section 14 and half of it is
 answerable from commands you have already run in this lab. The last row is the one that matters, and
-the honest answer is not "nothing" — a Kubernetes manifest is portable but the IAM roles, the VPC,
+the honest answer is not "nothing" - a Kubernetes manifest is portable but the IAM roles, the VPC,
 the node groups and the load balancer annotations are not.
 
 ---
 
-### Step 21 — IRSA: the right way to give a pod AWS permissions, and why it stops here
+### Step 21 - IRSA: the right way to give a pod AWS permissions, and why it stops here
 
 **Purpose**
 
@@ -3268,7 +3271,7 @@ Step 7 attached `USMSStudentDataReadWrite` to the node role and flagged it as th
 step shows the fine one. Whether it completes depends on your build, and either outcome is a result
 worth recording.
 
-**Concept first — the chain IRSA builds**
+**Concept first - the chain IRSA builds**
 
 ```text
 1.  The cluster publishes an OIDC discovery document at a public HTTPS URL.
@@ -3292,7 +3295,7 @@ nothing. That is the whole argument for IRSA over a node role, and it is worth b
 aws-floci-course/
 ```
 
-**Command — part 1, does the cluster publish an issuer?**
+**Command - part 1, does the cluster publish an issuer?**
 
 ```bash
 OIDC_ISSUER=$(aws eks describe-cluster --name usms-eks-cluster \
@@ -3301,7 +3304,7 @@ OIDC_ISSUER=$(aws eks describe-cluster --name usms-eks-cluster \
 echo "OIDC issuer: $OIDC_ISSUER"
 ```
 
-**Command — part 2, only if part 1 printed a URL**
+**Command - part 2, only if part 1 printed a URL**
 
 ```bash
 if [ "$OIDC_ISSUER" != "None" ] && [ -n "$OIDC_ISSUER" ]; then
@@ -3311,21 +3314,21 @@ if [ "$OIDC_ISSUER" != "None" ] && [ -n "$OIDC_ISSUER" ]; then
     --thumbprint-list 9e99a48a9960b14926bb7f3b02e22da2b0ab7280 \
     --query 'OpenIDConnectProviderArn' --output text
 else
-  echo "No OIDC issuer on this build — IRSA is Conceptual / Real AWS here. Record it."
+  echo "No OIDC issuer on this build - IRSA is Conceptual / Real AWS here. Record it."
 fi
 ```
 
-**Command — part 3, the ServiceAccount, which is worth creating either way**
+**Command - part 3, the ServiceAccount, which is worth creating either way**
 
 ```bash
 kubectl create serviceaccount usms-enrolment-sa -n usms \
-  --dry-run=client -o yaml > manifests/lab-05a/60-serviceaccount.yaml
+  --dry-run=client -o yaml > manifests/lab-07/60-serviceaccount.yaml
 
-kubectl apply -f manifests/lab-05a/60-serviceaccount.yaml
+kubectl apply -f manifests/lab-07/60-serviceaccount.yaml
 kubectl get sa -n usms
 ```
 
-!!! note "Floci Limitation — IRSA needs a publicly reachable OIDC document"
+!!! note "Floci Limitation - IRSA needs a publicly reachable OIDC document"
     Floci runs the cluster on your machine. Its OIDC discovery document, if it publishes one at all,
     is not reachable from AWS's STS endpoint, and on most builds `cluster.identity.oidc.issuer` is
     absent entirely.
@@ -3352,13 +3355,13 @@ provider ARN or an honest message. Do not fabricate the ARN in your report.
 
 ---
 
-### Step 22 — Prove that all of this survives a restart
+### Step 22 - Prove that all of this survives a restart
 
 **Purpose**
 
 The course's standing rule since Lab 1: a command that appears to succeed is not evidence that it did
 what you meant. Where a lab depends on a property, prove the property. Here the property is
-persistence, and the shape is the one you know — create, perturb, read back.
+persistence, and the shape is the one you know - create, perturb, read back.
 
 The perturbation is a full stop and start of Floci. The read-back must **re-derive every identifier
 from the API**, not from a shell variable, because a shell variable proves only that your shell still
@@ -3370,7 +3373,7 @@ remembers something.
 aws-floci-course/
 ```
 
-**Command — part 1, record the truth before the restart**
+**Command - part 1, record the truth before the restart**
 
 ```bash
 {
@@ -3380,10 +3383,10 @@ aws-floci-course/
     --query 'nodegroup.[nodegroupName,status,scalingConfig.desiredSize]' --output text 2>/dev/null
   kubectl get deploy -n usms -o custom-columns='NAME:.metadata.name,READY:.status.readyReplicas' --no-headers
   kubectl get svc -n usms --no-headers | awk '{print $1, $3}'
-} | tee outputs/lab-05a-before-restart.txt
+} | tee outputs/lab-07-before-restart.txt
 ```
 
-**Command — part 2, perturb**
+**Command - part 2, perturb**
 
 ```bash
 ./scripts/setup/floci-down.sh
@@ -3394,7 +3397,7 @@ sleep 20
 
 !!! danger "Read before running any stop command"
     **What will be stopped:** the Floci container, via `docker compose stop`.
-    **What depends on it:** every AWS API call in this course, and — on Path A — the Kubernetes node
+    **What depends on it:** every AWS API call in this course, and - on Path A - the Kubernetes node
     containers Floci manages.
     **Reversible?** Yes. `floci-down.sh` is `docker compose stop`, which keeps volumes and keeps the
     bind-mounted data directory. It is **not** `docker compose down -v`, which is forbidden in this
@@ -3402,7 +3405,7 @@ sleep 20
     **Effect on later labs:** none, provided `FLOCI_STORAGE_MODE` is `hybrid`. If it is `memory`,
     this step is where you find out, and finding out now is the entire purpose of the step.
 
-**Command — part 3, read back, re-deriving everything**
+**Command - part 3, read back, re-deriving everything**
 
 ```bash
 {
@@ -3420,20 +3423,20 @@ sleep 20
   kubectl get ns usms --no-headers 2>/dev/null | awk '{print "namespace", $1, $2}'
   kubectl get deploy -n usms -o custom-columns='NAME:.metadata.name,READY:.status.readyReplicas' --no-headers 2>/dev/null
   kubectl get cm -n usms --no-headers 2>/dev/null | awk '{print "configmap", $1}'
-} | tee outputs/lab-05a-after-restart.txt
+} | tee outputs/lab-07-after-restart.txt
 
 echo
-diff <(grep -v '^===' outputs/lab-05a-before-restart.txt) \
-     <(grep -v '^===\|re-derived\|^--- ' outputs/lab-05a-after-restart.txt) \
-  && echo "PERSISTENCE PROVEN — identical before and after" \
-  || echo "differences above — read them before deciding whether they matter"
+diff <(grep -v '^===' outputs/lab-07-before-restart.txt) \
+     <(grep -v '^===\|re-derived\|^--- ' outputs/lab-07-after-restart.txt) \
+  && echo "PERSISTENCE PROVEN - identical before and after" \
+  || echo "differences above - read them before deciding whether they matter"
 ```
 
 **What the command does**
 
 Note the shape of the re-derivation. `aws eks list-clusters` is asked for *the whole list* and the
 JMESPath filter `[?@==\`usms-eks-cluster\`]` picks the matching element. `@` is the current node in
-JMESPath — here, each string in the list — and the backticks make `usms-eks-cluster` a literal rather
+JMESPath - here, each string in the list - and the backticks make `usms-eks-cluster` a literal rather
 than a field name. That is a new JMESPath form for this course and Appendix B records it.
 
 Why bother, when `describe-cluster --name usms-eks-cluster` is simpler? Because `describe-cluster`
@@ -3455,10 +3458,10 @@ usms-enrolment	2
 usms-gateway	1
 usms-results	2
 
-PERSISTENCE PROVEN — identical before and after
+PERSISTENCE PROVEN - identical before and after
 ```
 
-> Example output — timestamps differ, and the `diff` may report harmless ordering differences. Read
+> Example output - timestamps differ, and the `diff` may report harmless ordering differences. Read
 > them; do not assume.
 
 **If the cluster is `MISSING` after the restart**, run `./scripts/utilities/floci-storage-check.sh`
@@ -3490,11 +3493,11 @@ PERSISTENCE PROVEN
 
 ---
 
-### Step 23 — Write `configs/lab-05a.env`
+### Step 23 - Write `configs/lab-07.env`
 
 **Purpose**
 
-Every identifier in your shell dies when you close the terminal. Lab 05B needs eleven of these, and
+Every identifier in your shell dies when you close the terminal. Lab 08 needs eleven of these, and
 this is the step that turns four hours into something the next session can consume without you
 remembering anything.
 
@@ -3507,11 +3510,11 @@ aws-floci-course/
 **Command**
 
 ```bash
-cat > configs/lab-05a.env << EOF
-# Lab 05A — EKS cluster, node group and microservices
+cat > configs/lab-07.env << EOF
+# Lab 07 - EKS cluster, node group and microservices
 # Generated on $(date -u +%Y-%m-%dT%H:%M:%SZ)
 # Contains IDs, ARNs and names only. NO SECRETS. Safe to commit.
-# The kubeconfig is NOT recorded here — it lives in ~/.kube/config, outside this repo.
+# The kubeconfig is NOT recorded here - it lives in ~/.kube/config, outside this repo.
 
 export USMS_EKS_CLUSTER=usms-eks-cluster
 export USMS_EKS_NODEGROUP=usms-eks-nodes
@@ -3548,17 +3551,17 @@ export USMS_K8S_SVC_GATEWAY=usms-gateway
 export USMS_K8S_SVC_ENROLMENT=usms-enrolment
 export USMS_K8S_SVC_RESULTS=usms-results
 export USMS_K8S_CPU_REQUEST=50m
-export USMS_K8S_MANIFEST_DIR=manifests/lab-05a
+export USMS_K8S_MANIFEST_DIR=manifests/lab-07
 EOF
 
-grep -n 'export .*=$\|None' configs/lab-05a.env || echo "all values populated"
+grep -n 'export .*=$\|None' configs/lab-07.env || echo "all values populated"
 ```
 
 **What the command does**
 
-**The heredoc is unquoted** — the third time this lab has made that choice and said so. Every
+**The heredoc is unquoted** - the third time this lab has made that choice and said so. Every
 `$(...)` runs now and the file that lands on disk contains values, not commands. Had it been quoted,
-`source configs/lab-05a.env` would re-run eleven API calls in every new terminal for the rest of the
+`source configs/lab-07.env` would re-run eleven API calls in every new terminal for the rest of the
 course.
 
 Every AWS value is **looked up from the API**, not taken from a shell variable. `export
@@ -3568,7 +3571,7 @@ Looking it up means a deleted resource shows as `None` and the check below catch
 The Kubernetes values are **literal names**, because Kubernetes object names are chosen by you and do
 not contain generated identifiers. There is nothing to look up.
 
-`USMS_K8S_CPU_REQUEST` looks like trivia and is not: Lab 05B's HPA computes utilisation against it,
+`USMS_K8S_CPU_REQUEST` looks like trivia and is not: Lab 08's HPA computes utilisation against it,
 and having the number recorded means you can check the arithmetic rather than trust it.
 
 **Expected result**
@@ -3579,16 +3582,16 @@ all values populated
 
 If instead you see lines printed, one of two things is true. On **Path B**, `USMS_EKS_CLUSTER_ARN`,
 `USMS_EKS_CLUSTER_STATUS`, `USMS_EKS_VERSION`, `USMS_EKS_ENDPOINT` and `USMS_EKS_LB_PORTS` will be
-empty or `None` — that is expected, and Lab 05B's Step 10 is the only step that needs them. Note it
-in `notes/lab-05a-notes.md`. On **Path A**, any empty value is a genuine gap: find it now, because a
+empty or `None` - that is expected, and Lab 08's Step 10 is the only step that needs them. Note it
+in `notes/lab-07-notes.md`. On **Path A**, any empty value is a genuine gap: find it now, because a
 missing value here becomes an unexplained failure twenty steps into the next document.
 
 **Verify**
 
 ```bash
-source configs/lab-05a.env
+source configs/lab-07.env
 echo "cluster=$USMS_EKS_CLUSTER  ns=$USMS_EKS_NAMESPACE  lb_ports=$USMS_EKS_LB_PORTS"
-grep -c '^export' configs/lab-05a.env
+grep -c '^export' configs/lab-07.env
 ```
 
 **What to look for:** the three values echoed, `lb_ports` reading `8081,8082`, and a count of **21**
@@ -3596,12 +3599,12 @@ exported variables.
 
 ---
 
-### Step 24 — Commit your work
+### Step 24 - Commit your work
 
 **Purpose**
 
 Lab 1 established that `.gitignore` was the repository's first commit, before any secret existed.
-This step preserves that property and checks it rather than trusting it — and this lab has produced
+This step preserves that property and checks it rather than trusting it - and this lab has produced
 two things that make the check more interesting than usual.
 
 **Run from**
@@ -3610,7 +3613,7 @@ two things that make the check more interesting than usual.
 aws-floci-course/
 ```
 
-**Command — part 1, look before you add**
+**Command - part 1, look before you add**
 
 ```bash
 git status --short
@@ -3618,30 +3621,30 @@ git status --short
 
 **What to look for, before typing anything else:**
 
-- No path under `outputs/` appears. This lab wrote six files there, including — on some paths — a
+- No path under `outputs/` appears. This lab wrote six files there, including - on some paths - a
   kubeconfig with embedded certificates.
 - No `.env` at the repository root appears.
-- `configs/lab-05a.env` **does** appear. That one is meant to be committed: IDs and names, no secrets.
-- `manifests/lab-05a/50-secret.yaml` appears **only if you left it there** after Step 17's warning. If
+- `configs/lab-07.env` **does** appear. That one is meant to be committed: IDs and names, no secrets.
+- `manifests/lab-07/50-secret.yaml` appears **only if you left it there** after Step 17's warning. If
   it does, decide deliberately. In this course the values are dummies and committing it is a teaching
   artefact; in any other repository, move it.
 
 If anything under `outputs/` is listed, stop and diagnose before committing:
 
 ```bash
-git check-ignore -v outputs/lab-05a-support-probe.txt
+git check-ignore -v outputs/lab-07-support-probe.txt
 ```
 
 **Expected result**
 
 ```text
-.gitignore:7:outputs/*	outputs/lab-05a-support-probe.txt
+.gitignore:7:outputs/*	outputs/lab-07-support-probe.txt
 ```
 
-> Example output — the line number will differ.
+> Example output - the line number will differ.
 
 That names the file, the line number and the rule that matched. If it prints nothing, the file is
-**not** ignored, and the rule is probably `outputs/` rather than `outputs/*` — the silent failure
+**not** ignored, and the rule is probably `outputs/` rather than `outputs/*` - the silent failure
 described in §15 of the course contract, where Git cannot re-include `.gitkeep` under an excluded
 directory. Fix the rule, not the symptom:
 
@@ -3650,18 +3653,18 @@ grep -n '^outputs' .gitignore
 git ls-files outputs/          # .gitkeep, and nothing else
 ```
 
-**Command — part 2, add and commit**
+**Command - part 2, add and commit**
 
 ```bash
-git add labs/lab-05a-eks manifests/lab-05a policies/trust-eks-*.json \
-        policies/usms-eks-*.json templates/lab-05a-*.json \
-        configs/lab-05a.env scripts/utilities/verify-lab-05a.sh \
-        scripts/utilities/eks-support-probe.sh scripts/cleanup/lab-05a-cleanup.sh \
-        notes/lab-05a-notes.md
+git add labs/lab-07-eks manifests/lab-07 policies/trust-eks-*.json \
+        policies/usms-eks-*.json templates/lab-07-*.json \
+        configs/lab-07.env scripts/utilities/verify-lab-07.sh \
+        scripts/utilities/eks-support-probe.sh scripts/cleanup/lab-07-cleanup.sh \
+        notes/lab-07-notes.md
 
 git status --short
 
-git commit -m "Lab 05A: EKS cluster, node group and three USMS microservices
+git commit -m "Lab 07: EKS cluster, node group and three USMS microservices
 
 - usms-eks-cluster-role and usms-eks-node-role, with local stand-ins for the
   AWS managed policies, plus Lab 01's USMSStudentDataReadWrite on the node role
@@ -3681,40 +3684,40 @@ git ls-files | grep -c '^outputs/'
 ```
 
 **What to look for:** your commit at the top; a file list containing the manifests, the policies and
-`configs/lab-05a.env`; and **`0`** from the last command. A non-zero count means a file under
+`configs/lab-07.env`; and **`0`** from the last command. A non-zero count means a file under
 `outputs/` is tracked, and you should find out which one and why before doing anything else.
 
 **Checkpoint 9**
 
 ```text
 committed
- ├── manifests/lab-05a/     00-namespace, 10-configmap-app, 20-enrolment,
+ ├── manifests/lab-07/     00-namespace, 10-configmap-app, 20-enrolment,
  │                          30-results, 40-gateway, 60-serviceaccount
  ├── policies/              trust-eks-cluster, trust-eks-node,
  │                          usms-eks-cluster-policy, usms-eks-node-policy
- ├── templates/             lab-05a-create-cluster.json, lab-05a-create-nodegroup.json
- ├── configs/lab-05a.env    21 exports, no empty values (Path A)
- ├── scripts/utilities/     verify-lab-05a.sh, eks-support-probe.sh
+ ├── templates/             lab-07-create-cluster.json, lab-07-create-nodegroup.json
+ ├── configs/lab-07.env    21 exports, no empty values (Path A)
+ ├── scripts/utilities/     verify-lab-07.sh, eks-support-probe.sh
  └── git ls-files outputs/  -> only .gitkeep
 ```
 
 ---
 
-### 8.4 Path C — what to do if neither EKS nor k3d is available
+### 8.4 Path C - what to do if neither EKS nor k3d is available
 
 If Step 2 gave you Path C, you cannot run a cluster, and pretending otherwise would produce a lab
 report full of invented output. Do this instead, and say in your report that you did:
 
 1. **Write every manifest** from Steps 12 to 17. They are text files; nothing about writing them
    requires a cluster.
-2. **Validate them without a cluster.** `kubectl apply --dry-run=client -f manifests/lab-05a/`
+2. **Validate them without a cluster.** `kubectl apply --dry-run=client -f manifests/lab-07/`
    parses and schema-checks against `kubectl`'s built-in knowledge and needs no API server. It will
    catch a mis-indented `spec`, a wrong `apiVersion` and a selector that does not match its template.
 3. **Do Steps 4 to 7 and Step 23 in full.** They are IAM and EC2 calls, and they work.
 4. **Answer all of Section 15**, and answer Section 13's Exercises 1, 2 and 3 on paper, giving the
    commands you would run and the output you would expect, clearly labelled as expected rather than
    observed.
-5. **Install `k3d` before the next session** if you possibly can. Lab 05B is much harder to do on
+5. **Install `k3d` before the next session** if you possibly can. Lab 08 is much harder to do on
    paper than this one, because its whole subject is watching numbers move.
 
 That is a legitimate submission. An invented `kubectl get pods` output is not.
@@ -3722,7 +3725,7 @@ That is a legitimate submission. An invented `kubectl get pods` output is not.
 ---
 ## 9. Verification
 
-### 9.1 Build `scripts/utilities/verify-lab-05a.sh`
+### 9.1 Build `scripts/utilities/verify-lab-07.sh`
 
 Every lab ships one of these. It checks **configuration as well as existence**, because a script that
 only asks "does it exist?" passes right up until the restart that deletes it.
@@ -3735,9 +3738,9 @@ aws-floci-course/
 
 ````markdown
 {% raw %}```bash
-cat > scripts/utilities/verify-lab-05a.sh << 'EOF'
+cat > scripts/utilities/verify-lab-07.sh << 'EOF'
 #!/usr/bin/env bash
-# Verify every Lab 05A artefact. Exit 1 if anything is missing.
+# Verify every Lab 07 artefact. Exit 1 if anything is missing.
 # Works from any directory. Never assumes a shell variable is already set.
 set -uo pipefail
 
@@ -3745,7 +3748,7 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$REPO_ROOT"
 source "$REPO_ROOT/configs/course.env"
 source "$REPO_ROOT/configs/lab-02.env"  2>/dev/null || true
-source "$REPO_ROOT/configs/lab-05a.env" 2>/dev/null || true
+source "$REPO_ROOT/configs/lab-07.env" 2>/dev/null || true
 
 PASS=0; FAIL=0
 check() {
@@ -3770,7 +3773,7 @@ check "Lab 02 usms-vpc" "aws ec2 describe-vpcs --vpc-ids ${USMS_VPC_ID:-vpc-none
 check "Lab 02 private subnet b exists (two AZs needed)" \
   "aws ec2 describe-subnets --subnet-ids ${USMS_PRIVATE_SUBNET_B:-subnet-none}"
 
-echo "== Lab 05A IAM and EC2 =="
+echo "== Lab 07 IAM and EC2 =="
 check "role usms-eks-cluster-role" "aws iam get-role --role-name usms-eks-cluster-role"
 check "cluster role trusts eks.amazonaws.com" \
   "test \"\$(aws iam get-role --role-name usms-eks-cluster-role --query 'Role.AssumeRolePolicyDocument.Statement[0].Principal.Service' --output text)\" = eks.amazonaws.com"
@@ -3782,7 +3785,7 @@ check "node role carries Lab 01's USMSStudentDataReadWrite" \
 check "usms-eks-cluster-sg is in usms-vpc" \
   "test \"\$(aws ec2 describe-security-groups --filters Name=group-name,Values=usms-eks-cluster-sg --query 'SecurityGroups[0].VpcId' --output text)\" = ${USMS_VPC_ID:-vpc-none}"
 
-echo "== Lab 05A EKS (expect 3 failures on support Path B) =="
+echo "== Lab 07 EKS (expect 3 failures on support Path B) =="
 check "cluster usms-eks-cluster is ACTIVE" \
   "test \"\$(aws eks describe-cluster --name usms-eks-cluster --query 'cluster.status' --output text)\" = ACTIVE"
 check "cluster carries the _lb_ports_ tag" \
@@ -3801,16 +3804,16 @@ check "usms-gateway has 1 ready replica" \
   "test \"\$(kubectl get deploy usms-gateway -n usms -o jsonpath='{.status.readyReplicas}')\" = 1"
 check "service usms-enrolment has at least 2 endpoints" \
   "test \"\$(kubectl get endpoints usms-enrolment -n usms -o jsonpath='{.subsets[0].addresses}' | grep -o 'ip' | wc -l)\" -ge 2"
-check "usms-enrolment declares a cpu request (Lab 05B needs it)" \
+check "usms-enrolment declares a cpu request (Lab 08 needs it)" \
   "kubectl get deploy usms-enrolment -n usms -o jsonpath='{.spec.template.spec.containers[0].resources.requests.cpu}' | grep -q 'm'"
 
 echo "== Files and Git hygiene =="
-check "configs/lab-05a.env exists" "test -f configs/lab-05a.env"
-check "configs/lab-05a.env has no empty values" \
-  "! grep -qE 'export [A-Z_0-9]+=$' configs/lab-05a.env"
+check "configs/lab-07.env exists" "test -f configs/lab-07.env"
+check "configs/lab-07.env has no empty values" \
+  "! grep -qE 'export [A-Z_0-9]+=$' configs/lab-07.env"
 check "five or more manifests present" \
-  "test \"\$(ls manifests/lab-05a/*.yaml 2>/dev/null | wc -l)\" -ge 5"
-check "all four Lab 05A policy documents are valid JSON" \
+  "test \"\$(ls manifests/lab-07/*.yaml 2>/dev/null | wc -l)\" -ge 5"
+check "all four Lab 07 policy documents are valid JSON" \
   "for f in policies/trust-eks-cluster.json policies/trust-eks-node.json policies/usms-eks-cluster-policy.json policies/usms-eks-node-policy.json; do python3 -m json.tool \$f >/dev/null || exit 1; done"
 check "no secret is tracked by git" "! git ls-files | grep -q '^outputs/'"
 check ".gitignore uses outputs/* not outputs/" "grep -q '^outputs/\*' .gitignore"
@@ -3819,8 +3822,8 @@ echo; echo "PASS=$PASS  FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]
 EOF
 
-chmod +x scripts/utilities/verify-lab-05a.sh
-./scripts/utilities/verify-lab-05a.sh
+chmod +x scripts/utilities/verify-lab-07.sh
+./scripts/utilities/verify-lab-07.sh
 ```{% endraw %}
 ````
 
@@ -3845,7 +3848,7 @@ chmod +x scripts/utilities/verify-lab-05a.sh
 PASS=30  FAIL=0
 ```
 
-> Example output — the `ok` lines are abbreviated here; you will see all 30.
+> Example output - the `ok` lines are abbreviated here; you will see all 30.
 
 **How to read a failure.** Failures in the **Environment** block are the real problem; everything
 below them is usually a consequence. A cluster that "does not exist" because Floci is not running is
@@ -3865,26 +3868,26 @@ kubectl run usms-smoke --rm -it --restart=Never --image=busybox:1.36 -- sh -c '
 ```
 
 Three JSON documents and the words `SMOKE TEST PASSED`. If the gateway responds but a backend does
-not, the gateway is fine and the problem is in that backend's Service or endpoints — start with
+not, the gateway is fine and the problem is in that backend's Service or endpoints - start with
 `kubectl get endpoints -n usms`.
 
-### 9.3 Build the cleanup script — DO NOT RUN IT NOW
+### 9.3 Build the cleanup script - DO NOT RUN IT NOW
 
-!!! danger "This script destroys the whole of Lab 05A"
+!!! danger "This script destroys the whole of Lab 07"
     **What will be deleted:** the namespace and everything in it, the node group, the cluster, both
     IAM roles, both local policies and the cluster security group.
-    **What depends on it:** Lab 05B, entirely. Nothing in it works without this lab's cluster.
+    **What depends on it:** Lab 08, entirely. Nothing in it works without this lab's cluster.
     **Reversible?** No. Recreating means redoing Steps 4 to 17.
-    **Effect on later labs:** Lab 06 and Lab 07 do not use the cluster, but they do use
+    **Effect on later labs:** Lab 10 and Lab 07 do not use the cluster, but they do use
     `USMSStudentDataReadWrite`, which this script detaches from the node role and does **not** delete.
-    Deleting the policy itself would break Lab 03's instance profile and Lab 04A's task role.
+    Deleting the policy itself would break Lab 03's instance profile and Lab 04's task role.
 
     Write the script now, at the end of the course run it. It requires typed confirmation.
 
 ```bash
-cat > scripts/cleanup/lab-05a-cleanup.sh << 'EOF'
+cat > scripts/cleanup/lab-07-cleanup.sh << 'EOF'
 #!/usr/bin/env bash
-# END OF COURSE ONLY. Deletes every Lab 05A resource, dependencies inside-out.
+# END OF COURSE ONLY. Deletes every Lab 07 resource, dependencies inside-out.
 set -uo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -3899,15 +3902,15 @@ This deletes:
   - IAM roles usms-eks-cluster-role and usms-eks-node-role
   - IAM policies USMSEKSClusterPolicy and USMSEKSNodePolicy
   - Security group usms-eks-cluster-sg
-It does NOT delete USMSStudentDataReadWrite, which Lab 03 and Lab 04A still use.
+It does NOT delete USMSStudentDataReadWrite, which Lab 03 and Lab 04 still use.
 WARN
 
-printf 'Type exactly DELETE-LAB-05A to proceed: '
+printf 'Type exactly DELETE-LAB-07 to proceed: '
 read -r CONFIRM
-[ "$CONFIRM" = "DELETE-LAB-05A" ] || { echo "aborted"; exit 1; }
+[ "$CONFIRM" = "DELETE-LAB-07" ] || { echo "aborted"; exit 1; }
 
 # 1. Kubernetes objects first: the cluster cannot be deleted while a
-#    LoadBalancer Service still holds a load balancer (Lab 05B creates one).
+#    LoadBalancer Service still holds a load balancer (Lab 08 creates one).
 kubectl delete namespace usms --ignore-not-found --timeout=180s
 
 # 2. Node group before cluster. A cluster with a node group refuses to delete.
@@ -3939,11 +3942,11 @@ SG=$(aws ec2 describe-security-groups --filters Name=group-name,Values=usms-eks-
        --query 'SecurityGroups[0].GroupId' --output text 2>/dev/null)
 [ -n "$SG" ] && [ "$SG" != "None" ] && aws ec2 delete-security-group --group-id "$SG"
 
-echo "Lab 05A resources removed."
+echo "Lab 07 resources removed."
 EOF
 
-chmod +x scripts/cleanup/lab-05a-cleanup.sh
-bash -n scripts/cleanup/lab-05a-cleanup.sh && echo "cleanup script: valid bash syntax"
+chmod +x scripts/cleanup/lab-07-cleanup.sh
+bash -n scripts/cleanup/lab-07-cleanup.sh && echo "cleanup script: valid bash syntax"
 ```
 
 `bash -n` parses without executing. Run it on every script you write; it costs nothing and catches
@@ -3960,7 +3963,7 @@ name the operation rather than the dependent. Learning the order once is cheaper
 
 | # | After step | What must be true |
 | --- | --- | --- |
-| 1 | Step 2 | Floci running under Compose; five env files sourced; `verify-lab-02.sh` `FAIL=0`; four subnet IDs across two AZs; `kubectl` installed; support path A, B or C recorded in `notes/lab-05a-notes.md` |
+| 1 | Step 2 | Floci running under Compose; five env files sourced; `verify-lab-02.sh` `FAIL=0`; four subnet IDs across two AZs; `kubectl` installed; support path A, B or C recorded in `notes/lab-07-notes.md` |
 | 2 | Step 7 | `usms-eks-cluster-role` trusting `eks.amazonaws.com` with `USMSEKSClusterPolicy`; `usms-eks-node-role` trusting `ec2.amazonaws.com` with `USMSEKSNodePolicy` **and Lab 01's `USMSStudentDataReadWrite`**; `usms-eks-cluster-sg` in `usms-vpc` admitting tcp/443 from the VPC CIDR |
 | 3 | Step 10 | `usms-eks-cluster` `ACTIVE` across all four Lab 02 subnets with the `_lb_ports_` tag present; `usms-eks-nodes` `ACTIVE` in the **two private subnets only**, min 2 / max 4 / desired 2 |
 | 4 | Step 13 | `usms-enrolment` 2/2 ready, ClusterIP Service with two endpoints, CPU request `50m` declared, readiness and liveness probes distinct |
@@ -3968,7 +3971,7 @@ name the operation rather than the dependent. Learning the order once is cheaper
 | 6 | Step 18 | A rolling update observed creating a new ReplicaSet; `rollout history` readable; `rollout undo` exercised; the ConfigMap restored to `1.0.0` and the Deployment back at 2/2 |
 | 7 | Step 19 | `ImagePullBackOff`, `Pending` / `FailedScheduling` and `CrashLoopBackOff` each produced deliberately and diagnosed with `describe`; all three temporary objects deleted |
 | 8 | Step 22 | `PERSISTENCE PROVEN` after a Floci stop and start, with the cluster and node group names **re-derived from `list-clusters` and `list-nodegroups`**, not from shell variables |
-| 9 | Step 24 | `configs/lab-05a.env` with 21 exports and no empty values, committed; nothing under `outputs/` staged; `git check-ignore -v` naming the rule that protected you |
+| 9 | Step 24 | `configs/lab-07.env` with 21 exports and no empty values, committed; nothing under `outputs/` staged; `git check-ignore -v` naming the rule that protected you |
 
 ---
 
@@ -3983,13 +3986,13 @@ name the operation rather than the dependent. Learning the order once is cheaper
     kubectl cluster-info
     ```{% endraw %}
 
-    If no containers are listed, the cluster's nodes are not running — start Floci with
+    If no containers are listed, the cluster's nodes are not running - start Floci with
     `./scripts/setup/floci-up.sh` and give it 30 seconds. If containers are listed but the published
     port differs from the one in your kubeconfig, re-run Step 11's `update-kubeconfig`, which
     rewrites the endpoint.
 
     If `current-context` names a cluster you do not recognise, you are pointed at something else
-    entirely — a Docker Desktop cluster, or a colleague's. `kubectl config get-contexts` lists them
+    entirely - a Docker Desktop cluster, or a colleague's. `kubectl config get-contexts` lists them
     and `kubectl config use-context` switches.
 
 ??? danger "`error: You must be logged in to the server (Unauthorized)`"
@@ -4000,7 +4003,7 @@ name the operation rather than the dependent. Learning the order once is cheaper
     kubeconfig fallback given in Step 11.
 
     If it does not, your AWS identity is not mapped into the cluster's authorisation system. On real
-    EKS the cluster creator is mapped automatically and everyone else must be added — historically
+    EKS the cluster creator is mapped automatically and everyone else must be added - historically
     through the `aws-auth` ConfigMap, now through EKS access entries. This is worth knowing about
     because it is the commonest real-world EKS onboarding problem, and it does not arise locally.
 
@@ -4017,8 +4020,8 @@ name the operation rather than the dependent. Learning the order once is cheaper
     Fix by making the Services exist, then restarting the gateway:
 
     ```bash
-    kubectl apply -f manifests/lab-05a/20-enrolment.yaml
-    kubectl apply -f manifests/lab-05a/30-results.yaml
+    kubectl apply -f manifests/lab-07/20-enrolment.yaml
+    kubectl apply -f manifests/lab-07/30-results.yaml
     kubectl rollout restart deployment/usms-gateway
     ```
 
@@ -4036,7 +4039,7 @@ name the operation rather than the dependent. Learning the order once is cheaper
     kubectl get nodes -o custom-columns='NAME:.metadata.name,TAINTS:.spec.taints[*].key'
     ```
 
-    The correct fix is Step 10 — create the node group, so there is somewhere to run pods. If Step 10
+    The correct fix is Step 10 - create the node group, so there is somewhere to run pods. If Step 10
     is unavailable on your build, the local-only workaround is to remove the taint:
 
     ```bash
@@ -4062,7 +4065,7 @@ name the operation rather than the dependent. Learning the order once is cheaper
     `selector.matchLabels` is a *separate* selector from the Service's; they usually match because you
     wrote them to, not because Kubernetes requires it.
 
-    If labels agree and readiness is `False`, the readiness probe is failing —
+    If labels agree and readiness is `False`, the readiness probe is failing -
     `kubectl describe pod` shows `Readiness probe failed:` with the HTTP status.
 
 ??? danger "`ImagePullBackOff` on a public image, and you are behind a proxy or offline"
@@ -4090,8 +4093,8 @@ name the operation rather than the dependent. Learning the order once is cheaper
           --query 'Subnets[].[SubnetId,AvailabilityZone]' --output text
         ```
 
-    2. `templates/lab-05a-create-cluster.json` contains literal `$USMS_...` text because the heredoc
-       was quoted. `grep '\$USMS' templates/lab-05a-create-cluster.json` answers it in one line.
+    2. `templates/lab-07-create-cluster.json` contains literal `$USMS_...` text because the heredoc
+       was quoted. `grep '\$USMS' templates/lab-07-create-cluster.json` answers it in one line.
     3. The security group is in a different VPC from the subnets. Step 6's third verify covers this.
 
 ??? danger "`kubectl apply` reports `field is immutable` on a Deployment"
@@ -4100,11 +4103,11 @@ name the operation rather than the dependent. Learning the order once is cheaper
 
     ```bash
     kubectl delete deployment usms-enrolment
-    kubectl apply -f manifests/lab-05a/20-enrolment.yaml
+    kubectl apply -f manifests/lab-07/20-enrolment.yaml
     ```
 
     This is a genuine and well-known Kubernetes rough edge. It is also a good argument for choosing
-    your label scheme once, at the start, and leaving it alone — which is why this course fixed
+    your label scheme once, at the start, and leaving it alone - which is why this course fixed
     `app`, `project` and `tier` in Step 13 and never varied them.
 
 ??? danger "Everything worked yesterday and today the cluster is empty"
@@ -4117,7 +4120,7 @@ name the operation rather than the dependent. Learning the order once is cheaper
     A `FLOCI_STORAGE_MODE` of `memory` discards all state on restart. That is the failure §2.1 of the
     course contract exists to prevent, and Step 22 is the test that catches it. If the mode is
     correct and the cluster is still gone, check whether anyone ran `docker compose down -v` or
-    `docker volume prune` — both are forbidden in this course for exactly this reason.
+    `docker volume prune` - both are forbidden in this course for exactly this reason.
 
 ---
 
@@ -4128,13 +4131,13 @@ name the operation rather than the dependent. Learning the order once is cheaper
 | Feature | Real AWS | Floci | Status |
 | --- | --- | --- | --- |
 | `eks create-cluster` / `describe-cluster` | Provisions a managed control plane in AWS-owned accounts, 10–15 min | Starts a k3s cluster in local containers, 1–4 min | Implemented in Floci (Path A) |
-| Kubernetes API itself | Upstream conformant | Genuinely upstream conformant — this half is real | Implemented in Floci |
+| Kubernetes API itself | Upstream conformant | Genuinely upstream conformant - this half is real | Implemented in Floci |
 | Deployments, ReplicaSets, Services, ConfigMaps | Standard | Standard, identical behaviour | Implemented in Floci |
 | Cluster DNS (CoreDNS) | Standard | Standard | Implemented in Floci |
 | Rolling updates and rollback | Standard | Standard | Implemented in Floci |
 | Managed node group | Real EC2 instances in your subnets, real ASG | Recorded as an object; nodes are local containers | Floci Limitation |
 | `instanceTypes`, `amiType` | Determine real hardware and a real AMI | Stored and returned; no effect | Floci Limitation |
-| VPC CNI — pods get real VPC IPs | Yes; pod IPs come from your subnet CIDRs | Pods get k3s cluster-network addresses, unrelated to `10.0.0.0/16` | Floci Limitation |
+| VPC CNI - pods get real VPC IPs | Yes; pod IPs come from your subnet CIDRs | Pods get k3s cluster-network addresses, unrelated to `10.0.0.0/16` | Floci Limitation |
 | Cluster and node IAM roles enforced | A missing permission fails cluster creation or node registration | Stored, never evaluated | Floci Limitation |
 | IRSA / OIDC provider | Full support; the recommended way to give pods AWS permissions | Issuer usually absent; no reachable discovery document | Conceptual / Real AWS |
 | KMS envelope encryption of Secrets | Configurable at cluster creation | Not available | Conceptual / Real AWS |
@@ -4174,7 +4177,7 @@ RECORDED BUT NOT ENFORCED
   the node group's instance type, AMI type and scaling numbers
   the cluster's security group and its VPC association
 
-CONCEPTUAL ONLY — you read about it and could not run it
+CONCEPTUAL ONLY - you read about it and could not run it
   IRSA and the OIDC trust chain
   KMS envelope encryption of Secrets
   EKS access entries
@@ -4188,10 +4191,10 @@ no OIDC issuer" is true, and is worth more.
 ---
 ## 13. Independent Lab Exercises
 
-Work in `labs/lab-05a-eks/exercises.md`. Record commands and output there, and screenshots in
+Work in `labs/lab-07-eks/exercises.md`. Record commands and output there, and screenshots in
 `screenshots/`. Hints point at documentation or an earlier step; none of them contains the answer.
 
-### Exercise 1 — Basic: a fourth microservice
+### Exercise 1 - Basic: a fourth microservice
 
 **Requirements**
 
@@ -4200,7 +4203,7 @@ identifying itself and its pod, a readiness probe on `/healthz`, and a ClusterIP
 
 **Constraints**
 
-- The manifest must be a single file, `manifests/lab-05a/70-timetable.yaml`, containing all three
+- The manifest must be a single file, `manifests/lab-07/70-timetable.yaml`, containing all three
   objects.
 - Labels must follow this lab's scheme exactly: `app`, `project`, `tier`.
 - CPU and memory requests must be declared.
@@ -4213,13 +4216,13 @@ identifying itself and its pod, a readiness probe on `/healthz`, and a ClusterIP
 
 **Hints**
 
-Copy the structure of `30-results.yaml`, not `20-enrolment.yaml` — the results manifest is the
+Copy the structure of `30-results.yaml`, not `20-enrolment.yaml` - the results manifest is the
 smaller of the two and has no liveness probe to adapt. Remember that `kubectl apply --dry-run=client
 -f <file>` validates before you commit to anything.
 
 ---
 
-### Exercise 2 — Intermediate: route to it, and prove the route
+### Exercise 2 - Intermediate: route to it, and prove the route
 
 **Requirements**
 
@@ -4228,7 +4231,7 @@ Add a `/timetable/` route to `usms-gateway` so that a request through the gatewa
 
 **Constraints**
 
-- Edit `manifests/lab-05a/40-gateway.yaml` and re-apply it. Do not use `kubectl edit`.
+- Edit `manifests/lab-07/40-gateway.yaml` and re-apply it. Do not use `kubectl edit`.
 - The gateway must end the exercise on a **new** ReplicaSet, and you must be able to show which
   command caused that.
 - `/enrolment/` and `/results/` must still work afterwards. Show all three in one command.
@@ -4245,7 +4248,7 @@ do. Only one of them is appropriate when the pod template itself has not changed
 
 ---
 
-### Exercise 3 — Problem solving: find the misconfiguration
+### Exercise 3 - Problem solving: find the misconfiguration
 
 **Requirements**
 
@@ -4305,7 +4308,7 @@ spec:
 **Expected outcome**
 
 A short diagnosis naming both faults, the command output that revealed each, and a working Service
-with two endpoints. Delete `usms-broken` when you are finished — it is a CLEAN UP item.
+with two endpoints. Delete `usms-broken` when you are finished - it is a CLEAN UP item.
 
 **Hints**
 
@@ -4315,7 +4318,7 @@ probe requests, and what a failing readiness probe does to a Service's membershi
 
 ---
 
-### Exercise 4 — Challenge: survive a node going away
+### Exercise 4 - Challenge: survive a node going away
 
 **Requirements**
 
@@ -4326,8 +4329,8 @@ choice in prose.
 The brief, and nothing more:
 
 > USMS enrolment must not have all its capacity on one node, must never drop below one healthy pod
-> during a voluntary disruption such as a node drain, and must be able to say — from the cluster
-> itself, not from your memory — which node each of its pods is on.
+> during a voluntary disruption such as a node drain, and must be able to say - from the cluster
+> itself, not from your memory - which node each of its pods is on.
 
 **Constraints**
 
@@ -4346,33 +4349,33 @@ where possible, and half a page of justification. Marks are for the reasoning, n
 
 Three Kubernetes features are relevant and you need at least two of them:
 `topologySpreadConstraints`, `podAntiAffinity`, and `PodDisruptionBudget`. Read what each one
-guarantees — one of them is advisory and one of them is enforced, and knowing which is which is most
+guarantees - one of them is advisory and one of them is enforced, and knowing which is which is most
 of the exercise. `kubectl get pods -o wide` answers the third requirement.
 
 ---
 
-### Exercise 5 — Integration: prepare what Lab 05B needs, using what Lab 01 built
+### Exercise 5 - Integration: prepare what Lab 08 needs, using what Lab 01 built
 
 **Requirements**
 
 Three parts, and the third leaves a real artefact for the next session.
 
-**Part 1 — measure the baseline.** Record the current CPU consumption of the `usms-enrolment` pods,
+**Part 1 - measure the baseline.** Record the current CPU consumption of the `usms-enrolment` pods,
 as an absolute value and as a percentage of the `50m` request set in Step 13. Save it to
-`outputs/lab-05a-cpu-baseline.txt`.
+`outputs/lab-07-cpu-baseline.txt`.
 
-**Part 2 — trace Lab 01's policy to this cluster.** Without opening Lab 1's document, produce a
+**Part 2 - trace Lab 01's policy to this cluster.** Without opening Lab 1's document, produce a
 single report that shows: the ARN of `USMSStudentDataReadWrite`; every role currently carrying it;
 the bucket ARN named in its `Resource` field; and whether that bucket exists. Save it to
-`outputs/lab-05a-lab06-readiness.txt`.
+`outputs/lab-07-lab06-readiness.txt`.
 
-**Part 3 — write the readiness note.** Append to `notes/lab-05a-notes.md` a short section stating
-which of `configs/lab-05a.env`'s 21 variables Lab 05B will need, and why, one line each.
+**Part 3 - write the readiness note.** Append to `notes/lab-07-notes.md` a short section stating
+which of `configs/lab-07.env`'s 21 variables Lab 08 will need, and why, one line each.
 
 **Constraints**
 
 - Part 1 must state honestly whether `kubectl top` works on your build. If the metrics API is absent,
-  say so and record what you would expect to see instead; do not invent numbers. Lab 05B Step 7
+  say so and record what you would expect to see instead; do not invent numbers. Lab 08 Step 7
   deals with exactly this, so a documented absence here is genuinely useful.
 - Part 2 must read the bucket name **out of the policy document**, not out of Lab 1's text and not
   from memory. If you type the bucket name yourself, the exercise is not done.
@@ -4380,8 +4383,8 @@ which of `configs/lab-05a.env`'s 21 variables Lab 05B will need, and why, one li
 
 **Expected outcome**
 
-Two files in `outputs/` (git-ignored — check with `git check-ignore -v`) and a new section in your
-notes. Lab 05B's Step 2 opens by reading all three.
+Two files in `outputs/` (git-ignored - check with `git check-ignore -v`) and a new section in your
+notes. Lab 08's Step 2 opens by reading all three.
 
 **Hints**
 
@@ -4390,7 +4393,7 @@ For Part 1: `kubectl top pods -n usms` if the metrics API exists; `kubectl get -
 
 For Part 2: `aws iam get-policy-version` needs both the policy ARN and the default version ID, and
 the version ID comes from `aws iam get-policy`. Chain them. The `Resource` field is a list, and the
-bucket ARN is not the same as the object ARN — Lab 1 deliberately kept them apart, and Lab 06 depends
+bucket ARN is not the same as the object ARN - Lab 1 deliberately kept them apart, and Lab 10 depends
 on the difference.
 
 ---
@@ -4402,10 +4405,10 @@ Tick each item only when you can show the command output that proves it.
 **Environment and setup**
 
 - [ ] Floci started with `./scripts/setup/floci-up.sh`, storage mode `hybrid`
-- [ ] `verify-lab-02.sh` and `verify-lab-04a.sh` run before building
+- [ ] `verify-lab-02.sh` and `verify-lab-04.sh` run before building
 - [ ] Four subnet IDs across two Availability Zones confirmed present
 - [ ] `kubectl` installed and `kubectl version --client` verified
-- [ ] Support path A, B or C probed and recorded in `notes/lab-05a-notes.md`
+- [ ] Support path A, B or C probed and recorded in `notes/lab-07-notes.md`
 
 **IAM and networking**
 
@@ -4417,7 +4420,7 @@ Tick each item only when you can show the command output that proves it.
 
 **Cluster and nodes**
 
-- [ ] `templates/lab-05a-create-cluster.json` written with an **unquoted** heredoc and containing real IDs
+- [ ] `templates/lab-07-create-cluster.json` written with an **unquoted** heredoc and containing real IDs
 - [ ] Cluster created while holding assumed `usms-developer-role` credentials, and identity restored afterwards
 - [ ] Cluster `ACTIVE`, four subnets, correct VPC, `_lb_ports_` tag present
 - [ ] Node group `ACTIVE` in the **private subnets only**, min 2 / max 4 / desired 2
@@ -4443,17 +4446,17 @@ Tick each item only when you can show the command output that proves it.
 
 **Verification, persistence and hygiene**
 
-- [ ] `verify-lab-05a.sh` written and run; result recorded, including expected Path B failures
+- [ ] `verify-lab-07.sh` written and run; result recorded, including expected Path B failures
 - [ ] Floci stopped and started; cluster and node group **re-derived from the API**
 - [ ] `PERSISTENCE PROVEN` recorded, or the failure diagnosed with `floci-storage-check.sh`
-- [ ] `configs/lab-05a.env` generated, 21 exports, no empty values
+- [ ] `configs/lab-07.env` generated, 21 exports, no empty values
 - [ ] `git status --short` inspected before `git add`; nothing under `outputs/` staged
 - [ ] `git check-ignore -v` run on at least one `outputs/` file, and the rule it named recorded
-- [ ] `scripts/cleanup/lab-05a-cleanup.sh` written, syntax-checked, **not run**
+- [ ] `scripts/cleanup/lab-07-cleanup.sh` written, syntax-checked, **not run**
 
 **Understanding**
 
-- [ ] Section 15 answered in prose in `notes/lab-05a-notes.md`
+- [ ] Section 15 answered in prose in `notes/lab-07-notes.md`
 - [ ] Step 20's comparison table filled in with both platforms running
 - [ ] Five exercises attempted; Exercise 5's two `outputs/` files present
 
@@ -4461,14 +4464,14 @@ Tick each item only when you can show the command output that proves it.
 
 ## 15. Review Questions
 
-Answer in prose in `notes/lab-05a-notes.md`. No command output — these ask what you understood.
+Answer in prose in `notes/lab-07-notes.md`. No command output - these ask what you understood.
 
 **1.** An EKS cluster reports `ACTIVE`. Every pod you create sits in `Pending`. Explain, using the
 control plane / data plane distinction from Step 3, why "the cluster is healthy" and "nothing can
 run" are both true at once, and name two different configurations that produce this symptom.
 
 **2.** This lab created two IAM roles with different trust policies. Explain what would actually break
-if you swapped them — gave the cluster role's trust policy to the node role and vice versa — and say
+if you swapped them - gave the cluster role's trust policy to the node role and vice versa - and say
 at what point in Steps 6 to 11 you would notice, **assuming you were on real AWS rather than Floci.**
 
 **3.** Students routinely conflate a **Service** with a **Deployment**, and separately conflate a
@@ -4483,7 +4486,7 @@ problem.
 
 **5.** `usms-enrolment` uses `maxUnavailable: 0`; `usms-results` uses the default. Describe what each
 policy does during an update of a two-replica Deployment, and give one workload for which each is the
-better choice. Then say which of them is closer to Lab 04A's ECS deployment configuration, and why.
+better choice. Then say which of them is closer to Lab 04's ECS deployment configuration, and why.
 
 **6.** A colleague proposes storing the USMS database password in a Kubernetes Secret and says "it's
 encrypted, so it's fine to commit the manifest". Correct them precisely: say what a Secret does
@@ -4491,9 +4494,9 @@ provide, what it does not, and what you would do instead on real EKS. Reference 
 Step 17.
 
 **7.** Practical 2 built this application on ECS; this lab built it on Kubernetes. For the University
-Student Management System specifically — a small team, one region, a workload that is quiet for eight
-months and very busy for two — argue for one platform over the other. Your answer must name at least
-two things this lab was **harder** than Lab 04A, and at least one thing Kubernetes gave you that ECS
+Student Management System specifically - a small team, one region, a workload that is quiet for eight
+months and very busy for two - argue for one platform over the other. Your answer must name at least
+two things this lab was **harder** than Lab 04, and at least one thing Kubernetes gave you that ECS
 could not.
 
 ---
@@ -4502,15 +4505,15 @@ could not.
 
 ### 16.1 Reflection
 
-The reason this laboratory is longer than Lab 04A is not that Kubernetes is worse. It is that EKS
+The reason this laboratory is longer than Lab 04 is not that Kubernetes is worse. It is that EKS
 gave you back a data plane. Fargate took the machines away and, with them, most of the decisions;
-Steps 5, 7 and 10 exist because you own nodes again, and every one of them was a decision Lab 04A
+Steps 5, 7 and 10 exist because you own nodes again, and every one of them was a decision Lab 04
 never asked you to make.
 
 What you get in exchange is visible in Step 16. The gateway's configuration contains two DNS names
 and no addresses. Pods die, pods start, the ReplicaSet replaces them, endpoints are rewritten, and
-nothing anywhere had to be told. Lab 04B achieved the equivalent with an ALB, a target group, a
-listener and a service integration — four AWS objects, each with its own console page. Kubernetes did
+nothing anywhere had to be told. Lab 05 achieved the equivalent with an ALB, a target group, a
+listener and a service integration - four AWS objects, each with its own console page. Kubernetes did
 it with one object type and a DNS record, and it would do it identically on any conformant cluster
 anywhere.
 
@@ -4518,7 +4521,7 @@ The single most important thing to carry forward is the `spec` and `status` loop
 never told Kubernetes to *do* anything in this lab. You wrote down what should be true, and
 controllers made it true and then wrote down what actually was. `replicas: 2` is not an instruction to
 start two pods; it is a statement about the world that a controller is responsible for maintaining.
-Once that clicks, `HorizontalPodAutoscaler` in Lab 05B is not a new idea — it is one more controller,
+Once that clicks, `HorizontalPodAutoscaler` in Lab 08 is not a new idea - it is one more controller,
 writing to one more field, in exactly the same loop.
 
 And Step 7 is the sentence worth remembering from the whole of Practical 2 and Practical 4 together.
@@ -4530,10 +4533,10 @@ models come and go faster than the question "what may this code do to student da
 
 ```text
 ╔══════════════════ KEEP ══════════════════╗    ╔═══════════ CLEAN UP ═══════════╗
-║ usms-eks-cluster        Lab 05B needs it ║    ║ pod usms-toobig      Step 19   ║
-║ usms-eks-nodes          Lab 05B Step 10  ║    ║ pod usms-crasher     Step 19   ║
-║ the _lb_ports_ tag      Lab 05B Step 15  ║    ║ pod usms-broken      Exercise 3║
-║ namespace usms          all of Lab 05B   ║    ║ manifests/*.bak      sed -i.bak║
+║ usms-eks-cluster        Lab 08 needs it ║    ║ pod usms-toobig      Step 19   ║
+║ usms-eks-nodes          Lab 08 Step 10  ║    ║ pod usms-crasher     Step 19   ║
+║ the _lb_ports_ tag      Lab 08 Step 15  ║    ║ pod usms-broken      Exercise 3║
+║ namespace usms          all of Lab 08   ║    ║ manifests/*.bak      sed -i.bak║
 ║ usms-enrolment + its cpu request         ║    ║ any usms-debug pod left over   ║
 ║ usms-results, usms-gateway               ║    ║   (--rm should have removed it)║
 ║ all four ConfigMaps                      ║    ╚════════════════════════════════╝
@@ -4541,8 +4544,8 @@ models come and go faster than the question "what may this code do to student da
 ║ usms-eks-cluster-role, usms-eks-node-role║
 ║ USMSEKSClusterPolicy, USMSEKSNodePolicy  ║
 ║ usms-eks-cluster-sg                      ║
-║ configs/lab-05a.env                      ║
-║ everything from Labs 01, 02, 03, 04A-C   ║
+║ configs/lab-07.env                      ║
+║ everything from Labs 01, 02, 03, 04-C   ║
 ╚══════════════════════════════════════════╝
 ```
 
@@ -4552,24 +4555,24 @@ Clean up now:
 kubectl delete pod usms-toobig usms-crasher --ignore-not-found -n usms
 kubectl delete deployment,service usms-broken --ignore-not-found -n usms
 kubectl get pods -n usms
-rm -f manifests/lab-05a/*.bak
+rm -f manifests/lab-07/*.bak
 ```
 
-**What to look for:** five pods and nothing else — two enrolment, two results, one gateway. Six if you
+**What to look for:** five pods and nothing else - two enrolment, two results, one gateway. Six if you
 did Exercise 1.
 
-Do **not** run `scripts/cleanup/lab-05a-cleanup.sh`, `lab-04a-cleanup.sh`, `lab-03-cleanup.sh` or
+Do **not** run `scripts/cleanup/lab-07-cleanup.sh`, `lab-04-cleanup.sh`, `lab-03-cleanup.sh` or
 `lab-02-cleanup.sh`. They are for the end of the course, in the order given in each lab's Section 9.3.
 
 ### 16.3 The architecture you now have
 
 ```text
 Lab 01  IAM
-  usms-developer-role .................. used in Lab 02, Lab 04A and this lab's Step 8
+  usms-developer-role .................. used in Lab 02, Lab 04 and this lab's Step 8
   usms-ec2-app-role + usms-ec2-app-profile   attached to usms-web-01
   usms-lambda-exec-role ................ waiting for Lab 07
   USMSStudentDataReadWrite ............. now on THREE roles, naming a bucket that
-                                         still does not exist. Lab 06 changes that
+                                         still does not exist. Lab 10 changes that
   usms-eks-cluster-role -> USMSEKSClusterPolicy               <- new
   usms-eks-node-role    -> USMSEKSNodePolicy                  <- new
                         -> USMSStudentDataReadWrite (unchanged)
@@ -4583,58 +4586,62 @@ Lab 02  NETWORK
     firewalls: usms-app-sg, usms-db-sg, usms-enrolment-sg, usms-alb-sg,
                usms-private-nacl, usms-eks-cluster-sg          <- new
 
-Lab 03  COMPUTE — instances you administer
+Lab 03  COMPUTE - instances you administer
   usms-web-01   public subnet a   usms-app-sg   usms-ec2-app-profile   usms-web-eip
   usms-db-01    private subnet a  usms-db-sg
   usms-web-golden  AMI
 
-Lab 04A-C  COMPUTE — containers you operate, the ECS way
+Lab 06   COMPUTE - containers you operate, the ECS way
   usms-ecs-cluster / usms-enrolment-svc / usms-enrolment:2
   usms-enrolment-alb -> usms-enrolment-tg -> the service's tasks
   scalable target service/usms-ecs-cluster/usms-enrolment-svc  min 2 max 10
   /usms/ecs/enrolment  retention 7 days
      ^ STILL RUNNING. This lab did not replace it; it built the alternative alongside
 
-Lab 05A  COMPUTE — containers you operate, the Kubernetes way   <-- you are here
+Lab 07  COMPUTE - containers you operate, the Kubernetes way   <-- you are here
   usms-eks-cluster        k8s 1.30, 4 subnets, sg usms-eks-cluster-sg
-    tags Project=USMS Tier=app Lab=05A Name=usms-eks-cluster _lb_ports_=8081,8082
+    tags Project=USMS Tier=app Lab=07 Name=usms-eks-cluster _lb_ports_=8081,8082
     └── usms-eks-nodes    private-a + private-b, min 2 / max 4 / desired 2
                           labels workload=usms tier=app
   namespace usms
     Deployment usms-gateway    1 replica   -> Service ClusterIP
       proxies /enrolment/ and /results/ BY DNS NAME, no addresses anywhere
     Deployment usms-enrolment  2 replicas  -> Service ClusterIP, 2 endpoints
-      requests cpu=50m mem=32Mi   <- Lab 05B's HPA divides by this
+      requests cpu=50m mem=32Mi   <- Lab 08's HPA divides by this
       readiness + liveness on /healthz, strategy maxUnavailable 0 / maxSurge 1
     Deployment usms-results    2 replicas  -> Service ClusterIP, 2 endpoints
       default strategy 25% / 25%  <- deliberately different from enrolment
     ConfigMaps usms-app-config, usms-enrolment-conf, usms-results-conf, usms-gateway-conf
     Secret usms-enrolment-secret     base64, not encrypted, and you proved it
     ServiceAccount usms-enrolment-sa  annotated for IRSA on real AWS only
-  NOTHING outside the cluster can reach any of it. That is Lab 05B's subject
+  NOTHING outside the cluster can reach any of it. That is Lab 08's subject
 
-Lab 05B  SCALING AND EXPOSURE (next)
+Lab 08  SCALING AND EXPOSURE (next)
   replicas by hand -> HPA -> node group scaling
   ClusterIP -> port-forward -> NodePort -> LoadBalancer -> Ingress
 
-Lab 06  STORAGE
+Lab 09  SECURITY
+  least-privilege review of the IAM and security-group estate built so far
+
+Lab 10  Lambda
   usms-student-data  <- the bucket that makes USMSStudentDataReadWrite real for
-                        THREE roles at once
-Lab 07  Lambda, then DynamoDB · RDS · SNS/SQS · CloudWatch · CloudFormation
+                        THREE roles at once. Lambda creates it inline; there is
+                        no separate storage lab
+  then DynamoDB · RDS · SNS/SQS · CloudWatch · CloudFormation
 ```
 
 ---
 
 ## 17. Preparation for the Next Lab
 
-Lab 05B — `lab-05b-eks-scaling.md` — takes the three services you just deployed and answers the two
+Lab 08 - `lab-08-eks-scaling.md` - takes the three services you just deployed and answers the two
 questions this lab deliberately left open: **how do they grow**, and **how does anybody outside the
 cluster reach them?** It creates no new microservice, registers no new image, and renames nothing.
 
-| From `configs/lab-05a.env` | Lab 05B uses it for |
+| From `configs/lab-07.env` | Lab 08 uses it for |
 | --- | --- |
 | `USMS_EKS_CLUSTER` | Every `aws eks` call, and the kubeconfig context |
-| `USMS_EKS_NODEGROUP` | `update-nodegroup-config`, Step 10 — the data-plane half of scaling |
+| `USMS_EKS_NODEGROUP` | `update-nodegroup-config`, Step 10 - the data-plane half of scaling |
 | `USMS_EKS_NAMESPACE` | Every `kubectl` call |
 | `USMS_EKS_LB_PORTS` | **Step 15 cannot expose a LoadBalancer Service without it.** This is the one that bites |
 | `USMS_K8S_DEPLOY_ENROLMENT` | The Deployment the HorizontalPodAutoscaler targets |
@@ -4642,16 +4649,16 @@ cluster reach them?** It creates no new microservice, registers no new image, an
 | `USMS_K8S_CPU_REQUEST` | Checking the HPA's arithmetic instead of trusting it |
 | `USMS_EKS_ENDPOINT` | Confirming `kubectl` is pointed at the right cluster after a restart |
 
-| From earlier labs | Lab 05B uses it for |
+| From earlier labs | Lab 08 uses it for |
 | --- | --- |
-| Lab 02 `USMS_PUBLIC_SUBNET_A` and `-B` | Where a real EKS LoadBalancer Service would place its nodes. Compare with Lab 04B, which required exactly the same pair |
-| Lab 04B `usms-enrolment-alb` | The direct comparison in Section 12 — the same job, an entirely different control plane |
-| Lab 04C's scalable target | The comparison that Section 3 of that lab is built on: one integer, two very different machines for moving it |
+| Lab 02 `USMS_PUBLIC_SUBNET_A` and `-B` | Where a real EKS LoadBalancer Service would place its nodes. Compare with Lab 05, which required exactly the same pair |
+| Lab 05 `usms-enrolment-alb` | The direct comparison in Section 12 - the same job, an entirely different control plane |
+| Lab 06's scalable target | The comparison that Section 3 of that lab is built on: one integer, two very different machines for moving it |
 | Lab 01 `USMSStudentDataReadWrite` | Unchanged. Still on three roles, still naming nothing |
 
-**The connection to state out loud before the next session.** Lab 04C handed `desiredCount` to
-Application Auto Scaling — an AWS service, outside the workload, writing one integer through an AWS
-API. Lab 05B hands `replicas` to a HorizontalPodAutoscaler — a controller **inside the cluster**,
+**The connection to state out loud before the next session.** Lab 06 handed `desiredCount` to
+Application Auto Scaling - an AWS service, outside the workload, writing one integer through an AWS
+API. Lab 08 hands `replicas` to a HorizontalPodAutoscaler - a controller **inside the cluster**,
 reading a metrics API **inside the cluster**, writing one integer through the Kubernetes API. The
 architecture is identical and the blast radius is not. When you write your comparison, that is the
 distinction that earns marks: not "both of them scale", but *where the thing doing the scaling lives,
@@ -4661,40 +4668,40 @@ and what happens to it when the control plane you do not own has a bad afternoon
 
 ```bash
 cd ~/aws-floci-course
-./scripts/utilities/verify-lab-04a.sh | tail -2
-./scripts/utilities/verify-lab-05a.sh | tail -2
-grep -c '^export' configs/lab-05a.env
+./scripts/utilities/verify-lab-04.sh | tail -2
+./scripts/utilities/verify-lab-07.sh | tail -2
+grep -c '^export' configs/lab-07.env
 kubectl get deploy -n usms -o custom-columns='NAME:.metadata.name,READY:.status.readyReplicas'
 kubectl get deploy usms-enrolment -n usms \
   -o jsonpath='{.spec.template.spec.containers[0].resources.requests.cpu}'; echo
 aws eks describe-cluster --name usms-eks-cluster --query 'cluster.tags._lb_ports_' --output text
 ```
 
-You want: `FAIL=0` from the first (or `FAIL=1` if you never did Lab 04B Exercise 2, which that lab
+You want: `FAIL=0` from the first (or `FAIL=1` if you never did Lab 05 Exercise 2, which that lab
 says is expected); `FAIL=0` from the second on Path A or `FAIL=3` on Path B; a count of **21**; three
 Deployments reading `2`, `2` and `1`; the string `50m`; and `8081,8082`.
 
-The last two are the ones to care about. **An empty CPU request means Lab 05B's HPA will report
+The last two are the ones to care about. **An empty CPU request means Lab 08's HPA will report
 `<unknown>` and never scale**, and no amount of load generation will fix it. **A missing `_lb_ports_`
-tag means Lab 05B Step 15 has no host port to publish on**, and the remedy is to recreate the cluster.
+tag means Lab 08 Step 15 has no host port to publish on**, and the remedy is to recreate the cluster.
 Both are five-minute fixes today and hour-long fixes next week.
 
 **Read ahead, five minutes:** find out what the Kubernetes **metrics API** is, and why it is an
 optional add-on rather than part of the core. Then look up the three values of a Service's `type`
-field. Lab 05B assumes neither, but it moves considerably faster if the words are not new.
+field. Lab 08 assumes neither, but it moves considerably faster if the words are not new.
 
-Finally, take a snapshot so that a mistake in Lab 05B is recoverable:
+Finally, take a snapshot so that a mistake in Lab 08 is recoverable:
 
 ```bash
-floci snapshot save lab-05a-complete
+floci snapshot save lab-07-complete
 ```
 
-If `floci snapshot` is not available on your build, use the filesystem fallback — and stop Floci
+If `floci snapshot` is not available on your build, use the filesystem fallback - and stop Floci
 first, because archiving a live data directory can capture a half-written file:
 
 ```bash
 ./scripts/setup/floci-down.sh
-tar -czf ~/floci-data-lab-05a.tar.gz -C ~ floci-data
+tar -czf ~/floci-data-lab-07.tar.gz -C ~ floci-data
 ./scripts/setup/floci-up.sh
 ```
 
@@ -4702,7 +4709,7 @@ Keep the archive **outside** the repository so it is never a commit candidate.
 
 ---
 
-## Appendix A — Command Reference
+## Appendix A - Command Reference
 
 **Environment**
 
@@ -4712,10 +4719,10 @@ Keep the archive **outside** the repository so it is never a commit candidate.
 | `./scripts/setup/floci-down.sh` | Stop Floci, keeping all state |
 | `./scripts/utilities/whoami.sh` | Identity and endpoint; exits 1 if the account is wrong |
 | `./scripts/utilities/floci-storage-check.sh` | Six read-only checks that name a persistence failure |
-| `./scripts/utilities/eks-support-probe.sh` | This lab's Step 2 — which support path you are on |
-| `./scripts/utilities/verify-lab-05a.sh` | This lab's 30 checks |
+| `./scripts/utilities/eks-support-probe.sh` | This lab's Step 2 - which support path you are on |
+| `./scripts/utilities/verify-lab-07.sh` | This lab's 30 checks |
 
-**AWS — EKS**
+**AWS - EKS**
 
 | Command | Purpose |
 | --- | --- |
@@ -4730,7 +4737,7 @@ Keep the archive **outside** the repository so it is never a commit candidate.
 | `aws eks update-kubeconfig --name X --alias Y` | Write cluster, user and context into `~/.kube/config` |
 | `aws eks delete-nodegroup` / `delete-cluster` | Teardown, in that order. Section 9.3 |
 
-**AWS — IAM and EC2 used here**
+**AWS - IAM and EC2 used here**
 
 | Command | Purpose |
 | --- | --- |
@@ -4744,7 +4751,7 @@ Keep the archive **outside** the repository so it is never a commit candidate.
 | `aws ec2 create-security-group --vpc-id ...` | A group in a **named** VPC, never the default |
 | `aws sts assume-role --role-arn ... --role-session-name ...` | Take on `usms-developer-role` for the build |
 
-**kubectl — reading**
+**kubectl - reading**
 
 | Command | Purpose |
 | --- | --- |
@@ -4759,7 +4766,7 @@ Keep the archive **outside** the repository so it is never a commit candidate.
 | `kubectl api-resources --namespaced=true -o name` | What nouns does this cluster know? |
 | `kubectl auth can-i <verb> <resource>` | Am I allowed to? |
 
-**kubectl — changing**
+**kubectl - changing**
 
 | Command | Purpose |
 | --- | --- |
@@ -4778,7 +4785,7 @@ Keep the archive **outside** the repository so it is never a commit candidate.
 
 ---
 
-## Appendix B — New JMESPath, `kubectl` and CLI patterns introduced
+## Appendix B - New JMESPath, `kubectl` and CLI patterns introduced
 
 **JMESPath**
 
@@ -4825,20 +4832,20 @@ Keep the archive **outside** the repository so it is never a commit candidate.
 
 ## Sources
 
-- Amazon EKS User Guide — clusters, node groups, IAM roles, IRSA and `update-kubeconfig`:
+- Amazon EKS User Guide - clusters, node groups, IAM roles, IRSA and `update-kubeconfig`:
   [docs.aws.amazon.com/eks](https://docs.aws.amazon.com/eks/latest/userguide/what-is-eks.html)
 - Connecting `kubectl` to an EKS cluster:
-  [docs.aws.amazon.com/eks — create-kubeconfig](https://docs.aws.amazon.com/eks/latest/userguide/create-kubeconfig.html)
+  [docs.aws.amazon.com/eks - create-kubeconfig](https://docs.aws.amazon.com/eks/latest/userguide/create-kubeconfig.html)
 - AWS CLI reference for `aws eks`:
-  [awscli.amazonaws.com — eks](https://docs.aws.amazon.com/cli/latest/reference/eks/)
-- Kubernetes documentation — Deployments, Services, ConfigMaps, Secrets, probes and DNS:
+  [awscli.amazonaws.com - eks](https://docs.aws.amazon.com/cli/latest/reference/eks/)
+- Kubernetes documentation - Deployments, Services, ConfigMaps, Secrets, probes and DNS:
   [kubernetes.io/docs/concepts](https://kubernetes.io/docs/concepts/)
-- LocalStack EKS provider — k3d-backed clusters, `_lb_ports_`, node groups and known limitations,
+- LocalStack EKS provider - k3d-backed clusters, `_lb_ports_`, node groups and known limitations,
   which is the emulator behaviour this course calls Floci:
-  [docs.localstack.cloud — EKS](https://docs.localstack.cloud/aws/services/eks/)
-- k3d documentation — `cluster create`, `kubeconfig`, and `image import` for offline laboratories:
+  [docs.localstack.cloud - EKS](https://docs.localstack.cloud/aws/services/eks/)
+- k3d documentation - `cluster create`, `kubeconfig`, and `image import` for offline laboratories:
   [k3d.io](https://k3d.io/)
-- Official `nginx` Docker image — the `/etc/nginx/templates` envsubst behaviour used by all three
+- Official `nginx` Docker image - the `/etc/nginx/templates` envsubst behaviour used by all three
   microservices: [hub.docker.com/_/nginx](https://hub.docker.com/_/nginx)
 
 *Compiled for DSO303, Royal Thimphu College / CST, RUB. Laboratory content verified against Floci's

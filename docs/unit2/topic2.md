@@ -1,5 +1,6 @@
 # Amazon Elastic Container Service
 
+
 ## Definition
 
 **Amazon Elastic Container Service (ECS)** is an AWS-native container orchestrator: a managed control plane that stores your declared desired state, schedules containers onto capacity, replaces them when they fail, and integrates them with AWS networking, identity, load balancing, and observability.
@@ -145,6 +146,14 @@ flowchart TD
     SP --> RES
     RES --> NOTE["Guaranteed floor of 2 survives a Spot reclamation event"]
 ```
+
+Generate a educational content with clean and neat diagram with white background
+
+<figure markdown="span">
+    ![3layerglobalinfra](../img/U2/t2/fargatecapacity.png){width="80%"}
+    <figcaption>Example of Fargate Capacity Provider</figcaption>
+    <p align='right' style="font-size:0.8em"><i>Image Source: AI Generaed (Google Gemini)</i></p>
+</figure>
 
 **Auto Scaling group capacity providers** add three managed behaviours:
 

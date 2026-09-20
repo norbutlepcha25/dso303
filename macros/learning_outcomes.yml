@@ -1,23 +1,14 @@
 unit1:
-  - Explain the principles of cloud-native architectures and their implementation using AWS services, including the benefits and trade-offs of different service models (IaaS, PaaS, FaaS).
+
 unit2:
-  - Explain the principles of asymptotic analysis and the role of algorithms in computing.
 
 unit3:
-  - Design and implement containerized applications using Amazon Elastic Container Service (ECS) and Elastic Kubernetes Service (EKS), demonstrating proficiency in container orchestration and management on AWS.
 
 unit4:
-  - Implement divide-and-conquer algorithms such as Strassen's algorithm for matrix multiplication and the Fast Fourier Transform.
-  - Critique the effectiveness of different algorithm design paradigms (divide-and-conquer, dynamic programming, greedy) for various problem types.
+  - test 
 
 unit5:
-  - Compare and contrast various sorting algorithms, evaluating their time complexity and performance characteristics.
 
 unit6:
-  - Design dynamic programming solutions for complex problems such as the rod cutting problem and optimal binary search trees.
-  - Critique the effectiveness of different algorithm design paradigms (divide-and-conquer, dynamic programming, greedy) for various problem types.
 
 unit7:
-  - Develop greedy algorithms for optimization problems, such as the fractional knapsack problem and activity selection.
-  - Examine the principles and applications of randomised algorithms in problem-solving.
-  - Critique the effectiveness of different algorithm design paradigms (divide-and-conquer, dynamic programming, greedy) for various problem types.

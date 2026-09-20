@@ -24,7 +24,6 @@ Within an AWS architecture these loops sit entirely in the ECS control plane and
 
     You never tell ECS to start a task. You tell it what should be true — six tasks of revision 12, spread across three Availability Zones, between four and forty depending on requests per target — and the platform continuously acts to make reality match. Every setting in this chapter is part of that specification. The corresponding discipline is that if reality does not match, the specification is where you look first, not the platform.
 
----
 
 ## Why This Service or Concept Exists
 
@@ -76,25 +75,6 @@ Before orchestrators, a deployment was a sequence of steps with a failure mode i
 !!! warning "Health checks catch crashes, not regressions"
 
     The deployment circuit breaker detects tasks that fail to start or fail their health checks. It cannot detect a version that starts perfectly, passes `/health`, and returns wrong answers, or one that is 40 per cent slower. Those require **CloudWatch alarm-based rollback** on error rate and latency, or a canary that shifts a small traffic share and evaluates metrics before proceeding. Believing the circuit breaker is sufficient is one of the most consequential misunderstandings in this chapter.
-
----
-
-## Real-World Motivation
-
-**A university portal's Availability Zone lesson.** A department deployed a six-task service across three subnets and considered itself multi-AZ. During an AZ impairment the service went down completely: with the default placement behaviour and a cluster whose instances were unevenly distributed, five of six tasks had landed in the affected zone. The subnets were configured; the distribution was never verified. *The architectural lesson is that supplying three subnets permits spreading but does not guarantee it — you must declare a spread strategy and then check the actual distribution on a dashboard.*
-
-**A retailer's scaling that never fired.** A checkout service scaled on `CPUUtilization` at a 70 per cent target. Under peak load CPU reached 35 per cent while p99 latency rose to four seconds, because the bottleneck was a saturated database connection pool. The service never scaled. Moving to `ALBRequestCountPerTarget` made the policy track the thing that actually caused load. *The architectural lesson is that a scaling metric must be a proxy for arriving work, and CPU is that proxy only for CPU-bound work.*
-
-**A logistics company's oscillating workers.** A queue consumer scaled on `ApproximateNumberOfMessagesVisible` with a target of 100. Every burst drove the count to forty tasks, which drained the queue in seconds, which drove it back to two, which let the queue build again. The service spent its life scaling. Switching to backlog per task — messages visible divided by running tasks — produced a stable loop. *The architectural lesson is that a scaling metric must be normalised by current capacity, or the controller cannot converge.*
-
-**A bank's silent regression.** A release passed every health check and deployed cleanly. It also introduced a rounding error in interest calculation that no health check could detect and that took nine hours and a customer complaint to surface. Rolling back was straightforward once identified; identifying it was not. The bank subsequently adopted CodeDeploy canary shifting with a post-traffic validation hook running business assertions against the new version before full promotion. *The architectural lesson is that deployment safety mechanisms detect the failures they are designed to detect, and "the process started and answered `/health`" is a very low bar.*
-
-**A media company's deployment-time capacity dip.** A transcoding fleet deployed with `minimumHealthyPercent: 50`, halving capacity during each deployment. Deployments during quiet hours were invisible; a deployment during a live event caused a backlog that took two hours to clear. *The architectural lesson is that deployment parameters encode an assumption about when you deploy, and if that assumption is not enforced it will eventually be violated.*
-
-**A start-up's circuit breaker earning its keep.** A four-person team pushed a release with a missing environment variable. Tasks started, crashed on the first request, and were replaced. Without the circuit breaker the service would have degraded as healthy old tasks were drained in favour of failing new ones. With it enabled, ECS halted after the failure threshold and rolled back automatically, and the team learned about it from an alarm rather than from users. *The architectural lesson is that the circuit breaker costs nothing, has no scenario in which you prefer a failing deployment to continue, and should be enabled by default on every service.*
-
-**A gaming studio's Spot placement.** A studio ran stateless services entirely on EC2 Spot with a single instance type. A capacity-pool reclamation removed the whole fleet at once. Adding a mixed-instances policy across six compatible types, plus a `spread` strategy on instance ID, converted a total loss into the loss of a fraction. *The architectural lesson is that placement diversity and instance-type diversity are both risk controls, and Spot amplifies the cost of ignoring either.*
-
 
 ## Core Concepts
 

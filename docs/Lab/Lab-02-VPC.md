@@ -1,5 +1,5 @@
 
-# Lab 02 Virtual Private Cloud and Networking
+# Lab 02 - Virtual Private Cloud and Networking
 
 ## 1. Learning Objectives
 
@@ -233,7 +233,7 @@ labs/lab-01-iam  labs/lab-02-vpc
 **Purpose**
 
 Bring Floci up if it is stopped, and confirm it came up under Compose with the storage settings the
-course depends on. Everything in this lab is worthless if the state does not survive to Part B.
+course depends on. Everything in this lab is worthless if the state does not survive to Lab 03.
 
 **Run from**
 
@@ -640,7 +640,7 @@ usms-vpc  (vpc-0a1b...)
 **Purpose**
 
 A VPC created from the CLI has DNS resolution on but DNS **hostnames** off. Without hostnames, an
-instance with a public IP gets no public DNS name, and more importantly for Lab 4 and Lab 6 —
+instance with a public IP gets no public DNS name, and more importantly for Lab 4 and Lab 6 -
 service endpoints inside the VPC do not resolve to their private addresses. Turning this on now saves
 a confusing debugging session later.
 
@@ -1057,7 +1057,7 @@ aws ec2 describe-route-tables \
 ```
 
 **What to look for:** two routes. `10.0.0.0/16` to `local`, and `0.0.0.0/0` to your `igw-...` ID.
-Both with `State` of `active`. A route whose state is `blackhole` means its target no longer exists —
+Both with `State` of `active`. A route whose state is `blackhole` means its target no longer exists -
 if you ever detach the internet gateway, this is what you will see.
 
 ---
@@ -1267,7 +1267,7 @@ different places and behave differently.
 | Default | Deny all inbound, allow all outbound | The default NACL allows everything both ways |
 
 The consequence of "stateless" is the one to internalise. If a NACL allows inbound TCP 80 but has no
-outbound rule, the request arrives and the reply is dropped. The reply does not go out on port 80 —
+outbound rule, the request arrives and the reply is dropped. The reply does not go out on port 80 -
 it goes out from port 80 to the client's **ephemeral** port, somewhere in 1024–65535. Every custom
 NACL therefore needs an ephemeral-port rule, and forgetting it produces the most baffling symptom in
 AWS networking: connections that establish and then hang.
@@ -1841,7 +1841,7 @@ NAT gateway available
 
     Real AWS additionally runs a managed, horizontally scaled translation service behind that object.
     It rewrites source addresses on outbound packets, tracks connection state, supports up to 55,000
-    simultaneous connections per destination, and bills per hour plus per gigabyte processed —
+    simultaneous connections per destination, and bills per hour plus per gigabyte processed -
     typically the largest single line item on a small VPC's bill.
 
     Take away the architecture, not the packet path: the NAT gateway sits in a public subnet, the
@@ -2003,7 +2003,7 @@ aws ec2 describe-route-tables \
 
     Real AWS always adds the route, and removing the endpoint removes it again.
 
-    If your route table shows only two routes, the endpoint still exists and Lab 4 will still work —
+    If your route table shows only two routes, the endpoint still exists and Lab 4 will still work -
     Floci routes S3 calls to its own endpoint regardless. Record the endpoint ID and move on; note
     the discrepancy in your lab report, because noticing it is worth more marks than not noticing it.
 
@@ -2112,7 +2112,7 @@ verify command the same pattern works for `Tier`.
 
 Every command in this lab reported success. None of that is evidence the network still exists after
 Floci stops. Lab 1 Step 14 established the pattern create, perturb, read back and this is where
-it applies to Lab 2's work. Part B depends entirely on this being true.
+it applies to Lab 2's work. Lab 03 depends entirely on this being true.
 
 **Run from**
 
@@ -2304,7 +2304,7 @@ does not exist. Two are expected to be missing unless you have done the optional
 - `USMS_PRIVATE_SUBNET_B` created in Exercise 5.
 
 Anything else showing `None` is a genuine gap. Find it now. A missing subnet ID here becomes an
-`InvalidSubnetID.NotFound` in Part B, twenty steps into a different lab.
+`InvalidSubnetID.NotFound` in Lab 03, twenty steps into a different lab.
 
 Finally, confirm the file loads cleanly:
 
@@ -2576,7 +2576,7 @@ mistakes rather than typos:
     **Reversible?** No. You would repeat this laboratory from Step 3.
 
     **Effect on later labs:** total. This script exists so that you have a correct teardown at the end
-    of the course; running it today ends Practical 1 before Part B begins.
+    of the course; running it today ends Practical 1 before Lab 03 begins.
 
     It requires you to type `DELETE USMS NETWORK` in full before it does anything.
 
@@ -2773,7 +2773,7 @@ app group), subnets before the VPC, and the internet gateway detached before it 
 ??? danger "The VPC is gone after a restart"
     Storage mode. Run `./scripts/utilities/floci-storage-check.sh`. If it reports
     `FLOCI_STORAGE_MODE=memory`, a stray `floci start` replaced the Compose container. Remove it and
-    bring the environment back up with `./scripts/setup/floci-up.sh`. The work is not recoverable —
+    bring the environment back up with `./scripts/setup/floci-up.sh`. The work is not recoverable -
     repeat from Step 3, and this time confirm the storage check before building.
 
 ??? danger "`aws ec2 wait nat-gateway-available` never returns"
@@ -3024,9 +3024,9 @@ regenerate `configs/lab-02.env`, and confirm that `USMS_PRIVATE_SUBNET_B` is pop
 **Expected outcome**
 
 Four subnets across two AZs, two of them private and both using `usms-private-rt` and
-`usms-private-nacl`. `configs/lab-02.env` fully populated, committed, and consumed unchanged by Part B.
+`usms-private-nacl`. `configs/lab-02.env` fully populated, committed, and consumed unchanged by Lab 03.
 
-**This is what Part B will use.** Lab 3 launches the USMS database-tier instance into
+**This is what Lab 03 will use.** Lab 3 launches the USMS database-tier instance into
 `usms-private-subnet-a`, and Exercise 5 of Lab 3 launches a second one into
 `usms-private-subnet-b` which will not exist unless you do this now.
 
@@ -3136,7 +3136,7 @@ stateful and can reference each other, and use NACLs as a subnet-wide backstop t
 mistake can undo.
 
 The third is about proof. Everything in this lab reported success. Only Step 23 established that any
-of it will still be there when Part B begins.
+of it will still be there when Lab 03 begins.
 
 ### 16.2 KEEP vs CLEAN UP
 
@@ -3188,7 +3188,7 @@ Lab 02  NETWORK                                        <-- you are here
                                                              -> usms-s3-endpoint
     firewalls: usms-app-sg, usms-db-sg, usms-private-nacl
 
-Lab 03  COMPUTE (Part B, next session)
+Lab 03  COMPUTE (next session)
     usms-web-01  -> usms-public-subnet-a  + usms-app-sg + usms-ec2-app-profile
     usms-db-01   -> usms-private-subnet-a + usms-db-sg
 ```
@@ -3197,7 +3197,7 @@ Lab 03  COMPUTE (Part B, next session)
 
 ## 17. Preparation for the Next Lab
 
-Part B Lab 3, EC2 begins in the next session and will consume the following **without
+Lab 3, EC2 begins in the next session and will consume the following **without
 re-creating any of it**:
 
 | From `configs/lab-02.env` | Lab 3 uses it for |
@@ -3231,15 +3231,15 @@ empty, Lab 1's instance profile has no role in it and Lab 3 Step 11 will fail fi
 the next session.
 
 **Read ahead, five minutes:** find out what an AMI is, and what "user data" means for an EC2
-instance. Part B assumes neither, but it moves faster if the words are not new.
+instance. Lab 03 assumes neither, but it moves faster if the words are not new.
 
-Finally, take a snapshot so that a mistake in Part B is recoverable:
+Finally, take a snapshot so that a mistake in Lab 03 is recoverable:
 
 ```bash
 floci snapshot save lab-02-complete
 ```
 
-If `floci snapshot` is not available on your build, use the filesystem fallback. Stop Floci first —
+If `floci snapshot` is not available on your build, use the filesystem fallback. Stop Floci first -
 archiving a live data directory can capture a half-written file:
 
 ```bash

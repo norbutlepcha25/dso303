@@ -18,7 +18,7 @@ theme:
     #   one. Measured on the Lab 01 page: 139 in-page anchors were crammed into
     #   the left nav alongside the site navigation, and the right column was
     #   empty. Without it the TOC moves to the right column where it belongs.
-    #   Put it back if you prefer the old layout — nothing else depends on it.
+    #   Put it back if you prefer the old layout  - nothing else depends on it.
     - navigation.top
     - search.suggest
     - search.highlight
@@ -65,7 +65,7 @@ copyright: |
 
 extra:
   generator: false
-  # NOTE: harmless, but redundant — site_url already supplies the /dso303 path,
+  # NOTE: harmless, but redundant  - site_url already supplies the /dso303 path,
   # and MkDocs computes base_url per page. The macros plugin also exposes this
   # as a page variable literally named `base_url`, so `{{ base_url }}` in a page
   # resolves to "/dso303" rather than MkDocs' own relative value. Keep it only
@@ -96,7 +96,7 @@ markdown_extensions:
           # Material's docs show a `format:` key here. I tested with and without
           # it on your exact versions: the generated HTML is byte-identical
           # (<pre class="mermaid"><code>) and Material loads mermaid lazily from
-          # its own bundle either way. Left as you had it — no change needed.
+          # its own bundle either way. Left as you had it  - no change needed.
   - admonition
   - pymdownx.details
   - abbr
@@ -128,7 +128,7 @@ plugins:
   - glightbox
   # The macros plugin reads {{ ... }} in every page as Jinja2. That is what
   # broke Lab 01: `docker inspect --format '{{ index .Config.Labels "..." }}'`
-  # is a Go template, not a macro. Two ways to protect a page — pick ONE:
+  # is a Go template, not a macro. Two ways to protect a page  - pick ONE:
   #   1. wrap the affected code blocks in {% raw %} / {% endraw %}   (used in Lab 01)
   #   2. put `render_macros: false` in the page's YAML front matter
   # Both verified working on mkdocs-macros 1.5.0. Do not use both on one page:
@@ -177,23 +177,19 @@ nav:
       - 2.3 Container Orchestration with Amazon ECS: unit2/topic3.md
 
 
-  # - Unit 3:
-  #     - Overview: unit3/overview.md
-  #     - 3.1 EKS Architecture: unit3/topic1.md
-  #     - 3.2 Deploying App in EKS: unit3/topic2.md
-  #     - 3.3 EKS advanced concepts: unit3/topic3.md
+  - Unit 3:
+      - Overview: unit3/overview.md
+      - 3.1 EKS Architecture: unit3/topic1.md
+      - 3.2 Deploying App in EKS: unit3/topic2.md
+      - 3.3 EKS advanced concepts: unit3/topic3.md
 
 
-  # - Unit 4:
-  #     - Overview: unit4/overview.md
-  #     - 4.1 Divide & Conquer Algorithm Design: unit4/topic1.md
-  #     - 4.2 Strassen's Algorithm for Matrix Multiplication: unit4/topic2.md
-  #     - 4.3 Integer Multiplication: unit4/topic3.md
-  #     - 4.4 Convolution & Fast Fourier Transform (FFT): unit4/topic4.md
-  #     - 4.5 Binary Search and Ternary Search: unit4/topic5.md
-  #     - 4.6 Efficient Modular Power (Exponentiation): unit4/topic6.md
-  #     - 4.7 Efficient Matrix Modular Power (Exponentiation): unit4/topic7.md
-  #     - Summary: unit4/summary.md
+  - Unit 4:
+      - Overview: unit4/overview.md
+      - 4.1 Microservice Design Principle: unit4/topic1.md
+      - 4.2 API management: unit4/topic2.md
+      - 4.3 AWS Resilience: unit4/topic3.md
+
 
   # - Unit 5:
   #     - Overview: unit5/overview.md
@@ -241,15 +237,20 @@ nav:
 
   - Lab:
       - Lab Overview: Lab/overview.md
-      - Lab 1 - IAM: Lab/Lab-01-IAM.md
-      - Lab 2 - VPC: Lab/Lab-02_VPC.md
-      - Lab 3 - EC2+VPC: Lab/Lab-03_VPC2.md
-      - Lab 4 — ECS: Lab/Lab-04-ECS.md
-      - Lab 5 -  ALB: Lab/Lab-05-ALB.md
-      - Lab 6 - Auto scaling: Lab/Lab-06-autoscaling.md
-      - Lab 7 - EKS: Lab/Lab-07-EKS.md
-      - Lab 8 - EKS Scaling: Lab/Lab-08-EKS-scaling.md
-       # - "Lab 5": Lab/stats.md
+      - Lab 01 - IAM: Lab/Lab-01-IAM.md
+      - Lab 02 - VPC: Lab/Lab-02-VPC.md
+      - Lab 03 - EC2: Lab/Lab-03-EC2.md
+      - Lab 04 - ECS: Lab/Lab-04-ECS.md
+      - Lab 05 - ALB: Lab/Lab-05-ALB.md
+      - Lab 06 - Auto Scaling: Lab/Lab-06-autoscaling.md
+      - Lab 07 - EKS: Lab/Lab-07-EKS.md
+      - Lab 08 - EKS Scaling: Lab/Lab-08-EKS-scaling.md
+      - Lab 09 - Security: Lab/Lab-09-security.md
+      - Lab 10 - Lambda: Lab/Lab-10-lambda.md
+      - Lab 11 - CI/CD Pipeline: Lab/Lab-11-pipeline.md
+      - Lab 12 - ECS Pipeline Deploy: Lab/Lab-12-ECSpipeline.md
+      - Lab 13 - Monitoring: Lab/Lab-13-monitoring.md
+      - Checkpoint 1: Lab/Lab-14-checkpoint.md
 
   - Solutions: Solutions.md
 

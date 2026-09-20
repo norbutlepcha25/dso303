@@ -2,362 +2,346 @@
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
     <url>
          <loc>https://norbutlepcha25.github.io/dso303/index.html</loc>
-         <lastmod>2026-09-13</lastmod>
+         <lastmod>2026-09-20</lastmod>
     </url>
     <url>
          <loc>https://norbutlepcha25.github.io/dso303/Solutions.html</loc>
-         <lastmod>2026-09-13</lastmod>
+         <lastmod>2026-09-20</lastmod>
     </url>
     <url>
          <loc>https://norbutlepcha25.github.io/dso303/Answers/unit2.html</loc>
-         <lastmod>2026-09-13</lastmod>
+         <lastmod>2026-09-20</lastmod>
     </url>
     <url>
          <loc>https://norbutlepcha25.github.io/dso303/Lab/Lab-01-IAM.html</loc>
-         <lastmod>2026-09-13</lastmod>
+         <lastmod>2026-09-20</lastmod>
     </url>
     <url>
-         <loc>https://norbutlepcha25.github.io/dso303/Lab/Lab-02_VPC.html</loc>
-         <lastmod>2026-09-13</lastmod>
+         <loc>https://norbutlepcha25.github.io/dso303/Lab/Lab-02-VPC.html</loc>
+         <lastmod>2026-09-20</lastmod>
     </url>
     <url>
-         <loc>https://norbutlepcha25.github.io/dso303/Lab/Lab-03_VPC2.html</loc>
-         <lastmod>2026-09-13</lastmod>
+         <loc>https://norbutlepcha25.github.io/dso303/Lab/Lab-03-EC2.html</loc>
+         <lastmod>2026-09-20</lastmod>
     </url>
     <url>
          <loc>https://norbutlepcha25.github.io/dso303/Lab/Lab-04-ECS.html</loc>
-         <lastmod>2026-09-13</lastmod>
+         <lastmod>2026-09-20</lastmod>
     </url>
     <url>
          <loc>https://norbutlepcha25.github.io/dso303/Lab/Lab-05-ALB.html</loc>
-         <lastmod>2026-09-13</lastmod>
+         <lastmod>2026-09-20</lastmod>
     </url>
     <url>
          <loc>https://norbutlepcha25.github.io/dso303/Lab/Lab-06-autoscaling.html</loc>
-         <lastmod>2026-09-13</lastmod>
+         <lastmod>2026-09-20</lastmod>
     </url>
     <url>
          <loc>https://norbutlepcha25.github.io/dso303/Lab/Lab-07-EKS.html</loc>
-         <lastmod>2026-09-13</lastmod>
+         <lastmod>2026-09-20</lastmod>
     </url>
     <url>
          <loc>https://norbutlepcha25.github.io/dso303/Lab/Lab-08-EKS-scaling.html</loc>
-         <lastmod>2026-09-13</lastmod>
+         <lastmod>2026-09-20</lastmod>
+    </url>
+    <url>
+         <loc>https://norbutlepcha25.github.io/dso303/Lab/Lab-09-security.html</loc>
+         <lastmod>2026-09-20</lastmod>
+    </url>
+    <url>
+         <loc>https://norbutlepcha25.github.io/dso303/Lab/Lab-10-lambda.html</loc>
+         <lastmod>2026-09-20</lastmod>
+    </url>
+    <url>
+         <loc>https://norbutlepcha25.github.io/dso303/Lab/Lab-11-pipeline.html</loc>
+         <lastmod>2026-09-20</lastmod>
+    </url>
+    <url>
+         <loc>https://norbutlepcha25.github.io/dso303/Lab/Lab-12-ECSpipeline.html</loc>
+         <lastmod>2026-09-20</lastmod>
+    </url>
+    <url>
+         <loc>https://norbutlepcha25.github.io/dso303/Lab/Lab-13-monitoring.html</loc>
+         <lastmod>2026-09-20</lastmod>
+    </url>
+    <url>
+         <loc>https://norbutlepcha25.github.io/dso303/Lab/Lab-14-checkpoint.html</loc>
+         <lastmod>2026-09-20</lastmod>
     </url>
     <url>
          <loc>https://norbutlepcha25.github.io/dso303/Lab/iam.html</loc>
-         <lastmod>2026-09-13</lastmod>
+         <lastmod>2026-09-20</lastmod>
     </url>
     <url>
          <loc>https://norbutlepcha25.github.io/dso303/Lab/overview.html</loc>
-         <lastmod>2026-09-13</lastmod>
+         <lastmod>2026-09-20</lastmod>
     </url>
     <url>
          <loc>https://norbutlepcha25.github.io/dso303/Lab/stats.html</loc>
-         <lastmod>2026-09-13</lastmod>
+         <lastmod>2026-09-20</lastmod>
     </url>
     <url>
          <loc>https://norbutlepcha25.github.io/dso303/Questions/mids.html</loc>
-         <lastmod>2026-09-13</lastmod>
+         <lastmod>2026-09-20</lastmod>
     </url>
     <url>
          <loc>https://norbutlepcha25.github.io/dso303/Questions/unit1.html</loc>
-         <lastmod>2026-09-13</lastmod>
+         <lastmod>2026-09-20</lastmod>
     </url>
     <url>
          <loc>https://norbutlepcha25.github.io/dso303/Questions/unit2.html</loc>
-         <lastmod>2026-09-13</lastmod>
+         <lastmod>2026-09-20</lastmod>
     </url>
     <url>
          <loc>https://norbutlepcha25.github.io/dso303/Questions/unit3.html</loc>
-         <lastmod>2026-09-13</lastmod>
+         <lastmod>2026-09-20</lastmod>
     </url>
     <url>
          <loc>https://norbutlepcha25.github.io/dso303/Services/groups.html</loc>
-         <lastmod>2026-09-13</lastmod>
+         <lastmod>2026-09-20</lastmod>
     </url>
     <url>
          <loc>https://norbutlepcha25.github.io/dso303/Services/overview.html</loc>
-         <lastmod>2026-09-13</lastmod>
+         <lastmod>2026-09-20</lastmod>
     </url>
     <url>
          <loc>https://norbutlepcha25.github.io/dso303/Services/services.html</loc>
-         <lastmod>2026-09-13</lastmod>
+         <lastmod>2026-09-20</lastmod>
     </url>
     <url>
          <loc>https://norbutlepcha25.github.io/dso303/csf303/practical.html</loc>
-         <lastmod>2026-09-13</lastmod>
+         <lastmod>2026-09-20</lastmod>
     </url>
     <url>
          <loc>https://norbutlepcha25.github.io/dso303/csf303/q2.html</loc>
-         <lastmod>2026-09-13</lastmod>
+         <lastmod>2026-09-20</lastmod>
     </url>
     <url>
          <loc>https://norbutlepcha25.github.io/dso303/csf303/questions.html</loc>
-         <lastmod>2026-09-13</lastmod>
+         <lastmod>2026-09-20</lastmod>
     </url>
     <url>
          <loc>https://norbutlepcha25.github.io/dso303/extra-notes/unit1.html</loc>
-         <lastmod>2026-09-13</lastmod>
+         <lastmod>2026-09-20</lastmod>
     </url>
     <url>
          <loc>https://norbutlepcha25.github.io/dso303/extra-notes/unit2.html</loc>
-         <lastmod>2026-09-13</lastmod>
+         <lastmod>2026-09-20</lastmod>
     </url>
     <url>
          <loc>https://norbutlepcha25.github.io/dso303/extra-notes/unit3.html</loc>
-         <lastmod>2026-09-13</lastmod>
+         <lastmod>2026-09-20</lastmod>
     </url>
     <url>
          <loc>https://norbutlepcha25.github.io/dso303/interviewquestions/unit1.html</loc>
-         <lastmod>2026-09-13</lastmod>
+         <lastmod>2026-09-20</lastmod>
     </url>
     <url>
          <loc>https://norbutlepcha25.github.io/dso303/interviewquestions/unit2.html</loc>
-         <lastmod>2026-09-13</lastmod>
+         <lastmod>2026-09-20</lastmod>
     </url>
     <url>
          <loc>https://norbutlepcha25.github.io/dso303/interviewquestions/unit3.html</loc>
-         <lastmod>2026-09-13</lastmod>
+         <lastmod>2026-09-20</lastmod>
     </url>
     <url>
          <loc>https://norbutlepcha25.github.io/dso303/template/overview.html</loc>
-         <lastmod>2026-09-13</lastmod>
+         <lastmod>2026-09-20</lastmod>
     </url>
     <url>
          <loc>https://norbutlepcha25.github.io/dso303/template/summary.html</loc>
-         <lastmod>2026-09-13</lastmod>
+         <lastmod>2026-09-20</lastmod>
     </url>
     <url>
          <loc>https://norbutlepcha25.github.io/dso303/template/topic.html</loc>
-         <lastmod>2026-09-13</lastmod>
+         <lastmod>2026-09-20</lastmod>
     </url>
     <url>
          <loc>https://norbutlepcha25.github.io/dso303/unit1/overview.html</loc>
-         <lastmod>2026-09-13</lastmod>
+         <lastmod>2026-09-20</lastmod>
     </url>
     <url>
          <loc>https://norbutlepcha25.github.io/dso303/unit1/topic1.html</loc>
-         <lastmod>2026-09-13</lastmod>
+         <lastmod>2026-09-20</lastmod>
     </url>
     <url>
          <loc>https://norbutlepcha25.github.io/dso303/unit1/topic2.html</loc>
-         <lastmod>2026-09-13</lastmod>
+         <lastmod>2026-09-20</lastmod>
     </url>
     <url>
          <loc>https://norbutlepcha25.github.io/dso303/unit1/topic3.html</loc>
-         <lastmod>2026-09-13</lastmod>
+         <lastmod>2026-09-20</lastmod>
     </url>
     <url>
          <loc>https://norbutlepcha25.github.io/dso303/unit1/topic4.html</loc>
-         <lastmod>2026-09-13</lastmod>
+         <lastmod>2026-09-20</lastmod>
     </url>
     <url>
          <loc>https://norbutlepcha25.github.io/dso303/unit1/topic5.html</loc>
-         <lastmod>2026-09-13</lastmod>
+         <lastmod>2026-09-20</lastmod>
     </url>
     <url>
          <loc>https://norbutlepcha25.github.io/dso303/unit1/topic6.html</loc>
-         <lastmod>2026-09-13</lastmod>
+         <lastmod>2026-09-20</lastmod>
     </url>
     <url>
          <loc>https://norbutlepcha25.github.io/dso303/unit1/topic7.html</loc>
-         <lastmod>2026-09-13</lastmod>
+         <lastmod>2026-09-20</lastmod>
     </url>
     <url>
          <loc>https://norbutlepcha25.github.io/dso303/unit2/overview.html</loc>
-         <lastmod>2026-09-13</lastmod>
+         <lastmod>2026-09-20</lastmod>
     </url>
     <url>
          <loc>https://norbutlepcha25.github.io/dso303/unit2/topic1.html</loc>
-         <lastmod>2026-09-13</lastmod>
+         <lastmod>2026-09-20</lastmod>
     </url>
     <url>
          <loc>https://norbutlepcha25.github.io/dso303/unit2/topic2.html</loc>
-         <lastmod>2026-09-13</lastmod>
+         <lastmod>2026-09-20</lastmod>
     </url>
     <url>
          <loc>https://norbutlepcha25.github.io/dso303/unit2/topic3.html</loc>
-         <lastmod>2026-09-13</lastmod>
+         <lastmod>2026-09-20</lastmod>
     </url>
     <url>
          <loc>https://norbutlepcha25.github.io/dso303/unit3/overview.html</loc>
-         <lastmod>2026-09-13</lastmod>
+         <lastmod>2026-09-20</lastmod>
     </url>
     <url>
          <loc>https://norbutlepcha25.github.io/dso303/unit3/topic1.html</loc>
-         <lastmod>2026-09-13</lastmod>
+         <lastmod>2026-09-20</lastmod>
     </url>
     <url>
          <loc>https://norbutlepcha25.github.io/dso303/unit3/topic2.html</loc>
-         <lastmod>2026-09-13</lastmod>
+         <lastmod>2026-09-20</lastmod>
     </url>
     <url>
          <loc>https://norbutlepcha25.github.io/dso303/unit3/topic3.html</loc>
-         <lastmod>2026-09-13</lastmod>
+         <lastmod>2026-09-20</lastmod>
     </url>
     <url>
          <loc>https://norbutlepcha25.github.io/dso303/unit4/overview.html</loc>
-         <lastmod>2026-09-13</lastmod>
-    </url>
-    <url>
-         <loc>https://norbutlepcha25.github.io/dso303/unit4/summary.html</loc>
-         <lastmod>2026-09-13</lastmod>
+         <lastmod>2026-09-20</lastmod>
     </url>
     <url>
          <loc>https://norbutlepcha25.github.io/dso303/unit4/topic1.html</loc>
-         <lastmod>2026-09-13</lastmod>
+         <lastmod>2026-09-20</lastmod>
     </url>
     <url>
          <loc>https://norbutlepcha25.github.io/dso303/unit4/topic2.html</loc>
-         <lastmod>2026-09-13</lastmod>
+         <lastmod>2026-09-20</lastmod>
     </url>
     <url>
          <loc>https://norbutlepcha25.github.io/dso303/unit4/topic3.html</loc>
-         <lastmod>2026-09-13</lastmod>
-    </url>
-    <url>
-         <loc>https://norbutlepcha25.github.io/dso303/unit4/topic4.html</loc>
-         <lastmod>2026-09-13</lastmod>
-    </url>
-    <url>
-         <loc>https://norbutlepcha25.github.io/dso303/unit4/topic5.html</loc>
-         <lastmod>2026-09-13</lastmod>
-    </url>
-    <url>
-         <loc>https://norbutlepcha25.github.io/dso303/unit4/topic6.html</loc>
-         <lastmod>2026-09-13</lastmod>
-    </url>
-    <url>
-         <loc>https://norbutlepcha25.github.io/dso303/unit4/topic7.html</loc>
-         <lastmod>2026-09-13</lastmod>
+         <lastmod>2026-09-20</lastmod>
     </url>
     <url>
          <loc>https://norbutlepcha25.github.io/dso303/unit5/overview.html</loc>
-         <lastmod>2026-09-13</lastmod>
+         <lastmod>2026-09-20</lastmod>
     </url>
     <url>
          <loc>https://norbutlepcha25.github.io/dso303/unit5/summary.html</loc>
-         <lastmod>2026-09-13</lastmod>
+         <lastmod>2026-09-20</lastmod>
     </url>
     <url>
          <loc>https://norbutlepcha25.github.io/dso303/unit5/topic1.html</loc>
-         <lastmod>2026-09-13</lastmod>
+         <lastmod>2026-09-20</lastmod>
     </url>
     <url>
          <loc>https://norbutlepcha25.github.io/dso303/unit5/topic2.html</loc>
-         <lastmod>2026-09-13</lastmod>
+         <lastmod>2026-09-20</lastmod>
     </url>
     <url>
          <loc>https://norbutlepcha25.github.io/dso303/unit5/topic3.html</loc>
-         <lastmod>2026-09-13</lastmod>
-    </url>
-    <url>
-         <loc>https://norbutlepcha25.github.io/dso303/unit5/topic4.html</loc>
-         <lastmod>2026-09-13</lastmod>
-    </url>
-    <url>
-         <loc>https://norbutlepcha25.github.io/dso303/unit5/topic5.html</loc>
-         <lastmod>2026-09-13</lastmod>
-    </url>
-    <url>
-         <loc>https://norbutlepcha25.github.io/dso303/unit5/topic6.html</loc>
-         <lastmod>2026-09-13</lastmod>
-    </url>
-    <url>
-         <loc>https://norbutlepcha25.github.io/dso303/unit5/topic7.html</loc>
-         <lastmod>2026-09-13</lastmod>
+         <lastmod>2026-09-20</lastmod>
     </url>
     <url>
          <loc>https://norbutlepcha25.github.io/dso303/unit6/overview.html</loc>
-         <lastmod>2026-09-13</lastmod>
+         <lastmod>2026-09-20</lastmod>
     </url>
     <url>
          <loc>https://norbutlepcha25.github.io/dso303/unit6/summary.html</loc>
-         <lastmod>2026-09-13</lastmod>
+         <lastmod>2026-09-20</lastmod>
     </url>
     <url>
          <loc>https://norbutlepcha25.github.io/dso303/unit6/topic1.html</loc>
-         <lastmod>2026-09-13</lastmod>
+         <lastmod>2026-09-20</lastmod>
     </url>
     <url>
          <loc>https://norbutlepcha25.github.io/dso303/unit6/topic2.html</loc>
-         <lastmod>2026-09-13</lastmod>
+         <lastmod>2026-09-20</lastmod>
     </url>
     <url>
          <loc>https://norbutlepcha25.github.io/dso303/unit6/topic3.html</loc>
-         <lastmod>2026-09-13</lastmod>
+         <lastmod>2026-09-20</lastmod>
     </url>
     <url>
          <loc>https://norbutlepcha25.github.io/dso303/unit6/topic4.html</loc>
-         <lastmod>2026-09-13</lastmod>
-    </url>
-    <url>
-         <loc>https://norbutlepcha25.github.io/dso303/unit6/unit1.html</loc>
-         <lastmod>2026-09-13</lastmod>
+         <lastmod>2026-09-20</lastmod>
     </url>
     <url>
          <loc>https://norbutlepcha25.github.io/dso303/unit7/overview.html</loc>
-         <lastmod>2026-09-13</lastmod>
+         <lastmod>2026-09-20</lastmod>
     </url>
     <url>
          <loc>https://norbutlepcha25.github.io/dso303/unit7/summary.html</loc>
-         <lastmod>2026-09-13</lastmod>
+         <lastmod>2026-09-20</lastmod>
     </url>
     <url>
          <loc>https://norbutlepcha25.github.io/dso303/unit7/topic1.html</loc>
-         <lastmod>2026-09-13</lastmod>
+         <lastmod>2026-09-20</lastmod>
     </url>
     <url>
          <loc>https://norbutlepcha25.github.io/dso303/unit7/topic2.html</loc>
-         <lastmod>2026-09-13</lastmod>
+         <lastmod>2026-09-20</lastmod>
     </url>
     <url>
          <loc>https://norbutlepcha25.github.io/dso303/unit7/topic3.html</loc>
-         <lastmod>2026-09-13</lastmod>
+         <lastmod>2026-09-20</lastmod>
     </url>
     <url>
          <loc>https://norbutlepcha25.github.io/dso303/unit7/topic4.html</loc>
-         <lastmod>2026-09-13</lastmod>
+         <lastmod>2026-09-20</lastmod>
     </url>
     <url>
          <loc>https://norbutlepcha25.github.io/dso303/unit7/topic5.html</loc>
-         <lastmod>2026-09-13</lastmod>
+         <lastmod>2026-09-20</lastmod>
     </url>
     <url>
          <loc>https://norbutlepcha25.github.io/dso303/unit7/topic6.html</loc>
-         <lastmod>2026-09-13</lastmod>
+         <lastmod>2026-09-20</lastmod>
     </url>
     <url>
          <loc>https://norbutlepcha25.github.io/dso303/unit8/overview.html</loc>
-         <lastmod>2026-09-13</lastmod>
+         <lastmod>2026-09-20</lastmod>
     </url>
     <url>
          <loc>https://norbutlepcha25.github.io/dso303/unit8/summary.html</loc>
-         <lastmod>2026-09-13</lastmod>
+         <lastmod>2026-09-20</lastmod>
     </url>
     <url>
          <loc>https://norbutlepcha25.github.io/dso303/unit8/topic1.html</loc>
-         <lastmod>2026-09-13</lastmod>
+         <lastmod>2026-09-20</lastmod>
     </url>
     <url>
          <loc>https://norbutlepcha25.github.io/dso303/unit8/topic2.html</loc>
-         <lastmod>2026-09-13</lastmod>
+         <lastmod>2026-09-20</lastmod>
     </url>
     <url>
          <loc>https://norbutlepcha25.github.io/dso303/unit8/topic3.html</loc>
-         <lastmod>2026-09-13</lastmod>
+         <lastmod>2026-09-20</lastmod>
     </url>
     <url>
          <loc>https://norbutlepcha25.github.io/dso303/unit8/topic4.html</loc>
-         <lastmod>2026-09-13</lastmod>
+         <lastmod>2026-09-20</lastmod>
     </url>
     <url>
          <loc>https://norbutlepcha25.github.io/dso303/unit8/topic5.html</loc>
-         <lastmod>2026-09-13</lastmod>
+         <lastmod>2026-09-20</lastmod>
     </url>
     <url>
          <loc>https://norbutlepcha25.github.io/dso303/unit8/topic6.html</loc>
-         <lastmod>2026-09-13</lastmod>
+         <lastmod>2026-09-20</lastmod>
     </url>
 </urlset>

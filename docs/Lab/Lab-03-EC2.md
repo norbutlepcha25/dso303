@@ -1,4 +1,4 @@
-# Lab 03 — Amazon EC2 and Deploying the USMS Application
+# Lab 03 - Amazon EC2 and Deploying the USMS Application
 ---
 
 ## 1. Lab Overview
@@ -6,7 +6,7 @@
 Lab 2 built a network with nothing in it. This session puts servers in it.
 
 You will launch the USMS web server into the public subnet you built, attach the security group you
-wrote, and give it the instance profile Lab 1 created — three artefacts from two previous labs,
+wrote, and give it the instance profile Lab 1 created - three artefacts from two previous labs,
 combined in one API call. You will bootstrap it with a user-data script so that it configures itself
 at first boot, give it a stable public address, attach a data volume, and launch a second instance
 into the private subnet so that the two-tier design stops being a diagram.
@@ -114,7 +114,7 @@ Required for future labs:
 | Lab 2 `usms-private-subnet-a` | Step 16 launches the database-tier instance into it |
 | Lab 2 `usms-app-sg` / `usms-db-sg` | Attached at launch in Steps 8 and 16; Step 17 reads the wiring back |
 | Lab 2 `USMS_AZ_A` | Step 15 creates the EBS volume in the same AZ as the instance, because it must be |
-| Lab 2 `usms-igw` route | Step 14 is only meaningful because Part A gave the public subnet a default route |
+| Lab 2 `usms-igw` route | Step 14 is only meaningful because Lab 02 gave the public subnet a default route |
 
 ### 4.3 The moment two labs meet
 
@@ -124,7 +124,7 @@ has been in it.
 
 Step 8 is a single `run-instances` call that consumes both, plus a security group and a key pair.
 When it returns an instance ID, four labs' worth of separate objects have become one running system.
-That is worth pausing over when you get there — it is the first time this course looks like
+That is worth pausing over when you get there - it is the first time this course looks like
 infrastructure rather than exercises.
 
 ---
@@ -144,7 +144,7 @@ instance's own identity. The point of this lab is not the application. It is tha
 lands in the right place with the right permissions and the right firewall, and that you can prove
 each of those three independently.
 
-!!! note "Floci Limitation — read this before you start, not after"
+!!! note "Floci Limitation - read this before you start, not after"
     Floci models the EC2 **API** thoroughly: instances, states, tags, volumes, images, key pairs,
     Elastic IPs and their relationships all behave as documented, and `describe-*` returns
     realistic data.
@@ -177,7 +177,7 @@ aws-floci-course/
 │   └── lab-03-ec2/
 │       ├── README.md                       # this document
 │       ├── exercises.md                    # Section 13
-│       └── user-data.sh                    # NEW — the bootstrap script
+│       └── user-data.sh                    # NEW - the bootstrap script
 ├── configs/
 │   └── lab-03.env                          # NEW
 ├── scripts/
@@ -186,9 +186,9 @@ aws-floci-course/
 │   └── cleanup/
 │       └── lab-03-cleanup.sh               # NEW
 ├── templates/
-│   └── lab-03-run-instances.json           # NEW — --generate-cli-skeleton output, filled in
+│   └── lab-03-run-instances.json           # NEW - --generate-cli-skeleton output, filled in
 └── outputs/
-    ├── usms-app-key.pem                    # SECRET — git-ignored, chmod 600
+    ├── usms-app-key.pem                    # SECRET - git-ignored, chmod 600
     └── lab-03-*.json                        # command output
 ```
 
@@ -218,7 +218,7 @@ labs/lab-01-iam  labs/lab-02-vpc  labs/lab-03-ec2
     aws-floci-course/
     ```
 
-### Step 1 — Resume the environment and load three env files
+### Step 1 - Resume the environment and load three env files
 
 **Purpose**
 
@@ -255,7 +255,7 @@ printf '%-24s %s\n' \
 **What the command does**
 
 `printf` with more arguments than format specifiers reuses the format string until the arguments run
-out — which is why one `printf` prints six lines here. It is a small thing, but it keeps the output
+out - which is why one `printf` prints six lines here. It is a small thing, but it keeps the output
 aligned without six separate `echo` calls.
 
 **Expected result**
@@ -273,20 +273,20 @@ instance profile         usms-ec2-app-profile
 availability zone a      us-east-1a
 ```
 
-> Example output — your IDs will differ.
+> Example output - your IDs will differ.
 
 **What to look for:** six non-empty values. An empty one means `configs/lab-02.env` is incomplete;
-go back to Lab 2 Step 24 and regenerate it. Do not proceed with a blank — `run-instances` with an
+go back to Lab 2 Step 24 and regenerate it. Do not proceed with a blank - `run-instances` with an
 empty `--subnet-id` produces a `MissingParameter` error much later than you would like.
 
 ---
 
-### Step 2 — Confirm Part A's network is intact
+### Step 2 - Confirm Lab 02's network is intact
 
 **Purpose**
 
-A week may have passed since Part A. Before building on the network, check that it is still there and
-still correct — the verification script from Lab 2 does exactly that, and this is what it was for.
+A week may have passed since Lab 02. Before building on the network, check that it is still there and
+still correct - the verification script from Lab 2 does exactly that, and this is what it was for.
 
 **Run from**
 
@@ -325,18 +325,18 @@ Ready to build
 
 ---
 
-### Interlude — what an instance actually is
+### Interlude - what an instance actually is
 
 Three things combine to produce a running EC2 instance, and keeping them separate in your head makes
 the rest of this lab easy.
 
 **An AMI (Amazon Machine Image)** is a template for the root disk plus a little metadata:
-architecture, virtualisation type, and which block devices to create. It is regional — an AMI ID is
-meaningless in another region — and it is immutable. "Launching an instance" means, in part, copying
+architecture, virtualisation type, and which block devices to create. It is regional - an AMI ID is
+meaningless in another region - and it is immutable. "Launching an instance" means, in part, copying
 an AMI into a new EBS volume.
 
 **An instance type** is the hardware: vCPUs, memory, network bandwidth, and whether there is local
-storage attached. `t3.micro` means 2 vCPUs, 1 GiB of memory, and burstable CPU — the family letter
+storage attached. `t3.micro` means 2 vCPUs, 1 GiB of memory, and burstable CPU - the family letter
 (`t`, `m`, `c`, `r`, `g`) tells you the workload it is shaped for, the number is the generation, and
 the size is the slice.
 
@@ -358,7 +358,7 @@ And one about storage:
 
 ---
 
-### Step 3 — Choose an AMI
+### Step 3 - Choose an AMI
 
 **Purpose**
 
@@ -372,7 +372,7 @@ one programmatically, and what the right answer is on real AWS.
 aws-floci-course/
 ```
 
-**Command — part 1, see what this build offers**
+**Command - part 1, see what this build offers**
 
 ```bash
 aws ec2 describe-images \
@@ -381,7 +381,7 @@ aws ec2 describe-images \
   --output table
 ```
 
-**Command — part 2, capture one**
+**Command - part 2, capture one**
 
 ```bash
 AMI_ID=$(aws ec2 describe-images \
@@ -398,13 +398,13 @@ echo "AMI_ID = $AMI_ID"
 AMI_ID = ami-0abcd1234efgh5678
 ```
 
-> Example output — your AMI ID will certainly differ, and may differ between Floci builds.
+> Example output - your AMI ID will certainly differ, and may differ between Floci builds.
 
 **If `AMI_ID` prints as `None` or an empty line**, this Floci build seeds no images. That is a
 limitation, not a mistake on your part. Two options:
 
 ```bash
-# Option A — register a minimal image of your own, so the rest of the lab is honest about
+# Option A - register a minimal image of your own, so the rest of the lab is honest about
 # where the ID came from.
 AMI_ID=$(aws ec2 register-image \
   --name usms-course-base \
@@ -414,14 +414,14 @@ AMI_ID=$(aws ec2 register-image \
   --query 'ImageId' --output text)
 echo "AMI_ID = $AMI_ID"
 
-# Option B — if register-image is also unsupported, note it in your report and continue with a
+# Option B - if register-image is also unsupported, note it in your report and continue with a
 # placeholder. Floci does not validate the AMI ID on run-instances.
 AMI_ID=ami-00000000000000000
 ```
 
 Record which option you used. The assessment asks.
 
-!!! note "Floci Limitation — AMIs are metadata, not disk images"
+!!! note "Floci Limitation - AMIs are metadata, not disk images"
     Floci stores AMI records and returns them from `describe-images`, but there is no actual root
     filesystem behind them and the catalogue is small or empty depending on the build.
 
@@ -439,12 +439,12 @@ Record which option you used. The assessment asks.
 
     That parameter always names the newest Amazon Linux 2023 image in whichever region you call it
     in. It is what a launch template or CloudFormation stack should reference. Try it against Floci
-    — if it returns a `ParameterNotFound`, that is the limitation, and knowing the technique is still
+    - if it returns a `ParameterNotFound`, that is the limitation, and knowing the technique is still
     the point.
 
 ---
 
-### Step 4 — Create the key pair and store the private key safely
+### Step 4 - Create the key pair and store the private key safely
 
 **Purpose**
 
@@ -491,10 +491,10 @@ else, with an error message that does not mention permissions in its first line.
 -----BEGIN RSA PRIVATE KEY-----
 ```
 
-> Example output — the size and date will differ.
+> Example output - the size and date will differ.
 
 **What to look for:** permissions `-rw-------`, and a first line that begins a PEM block. If the file
-contains the word `None`, the query returned nothing and the key was not created — check for an
+contains the word `None`, the query returned nothing and the key was not created - check for an
 `InvalidKeyPair.Duplicate` error by re-running without the redirect.
 
 **Verify**
@@ -511,12 +511,12 @@ call cannot give it back to you.
 
 ---
 
-### Step 5 — Prove the private key is git-ignored
+### Step 5 - Prove the private key is git-ignored
 
 **Purpose**
 
 Lab 1 committed `.gitignore` as the repository's first commit, before any secret could exist. This is
-the moment that decision pays for itself — and, as always in this course, we check rather than trust.
+the moment that decision pays for itself - and, as always in this course, we check rather than trust.
 
 **Run from**
 
@@ -544,21 +544,21 @@ git ls-files outputs/
 outputs/.gitkeep
 ```
 
-> Example output — your line number may differ.
+> Example output - your line number may differ.
 
 **What to look for, in order:**
 
 1. `git status --short` shows the new lab folder and **nothing under `outputs/`**.
 2. `git check-ignore -v` names the file, the rule that matched, and the line number it is on. Silence
-   here means the file is **not** ignored — stop and fix `.gitignore` before doing anything else.
+   here means the file is **not** ignored - stop and fix `.gitignore` before doing anything else.
 3. `git ls-files outputs/` lists `.gitkeep` and nothing else. That single line proves the pattern is
-   `outputs/*` and not `outputs/` — Git cannot re-include a file whose parent directory is excluded,
+   `outputs/*` and not `outputs/` - Git cannot re-include a file whose parent directory is excluded,
    so with the wrong pattern this command prints nothing at all and the directory silently vanishes
    from the repository.
 
 ---
 
-### Step 6 — Write the user-data bootstrap script
+### Step 6 - Write the user-data bootstrap script
 
 **Purpose**
 
@@ -601,7 +601,7 @@ PRIVATE_IP=$(meta local-ipv4)
 cat > /usr/share/nginx/html/index.html <<HTML
 <!doctype html>
 <html lang="en">
-<head><meta charset="utf-8"><title>USMS — University Student Management System</title></head>
+<head><meta charset="utf-8"><title>USMS - University Student Management System</title></head>
 <body style="font-family:system-ui,sans-serif;max-width:40rem;margin:4rem auto">
   <h1>USMS Student Portal</h1>
   <p>University Student Management System &mdash; web tier</p>
@@ -627,7 +627,7 @@ bash -n labs/lab-03-ec2/user-data.sh && echo "user-data.sh syntax OK"
 wc -c labs/lab-03-ec2/user-data.sh
 ````
 
-!!! warning "Heredoc quoting — and a nested heredoc, which is where it gets interesting"
+!!! warning "Heredoc quoting - and a nested heredoc, which is where it gets interesting"
     The **outer** heredoc is `<< 'EOF'`, quoted. Everything inside is written to the file literally:
     `$(date ...)`, `${INSTANCE_ID}` and `$TOKEN` must all survive to be evaluated later, on the
     instance, not now, in your shell. Had you written `<< EOF`, your local shell would have expanded
@@ -642,7 +642,7 @@ wc -c labs/lab-03-ec2/user-data.sh
     expanded now, or later?**
 
 **What to look for:** `user-data.sh syntax OK`, and a byte count comfortably under 16,384. If
-`bash -n` reports an error, fix it now — a syntax error in user data fails silently at boot, and
+`bash -n` reports an error, fix it now - a syntax error in user data fails silently at boot, and
 debugging it means retrieving a log from a machine you may not be able to log in to.
 
 **Expected result**
@@ -652,11 +652,11 @@ user-data.sh syntax OK
 1487 labs/lab-03-ec2/user-data.sh
 ```
 
-> Example output — your byte count will differ.
+> Example output - your byte count will differ.
 
 ---
 
-### Step 7 — Generate a request skeleton and fill it in
+### Step 7 - Generate a request skeleton and fill it in
 
 **Purpose**
 
@@ -671,7 +671,7 @@ reviewable artefact.
 aws-floci-course/
 ```
 
-**Command — part 1, look at the shape**
+**Command - part 1, look at the shape**
 
 ```bash
 mkdir -p templates
@@ -695,12 +695,12 @@ head -25 templates/lab-03-run-instances-full.json
             ...
 ```
 
-> Example output — the line count varies by CLI version. The point is that it is large.
+> Example output - the line count varies by CLI version. The point is that it is large.
 
 Skim it. Nearly every field is optional; that is the API's real surface area, and it is worth seeing
 once.
 
-**Command — part 2, write the request we actually want**
+**Command - part 2, write the request we actually want**
 
 ```bash
 cat > templates/lab-03-run-instances.json << EOF
@@ -735,7 +735,7 @@ cat > templates/lab-03-run-instances.json << EOF
 EOF
 
 python3 -m json.tool templates/lab-03-run-instances.json > /dev/null \
-  && echo "valid JSON" || echo "INVALID JSON — fix it before Step 8"
+  && echo "valid JSON" || echo "INVALID JSON - fix it before Step 8"
 
 cat templates/lab-03-run-instances.json
 ```
@@ -743,7 +743,7 @@ cat templates/lab-03-run-instances.json
 **What the command does**
 
 Unquoted heredoc again, because the four variables must be expanded now. Then `python3 -m json.tool`
-parses it — checking JSON validity before sending it is worth the two seconds, because the CLI's
+parses it - checking JSON validity before sending it is worth the two seconds, because the CLI's
 parse errors point at a byte offset rather than a field.
 
 Note the second `TagSpecifications` entry with `ResourceType: volume`. `run-instances` creates the
@@ -763,7 +763,7 @@ followed by the document, with your real IDs substituted in.
 
 ---
 
-### Step 8 — Launch the USMS web server
+### Step 8 - Launch the USMS web server
 
 **Purpose**
 
@@ -805,12 +805,12 @@ Two things are worth knowing about this combination.
 
 **Command-line parameters override the JSON.** `--cli-input-json` supplies the base request and
 anything you also pass as a flag wins. That is why `--user-data` can be added here rather than
-embedded in the document — which matters, because the document would need the script base64-encoded
+embedded in the document - which matters, because the document would need the script base64-encoded
 by hand.
 
 **The CLI base64-encodes user data for you.** The EC2 API requires user data to be base64-encoded.
 The AWS CLI does that encoding for `run-instances` when you pass `--user-data file://...`. It does
-**not** do it for `modify-instance-attribute`, where you must encode it yourself — an inconsistency
+**not** do it for `modify-instance-attribute`, where you must encode it yourself - an inconsistency
 worth remembering, and the reason Step 12 decodes rather than reads.
 
 **Expected result**
@@ -819,7 +819,7 @@ worth remembering, and the reason Step 12 decodes rather than reads.
 WEB_INSTANCE_ID = i-0123456789abcdef0
 ```
 
-> Example output — your instance ID will differ.
+> Example output - your instance ID will differ.
 
 If this fails, the error message names the cause:
 
@@ -833,7 +833,7 @@ If this fails, the error message names the cause:
 
 ---
 
-### Step 9 — Wait for the instance to reach `running`
+### Step 9 - Wait for the instance to reach `running`
 
 **Purpose**
 
@@ -858,7 +858,7 @@ echo "exit code: $?"
 
 `aws ec2 wait <condition>` polls a `describe-*` call on a fixed schedule until a condition is met, a
 maximum number of attempts is exhausted, or a terminal failure state is reached. `instance-running`
-polls `describe-instances` every 15 seconds, up to 40 times — ten minutes. Exit code 0 means the
+polls `describe-instances` every 15 seconds, up to 40 times - ten minutes. Exit code 0 means the
 condition was met; 255 means it timed out.
 
 Run `aws ec2 wait help` to see the full list. The ones you will use most in this course are
@@ -867,7 +867,7 @@ Run `aws ec2 wait help` to see the full list. The ones you will use most in this
 
 The difference between `instance-running` and `instance-status-ok` matters on real AWS:
 `instance-running` means the hypervisor has started the virtual machine, which typically happens in
-under a minute. `instance-status-ok` means AWS's system and instance status checks have both passed —
+under a minute. `instance-status-ok` means AWS's system and instance status checks have both passed -
 the operating system is up and the network is responding. A script that connects to a service should
 wait for the latter.
 
@@ -878,7 +878,7 @@ real    0m2.114s
 exit code: 0
 ```
 
-> Example output — on real AWS this takes 30 to 60 seconds. Floci transitions almost immediately,
+> Example output - on real AWS this takes 30 to 60 seconds. Floci transitions almost immediately,
 > which is a difference worth noticing rather than enjoying.
 
 **If the waiter hangs**, interrupt with ++ctrl+c++ and poll manually:
@@ -895,7 +895,7 @@ done
 
 ---
 
-### Step 10 — Read the instance back and understand the fields
+### Step 10 - Read the instance back and understand the fields
 
 **Purpose**
 
@@ -954,14 +954,14 @@ most common JMESPath mistake in EC2.
 +-----------+-----------------------------------------+
 ```
 
-> Example output — every value here will differ.
+> Example output - every value here will differ.
 
 **What to look for, and why each one matters:**
 
 - `State` is `running`.
 - `Subnet` equals `$USMS_PUBLIC_SUBNET_A`. If it does not, the instance is in the wrong place and
   nothing else in this lab will make sense.
-- `PrivateIP` is inside `10.0.1.0/24` — the CIDR you chose in Part A, visible on a real interface.
+- `PrivateIP` is inside `10.0.1.0/24` - the CIDR you chose in Lab 02, visible on a real interface.
 - `PublicIP` has a value. It has one **only** because Lab 2 Step 8 set `MapPublicIpOnLaunch` on this
   subnet. Launch into the private subnet and this field is empty.
 - `SG` is `usms-app-sg`, not `default`.
@@ -980,12 +980,12 @@ usms-public-subnet-a  10.0.1.0/24
 
 ---
 
-### Step 11 — Trace the permission chain from the instance to the policy
+### Step 11 - Trace the permission chain from the instance to the policy
 
 **Purpose**
 
 The instance has an instance profile. That is the whole reason there are no AWS credentials anywhere
-on this server. This step follows the chain link by link — instance to profile to role to policy —
+on this server. This step follows the chain link by link - instance to profile to role to policy -
 so that when Lab 4 creates the bucket, you already know why the instance can write to it.
 
 **Run from**
@@ -1040,7 +1040,7 @@ aws iam get-policy-version --policy-arn "$POLICY_ARN" --version-id "$DEFAULT_VER
 }
 ```
 
-> Example output — the policy body is Lab 1's, unchanged.
+> Example output - the policy body is Lab 1's, unchanged.
 
 **Now read the policy document and answer the question it raises.** It grants `s3:GetObject`,
 `s3:PutObject` and `s3:ListBucket` on `arn:aws:s3:::usms-student-data` and
@@ -1052,12 +1052,12 @@ This is not a bug and it is not a mistake in Lab 1. An IAM policy is a statement
 reference to objects; it is perfectly valid to grant access to a resource that has not been created.
 The permission simply has no effect until something appears at that ARN. When Lab 4 runs
 `create-bucket`, this policy stops being hypothetical and `usms-web-01` gains the ability to write
-transcripts — with no access key anywhere on the machine.
+transcripts - with no access key anywhere on the machine.
 
 Write that sentence into `notes/lab-03-notes.md` now. It is the single most important idea connecting
 Labs 1, 3 and 4, and it is a review question.
 
-!!! note "Floci Limitation — the instance cannot fetch its own credentials"
+!!! note "Floci Limitation - the instance cannot fetch its own credentials"
     On real AWS, an instance with a profile gets temporary credentials from the Instance Metadata
     Service at `169.254.169.254`, rotated automatically several times a day. The SDKs find them with
     no configuration at all, which is why no key ever needs to be on the disk.
@@ -1066,12 +1066,12 @@ Labs 1, 3 and 4, and it is a review question.
     fail there.
 
     The chain you just traced is nonetheless real: the association between instance, profile, role and
-    policy is stored and returned correctly, and it is the association — not the metadata service —
+    policy is stored and returned correctly, and it is the association - not the metadata service -
     that you are being assessed on.
 
 ---
 
-### Step 12 — Prove the user data actually arrived
+### Step 12 - Prove the user data actually arrived
 
 **Purpose**
 
@@ -1101,7 +1101,7 @@ openssl base64 -d -A -in outputs/lab-03-userdata.b64 -out outputs/lab-03-userdat
 
 diff labs/lab-03-ec2/user-data.sh outputs/lab-03-userdata.sh \
   && echo "USER DATA PROVEN: what EC2 stored is byte-identical to what you wrote" \
-  || echo "MISMATCH — see the diff above"
+  || echo "MISMATCH - see the diff above"
 ```
 
 **What the command does**
@@ -1111,7 +1111,7 @@ how the API stores it. `openssl base64 -d` decodes it.
 
 `openssl` rather than `base64` is deliberate. GNU `base64` decodes with `-d`; BSD and older macOS
 `base64` uses `-D`. Writing `base64 -d` in a lab script is one of the classic ways to produce a
-command that works for half the class. `openssl base64 -d -A` behaves identically on both — `-A`
+command that works for half the class. `openssl base64 -d -A` behaves identically on both - `-A`
 tells it to accept the input as one long line without embedded newlines.
 
 `diff` producing no output is the pass condition, and it is a stronger claim than "the script looks
@@ -1126,7 +1126,7 @@ IyEvYmluL2Jhc2gKIyBVU01TIHdlYiB0aWVyIGJvb3RzdHJhcC4gUnVucyBPTkNFLCBhcyByb290LCBh
 USER DATA PROVEN: what EC2 stored is byte-identical to what you wrote
 ```
 
-> Example output — your byte count will differ. The base64 prefix `IyEvYmluL2Jhc2gK` decodes to
+> Example output - your byte count will differ. The base64 prefix `IyEvYmluL2Jhc2gK` decodes to
 > `#!/bin/bash\n`, which is a useful thing to recognise on sight.
 
 **What to look for:** the `USER DATA PROVEN` line. If `diff` reports differences, the most likely
@@ -1145,7 +1145,7 @@ usms-web-01  i-0123...
 ```
 
 ---
-### Step 13 — Give the web server a stable public address
+### Step 13 - Give the web server a stable public address
 
 **Purpose**
 
@@ -1202,7 +1202,7 @@ auto-assigned address before EIP: 54.12.33.201
 alloc=eipalloc-0aaa111bbb222ccc3 assoc=eipassoc-0ddd444eee555fff6 address=52.9.144.17
 ```
 
-> Example output — every address and ID will differ.
+> Example output - every address and ID will differ.
 
 **Verify**
 
@@ -1214,12 +1214,12 @@ aws ec2 describe-instances --instance-ids "$WEB_INSTANCE_ID" \
 
 **What to look for:** `Public` now shows the Elastic IP, not the address from Step 10.
 
-!!! note "Floci Limitation — Elastic IPs are plausible, not routable"
+!!! note "Floci Limitation - Elastic IPs are plausible, not routable"
     Floci allocates an address that looks like a public IPv4 address, tracks the allocation and the
     association, and returns them correctly. Nothing on the internet routes to it.
 
-    Real AWS gives you an address reachable from anywhere, held until you release it, and — this is
-    the part that catches people — **charges you for it while it is not associated with a running
+    Real AWS gives you an address reachable from anywhere, held until you release it, and - this is
+    the part that catches people - **charges you for it while it is not associated with a running
     instance.** An unassociated Elastic IP is the second most common surprise on a first AWS bill,
     after the NAT gateway from Lab 2 Step 19.
 
@@ -1228,12 +1228,12 @@ aws ec2 describe-instances --instance-ids "$WEB_INSTANCE_ID" \
 
 ---
 
-### Step 14 — Test the application
+### Step 14 - Test the application
 
 **Purpose**
 
 Try the thing you built. Then, when it does not answer, work out precisely which link in the chain is
-missing — because that reasoning is what the assessment examines.
+missing - because that reasoning is what the assessment examines.
 
 **Run from**
 
@@ -1241,7 +1241,7 @@ missing — because that reasoning is what the assessment examines.
 aws-floci-course/
 ```
 
-**Command — primary path**
+**Command - primary path**
 
 ```bash
 curl -sS --max-time 5 "http://${WEB_PUBLIC_IP}/" && echo || echo "no response (expected on Floci)"
@@ -1267,7 +1267,7 @@ no response (expected on Floci)
 This is not a failure of your work. Floci does not boot an operating system for the instance, so
 there is no nginx listening. Now prove that everything *you* control is correct.
 
-**Command — fallback, prove every link in the chain**
+**Command - fallback, prove every link in the chain**
 
 ```bash
 echo "== 1. Is the instance running? =="
@@ -1318,7 +1318,7 @@ available
 acl-0aabbccddeeff0011	True
 ```
 
-> Example output — your IDs and addresses will differ.
+> Example output - your IDs and addresses will differ.
 
 **What to look for:** six answers, none of them `None`. Those six checks are, in order, exactly the
 things that must be true for a request from a browser to reach an EC2 instance:
@@ -1332,12 +1332,12 @@ browser
   -> elastic network interface
   -> security group              (check 4)
   -> instance, running           (check 1)
-  -> a process listening on 80   (NOT checked — this is the one Floci cannot give you)
+  -> a process listening on 80   (NOT checked - this is the one Floci cannot give you)
 ```
 
 Memorise that list. It is the debugging procedure for "I cannot reach my instance" on real AWS, and
 it is a viva question in Section 14. Note that the seventh item is the only one this lab cannot
-verify — and note that on real AWS it is also the item that is *not* an AWS problem.
+verify - and note that on real AWS it is also the item that is *not* an AWS problem.
 
 **Checkpoint 4**
 
@@ -1354,12 +1354,12 @@ usms-web-01  reachable-by-configuration
 
 ---
 
-### Step 15 — Create and attach a data volume
+### Step 15 - Create and attach a data volume
 
 **Purpose**
 
 The root volume is deleted when the instance is terminated. Student records cannot live there. This
-step creates a separate EBS volume — an independent resource with its own lifecycle — and attaches
+step creates a separate EBS volume - an independent resource with its own lifecycle - and attaches
 it.
 
 **Run from**
@@ -1399,7 +1399,7 @@ aws ec2 attach-volume \
 `--availability-zone "$INSTANCE_AZ"` is derived from the instance rather than typed. That is not
 style: **an EBS volume can only be attached to an instance in the same Availability Zone.** A volume
 is stored in one AZ's storage fabric and cannot cross to another. To move data between AZs you take a
-snapshot — which is regional — and create a new volume from it elsewhere.
+snapshot - which is regional - and create a new volume from it elsewhere.
 
 `gp3` is the current general-purpose SSD type. It gives a baseline 3,000 IOPS and 125 MB/s regardless
 of size, where the older `gp2` scaled performance with capacity and forced you to over-provision disk
@@ -1423,7 +1423,7 @@ WEB_VOLUME_ID = vol-0123456789abcdef0
 +-----------+-----------------------+---------------------+
 ```
 
-> Example output — your IDs will differ.
+> Example output - your IDs will differ.
 
 **Verify**
 
@@ -1442,24 +1442,24 @@ terminate and storage that does not.
 ✏️ **Your turn**
 
 Test the Availability Zone constraint rather than believing it. Create an 8 GiB `gp3` volume in
-`$USMS_AZ_B` — the *other* zone — and attempt to attach it to `usms-web-01`, which is in
+`$USMS_AZ_B` - the *other* zone - and attempt to attach it to `usms-web-01`, which is in
 `$USMS_AZ_A`.
 
 ```text
 Expected result:
 On real AWS: InvalidVolume.ZoneMismatch, naming both zones.
-On Floci: record what actually happens — it may accept the attachment, which is
+On Floci: record what actually happens - it may accept the attachment, which is
 itself a finding worth writing down. Either way, delete the test volume afterwards
 and state in one sentence what real AWS would have done.
 ```
 
 Hint: `aws ec2 delete-volume --volume-id <id>` after detaching, if it attached. This is the only
 place in Practical 1 where the expected outcome is an error, which is why it is a "your turn" task
-and not an assessed step — see Section 12 for why this course never *depends* on seeing a denial.
+and not an assessed step - see Section 12 for why this course never *depends* on seeing a denial.
 
 ---
 
-### Step 16 — Launch the database-tier instance into the private subnet
+### Step 16 - Launch the database-tier instance into the private subnet
 
 **Purpose**
 
@@ -1497,7 +1497,7 @@ aws ec2 describe-instances --instance-ids "$DB_INSTANCE_ID" \
 **What the command does**
 
 The long-form command line this time, rather than `--cli-input-json`, so that you have used both. Note
-that `--tag-specifications` takes two space-separated arguments here — one for the instance, one for
+that `--tag-specifications` takes two space-separated arguments here - one for the instance, one for
 its root volume.
 
 There is deliberately **no** `--iam-instance-profile`. The database tier has no reason to call the S3
@@ -1521,19 +1521,19 @@ DB_INSTANCE_ID = i-0fedcba9876543210
 +-----------+----------------------------------------+
 ```
 
-> Example output — your IDs and addresses will differ.
+> Example output - your IDs and addresses will differ.
 
 **What to look for, and this is the assessed part:**
 
 - `Private` is inside `10.0.3.0/24`.
-- `Public` is `None`. Not blank by accident — the subnet has `MapPublicIpOnLaunch` set to `False`,
+- `Public` is `None`. Not blank by accident - the subnet has `MapPublicIpOnLaunch` set to `False`,
   which Lab 2 Step 9 deliberately left alone.
 - `SG` is `usms-db-sg`.
 - `Profile` is `None`, on purpose.
 
 ---
 
-### Step 17 — Prove the two tiers are wired the way you think
+### Step 17 - Prove the two tiers are wired the way you think
 
 **Purpose**
 
@@ -1614,7 +1614,7 @@ WIRING PROVEN: usms-db-sg admits 5432 from sg-0123456789abcdef0, which is the gr
 +-------------------------------------------------------------
 ```
 
-> Example output — your IDs will differ.
+> Example output - your IDs will differ.
 
 **What to look for:**
 
@@ -1622,7 +1622,7 @@ WIRING PROVEN: usms-db-sg admits 5432 from sg-0123456789abcdef0, which is the gr
   "work" and would be wrong for the reasons Lab 2 Step 15 gave.
 - The private route table's default route targets a NAT gateway, not an internet gateway. Outbound
   yes; inbound no. That asymmetry is what makes `usms-db-01` unreachable, and it is a property of
-  routing — it would hold even if someone opened `usms-db-sg` to `0.0.0.0/0` tomorrow.
+  routing - it would hold even if someone opened `usms-db-sg` to `0.0.0.0/0` tomorrow.
 
 **Checkpoint 5**
 
@@ -1638,7 +1638,7 @@ usms-vpc
 
 ---
 
-### Step 18 — Stop and start the web server, and watch which address moves
+### Step 18 - Stop and start the web server, and watch which address moves
 
 **Purpose**
 
@@ -1691,7 +1691,7 @@ aws ec2 describe-addresses --allocation-ids "$WEB_EIP_ALLOC" \
     **What depends on it:** nothing in this lab. Its root and data volumes persist, its Elastic IP
     stays allocated, its instance ID does not change.
 
-    **Reversible?** Yes — `start-instances`, which the command above does immediately.
+    **Reversible?** Yes - `start-instances`, which the command above does immediately.
 
     **Effect on later labs:** none. Do **not** substitute `terminate-instances` here. Termination is
     irreversible, deletes the root volume, and Lab 4 expects `usms-web-01` to exist.
@@ -1715,7 +1715,7 @@ State: running   Public: 52.9.144.17  Private: 10.0.1.87
 3. `PrivateIpAddress` never changed. A private address is held for the life of the instance, not the
    life of the running state.
 
-!!! note "Floci Limitation — the stop/start transition may be instantaneous or absent"
+!!! note "Floci Limitation - the stop/start transition may be instantaneous or absent"
     Some Floci builds move an instance to `stopped` and back without ever clearing the public address
     field, so the middle line reads `Public: 52.9.144.17` throughout.
 
@@ -1741,11 +1741,11 @@ on Tier=web returns exactly two rows.
 
 Hint: copy the JSON to `templates/lab-03-run-instances-web02.json`, change `SubnetId` and the `Name`
 tag, and leave everything else alone. That is the argument for `--cli-input-json` over a long command
-line — the diff between the two launches is two lines and is reviewable.
+line - the diff between the two launches is two lines and is reviewable.
 
 ---
 
-### Step 19 — Prove the compute layer survives a restart
+### Step 19 - Prove the compute layer survives a restart
 
 **Purpose**
 
@@ -1758,7 +1758,7 @@ being there.
 aws-floci-course/
 ```
 
-**Command — part 1, record the truth**
+**Command - part 1, record the truth**
 
 ```bash
 aws ec2 describe-instances \
@@ -1769,7 +1769,7 @@ aws ec2 describe-instances \
 cat outputs/lab-03-pre-restart.txt
 ```
 
-**Command — part 2, perturb**
+**Command - part 2, perturb**
 
 ```bash
 ./scripts/setup/floci-down.sh
@@ -1779,7 +1779,7 @@ sleep 5
 source configs/course.env
 ```
 
-**Command — part 3, read it back by tag, not by variable**
+**Command - part 3, read it back by tag, not by variable**
 
 ```bash
 aws ec2 describe-instances \
@@ -1800,7 +1800,7 @@ aws ec2 describe-addresses --filters "Name=tag:Project,Values=USMS" \
 **What the command does**
 
 Everything is looked up **by tag**, not by the instance IDs in your shell variables. Reusing
-`$WEB_INSTANCE_ID` would prove only that Bash remembers strings — the same mistake that made an
+`$WEB_INSTANCE_ID` would prove only that Bash remembers strings - the same mistake that made an
 earlier edition of this course's persistence test worthless. Searching by tag forces the API to find
 the resource.
 
@@ -1815,7 +1815,7 @@ PERSISTENCE PROVEN: same instances, same subnets, same security groups after res
 2
 ```
 
-> Example output — the volume count is 4 if you have two instances plus a data volume and did the
+> Example output - the volume count is 4 if you have two instances plus a data volume and did the
 > Step 18 "Your turn" task; 3 otherwise. The Elastic IP count is 2: `usms-nat-eip` from Lab 2 and
 > `usms-web-eip` from Step 13.
 
@@ -1831,7 +1831,7 @@ Persistence proven for Lab 03
 
 ---
 
-### Step 20 — Create an AMI from the configured instance
+### Step 20 - Create an AMI from the configured instance
 
 **Purpose**
 
@@ -1867,7 +1867,7 @@ aws ec2 describe-images --image-ids "$WEB_AMI_ID" \
 
 **What the command does**
 
-`--name` must be unique within your account and region, which is why the date is appended — re-running
+`--name` must be unique within your account and region, which is why the date is appended - re-running
 this step tomorrow works, re-running it twice today does not.
 
 `--no-reboot` tells AWS not to restart the instance before taking the snapshot. It keeps the service
@@ -1886,13 +1886,13 @@ WEB_AMI_ID = ami-0abc123def456789a
 +---------+---------------------------+---------+----------+
 ```
 
-> Example output — your ID and date will differ.
+> Example output - your ID and date will differ.
 
 **AMI or user data?** Both, usually:
 
 | | User data | AMI |
 | --- | --- | --- |
-| Boot time | Slow — installs packages at every launch | Fast — everything is already there |
+| Boot time | Slow - installs packages at every launch | Fast - everything is already there |
 | Patching | Always gets the latest packages | Frozen at build time; rebuild to patch |
 | Auditability | The script is in Git and reviewable | The contents are opaque unless you built it reproducibly |
 | Failure mode | A failed install leaves a half-configured live instance | A bad image fails identically every time, which is easier to diagnose |
@@ -1911,7 +1911,7 @@ usms-web-golden  (ami-0abc...)
 
 ---
 
-### Step 21 — Audit what this lab created
+### Step 21 - Audit what this lab created
 
 **Purpose**
 
@@ -1956,7 +1956,7 @@ untagged. A resource without a `Name` value in these tables was created without
 ✏️ **Your turn**
 
 Write a single command that prints, for every running USMS instance, its name, its Availability Zone,
-and whether it has a public address — sorted so that instances **without** a public address appear
+and whether it has a public address - sorted so that instances **without** a public address appear
 first. Save it to `outputs/lab-03-exposure-report.txt`.
 
 ```text
@@ -1966,12 +1966,12 @@ address. On a real account this is the report you would run to answer "what of o
 is exposed to the internet?"
 ```
 
-Hint: `sort_by()` needs something orderable. A null does not sort against a string — think about what
+Hint: `sort_by()` needs something orderable. A null does not sort against a string - think about what
 you could map the address to first, or look up `not_null()` in the JMESPath specification.
 
 ---
 
-### Step 22 — Write `configs/lab-03.env`
+### Step 22 - Write `configs/lab-03.env`
 
 **Purpose**
 
@@ -1988,7 +1988,7 @@ aws-floci-course/
 
 ```bash
 cat > configs/lab-03.env << EOF
-# Lab 03 — EC2 outputs
+# Lab 03 - EC2 outputs
 # Generated on $(date -u +%Y-%m-%dT%H:%M:%SZ)
 # Contains IDs only. NO SECRETS. Safe to commit.
 # The private key for usms-app-key lives in outputs/ and is NOT recorded here.
@@ -2030,7 +2030,7 @@ Unquoted heredoc, for the same reason as Lab 2 Step 24: every `$(...)` must run 
 must land in the file.
 
 Note the `instance-state-name` filter with two values. Without it, a terminated instance from a
-previous attempt could be returned instead of the live one — terminated instances remain visible to
+previous attempt could be returned instead of the live one - terminated instances remain visible to
 `describe-instances` for about an hour.
 
 **Verify**
@@ -2045,12 +2045,12 @@ printf '%-24s %s\n' \
 ```
 
 **What to look for:** `all values populated`, then four non-empty values. `USMS_WEB_AMI` reading
-`None` means Step 20's tag did not apply — check with
+`None` means Step 20's tag did not apply - check with
 `aws ec2 describe-images --owners self --query 'Images[].Tags'`.
 
 ---
 
-### Step 23 — Commit
+### Step 23 - Commit
 
 **Purpose**
 
@@ -2082,7 +2082,7 @@ git log --oneline -4
 **What to look for before you type `git commit`:**
 
 - Nothing under `outputs/` is staged. Especially not `usms-app-key.pem`.
-- `templates/lab-03-run-instances-full.json` is **not** staged — it is 300 lines of empty skeleton
+- `templates/lab-03-run-instances-full.json` is **not** staged - it is 300 lines of empty skeleton
   and adds nothing to the repository. Add it to `.gitignore` if you like, or just do not stage it.
 - `configs/lab-03.env` **is** staged. IDs, no secrets.
 
@@ -2094,7 +2094,7 @@ git log --oneline -4
  6 files changed, 388 insertions(+)
 ```
 
-> Example output — your hash and counts will differ.
+> Example output - your hash and counts will differ.
 
 **Checkpoint 8**
 
@@ -2113,11 +2113,11 @@ Lab 03 recorded
 
 Three of the checks below are the ones worth having:
 
-- **`usms-db-01 has NO public address`** — a negative assertion. Nothing else would notice if the
+- **`usms-db-01 has NO public address`** - a negative assertion. Nothing else would notice if the
   data tier quietly became reachable.
-- **`data volume DeleteOnTermination is False`** — checks the *configuration* that makes the volume
+- **`data volume DeleteOnTermination is False`** - checks the *configuration* that makes the volume
   durable, not merely that a volume exists.
-- **`private key is chmod 600 and not tracked by git`** — checks the security property, not the file.
+- **`private key is chmod 600 and not tracked by git`** - checks the security property, not the file.
 
 ### 9.2 Build `scripts/utilities/verify-lab-03.sh`
 
@@ -2267,17 +2267,17 @@ chmod +x scripts/utilities/verify-lab-03.sh
 PASS=36  FAIL=0
 ```
 
-> Example output — the middle is abbreviated; you will see all 36.
+> Example output - the middle is abbreviated; you will see all 36.
 
 **The expected count is `PASS=36  FAIL=0`.**
 
 Two failures have known, benign causes on some Floci builds. Record them in your report rather than
 fighting them:
 
-- `usms-db-01 has NO public address` — if Floci assigns one anyway despite `MapPublicIpOnLaunch`
+- `usms-db-01 has NO public address` - if Floci assigns one anyway despite `MapPublicIpOnLaunch`
   being `False` on the subnet, that is a Floci limitation. Check the subnet attribute yourself and
   say so.
-- `data volume survives termination` — if Floci does not populate `DeleteOnTermination` on
+- `data volume survives termination` - if Floci does not populate `DeleteOnTermination` on
   attachments, the check returns an empty string. Confirm with
   `aws ec2 describe-volumes --volume-ids "$USMS_WEB_DATA_VOLUME" --output json` and note it.
 
@@ -2303,7 +2303,7 @@ Everything else failing is a real problem with your work.
 cat > scripts/cleanup/lab-03-cleanup.sh << 'EOF'
 #!/usr/bin/env bash
 # END OF COURSE ONLY. Terminates Lab 03 compute, dependencies first.
-# Run this BEFORE scripts/cleanup/lab-02-cleanup.sh — a VPC with running
+# Run this BEFORE scripts/cleanup/lab-02-cleanup.sh - a VPC with running
 # instances in it cannot be deleted.
 set -Eeuo pipefail
 
@@ -2365,14 +2365,14 @@ echo; echo "Lab 03 teardown complete. You may now run lab-02-cleanup.sh."
 EOF
 
 chmod +x scripts/cleanup/lab-03-cleanup.sh
-bash -n scripts/cleanup/lab-03-cleanup.sh && echo "syntax OK — do NOT run it"
+bash -n scripts/cleanup/lab-03-cleanup.sh && echo "syntax OK - do NOT run it"
 ````
 
-**What to look for:** `syntax OK — do NOT run it`.
+**What to look for:** `syntax OK - do NOT run it`.
 
 The ordering is the lesson again. An Elastic IP must be disassociated before it can be released. A
 volume must be detached before it can be deleted, and detaching is asynchronous, so there is a wait.
-Instances must be terminated before the VPC that contains them can be deleted — which is why this
+Instances must be terminated before the VPC that contains them can be deleted - which is why this
 script must run before Lab 2's.
 
 ---
@@ -2413,7 +2413,7 @@ script must run before Lab 2's.
     ```
 
     If a value is `None`, the Lab 2 resource does not exist. Fix it in Lab 2 and regenerate the file
-    with Lab 2 Step 24 — do not hand-edit.
+    with Lab 2 Step 24 - do not hand-edit.
 
 ??? danger "`InvalidParameterValue: Value () for parameter iamInstanceProfile.name is invalid`"
     `$USMS_INSTANCE_PROFILE` is empty. It comes from `configs/lab-01.env`. Confirm the profile exists
@@ -2444,7 +2444,7 @@ script must run before Lab 2's.
     ```
 
 ??? danger "`curl` to the public address times out"
-    Expected on Floci — there is no operating system behind the instance. Use Step 14's fallback and
+    Expected on Floci - there is no operating system behind the instance. Use Step 14's fallback and
     verify the six configuration links instead. Do **not** spend the session trying to make it
     answer; nothing in the assessment requires it.
 
@@ -2485,7 +2485,7 @@ script must run before Lab 2's.
 
 ??? danger "`InvalidKeyPair.Duplicate`"
     You have run Step 4 twice. AWS will not re-issue a private key. Either use the existing pair, or
-    delete and recreate it — remembering that any instance launched with the old pair loses its login
+    delete and recreate it - remembering that any instance launched with the old pair loses its login
     path:
 
     ```bash
@@ -2504,7 +2504,7 @@ script must run before Lab 2's.
 ??? danger "Everything is gone after a restart"
     Storage mode, as always. `./scripts/utilities/floci-storage-check.sh`. If it reports
     `FLOCI_STORAGE_MODE=memory`, the container was not started by Compose. The work is not
-    recoverable; restore from the Lab 2 snapshot you took at the end of Part A.
+    recoverable; restore from the Lab 2 snapshot you took at the end of Lab 02.
 
 ---
 
@@ -2516,11 +2516,11 @@ script must run before Lab 2's.
 | `describe-instances` and its whole data model | Full | Full and realistic | Implemented in Floci |
 | Key pairs, fingerprints, one-time private key | Full | Full; the key is a dummy | Implemented in Floci |
 | Tags on instances and volumes | Full | Full | Implemented in Floci |
-| User data storage and base64 round-trip | Full | Full — Step 12 proves it | Implemented in Floci |
+| User data storage and base64 round-trip | Full | Full - Step 12 proves it | Implemented in Floci |
 | EBS volumes: create, attach, detach, describe | Full | Full at the API level | Implemented in Floci |
 | Elastic IP allocate / associate / release | Real routable address | Plausible address, not routable | Floci Limitation |
 | `create-image` | Real snapshot of the root volume | Image record with no backing snapshot | Floci Limitation |
-| **Booting an operating system** | Yes | **No** — nothing runs inside the instance | Floci Limitation |
+| **Booting an operating system** | Yes | **No** - nothing runs inside the instance | Floci Limitation |
 | cloud-init executing user data | Yes, once, as root at first boot | Stored but not executed | Floci Limitation |
 | Instance Metadata Service at `169.254.169.254` | Yes, IMDSv1 and IMDSv2 | Not served to instances | Floci Limitation |
 | Instance profile credentials delivered via IMDS | Yes, rotated automatically | Association stored; no credentials delivered | Floci Limitation |
@@ -2529,14 +2529,14 @@ script must run before Lab 2's.
 | Instance status checks (`instance-status-ok`) | System and instance checks | Not meaningfully modelled | Floci Limitation |
 | SSH to the instance | Yes, with the private key | No | Conceptual / Real AWS |
 | Instance types differing in real CPU and memory | Yes | Type is a label | Conceptual / Real AWS |
-| Cost — per instance-hour, per GB-month, per idle EIP | Real | Free | Conceptual / Real AWS |
+| Cost - per instance-hour, per GB-month, per idle EIP | Real | Free | Conceptual / Real AWS |
 | Placement groups, dedicated hosts, spot pricing | Full | Not available | Conceptual / Real AWS |
 | EC2 service quotas (vCPU limits per region) | Enforced | Not enforced | Conceptual / Real AWS |
 
 ### 12.1 What you actually observed in this lab
 
 ```text
-OBSERVABLE — you saw this happen
+OBSERVABLE - you saw this happen
   an instance created in a specific subnet with a specific security group
   the instance profile association, and the chain from it to a named policy
   user data stored and returned byte-identical (Step 12)
@@ -2547,7 +2547,7 @@ OBSERVABLE — you saw this happen
   an image record created from a running instance
   all of it surviving a container restart (Step 19)
 
-CONCEPTUAL — you reasoned about it, you did not see it
+CONCEPTUAL - you reasoned about it, you did not see it
   nginx starting, or any process running at all
   the user-data script executing
   the instance fetching credentials from IMDS
@@ -2576,7 +2576,7 @@ CONCEPTUAL — you reasoned about it, you did not see it
 
 Record commands and output in `labs/lab-03-ec2/exercises.md`.
 
-### Exercise 1 — Basic: a maintenance instance
+### Exercise 1 - Basic: a maintenance instance
 
 **Requirements**
 
@@ -2601,14 +2601,14 @@ Step 16 is the long-form launch. The only new thing is that you are choosing whi
 
 ---
 
-### Exercise 2 — Intermediate: a self-describing bootstrap
+### Exercise 2 - Intermediate: a self-describing bootstrap
 
 **Requirements**
 
 Write `labs/lab-03-ec2/user-data-db.sh`, a bootstrap script for the data tier that installs
 PostgreSQL, creates a database called `usms`, writes a marker file at
-`/var/log/usms-db-bootstrap.done` containing the instance ID and the UTC timestamp, and — importantly
-— refuses to run twice by checking for that marker first.
+`/var/log/usms-db-bootstrap.done` containing the instance ID and the UTC timestamp, and - importantly
+- refuses to run twice by checking for that marker first.
 
 Then apply it to a **new** instance `usms-db-02` in `usms-private-subnet-b`, and prove with Step 12's
 technique that what EC2 stored is byte-identical to what you wrote.
@@ -2632,7 +2632,7 @@ shell at the top of the script.
 
 ---
 
-### Exercise 3 — Problem solving: a reachability report
+### Exercise 3 - Problem solving: a reachability report
 
 **Requirements**
 
@@ -2652,7 +2652,7 @@ instance's name or tags.
 
 - Runs correctly from any directory.
 - No hard-coded resource IDs.
-- Does not fail when a field is absent — a `None` must not crash it.
+- Does not fail when a field is absent - a `None` must not crash it.
 - `set -uo pipefail`. Decide about `-e` and justify your decision in a comment.
 
 **Expected outcome**
@@ -2664,12 +2664,12 @@ classifying every instance including the ones from Exercises 1 and 2.
 
 Step 14's fallback already answers the question for one instance. The work is generalising it, and
 deciding what the verdict should be when a subnet has an internet-gateway route but the instance has
-no public address — which is a real state and is neither reachable nor unreachable for the same
+no public address - which is a real state and is neither reachable nor unreachable for the same
 reason as the others.
 
 ---
 
-### Exercise 4 — Challenge: right-size and clean up
+### Exercise 4 - Challenge: right-size and clean up
 
 **Requirements**
 
@@ -2707,14 +2707,14 @@ verification still passes.
 
 **Hints**
 
-The burstable-credit question is the one worth thinking hardest about — a `t3` instance sustained
+The burstable-credit question is the one worth thinking hardest about - a `t3` instance sustained
 above its baseline either exhausts its credits and throttles, or silently bills you for unlimited
 mode. Which of those happens depends on a setting you have not touched. Find it with
 `aws ec2 describe-instance-credit-specifications`.
 
 ---
 
-### Exercise 5 — Integration: prepare the S3 hand-off for Lab 4
+### Exercise 5 - Integration: prepare the S3 hand-off for Lab 4
 
 **Requirements**
 
@@ -2724,17 +2724,17 @@ resolving.
 
 Specifically:
 
-1. Write `labs/lab-03-ec2/transcript-upload.sh` — a script that would run **on** `usms-web-01`,
+1. Write `labs/lab-03-ec2/transcript-upload.sh` - a script that would run **on** `usms-web-01`,
    taking a student ID and a file path, and uploading it to
    `s3://usms-student-data/transcripts/<student-id>/<filename>` using no credentials at all, relying
    on the instance profile.
-2. Add a second inbound rule to `usms-app-sg` allowing TCP 443 outbound is not needed — but confirm,
+2. Add a second inbound rule to `usms-app-sg` allowing TCP 443 outbound is not needed - but confirm,
    and state in one sentence, why the *outbound* rule you never wrote is what makes the S3 call
    possible.
 3. Prove the chain is complete on the EC2 side by writing `outputs/lab-03-s3-readiness.txt`
    containing: the instance ID, its instance profile ARN, the role name, the attached policy name,
    the exact bucket ARN in the policy, and the result of
-   `aws s3api head-bucket --bucket usms-student-data` — which should fail, and whose failure is the
+   `aws s3api head-bucket --bucket usms-student-data` - which should fail, and whose failure is the
    point.
 4. Record `USMS_BUCKET_NAME` in `configs/lab-03.env` if `configs/lab-01.env` does not already carry
    it, so that Lab 4 can source the intended name rather than re-deriving it.
@@ -2744,7 +2744,7 @@ Specifically:
 - `transcript-upload.sh` must not contain, read, or reference an access key. If it does, the exercise
   is failed regardless of whether it would work.
 - It must validate its two arguments and exit non-zero with a usable message if either is missing.
-- The `head-bucket` failure must be captured, not hidden — its error code is evidence.
+- The `head-bucket` failure must be captured, not hidden - its error code is evidence.
 
 **Expected outcome**
 
@@ -2757,7 +2757,7 @@ what will change the moment the bucket exists.
 **Hints**
 
 Step 11 traced the chain. This exercise writes it down. For the `head-bucket` call, remember that a
-non-zero exit code is information — capture it with `|| true` and record `$?` rather than letting
+non-zero exit code is information - capture it with `|| true` and record `$?` rather than letting
 `set -e` abort the script.
 
 ---
@@ -2770,14 +2770,14 @@ This section is the **in-class assessment for Practical 1**. Read it at the star
 
 Everything below is checkable from your own repository.
 
-**Part A — VPC (Lab 02)**
+**Lab 02 - VPC**
 
 - [ ] `./scripts/utilities/verify-lab-02.sh` reports `FAIL=0`
 - [ ] `configs/lab-02.env` committed, no empty values, no `None`
 - [ ] Four subnets across two Availability Zones
 - [ ] `usms-private-rt` has no route to any internet gateway
 
-**Part B — EC2 (Lab 03)**
+**Lab 03 - EC2**
 
 - [ ] `./scripts/utilities/verify-lab-03.sh` reports `FAIL=0`
 - [ ] `usms-web-01` running in `usms-public-subnet-a` with `usms-app-sg` and `usms-ec2-app-profile`
@@ -2795,7 +2795,7 @@ Everything below is checkable from your own repository.
 - [ ] Every Floci limitation you hit is recorded, with what real AWS would have done
 - [ ] Screenshots in `screenshots/` for Checkpoints 3, 5 and 6
 <!-- 
-### 14.2 The in-class practical task — 60 minutes, 60 marks
+### 14.2 The in-class practical task - 60 minutes, 60 marks
 
 You will be given the task at the start of the assessment slot and must complete it in your own
 repository, live. Work alone. The AWS CLI documentation and your own notes are permitted; the lab
@@ -2833,7 +2833,7 @@ The task will be a variation on this shape, so prepare for the shape rather than
 | `floci start`, `docker compose down -v`, or `docker volume prune` used | −20 |
 | A claim of success with no verification command behind it | −5 each | -->
 
-<!-- ### 14.3 Viva — 10 minutes, 40 marks
+<!-- ### 14.3 Viva - 10 minutes, 40 marks
 
 Two questions from this bank, chosen at random. You may use your repository to illustrate an answer,
 but the answer must be in your own words.
@@ -2880,7 +2880,7 @@ Answer in prose in `notes/lab-03-notes.md`.
 
 1. Step 8 launched an instance using a subnet from Lab 2, a security group from Lab 2, an instance
    profile from Lab 1, and a key pair and script from Lab 3. For each of those five, say what would
-   have happened had it been wrong or missing — and note which failures would have been immediate and
+   have happened had it been wrong or missing - and note which failures would have been immediate and
    which would have been silent.
 
 2. `USMSStudentDataReadWrite` grants access to a bucket that does not exist. Explain why this is
@@ -2902,7 +2902,7 @@ Answer in prose in `notes/lab-03-notes.md`.
    what it implies for designing a system that must survive the loss of one AZ.
 
 6. Step 14 could not confirm that the application was reachable, so it verified six configuration
-   properties instead. Argue either that this is an adequate substitute or that it is not — and, in
+   properties instead. Argue either that this is an adequate substitute or that it is not - and, in
    either case, name the specific class of fault it cannot detect.
 
 7. Both `usms-web-01` and `usms-db-01` are `t3.micro` instances launched from the same AMI. List
@@ -2921,14 +2921,14 @@ second half is where the course stopped being a set of exercises.
 
 Step 8 is the moment to remember. A single `run-instances` call reached back into Lab 1 for an
 instance profile, into Lab 2 for a subnet and a security group, and into this lab for a key pair and
-a bootstrap script — and produced a running server that has no credentials on it, sits behind a
+a bootstrap script - and produced a running server that has no credentials on it, sits behind a
 firewall you wrote, and is addressable at a stable public address you own. None of those pieces was
 built with the others in view. They fit because the naming and the tagging and the env files made
 them fit.
 
 The second thing worth keeping is the seven-link chain in Step 14. When something on real AWS is
 unreachable, that list is the diagnosis, in order, and six of its seven links are things you can check
-with a `describe-*` call. The seventh — is a process actually listening — is the one AWS cannot help
+with a `describe-*` call. The seventh - is a process actually listening - is the one AWS cannot help
 you with, and it is remarkable how often it is the answer.
 
 The third is the discipline the course keeps returning to. Every command in this lab reported
@@ -2941,16 +2941,16 @@ depends on. A command that appears to succeed is still not evidence that it did 
 ```text
 ╔═══════════════════ KEEP ══════════════════════╗    ╔═══════════ CLEAN UP ════════════════╗
 ║ usms-web-01        Lab 04 uploads from it     ║    ║ usms-admin-01-host                   ║
-║ usms-db-01         Lab 06 replaces it         ║    ║   — Exercise 1 practice instance;    ║
+║ usms-db-01         Lab 06 replaces it         ║    ║   - Exercise 1 practice instance;    ║
 ║ usms-web-eip       stable address             ║    ║   terminate it in Exercise 4         ║
 ║ usms-web-data-vol  the durable-storage lesson ║    ║                                      ║
 ║ usms-web-golden    Lab 08 launch template     ║    ║ templates/lab-03-run-instances-      ║
-║ usms-app-key       + outputs/usms-app-key.pem ║    ║   full.json — 300 lines of empty     ║
+║ usms-app-key       + outputs/usms-app-key.pem ║    ║   full.json - 300 lines of empty     ║
 ║ configs/lab-03.env Lab 04 sources it          ║    ║   skeleton; do not commit it         ║
 ║ labs/lab-03-ec2/user-data.sh                  ║    ║                                      ║
 ║ templates/lab-03-run-instances.json           ║    ║ outputs/lab-03-userdata.b64 and .sh  ║
 ║ scripts/utilities/verify-lab-03.sh            ║    ║ outputs/lab-03-pre/post-restart.txt  ║
-║ everything from Labs 01 and 02                ║    ║   — evidence; keep until submitted   ║
+║ everything from Labs 01 and 02                ║    ║   - evidence; keep until submitted   ║
 ╚═══════════════════════════════════════════════╝    ╚══════════════════════════════════════╝
 ```
 
@@ -2974,19 +2974,23 @@ for the end of the course, and in that order.
 
 ## 17. Preparation for the Next Lab
 
-Lab 4 is S3, and it is the lab where Lab 1's policy finally resolves.
+Lab 04 is ECS: the enrolment service moves off a hand-run EC2 instance and onto a cluster that
+restarts what it loses.
 
-| From `configs/lab-03.env` | Lab 4 uses it for |
+| From `configs/lab-03.env` | Lab 04 uses it for |
 | --- | --- |
-| `USMS_WEB_INSTANCE` | Demonstrating that the instance's role, not a key, grants the access |
-| `USMS_WEB_PUBLIC_IP` | Referencing the portal in the bucket's website configuration exercise |
-| `USMS_BUCKET_NAME` | The bucket name to create, sourced rather than retyped |
+| `USMS_WEB_INSTANCE` | Step 2's cross-check that Lab 03 is still intact before building on it, and Exercise 5's reverse lookup back to this same instance |
 
-| From earlier labs | Lab 4 uses it for |
+| From earlier labs | Lab 04 uses it for |
 | --- | --- |
-| Lab 1 `USMSStudentDataReadWrite` | Lab 4 Step 3 creates the bucket at the ARN this policy names |
-| Lab 1 `usms-ec2-app-role` | The principal in the bucket policy |
-| Lab 2 `usms-s3-endpoint` | Explaining why a private instance reaches S3 without a NAT hop |
+| Lab 02 `usms-app-sg` | Becomes the *source* of the enrolment security group's only inbound rule - the web tier is the only thing allowed to call the enrolment API |
+| Lab 02 `usms-private-subnet-a` / `-b` | Where the ECS tasks actually run |
+| Lab 01 `usms-developer-role` | Assumed before every build in this course, including Lab 04's |
+| Lab 03 `usms-web-01`, `usms-db-01` | Both still running, untouched; Lab 04 does not replace them, it adds a second compute path alongside them |
+
+There is no S3 bucket yet. `USMSStudentDataReadWrite` still names a bucket that does not exist -
+Lab 10 is the lab that finally creates it, and Lab 04's own task role picks up that same policy in
+the meantime without anything to point it at.
 
 **Before the next session:**
 
@@ -2994,15 +2998,14 @@ Lab 4 is S3, and it is the lab where Lab 1's policy finally resolves.
 cd ~/aws-floci-course
 ./scripts/utilities/verify-lab-02.sh
 ./scripts/utilities/verify-lab-03.sh
-aws s3api head-bucket --bucket usms-student-data ; echo "exit code: $?"
 ```
 
-You want `FAIL=0` twice, and a **non-zero** exit code from `head-bucket` — probably 254, with a
-`404` or `NoSuchBucket` message. Save that output. Lab 4 Step 3 runs the same command after creating
-the bucket, and the difference between the two is the point of the step.
+You want `FAIL=0` twice. Lab 04 Step 2 re-runs this same check before doing anything else, and a
+failure there is worth fixing now rather than at the start of the next session.
 
-**Read ahead, five minutes:** find out what makes an S3 bucket name globally unique, and what the
-difference is between the `aws s3` and `aws s3api` command sets. Lab 4 uses both, deliberately.
+**Read ahead, five minutes:** find out what an ECS task definition is and how it differs from an EC2
+instance - immutable, versioned, and never edited in place. Lab 04 builds on that distinction from
+its first step.
 
 Take a snapshot before you finish:
 
@@ -3010,8 +3013,8 @@ Take a snapshot before you finish:
 floci snapshot save practical-01-complete
 ```
 
-If `floci snapshot` is not available on your build, stop Floci first — archiving a live data
-directory can capture a half-written file — and use the filesystem fallback:
+If `floci snapshot` is not available on your build, stop Floci first - archiving a live data
+directory can capture a half-written file - and use the filesystem fallback:
 
 ```bash
 ./scripts/setup/floci-down.sh
@@ -3024,16 +3027,16 @@ Keep the archive in your home directory, outside the repository, so it is never 
 
 ---
 
-## Appendix A — Command Reference
+## Appendix A - Command Reference
 
 | Command | What it does |
 | --- | --- |
 | `aws ec2 describe-images` | List AMIs; `--owners amazon` or `--owners self` |
 | `aws ec2 register-image` | Create an AMI record from parameters rather than from an instance |
 | `aws ec2 deregister-image` | Remove an AMI; does not delete its snapshots |
-| `aws ssm get-parameter` | Read an SSM parameter — how you resolve the current AMI on real AWS |
+| `aws ssm get-parameter` | Read an SSM parameter - how you resolve the current AMI on real AWS |
 | `aws ec2 create-key-pair` | Create a key pair; the private key is returned exactly once |
-| `aws ec2 describe-key-pairs` | Read back the name, fingerprint and type — never the private key |
+| `aws ec2 describe-key-pairs` | Read back the name, fingerprint and type - never the private key |
 | `aws ec2 delete-key-pair` | Delete the public half; existing instances keep the injected key |
 | `aws ec2 run-instances` | Launch instances |
 | `aws ec2 --generate-cli-skeleton` | Print the full request shape as JSON |
@@ -3054,15 +3057,15 @@ Keep the archive in your home directory, outside the repository, so it is never 
 | `aws ec2 describe-volumes` | Read volumes; filter on `attachment.instance-id` |
 | `aws ec2 create-image` | Create an AMI from a running instance |
 | `aws s3api head-bucket` | Test whether a bucket exists and is reachable by you |
-| `openssl base64 -d -A` | Portable base64 decode — works on Linux and macOS alike |
+| `openssl base64 -d -A` | Portable base64 decode - works on Linux and macOS alike |
 
 ---
 
-## Appendix B — New JMESPath and CLI patterns introduced
+## Appendix B - New JMESPath and CLI patterns introduced
 
 | Pattern | Meaning | Where it appeared |
 | --- | --- | --- |
-| `Reservations[0].Instances[0]` | Two levels of array before the instance — a reservation is one `run-instances` call | Step 10 |
+| `Reservations[0].Instances[0]` | Two levels of array before the instance - a reservation is one `run-instances` call | Step 10 |
 | `Reservations[].Instances[]` | Flatten every instance across every reservation | Step 17 |
 | Multi-line `--query` with a `{}` projection | Readable object projections across several lines | Step 10 |
 | `--generate-cli-skeleton` | Print the request shape as JSON | Step 7 |
@@ -3083,7 +3086,7 @@ Keep the archive in your home directory, outside the repository, so it is never 
 - [Amazon Machine Images (AMIs)](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/AMIs.html)
 - [Find an AMI using Systems Manager public parameters](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/finding-an-ami-parameter-store.html)
 - [Run commands when you launch an EC2 instance with user data](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/user-data.html)
-- [`run-instances` — AWS CLI reference](https://docs.aws.amazon.com/cli/latest/reference/ec2/run-instances.html)
+- [`run-instances` - AWS CLI reference](https://docs.aws.amazon.com/cli/latest/reference/ec2/run-instances.html)
 - [Amazon EC2 key pairs](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/ec2-key-pairs.html)
 - [IAM roles for Amazon EC2](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/iam-roles-for-amazon-ec2.html)
 - [Instance metadata and IMDSv2](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/ec2-instance-metadata.html)
@@ -3096,5 +3099,5 @@ Keep the archive in your home directory, outside the repository, so it is never 
 
 ---
 
-*Practical 1 complete. Lab 04 — S3 — creates the bucket that has been named in an IAM policy since
+*Practical 1 complete. Lab 04 - S3 - creates the bucket that has been named in an IAM policy since
 Lab 1, and `usms-web-01` will write to it with no credentials on disk.*
