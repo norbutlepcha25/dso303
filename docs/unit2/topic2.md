@@ -1,6 +1,5 @@
 # Amazon Elastic Container Service
 
-
 ## Definition
 
 **Amazon Elastic Container Service (ECS)** is an AWS-native container orchestrator: a managed control plane that stores your declared desired state, schedules containers onto capacity, replaces them when they fail, and integrates them with AWS networking, identity, load balancing, and observability.

@@ -1,9 +1,5 @@
 # Lab 04 - Amazon ECS
 
-*Practical 2 - running the USMS enrolment service on containers*
-
----
-
 ## 1. Lab Overview
 
 Lab 3 gave USMS two servers. They are exactly the size you made them and they will stay that size

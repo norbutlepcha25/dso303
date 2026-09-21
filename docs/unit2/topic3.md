@@ -3,7 +3,7 @@
 
 ## Definition
 
-**Container orchestration** is the continuous, automated management of a container fleet's lifecycle: deciding where each container runs, keeping the right number running, adjusting that number as demand changes, and replacing one version with another without interrupting service.
+**Container orchestration** is the ==continuous, automated management of a container fleet's lifecycle:== deciding where each container runs, keeping the right number running, adjusting that number as demand changes, and replacing one version with another without interrupting service.
 
 On Amazon ECS this is three cooperating control loops:
 
