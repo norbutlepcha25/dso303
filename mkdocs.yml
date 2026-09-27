@@ -175,88 +175,88 @@ nav:
       - 2.2 Amazon ECS: unit2/topic2.md
       - 2.3 Container Orchestration with Amazon ECS: unit2/topic3.md
 
-  - Unit 3:
-      - Overview: unit3/overview.md
-      - 3.1 Amazon EKS Architecture: unit3/topic1.md
-      - 3.2 Deploying Applications on Amazon EKS: unit3/topic2.md
-      - 3.3 Amazon EKS Advanced Concepts: unit3/topic3.md
+#   - Unit 3:
+#       - Overview: unit3/overview.md
+#       - 3.1 Amazon EKS Architecture: unit3/topic1.md
+#       - 3.2 Deploying Applications on Amazon EKS: unit3/topic2.md
+#       - 3.3 Amazon EKS Advanced Concepts: unit3/topic3.md
 
-  - Unit 4:
-      - Overview: unit4/overview.md
-      - 4.1 Microservices Design Principles: unit4/topic1.md
-      - 4.2 API Management and Service Mesh: unit4/topic2.md
-      - 4.3 Resilience in AWS Microservices: unit4/topic3.md
+#   - Unit 4:
+#       - Overview: unit4/overview.md
+#       - 4.1 Microservices Design Principles: unit4/topic1.md
+#       - 4.2 API Management and Service Mesh: unit4/topic2.md
+#       - 4.3 Resilience in AWS Microservices: unit4/topic3.md
 
-  - Unit 5:
-      - Overview: unit5/overview.md
-      - 5.1 AWS CI/CD Services: unit5/topic1.md
-      - 5.2 CI/CD Pipelines with CodePipeline and ECR: unit5/topic2.md
-      - 5.3 Infrastructure as Code: unit5/topic3.md
+#   - Unit 5:
+#       - Overview: unit5/overview.md
+#       - 5.1 AWS CI/CD Services: unit5/topic1.md
+#       - 5.2 CI/CD Pipelines with CodePipeline and ECR: unit5/topic2.md
+#       - 5.3 Infrastructure as Code: unit5/topic3.md
 
-  - Unit 6:
-      - Overview: unit6/overview.md
-      - 6.1 AWS Storage Solutions: unit6/topic1.md
-      - 6.2 AWS Database Services: unit6/topic2.md
-      - 6.3 Messaging and Event Streaming: unit6/topic3.md
+#   - Unit 6:
+#       - Overview: unit6/overview.md
+#       - 6.1 AWS Storage Solutions: unit6/topic1.md
+#       - 6.2 AWS Database Services: unit6/topic2.md
+#       - 6.3 Messaging and Event Streaming: unit6/topic3.md
 
-  - Unit 7:
-      - Overview: unit7/overview.md
-      - 7.1 Monitoring Cloud-Native Applications: unit7/topic1.md
-      - 7.2 Centralized Logging: unit7/topic2.md
-      - 7.3 Observability and Alerting: unit7/topic3.md
+#   - Unit 7:
+#       - Overview: unit7/overview.md
+#       - 7.1 Monitoring Cloud-Native Applications: unit7/topic1.md
+#       - 7.2 Centralized Logging: unit7/topic2.md
+#       - 7.3 Observability and Alerting: unit7/topic3.md
 
-  - Unit 8:
-      - Overview: unit8/overview.md
-      - 8.1 AWS Identity and Access Management: unit8/topic1.md
-      - 8.2 Network Security: unit8/topic2.md
-      - 8.3 Data Protection and Encryption: unit8/topic3.md
+#   - Unit 8:
+#       - Overview: unit8/overview.md
+#       - 8.1 AWS Identity and Access Management: unit8/topic1.md
+#       - 8.2 Network Security: unit8/topic2.md
+#       - 8.3 Data Protection and Encryption: unit8/topic3.md
 
-  - Services:
-      - Overview: Services/overview.md
-      - Services: Services/services.md
-      - Groups: Services/groups.md
+#   - Services:
+#       - Overview: Services/overview.md
+#       - Services: Services/services.md
+#       - Groups: Services/groups.md
 
-  - Practice Questions:
-      - Unit 1: Questions/unit1.md
-      - Unit 2: Questions/unit2.md
-      - Unit 3: Questions/unit3.md
-      - Unit 4: Questions/unit4.md
-      - Unit 5: Questions/unit5.md
-      - Unit 6: Questions/unit6.md
-      - Unit 7: Questions/unit7.md
-      - Unit 8: Questions/unit8.md
-      - Mid-term Question Pool: Questions/mids.md
+#   - Practice Questions:
+#       - Unit 1: Questions/unit1.md
+#       - Unit 2: Questions/unit2.md
+#       - Unit 3: Questions/unit3.md
+#       - Unit 4: Questions/unit4.md
+#       - Unit 5: Questions/unit5.md
+#       - Unit 6: Questions/unit6.md
+#       - Unit 7: Questions/unit7.md
+#       - Unit 8: Questions/unit8.md
+#       - Mid-term Question Pool: Questions/mids.md
 
-  - Interview Questions:
-      - Unit 1: interviewquestions/unit1.md
-      - Unit 2: interviewquestions/unit2.md
-      - Unit 3: interviewquestions/unit3.md
-      - Unit 4: interviewquestions/unit4.md
-      - Unit 5: interviewquestions/unit5.md
-      - Unit 6: interviewquestions/unit6.md
-      - Unit 7: interviewquestions/unit7.md
-      - Unit 8: interviewquestions/unit8.md
+#   - Interview Questions:
+#       - Unit 1: interviewquestions/unit1.md
+#       - Unit 2: interviewquestions/unit2.md
+#       - Unit 3: interviewquestions/unit3.md
+#       - Unit 4: interviewquestions/unit4.md
+#       - Unit 5: interviewquestions/unit5.md
+#       - Unit 6: interviewquestions/unit6.md
+#       - Unit 7: interviewquestions/unit7.md
+#       - Unit 8: interviewquestions/unit8.md
 
-  # - Sample Answers:
-  #     - Unit 2: Answers/unit2.md
+#   # - Sample Answers:
+#   #     - Unit 2: Answers/unit2.md
 
-  - Lab:
-      - Lab Overview: Lab/overview.md
-      - Lab 01 - IAM: Lab/Lab-01-IAM.md
-      - Lab 02 - VPC: Lab/Lab-02-VPC.md
-      - Lab 03 - EC2: Lab/Lab-03-EC2.md
-      - Lab 04 - ECS: Lab/Lab-04-ECS.md
-      - Lab 05 - ALB: Lab/Lab-05-ALB.md
-      - Lab 06 - Auto Scaling: Lab/Lab-06-autoscaling.md
-      - Lab 07 - EKS: Lab/Lab-07-EKS.md
-      - Lab 08 - EKS Scaling: Lab/Lab-08-EKS-scaling.md
-      - Lab 09 - Security: Lab/Lab-09-security.md
-      - Lab 10 - Lambda: Lab/Lab-10-lambda.md
-      - Lab 11 - CI/CD Pipeline: Lab/Lab-11-pipeline.md
-      - Lab 12 - ECS Pipeline Deploy: Lab/Lab-12-ECSpipeline.md
-      - Lab 13 - Monitoring: Lab/Lab-13-monitoring.md
-      - Checkpoint 1: Lab/Lab-14-checkpoint.md
+#   - Lab:
+#       - Lab Overview: Lab/overview.md
+#       - Lab 01 - IAM: Lab/Lab-01-IAM.md
+#       - Lab 02 - VPC: Lab/Lab-02-VPC.md
+#       - Lab 03 - EC2: Lab/Lab-03-EC2.md
+#       - Lab 04 - ECS: Lab/Lab-04-ECS.md
+#       - Lab 05 - ALB: Lab/Lab-05-ALB.md
+#       - Lab 06 - Auto Scaling: Lab/Lab-06-autoscaling.md
+#       - Lab 07 - EKS: Lab/Lab-07-EKS.md
+#       - Lab 08 - EKS Scaling: Lab/Lab-08-EKS-scaling.md
+#       - Lab 09 - Security: Lab/Lab-09-security.md
+#       - Lab 10 - Lambda: Lab/Lab-10-lambda.md
+#       - Lab 11 - CI/CD Pipeline: Lab/Lab-11-pipeline.md
+#       - Lab 12 - ECS Pipeline Deploy: Lab/Lab-12-ECSpipeline.md
+#       - Lab 13 - Monitoring: Lab/Lab-13-monitoring.md
+#       - Checkpoint 1: Lab/Lab-14-checkpoint.md
 
-#   - Solutions: Solutions.md
+# #   - Solutions: Solutions.md
 
-  - Simulation: https://main.dcaowu8w5ohp0.amplifyapp.com
+#   - Simulation: https://main.dcaowu8w5ohp0.amplifyapp.com
