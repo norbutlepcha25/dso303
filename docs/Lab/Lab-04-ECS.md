@@ -21,7 +21,7 @@ built, correctly networked, correctly permissioned service standing still.
 
 **Time:** roughly 2.5 hours, including the exercises.
 
-**Where this sits in the course**
+** Where this sits in the course**
 
 ```text
 Lab 01  IAM ..................... roles, policies, instance profile

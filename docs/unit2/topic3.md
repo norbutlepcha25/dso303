@@ -1,4 +1,3 @@
-
 # Container Orchestration with Amazon ECS
 
 ## Definition
@@ -7,7 +6,7 @@
 
 On Amazon ECS this is three cooperating control loops:
 
-- **Placement** answers *where*. The ECS scheduler filters the available capacity, sorts it according to your declared strategy, and binds the task to a host — or, on Fargate, to a subnet and an AWS-managed slot.
+- **Placement** answers *where*. The ECS scheduler filters the available capacity, sorts it according to your declared strategy, and binds the task to a host or, on Fargate, to a subnet and an AWS-managed slot.
 - **Scaling** answers *how many*. Application Auto Scaling adjusts a service's `desiredCount` from a metric, and on EC2 capacity a capacity provider adjusts the instance count underneath it.
 - **Deployment** answers *which version, and how do we get there*. A deployment controller replaces tasks of one task-definition revision with tasks of another under constraints that bound the risk.
 
@@ -18,13 +17,6 @@ On Amazon ECS this is three cooperating control loops:
 | **Capacity scaling** | Target capacity percentage | Capacity provider managed scaling | Tasks stick in `PROVISIONING` under load |
 | **Deployment** | Minimum healthy and maximum percent, circuit breaker | ECS or CodeDeploy deployment controller | A bad release drains healthy capacity, or a deployment reduces capacity during peak |
 
-Within an AWS architecture these loops sit entirely in the ECS control plane and Application Auto Scaling, acting on the data plane described in 2.2. None of them is on the request path, which is what makes a control-plane impairment survivable.
-
-!!! note "Orchestration is declarative, and that is the whole idea"
-
-    You never tell ECS to start a task. You tell it what should be true — six tasks of revision 12, spread across three Availability Zones, between four and forty depending on requests per target — and the platform continuously acts to make reality match. Every setting in this chapter is part of that specification. The corresponding discipline is that if reality does not match, the specification is where you look first, not the platform.
-
-
 ## Why This Service or Concept Exists
 
 ### Why placement is a decision at all
@@ -33,7 +25,7 @@ If every host were identical and every failure independent, placement would not 
 
 Hosts are not identical. They have different amounts of remaining CPU and memory, they sit in different Availability Zones, they may have different instance types, GPUs, or local storage, and on Spot they have different interruption risks. And failures are not independent: **an Availability Zone is a correlated failure domain**. Every task in one AZ fails together when that AZ fails, which is precisely the event multi-AZ architecture exists to survive.
 
-This produces the central tension of placement. **Bin packing** — filling one host before using the next — maximises density and minimises cost, and concentrates risk. **Spreading** — distributing across AZs and hosts — maximises availability, and wastes capacity. Real production configurations do both, in a deliberate order: spread first across the failure domain that matters, then pack within it.
+This produces the central tension of placement. **Bin packing**  filling one host before using the next  maximises density and minimises cost, and concentrates risk. **Spreading**  distributing across AZs and hosts  maximises availability, and wastes capacity. Real production configurations do both, in a deliberate order: spread first across the failure domain that matters, then pack within it.
 
 | If placement were ignored | Consequence |
 |---|---|
@@ -45,9 +37,9 @@ This produces the central tension of placement. **Bin packing** — filling one 
 
 ### Why auto scaling exists, and why the signal matters more than the mechanism
 
-Static capacity is wrong in both directions. Provision for peak and you pay for idle capacity most of the time. Provision for average and you fail at peak. Auto scaling replaces a fixed number with a control loop.
+Static capacity is wrong in both directions. ***Provision for peak and you pay for idle capacity most of the time. Provision for average and you fail at peak. Auto scaling replaces a fixed number with a control loop.***
 
-The mechanism is straightforward. The difficulty — and where students and production teams alike go wrong — is **choosing the signal**. A scaling metric is a proxy for "how much work is arriving relative to how much we can do". CPU is a good proxy only when the work is CPU-bound. For a service that spends its time waiting on a database, CPU stays at 20 per cent while requests queue behind an exhausted connection pool, and a CPU-based policy never fires. For a queue consumer, raw queue depth is a *worse* proxy, because it does not account for the capacity you just added — scaling on it produces oscillation. The correct signals are load per unit of capacity: requests per target, or backlog per task.
+The mechanism is straightforward. The difficulty  and where students and production teams alike go wrong  is **choosing the signal**. A scaling metric is a proxy for "how much work is arriving relative to how much we can do". CPU is a good proxy only when the work is CPU-bound. For a service that spends its time waiting on a database, CPU stays at 20 per cent while requests queue behind an exhausted connection pool, and a CPU-based policy never fires. For a queue consumer, raw queue depth is a *worse* proxy, because it does not account for the capacity you just added  scaling on it produces oscillation. The correct signals are load per unit of capacity: requests per target, or backlog per task.
 
 | Workload | Wrong signal | Right signal | Why |
 |---|---|---|---|
@@ -61,7 +53,7 @@ The mechanism is straightforward. The difficulty — and where students and prod
 
 Replacing running software is the highest-risk routine operation a team performs. Two things can go wrong: the new version is broken, and the act of replacement itself interrupts service. Deployment strategy addresses both.
 
-Before orchestrators, a deployment was a sequence of steps with a failure mode in the middle: stop the old version, start the new one, discover it does not work, and now nothing is running. ECS turns deployment into a controlled transition with explicit bounds — how much capacity may be removed, how much extra may be created, what counts as healthy, and what to do when the transition is not converging.
+Before orchestrators, a deployment was a sequence of steps with a failure mode in the middle: stop the old version, start the new one, discover it does not work, and now nothing is running. ECS turns deployment into a controlled transition with explicit bounds  how much capacity may be removed, how much extra may be created, what counts as healthy, and what to do when the transition is not converging.
 
 | The old failure | What ECS provides |
 |---|---|
@@ -84,8 +76,8 @@ When the ECS scheduler must place a task, it runs a pipeline. Understanding the 
 
 ```mermaid
 flowchart TD
-    A["Task needs placement"] --> B["Stage 1: filter by launch requirements — CPU, memory, ports, network mode, required attributes"]
-    B --> C["Stage 2: filter by placement constraints — distinctInstance, memberOf expressions"]
+    A["Task needs placement"] --> B["Stage 1: filter by launch requirements  CPU, memory, ports, network mode, required attributes"]
+    B --> C["Stage 2: filter by placement constraints  distinctInstance, memberOf expressions"]
     C --> D{"Any candidate instances left?"}
     D -->|"no"| E["Task stays in PROVISIONING; service event states the reason"]
     D -->|"yes"| F["Stage 3: sort candidates by placement strategies, in the order declared"]
@@ -96,7 +88,7 @@ flowchart TD
 
 Two properties of this pipeline matter architecturally.
 
-**Constraints filter; strategies sort.** A constraint can make placement impossible — if no instance satisfies it, the task simply does not run and the service event says so. A strategy can never make placement impossible; it only chooses among candidates that already qualify. This is why an over-tight constraint produces a stuck service and a poorly chosen strategy produces a working but badly distributed one.
+**Constraints filter; strategies sort.** A constraint can make placement impossible  if no instance satisfies it, the task simply does not run and the service event says so. A strategy can never make placement impossible; it only chooses among candidates that already qualify. This is why an over-tight constraint produces a stuck service and a poorly chosen strategy produces a working but badly distributed one.
 
 **Tasks are placed one at a time.** The strategy is re-evaluated for each task against the state produced by previous placements, which is what makes `spread` converge on an even distribution rather than sending everything to the currently emptiest AZ.
 
@@ -123,7 +115,7 @@ Built-in attributes include `ecs.availability-zone`, `ecs.instance-type`, `ecs.o
 
 !!! danger "A constraint that nothing satisfies is a service that never runs"
 
-    Constraints filter before strategies sort. If a `memberOf` expression references an instance type that is no longer in the Auto Scaling group, or a custom attribute nobody sets any more, every candidate is filtered out and tasks remain in `PROVISIONING` indefinitely — with a service event stating that no container instance met the requirements. This is one of the more confusing failures because the cluster has abundant free capacity. Audit constraints whenever the fleet composition changes.
+    Constraints filter before strategies sort. If a `memberOf` expression references an instance type that is no longer in the Auto Scaling group, or a custom attribute nobody sets any more, every candidate is filtered out and tasks remain in `PROVISIONING` indefinitely  with a service event stating that no container instance met the requirements. This is one of the more confusing failures because the cluster has abundant free capacity. Audit constraints whenever the fleet composition changes.
 
 ### Placement strategies
 
@@ -142,7 +134,7 @@ Strategies are an **ordered list**, applied as successive sort keys. The standar
 ]
 ```
 
-Read it as: first choose the Availability Zone that currently has the fewest tasks of this service, then within that zone choose the fullest instance that still has room. The result is even distribution across the correlated failure domain, and density within it — availability where it matters, cost efficiency where it does not conflict.
+Read it as: first choose the Availability Zone that currently has the fewest tasks of this service, then within that zone choose the fullest instance that still has room. The result is even distribution across the correlated failure domain, and density within it  availability where it matters, cost efficiency where it does not conflict.
 
 ```mermaid
 flowchart TD
@@ -152,21 +144,21 @@ flowchart TD
         AZ3["us-east-1c: instance D 10% full"]
     end
     T["New task needs placement"] --> S1["Step 1: which AZ has fewest tasks of this service?"]
-    S1 --> S2["Suppose 1a has 3, 1b has 3, 1c has 2 — choose 1c"]
-    S2 --> S3["Step 2: within 1c, binpack on memory — choose the fullest instance that fits"]
+    S1 --> S2["Suppose 1a has 3, 1b has 3, 1c has 2  choose 1c"]
+    S2 --> S3["Step 2: within 1c, binpack on memory  choose the fullest instance that fits"]
     S3 --> S4["Place on instance D"]
     S4 --> NOTE["Next task re-evaluates: 1c now has 3, so the next goes to whichever is lowest"]
 ```
 
-Reversing the order — binpack then spread — produces a very different and usually wrong outcome: the scheduler fills one instance completely before considering the zone, concentrating replicas on a single host in a single AZ.
+Reversing the order  binpack then spread  produces a very different and usually wrong outcome: the scheduler fills one instance completely before considering the zone, concentrating replicas on a single host in a single AZ.
 
 !!! tip "Spread across zones, then bin pack within them"
 
-    This ordering is the default recommendation for almost every production service on EC2 capacity, and it is worth being able to justify rather than just recite. Spreading across `instanceId` instead of AZ protects against instance failure but not zone failure, and zone failure is the larger correlated event. Adding `distinctInstance` as a constraint on top gives both, at the cost of requiring at least as many instances as tasks — appropriate for small, critical services and wasteful for large ones.
+    This ordering is the default recommendation for almost every production service on EC2 capacity, and it is worth being able to justify rather than just recite. Spreading across `instanceId` instead of AZ protects against instance failure but not zone failure, and zone failure is the larger correlated event. Adding `distinctInstance` as a constraint on top gives both, at the cost of requiring at least as many instances as tasks  appropriate for small, critical services and wasteful for large ones.
 
 ### Application Auto Scaling on ECS
 
-The scaling layer is **Application Auto Scaling**, a separate service that registers a **scalable target** — here, `ecs:service:DesiredCount` for a given cluster and service — with a minimum and maximum capacity, and then applies **scaling policies** to it.
+The scaling layer is **Application Auto Scaling**, a separate service that registers a **scalable target**  here, `ecs:service:DesiredCount` for a given cluster and service  with a minimum and maximum capacity, and then applies **scaling policies** to it.
 
 | Policy type | How it works | Best for |
 |---|---|---|
@@ -174,14 +166,14 @@ The scaling layer is **Application Auto Scaling**, a separate service that regis
 | **Step scaling** | You define alarm thresholds and the adjustment for each step | Asymmetric or aggressive responses target tracking cannot express |
 | **Scheduled scaling** | You set minimum and maximum capacity at a time or on a cron schedule | Calendar-driven load; setting a floor before a known peak |
 
-**Target tracking** is the workhorse and is worth understanding rather than treating as magic. When you create a target-tracking policy, Application Auto Scaling creates two CloudWatch alarms — a high alarm and a low alarm — and continuously computes a desired capacity that would bring the metric to the target, assuming the metric is roughly proportional to load per task. It scales out aggressively and in conservatively by design, and it will not scale in while a scale-out cooldown is active.
+**Target tracking** is the workhorse and is worth understanding rather than treating as magic. When you create a target-tracking policy, Application Auto Scaling creates two CloudWatch alarms  a high alarm and a low alarm  and continuously computes a desired capacity that would bring the metric to the target, assuming the metric is roughly proportional to load per task. It scales out aggressively and in conservatively by design, and it will not scale in while a scale-out cooldown is active.
 
 **Cooldowns** deserve deliberate asymmetry:
 
 - **Scale-out cooldown** short, 60 seconds or less. Under-capacity harms users immediately.
 - **Scale-in cooldown** long, 300 seconds or more. Removing capacity too eagerly causes flapping, and the cost of holding a few extra tasks for five minutes is trivial next to the cost of oscillation.
 
-**Predefined metrics** available for ECS target tracking are `ECSServiceAverageCPUUtilization`, `ECSServiceAverageMemoryUtilization`, their high-resolution counterparts `ECSServiceAverageCPUUtilizationHighResolution` and `ECSServiceAverageMemoryUtilizationHighResolution` (which use 20-second metrics and require high-resolution metrics to be enabled on ECS first), and `ALBRequestCountPerTarget`. Anything else — SQS backlog per task, custom business metrics — uses a **customised metric specification**, frequently a CloudWatch **metric math** expression.
+**Predefined metrics** available for ECS target tracking are `ECSServiceAverageCPUUtilization`, `ECSServiceAverageMemoryUtilization`, their high-resolution counterparts `ECSServiceAverageCPUUtilizationHighResolution` and `ECSServiceAverageMemoryUtilizationHighResolution` (which use 20-second metrics and require high-resolution metrics to be enabled on ECS first), and `ALBRequestCountPerTarget`. Anything else  SQS backlog per task, custom business metrics  uses a **customised metric specification**, frequently a CloudWatch **metric math** expression.
 
 !!! warning "`ALBRequestCountPerTarget` is not available with blue/green deployments"
 
@@ -189,7 +181,7 @@ The scaling layer is **Application Auto Scaling**, a separate service that regis
 
 ### Choosing the scaling metric
 
-**For a request-serving service**, `ALBRequestCountPerTarget` is usually correct. It measures requests arriving per task, which is the actual driver of load, and it works for I/O-bound services where CPU never moves. The target value is derived, not guessed: measure the requests per task at which p99 latency begins to degrade, and set the target somewhat below it — commonly 60 to 70 per cent of that value, leaving headroom for the scaling delay.
+**For a request-serving service**, `ALBRequestCountPerTarget` is usually correct. It measures requests arriving per task, which is the actual driver of load, and it works for I/O-bound services where CPU never moves. The target value is derived, not guessed: measure the requests per task at which p99 latency begins to degrade, and set the target somewhat below it  commonly 60 to 70 per cent of that value, leaving headroom for the scaling delay.
 
 **For a queue consumer**, the correct signal is **backlog per task**:
 
@@ -203,7 +195,7 @@ and the target is derived from the latency you have promised:
 target_backlog_per_task = acceptable_latency_seconds / seconds_per_message_per_task
 ```
 
-If a task processes one message every 0.2 seconds and you have promised that a message is processed within 60 seconds, the target is 60 / 0.2 = 300 messages per task. Scaling on raw depth instead has no denominator, so the controller has no idea whether the capacity it just added is sufficient — which is exactly why it oscillates.
+If a task processes one message every 0.2 seconds and you have promised that a message is processed within 60 seconds, the target is 60 / 0.2 = 300 messages per task. Scaling on raw depth instead has no denominator, so the controller has no idea whether the capacity it just added is sufficient  which is exactly why it oscillates.
 
 **`ApproximateAgeOfOldestMessage`** is the complementary *alarm* metric: it measures whether the promise is actually being kept, and it belongs on a dashboard and an alarm even when scaling is driven by backlog per task.
 
@@ -225,7 +217,7 @@ flowchart TD
 
 ### The two scaling layers, revisited
 
-2.2 introduced the distinction; here is the operational detail. Service auto scaling changes `desiredCount`. On EC2 capacity, capacity provider **managed scaling** changes the instance count, driven by the `CapacityProviderReservation` metric, which expresses how much capacity is needed relative to how much exists. The two loops run independently and must be tuned to cooperate: the capacity layer must react faster than, or at least concurrently with, the task layer, or every scale-out waits for an instance launch.
+[2.2](topic2.md#capacity-providers-and-strategies) introduced the distinction; here is the operational detail. Service auto scaling changes `desiredCount`. On EC2 capacity, capacity provider **managed scaling** changes the instance count, driven by the `CapacityProviderReservation` metric, which expresses how much capacity is needed relative to how much exists. The two loops run independently and must be tuned to cooperate: the capacity layer must react faster than, or at least concurrently with, the task layer, or every scale-out waits for an instance launch.
 
 The practical settings that make them cooperate are **target capacity below 100 per cent** on the capacity provider, so there is standing headroom for immediate placement, and a **task scaling target below saturation**, so the service asks for capacity before it is in trouble. On Fargate the second loop does not exist and the only tuning is the first.
 
@@ -243,7 +235,7 @@ The default ECS deployment controller performs a rolling update governed by two 
 | min 50, max 100 | Stop 5 old, start 5 new, repeat | Falls to 5 | None | Only when capacity cannot be exceeded and reduced capacity is acceptable |
 | min 0, max 100 | Stop all, then start all | Zero | None | Singleton tasks that must not run twice; accepts downtime |
 
-The `min 0, max 100` case is worth naming explicitly because it has a legitimate use: a task that must never have two instances running simultaneously — a scheduler, a leader process, or a service holding an exclusive lock — cannot use a strategy that starts a new task before stopping the old one.
+The `min 0, max 100` case is worth naming explicitly because it has a legitimate use: a task that must never have two instances running simultaneously  a scheduler, a leader process, or a service holding an exclusive lock  cannot use a strategy that starts a new task before stopping the old one.
 
 ```mermaid
 sequenceDiagram
@@ -265,11 +257,11 @@ sequenceDiagram
 
 ### The deployment circuit breaker
 
-The circuit breaker monitors a rolling deployment and, if new tasks repeatedly fail to reach a healthy state, marks the deployment failed and — with `rollback: true` — automatically redeploys the previous revision. It has a failure threshold that scales with the desired count, and it terminates a deployment that is not converging rather than allowing it to consume the fleet.
+The circuit breaker monitors a rolling deployment and, if new tasks repeatedly fail to reach a healthy state, marks the deployment failed and  with `rollback: true`  automatically redeploys the previous revision. It has a failure threshold that scales with the desired count, and it terminates a deployment that is not converging rather than allowing it to consume the fleet.
 
 What it detects: tasks that fail to start, containers that exit immediately, images that cannot be pulled, containers that fail their health check, and targets that never become healthy.
 
-What it cannot detect: a version that starts cleanly, passes `/health`, and behaves incorrectly. For that you need **CloudWatch alarm-based rollback**, configured with the deployment, which rolls back when a named alarm — error rate, latency, a business metric — enters `ALARM` during the deployment's bake period.
+What it cannot detect: a version that starts cleanly, passes `/health`, and behaves incorrectly. For that you need **CloudWatch alarm-based rollback**, configured with the deployment, which rolls back when a named alarm  error rate, latency, a business metric  enters `ALARM` during the deployment's bake period.
 
 !!! danger "Enable the circuit breaker on every service, and do not stop there"
 
@@ -287,111 +279,15 @@ Setting a service's deployment controller to `CODE_DEPLOY` changes the model ent
 
 The topology requires **two target groups** and, optionally, a **test listener** on a separate port, which is why blue/green must be designed in from the outset rather than retrofitted.
 
-**Lifecycle hooks** are the feature that distinguishes blue/green from a fancier rolling update. For ECS the hooks are `BeforeInstall`, `AfterInstall`, `AfterAllowTestTraffic`, `BeforeAllowTraffic`, and `AfterAllowTraffic`, each invoking a Lambda function that must report success or failure back to CodeDeploy. Note that there is no `BeforeAllowTestTraffic` hook — validation of the green task set before production traffic happens at `AfterInstall` (green exists, no traffic yet) and `AfterAllowTestTraffic` (test traffic has been served). This is where genuine validation lives: run a smoke suite against the green task set before any production traffic reaches it, and run business assertions after traffic shifts but before the deployment is declared successful.
-
-```mermaid
-flowchart TD
-    A["CodeDeploy deployment starts"] --> B["Provision green task set at full capacity"]
-    B --> C["Register green tasks with the green target group"]
-    C --> D["Hook: AfterInstall — Lambda validates green before any traffic"]
-    D --> E["Route test listener traffic to green"]
-    E --> F["Hook: AfterAllowTestTraffic — smoke tests against green"]
-    F --> G["Hook: BeforeAllowTraffic"]
-    G --> H["Shift production traffic: all at once, linear, or canary"]
-    H --> I["Hook: AfterAllowTraffic — business assertions"]
-    I --> J{"CloudWatch alarms healthy through the bake period?"}
-    J -->|"yes"| K["Terminate the blue task set"]
-    J -->|"no"| L["Shift traffic back to blue instantly — rollback is a routing change"]
-```
+**Lifecycle hooks** are what distinguish blue/green from a fancier rolling update: Lambda functions that validate the green task set against the test listener before any production traffic reaches it, and assert business behaviour after traffic shifts. The CodeDeploy mechanics  the AppSpec file, deployment groups, the ECS hook order and automatic rollback triggers  are covered in [5.1 CodeCommit, CodeBuild and CodeDeploy](../unit5/topic1.md#aws-codedeploy); the decision this chapter owns is whether a service needs them at all.
 
 Rollback in this model is a **routing change**, not a redeployment, which is why it is measured in seconds rather than minutes. The cost is double capacity for the duration of the deployment plus the bake period, and considerably more configuration.
 
 ### Deploy is not release
 
-The most valuable idea in deployment engineering is that **shipping code and exposing behaviour are separable**. A **feature flag** — in AWS AppConfig, or any flag system — lets you deploy code with a new capability switched off, verify the deployment is healthy on its own terms, and then enable the capability for one per cent of users, then ten, then all, without another deployment. Turning a feature off is instantaneous and carries none of a rollback's risk.
+The most valuable idea in deployment engineering is that **shipping code and exposing behaviour are separable**. A **feature flag**  in AWS AppConfig, or any flag system  lets you deploy code with a new capability switched off, verify the deployment is healthy on its own terms, and then enable the capability for one per cent of users, then ten, then all, without another deployment. Turning a feature off is instantaneous and carries none of a rollback's risk.
 
-This changes the risk calculus completely. A deployment becomes a low-risk, frequent, boring event, and the risky decision — exposing new behaviour — becomes a separately controlled, instantly reversible one. It also decouples the two from each other in time, so a release can happen during business hours with the team watching, rather than at the moment the pipeline finishes.
-
----
-
-## Internal Working
-
-### How target tracking actually computes a capacity change
-
-Target tracking is a proportional controller with guard rails. Application Auto Scaling maintains two CloudWatch alarms on the metric and, when one fires, computes a new capacity roughly as:
-
-```
-new_desired = ceil( current_desired × (current_metric_value / target_value) )
-```
-
-then clamps it to the scalable target's minimum and maximum. If a service running 10 tasks sees `ALBRequestCountPerTarget` at 150 against a target of 100, the computed capacity is `ceil(10 × 1.5) = 15`.
-
-This formula explains three behaviours that otherwise look arbitrary.
-
-**It requires the metric to be load *per task*.** The arithmetic only works if adding tasks reduces the metric proportionally. `ALBRequestCountPerTarget` and backlog per task have this property; raw queue depth does not, which is precisely why scaling on raw depth oscillates — the controller multiplies capacity by a ratio that adding capacity does not change.
-
-**Scale-in is deliberately conservative.** The service will not scale in while a scale-out cooldown is active, and it applies the largest recent scale-out as a floor for a period, because removing capacity that was recently needed is more dangerous than keeping it briefly.
-
-**Multiple policies on one service take the maximum.** If both a CPU policy and a request-count policy are attached, the service scales to the larger of the two computed capacities. This is safe, and it is the correct way to handle a service that can be constrained by either resource.
-
-```mermaid
-sequenceDiagram
-    participant CW as "CloudWatch"
-    participant AAS as "Application Auto Scaling"
-    participant ECS as "ECS service"
-    participant CP as "Capacity provider (EC2 only)"
-    CW->>AAS: "ALBRequestCountPerTarget = 150, target = 100"
-    AAS->>AAS: "new desired = ceil(10 × 1.5) = 15, clamped to [4, 40]"
-    AAS->>ECS: "UpdateService desiredCount = 15"
-    ECS->>ECS: "scheduler places 5 new tasks per placement strategy"
-    alt EC2 capacity with insufficient room
-        ECS->>CP: "CapacityProviderReservation above target"
-        CP->>CP: "increase ASG desired capacity"
-        Note over CP,ECS: "Tasks wait in PROVISIONING until instances register"
-    else Fargate, or EC2 with headroom
-        Note over ECS: "Tasks place immediately"
-    end
-    ECS->>CW: "metric falls as new tasks take traffic"
-    AAS->>AAS: "scale-in cooldown prevents immediate reversal"
-```
-
-### How the rolling update converges
-
-The service scheduler runs the deployment as a loop, not as a plan. On each iteration it computes how many new tasks it may start without exceeding `maximumPercent`, and how many old tasks it may stop without falling below `minimumHealthyPercent` — counting only tasks that are actually healthy. It then issues those starts and stops and repeats.
-
-This loop structure is why a deployment stalls rather than fails when new tasks cannot become healthy: the scheduler is permitted to stop old tasks only when new healthy ones exist, so if none become healthy, none are stopped and the service continues serving on the old revision. The circuit breaker exists to end that stall with a decision rather than leaving it indefinite.
-
-The **`rolloutState`** field on a deployment — `IN_PROGRESS`, `COMPLETED`, `FAILED` — with its accompanying `rolloutStateReason`, is the authoritative view of this loop and the first thing to read when a deployment is not progressing.
-
-### What happens to a task during replacement
-
-```mermaid
-stateDiagram-v2
-    [*] --> Running : "old task serving traffic"
-    Running --> Deregistering : "scheduler deregisters the target"
-    Deregistering --> Draining : "target group state draining, no new requests"
-    Draining --> SigTerm : "deregistration delay elapses"
-    SigTerm --> Exiting : "application stops accepting, finishes in-flight work"
-    Exiting --> Stopped : "process exits cleanly"
-    SigTerm --> Killed : "stopTimeout elapses first"
-    Killed --> Stopped : "SIGKILL, in-flight work lost"
-    Stopped --> [*]
-```
-
-The path through `Killed` is the one to design away. It happens when the application does not handle `SIGTERM`, when `stopTimeout` is shorter than the drain the application needs, or when the entrypoint is in shell form so `/bin/sh` is PID 1 and never forwards the signal. All three are avoidable and all three are common.
-
-### How placement interacts with scaling and deployment
-
-The three loops are independent but coupled through capacity, and the couplings produce most of the surprising behaviour in a real cluster:
-
-- A **placement constraint** that no instance satisfies stops scaling from having any effect, because the additional tasks cannot be placed.
-- A **`spread` strategy across AZs** interacts with capacity: if one AZ has no instances with room, spread will place there anyway once the capacity provider adds one, but only after waiting.
-- A **deployment with `maximumPercent: 200`** briefly requires double capacity, which on EC2 may trigger the capacity provider to launch instances mid-deployment — making deployments slower during periods when the cluster is already near its target capacity.
-- **`distinctInstance`** caps a service's task count at the number of container instances, which silently caps auto scaling too.
-
-!!! warning "Auto scaling can be capped by a placement constraint without any error"
-
-    A service with `distinctInstance` and a scaling maximum of 40 running on a cluster of 12 instances will never exceed 12 tasks. Nothing reports this as an error; the service simply stops growing while the scaling policy keeps asking for more. The symptom is a metric that stays above target indefinitely with `desiredCount` above `runningCount`. Check placement constraints whenever scaling appears to have a ceiling you did not configure.
+This changes the risk calculus completely. A deployment becomes a low-risk, frequent, boring event, and the risky decision  exposing new behaviour  becomes a separately controlled, instantly reversible one. It also decouples the two from each other in time, so a release can happen during business hours with the team watching, rather than at the moment the pipeline finishes.
 
 ---
 
@@ -427,85 +323,7 @@ The three loops are independent but coupled through capacity, and the couplings 
 | **Container Insights** | `RunningTaskCount`, `DesiredTaskCount`, per-task CPU and memory, restart counts |
 | **AWS CloudTrail** | Audit of `UpdateService`, scaling actions, and deployments |
 
-Read architecturally, these fall into three groups matching the three loops. **Placement** components are all about expressing intent to a scheduler that would otherwise choose arbitrarily. **Scaling** components are a control system whose quality depends almost entirely on the choice of input signal, not on the mechanism. **Deployment** components are about bounding the risk of change — how much capacity may be at risk, what counts as failure, and how fast the decision to abandon is made. The three interact only through capacity, which is why capacity headroom is the setting that most often turns a working configuration into a stuck one.
-
----
-
-## Request Lifecycle
-
-The lifecycle here is not a user request but a scaling event and the deployment that follows it, because those are the orchestration paths.
-
-### A scale-out event, end to end
-
-```mermaid
-sequenceDiagram
-    participant U as "Traffic increase"
-    participant ALB as "Application Load Balancer"
-    participant CW as "CloudWatch"
-    participant AAS as "Application Auto Scaling"
-    participant ECS as "ECS service scheduler"
-    participant SCHED as "ECS placement scheduler"
-    participant CP as "Capacity provider"
-    participant TASK as "New task"
-    U->>ALB: "request rate doubles"
-    ALB->>CW: "RequestCountPerTarget metric published"
-    CW->>AAS: "high alarm breaches after the evaluation period"
-    AAS->>AAS: "compute new desired = ceil(current × value/target)"
-    AAS->>ECS: "UpdateService desiredCount"
-    ECS->>SCHED: "place N additional tasks"
-    SCHED->>SCHED: "filter by constraints, sort by spread then binpack"
-    alt no candidate has room (EC2)
-        SCHED->>CP: "CapacityProviderReservation rises above target"
-        CP->>CP: "ASG launches instances, 60 to 180 seconds"
-        Note over SCHED,CP: "Tasks wait in PROVISIONING meanwhile"
-    end
-    SCHED->>TASK: "start task: pull image, start containers"
-    TASK->>TASK: "container health check passes"
-    ECS->>ALB: "register the task as a target"
-    ALB->>TASK: "target group health check"
-    ALB-->>ECS: "healthy, task begins receiving traffic"
-    ALB->>CW: "RequestCountPerTarget falls as load spreads"
-    AAS->>AAS: "scale-in cooldown holds capacity for a period"
-```
-
-The timing is what matters for design. From the traffic increase to a task serving requests, the components are: the metric's publication interval and the alarm's evaluation periods (tens of seconds to a couple of minutes), possibly an instance launch (one to three minutes), the image pull and container start (seconds to a minute), and the health-check threshold (fifteen to sixty seconds). Two minutes is a good outcome; five is common. **Reactive scaling cannot outrun a step change in load**, which is why a known peak should be met with scheduled scaling that raises the floor before the peak arrives, with target tracking handling the variance above it.
-
-### A rolling deployment, end to end
-
-```mermaid
-sequenceDiagram
-    participant CI as "Pipeline"
-    participant ECS as "ECS control plane"
-    participant NEW as "New revision task"
-    participant TG as "Target group"
-    participant OLD as "Old revision task"
-    participant CB as "Deployment circuit breaker"
-    participant CWA as "CloudWatch alarm"
-    CI->>ECS: "RegisterTaskDefinition revision 13, pinned by digest"
-    CI->>ECS: "UpdateService to revision 13"
-    ECS->>ECS: "create a new deployment, rolloutState IN_PROGRESS"
-    ECS->>NEW: "start tasks up to maximumPercent"
-    NEW->>NEW: "healthCheck startPeriod, then healthy"
-    ECS->>TG: "register new targets"
-    TG->>NEW: "health check on /health"
-    TG-->>ECS: "targets healthy"
-    ECS->>TG: "deregister an equal number of old targets"
-    TG->>TG: "deregistration delay: drain in-flight requests"
-    ECS->>OLD: "SIGTERM"
-    OLD->>OLD: "stop accepting, finish work, exit"
-    ECS->>ECS: "repeat until all tasks are revision 13"
-    alt new tasks repeatedly fail
-        CB->>ECS: "failure threshold reached"
-        ECS->>ECS: "rolloutState FAILED, redeploy revision 12"
-    else deployment healthy but error rate rises
-        CWA->>ECS: "alarm in ALARM state during the bake period"
-        ECS->>ECS: "roll back to revision 12"
-    else all good
-        ECS->>ECS: "rolloutState COMPLETED"
-    end
-```
-
-The two rollback paths are the point. The circuit breaker catches tasks that will not run; the alarm catches releases that run but are wrong. A service configured with only the first is protected against half the failure space.
+Read architecturally, these fall into three groups matching the three loops. **Placement** components are all about expressing intent to a scheduler that would otherwise choose arbitrarily. **Scaling** components are a control system whose quality depends almost entirely on the choice of input signal, not on the mechanism. **Deployment** components are about bounding the risk of change  how much capacity may be at risk, what counts as failure, and how fast the decision to abandon is made. The three interact only through capacity, which is why capacity headroom is the setting that most often turns a working configuration into a stuck one.
 
 ---
 
@@ -523,7 +341,7 @@ The two rollback paths are the point. The circuit breaker catches tasks that wil
 
 **Important features.** `distinctInstance` and `memberOf` constraints; the Cluster Query Language over built-in and custom attributes; `spread`, `binpack`, and `random` strategies applied as an ordered list; constraints and strategies settable at the service level or per `RunTask` call; task-definition-level `placementConstraints` for requirements intrinsic to the workload.
 
-**Limitations.** Only five placement strategy rules and ten placement constraints per service. No equivalent of Kubernetes pod affinity or anti-affinity relative to *other services*' tasks — `distinctInstance` applies within a service only. No preemption: a higher-priority task cannot evict a lower-priority one. On **Fargate**, instance-level constraints and strategies do not apply at all; distribution is across the subnets you supply.
+**Limitations.** Only five placement strategy rules and ten placement constraints per service. No equivalent of Kubernetes pod affinity or anti-affinity relative to *other services*' tasks  `distinctInstance` applies within a service only. No preemption: a higher-priority task cannot evict a lower-priority one. On **Fargate**, instance-level constraints and strategies do not apply at all; distribution is across the subnets you supply.
 
 **Performance characteristics.** Placement decisions are fast; the latency in a scale-out is capacity acquisition and image pull, not the scheduling decision.
 
@@ -539,7 +357,7 @@ The two rollback paths are the point. The circuit breaker catches tasks that wil
 
 **Important features.** Predefined metrics for CPU, memory, their high-resolution variants, and `ALBRequestCountPerTarget` (the last unavailable with the blue/green deployment controller); customised metric specifications, including CloudWatch metric math for derived signals such as backlog per task; separate scale-out and scale-in cooldowns; `disableScaleIn` for policies that should only add capacity; multiple policies per service, with the maximum computed capacity winning; scheduled actions with cron or rate expressions.
 
-**Limitations.** Reactive by nature — it cannot anticipate a step change, and the end-to-end delay from load arriving to capacity serving is typically one to five minutes. Scaling is capped by the scalable target's maximum, by placement constraints, by subnet IP availability, and on EC2 by instance capacity. Metric publication intervals bound how quickly a policy can react. There is no built-in predictive scaling for ECS as there is for EC2 Auto Scaling groups; anticipation must be expressed through scheduled actions.
+**Limitations.** Reactive by nature  it cannot anticipate a step change, and the end-to-end delay from load arriving to capacity serving is typically one to five minutes. Scaling is capped by the scalable target's maximum, by placement constraints, by subnet IP availability, and on EC2 by instance capacity. Metric publication intervals bound how quickly a policy can react. There is no built-in predictive scaling for ECS as there is for EC2 Auto Scaling groups; anticipation must be expressed through scheduled actions.
 
 **Pricing model.** Application Auto Scaling itself is not charged; the CloudWatch alarms it creates are, at a negligible rate. The real cost consequence is the capacity it provisions.
 
@@ -553,17 +371,15 @@ The two rollback paths are the point. The circuit breaker catches tasks that wil
 
 **Architecture.** Two deployment controllers. `ECS` performs an in-place rolling update governed by minimum healthy and maximum percent, with an optional circuit breaker and alarm-based rollback. `CODE_DEPLOY` creates a complete second task set and shifts traffic between two target groups, with Lambda lifecycle hooks. A third, `EXTERNAL`, hands task-set management to your own controller and is rarely used.
 
-**Important features.** `minimumHealthyPercent` and `maximumPercent`; deployment circuit breaker with automatic rollback; CloudWatch alarm-based rollback with a bake period; `rolloutState` and `rolloutStateReason` for observability; `forceNewDeployment` to redeploy the same revision, which is how you pick up a moved image tag or refresh tasks; `enableECSManagedTags` and `propagateTags` for cost attribution; blue/green traffic shifting in all-at-once, linear, and canary modes; four CodeDeploy lifecycle hooks.
+**Important features.** `minimumHealthyPercent` and `maximumPercent`; deployment circuit breaker with automatic rollback; CloudWatch alarm-based rollback with a bake period; `rolloutState` and `rolloutStateReason` for observability; `forceNewDeployment` to redeploy the same revision, which is how you pick up a moved image tag or refresh tasks; `enableECSManagedTags` and `propagateTags` for cost attribution; blue/green traffic shifting in all-at-once, linear, and canary modes; five CodeDeploy lifecycle hooks.
 
-**Limitations.** The rolling update cannot shift traffic by percentage — it shifts by task count, which for small services is a coarse increment. The circuit breaker detects health failures only, never behavioural regressions. Blue/green requires two target groups designed in from the start and consumes double capacity during the deployment. There is no built-in automatic canary analysis comparing metrics between versions; alarm-based rollback is threshold-based rather than comparative.
+**Limitations.** The rolling update cannot shift traffic by percentage  it shifts by task count, which for small services is a coarse increment. The circuit breaker detects health failures only, never behavioural regressions. Blue/green requires two target groups designed in from the start and consumes double capacity during the deployment. There is no built-in automatic canary analysis comparing metrics between versions; alarm-based rollback is threshold-based rather than comparative.
 
 **Pricing model.** No charge for the deployment mechanism. Blue/green's cost is the double capacity during the deployment and bake period, and the Lambda invocations for hooks.
 
 **Performance characteristics.** A rolling update's duration is roughly (number of batches) × (task start time plus health-check time plus deregistration delay). Small images and short health-check thresholds make deployments materially faster, which matters because a slow deployment is a long window of mixed versions.
 
 **Common configurations.** `minimumHealthyPercent: 100`, `maximumPercent: 200`, circuit breaker enabled with rollback, alarm-based rollback on 5xx rate and p99 latency, and a health-check grace period above the measured cold start.
-
----
 
 ## Important AWS Terminology
 
@@ -632,7 +448,7 @@ The two rollback paths are the point. The circuit breaker catches tasks that wil
 | **`spread` field** | `attribute:ecs.availability-zone`, `instanceId`, any attribute | AZ protects against the larger correlated failure; `instanceId` protects against host failure; use AZ first and add `distinctInstance` if you need both |
 | **`binpack` field** | `cpu` or `memory` | Pack on whichever resource your tasks actually exhaust first; for most services that is memory |
 | **`distinctInstance`** | Present or absent | For small critical services where an instance failure must cost at most one replica; note it caps task count at instance count |
-| **`memberOf` expressions** | Any CQL expression | Express genuine requirements — architecture, instance family, licensed hosts — never incidental preferences, because a stale expression stops placement entirely |
+| **`memberOf` expressions** | Any CQL expression | Express genuine requirements  architecture, instance family, licensed hosts  never incidental preferences, because a stale expression stops placement entirely |
 | **Custom attributes** | Any key-value | Define a small vocabulary such as `workload-class` and set it in `/etc/ecs/ecs.config`; ad-hoc attributes become unmaintainable |
 | **Fargate** | Not applicable | Distribution follows the subnets you supply; supply three AZs' subnets |
 
@@ -664,13 +480,11 @@ The two rollback paths are the point. The circuit breaker catches tasks that wil
 | **Deregistration delay** | Seconds | Just above p99 request duration |
 | **`stopTimeout`** | Up to 120 seconds | Slightly above the drain the application needs, and comfortably above the deregistration delay |
 | **Traffic shifting (blue/green)** | All at once, linear, canary | Canary for user-facing services; all-at-once only for internal services where the bake period is not worth the wall-clock time |
-| **Lifecycle hooks** | Up to four Lambda functions | At minimum `AfterAllowTestTraffic` running a smoke suite; this is where blue/green earns its cost |
+| **Lifecycle hooks** | Up to five Lambda functions | At minimum `AfterAllowTestTraffic` running a smoke suite; this is where blue/green earns its cost |
 
 !!! tip "Derive targets from measurement, not from round numbers"
 
     A target value of 70 per cent CPU or 1000 requests per target is a guess until you have measured the point at which the service degrades. Run a load test, find the load per task at which p99 latency begins to rise, and set the target at 60 to 70 per cent of it. The gap is the headroom the scaling delay consumes: if scaling takes two minutes and load can double in two minutes, a target at the degradation point guarantees the service is degraded for the whole scaling window.
-
----
 
 ## Design Considerations
 
@@ -709,19 +523,17 @@ flowchart TD
 
 !!! danger "Availability during deployment is a separate question from availability during failure"
 
-    A service configured with three AZs and `spread` is well protected against an AZ event. The same service with `minimumHealthyPercent: 50` deliberately halves its own capacity every time it deploys. Teams routinely design carefully for the failure they fear and casually for the one they cause themselves — and deployments happen far more often than AZ failures. Both numbers are part of the availability design.
-
----
+    A service configured with three AZs and `spread` is well protected against an AZ event. The same service with `minimumHealthyPercent: 50` deliberately halves its own capacity every time it deploys. Teams routinely design carefully for the failure they fear and casually for the one they cause themselves  and deployments happen far more often than AZ failures. Both numbers are part of the availability design.
 
 ## AWS Best Practices
 
 ### Operational Excellence
 
-Express placement strategies, scaling policies, and deployment configuration in infrastructure as code, so they are reviewable and consistent across services rather than clicked into a console once and forgotten. Standardise a module that sets the defaults this chapter recommends — spread then binpack, circuit breaker with rollback, minimum healthy 100, sensible cooldowns — so that a new service is safe by construction. Emit deployment events to EventBridge and notify the owning team, so a rollback is noticed rather than discovered. Verify actual task distribution on a dashboard rather than assuming the strategy worked. Practise rollback until it is boring, and run game days that stop tasks, drain instances, and simulate AZ loss.
+Express placement strategies, scaling policies, and deployment configuration in infrastructure as code, so they are reviewable and consistent across services rather than clicked into a console once and forgotten. Standardise a module that sets the defaults this chapter recommends  spread then binpack, circuit breaker with rollback, minimum healthy 100, sensible cooldowns  so that a new service is safe by construction. Emit deployment events to EventBridge and notify the owning team, so a rollback is noticed rather than discovered. Verify actual task distribution on a dashboard rather than assuming the strategy worked. Practise rollback until it is boring, and run game days that stop tasks, drain instances, and simulate AZ loss.
 
 ### Security
 
-Restrict who can call `UpdateService` and `RegisterTaskDefinition`, scoped to a cluster, and always constrain `iam:PassRole` to the specific execution and task roles a service uses — without that constraint a deployment principal can attach any role in the account to a task and assume it. Require deployments to reference immutable image digests, so the artefact being deployed is exactly the artefact that was scanned. Log deployment actions through CloudTrail and review who deployed what after any incident. Where blue/green lifecycle hooks run Lambda functions, scope those functions' permissions narrowly, since they gate production traffic.
+Restrict who can call `UpdateService` and `RegisterTaskDefinition`, scoped to a cluster, and always constrain `iam:PassRole` to the specific execution and task roles a service uses  without that constraint a deployment principal can attach any role in the account to a task and assume it. Require deployments to reference immutable image digests, so the artefact being deployed is exactly the artefact that was scanned. Log deployment actions through CloudTrail and review who deployed what after any incident. Where blue/green lifecycle hooks run Lambda functions, scope those functions' permissions narrowly, since they gate production traffic.
 
 ### Reliability
 
@@ -729,7 +541,7 @@ Set the service minimum capacity to at least two, and to at least the number of 
 
 ### Performance Efficiency
 
-Choose the scaling metric that reflects the actual constraint, and derive the target value from a load test rather than a round number. Keep images small, because task start time is on the critical path of every scale-out and every deployment. Maintain capacity headroom on EC2 so placement is immediate. Use scheduled scaling to raise the floor ahead of known peaks, since reactive scaling cannot anticipate. Keep deployments fast — small images, short health-check thresholds, `maximumPercent: 200` — because a slow deployment is a long window of mixed versions and a long window before a rollback completes.
+Choose the scaling metric that reflects the actual constraint, and derive the target value from a load test rather than a round number. Keep images small, because task start time is on the critical path of every scale-out and every deployment. Maintain capacity headroom on EC2 so placement is immediate. Use scheduled scaling to raise the floor ahead of known peaks, since reactive scaling cannot anticipate. Keep deployments fast  small images, short health-check thresholds, `maximumPercent: 200`  because a slow deployment is a long window of mixed versions and a long window before a rollback completes.
 
 ### Cost Optimization
 
@@ -743,11 +555,11 @@ The same levers reduce energy: higher utilisation through bin packing and right-
 
 ## Security Considerations
 
-**Deployment is a privileged operation.** A principal that can register a task definition and update a service can run arbitrary code in your account with whatever role it can pass. The controls that matter are: scoping `ecs:UpdateService` to specific cluster ARNs, constraining `iam:PassRole` to named roles with the `iam:PassedToService` condition, and requiring digest-pinned images so the deployed bytes are the scanned bytes. Of these, the `PassRole` constraint is the one most often omitted and the one that turns a deployment permission into a privilege-escalation path.
+**Deployment is a privileged operation.** A principal that can register a task definition and update a service can run arbitrary code in your account with whatever role it can pass. The controls are scoping `ecs:UpdateService` to cluster ARNs and constraining `iam:PassRole`. The orchestration-specific addition is requiring digest-pinned images, so the deployed bytes are the scanned bytes.
 
 **Scaling limits are a security control as well as a cost control.** A maximum capacity on the scalable target bounds the blast radius of a traffic anomaly, a retry storm, or a scaling loop misconfiguration. Without it, an application-level bug that inflates the scaling metric can provision capacity until a quota or a budget stops it.
 
-**Rollback must be as trustworthy as deployment.** Because task-definition revisions are immutable and images are pinned by digest, rolling back retrieves exactly the bytes that were previously healthy. This property is what makes automatic rollback safe to enable — and it depends entirely on the 2.1 discipline of immutable tags and digest pinning. A service deploying mutable tags has a rollback that is itself an untested deployment.
+**Rollback must be as trustworthy as deployment.** Because task-definition revisions are immutable and images are pinned by digest, rolling back retrieves exactly the bytes that were previously healthy. This property is what makes automatic rollback safe to enable  and it depends entirely on the 2.1 discipline of immutable tags and digest pinning. A service deploying mutable tags has a rollback that is itself an untested deployment.
 
 **Lifecycle hooks gate production traffic.** A CodeDeploy hook Lambda that returns success promotes a release; one that returns failure blocks it. Treat those functions as production-critical code: version them, review them, scope their IAM permissions narrowly, and make sure a hook that times out fails the deployment rather than passing it.
 
@@ -761,11 +573,11 @@ The same levers reduce energy: higher utilisation through bin packing and right-
 
 ## Performance Optimization
 
-**Reduce the time from load arriving to capacity serving.** That interval is the sum of metric publication and alarm evaluation, capacity acquisition on EC2, image pull, container start, and health-check confirmation. Each has a lever: a shorter alarm evaluation period (at the cost of noise sensitivity), capacity headroom, a smaller image, faster application start-up, and a lower healthy threshold on the target group. Measure each rather than guessing which dominates — `pullStartedAt` and `pullStoppedAt` from `DescribeTasks` isolate the pull, and the service event timestamps isolate the rest.
+**Reduce the time from load arriving to capacity serving.** That interval is the sum of metric publication and alarm evaluation, capacity acquisition on EC2, image pull, container start, and health-check confirmation. Each has a lever: a shorter alarm evaluation period (at the cost of noise sensitivity), capacity headroom, a smaller image, faster application start-up, and a lower healthy threshold on the target group. Measure each rather than guessing which dominates  `pullStartedAt` and `pullStoppedAt` from `DescribeTasks` isolate the pull, and the service event timestamps isolate the rest.
 
 **Scale earlier rather than faster.** Lowering the target value has a larger practical effect than tuning cooldowns, because it starts the scaling process before the service is saturated rather than trying to shorten a pipeline whose steps are mostly fixed.
 
-**Anticipate what you can.** For calendar-driven load — a lecture timetable, a market open, a nightly batch — a scheduled action raising the minimum capacity beforehand converts a scaling problem into a non-problem. Reactive scaling then handles only the variance.
+**Anticipate what you can.** For calendar-driven load  a lecture timetable, a market open, a nightly batch  a scheduled action raising the minimum capacity beforehand converts a scaling problem into a non-problem. Reactive scaling then handles only the variance.
 
 **Do not fight the deployment for capacity.** With `maximumPercent: 200`, a deployment briefly doubles task count. On EC2 near target capacity this triggers instance launches mid-deployment, making the deployment slow at exactly the wrong moment. Either keep headroom, or deploy when the cluster is not near its ceiling, or use 150 rather than 200 for large services.
 
@@ -793,9 +605,7 @@ The same levers reduce energy: higher utilisation through bin packing and right-
 
 !!! tip "On Fargate, deployment capacity is cheap; on EC2 it may not be"
 
-    `maximumPercent: 200` on Fargate means paying for double capacity for the few minutes a deployment takes, billed per second — a trivial amount. On EC2 the same setting may require launching instances that are then billed by the hour and may sit idle afterwards. This asymmetry is a small but real point in Fargate's favour for services that deploy frequently.
-
----
+    `maximumPercent: 200` on Fargate means paying for double capacity for the few minutes a deployment takes, billed per second  a trivial amount. On EC2 the same setting may require launching instances that are then billed by the hour and may sit idle afterwards. This asymmetry is a small but real point in Fargate's favour for services that deploy frequently.
 
 ## Monitoring and Observability
 
@@ -803,7 +613,7 @@ The same levers reduce energy: higher utilisation through bin packing and right-
 |---|---|---|
 | **`RunningTaskCount` versus `DesiredTaskCount`** | Container Insights | The universal symptom: a sustained gap means placement failure, capacity shortage, or crash looping |
 | **`DesiredTaskCount` over time** | Container Insights | Whether scaling is happening at all, and whether it is oscillating |
-| **Task distribution by Availability Zone** | Container Insights or a Logs Insights query over task metadata | Whether your `spread` strategy is actually working — assume nothing |
+| **Task distribution by Availability Zone** | Container Insights or a Logs Insights query over task metadata | Whether your `spread` strategy is actually working  assume nothing |
 | **`ALBRequestCountPerTarget`** | ALB target group | Load per task; also the scaling signal itself |
 | **`TargetResponseTime` p99** | ALB | Whether the scaling target value is actually protecting latency |
 | **`UnHealthyHostCount`** | ALB target group | The most informative deployment-failure signal; a rise during a deploy means roll back |
@@ -816,15 +626,13 @@ The same levers reduce energy: higher utilisation through bin packing and right-
 | **Deployment state change events** | EventBridge | The hook for notifying a team that a deployment started, completed, or rolled back |
 | **Error-budget burn rate** | Derived from SLIs | The only alarm that reliably corresponds to user harm |
 
-**Three dashboards worth building.** A **scaling dashboard** per service showing the scaling metric, the target line, desired and running counts, and scaling activities on the same time axis — this makes flapping, capping, and non-firing policies immediately visible. A **deployment dashboard** showing `rolloutState`, unhealthy host count, 5xx rate, and p99 latency during deployments. And an **availability dashboard** showing task count by AZ, which is the only way to know whether your placement strategy is doing what you believe.
+**Three dashboards worth building.** A **scaling dashboard** per service showing the scaling metric, the target line, desired and running counts, and scaling activities on the same time axis  this makes flapping, capping, and non-firing policies immediately visible. A **deployment dashboard** showing `rolloutState`, unhealthy host count, 5xx rate, and p99 latency during deployments. And an **availability dashboard** showing task count by AZ, which is the only way to know whether your placement strategy is doing what you believe.
 
 **Alarms that correspond to real problems.** A sustained gap between desired and running. A service sitting at its scaling maximum. `ApproximateAgeOfOldestMessage` above the promise. 5xx rate and p99 latency, wired both to paging and to deployment rollback. And deployment failure events from EventBridge. Resource metrics such as CPU belong on dashboards for capacity planning rather than on pagers.
 
 !!! tip "`describe-scaling-activities` answers most scaling questions in one call"
 
-    When a service is not scaling as expected, the scaling activity history states what Application Auto Scaling decided, when, why, and whether it succeeded — including messages such as a request being clamped to the maximum capacity. Reading it first replaces most of the guesswork about whether the problem is the metric, the policy, the limits, or placement.
-
----
+    When a service is not scaling as expected, the scaling activity history states what Application Auto Scaling decided, when, why, and whether it succeeded  including messages such as a request being clamped to the maximum capacity. Reading it first replaces most of the guesswork about whether the problem is the metric, the policy, the limits, or placement.
 
 ## Integration with Other AWS Services
 
@@ -871,64 +679,7 @@ flowchart TD
     FLAG["AWS AppConfig feature flags"] -.->|"release, separately from deploy"| SVC
 ```
 
-Read architecturally, this shows the three loops closing at different speeds and the deliberate separation of deploy from release. The **scaling loop** closes in minutes and is driven by a metric that must be normalised per task. The **placement loop** closes in seconds but is constrained by capacity that may take minutes to appear. The **deployment loop** closes in minutes and has two independent abort mechanisms — one for tasks that will not run, one for releases that run but are wrong. And the feature-flag path bypasses all three: it changes behaviour without changing what is deployed, which is why it is the fastest and safest control available.
-
----
-
-## Common Architecture Patterns
-
-### Spread across zones, bin pack within them
-
-The default production placement configuration on EC2 capacity, and the one to be able to justify: availability across the correlated failure domain, density inside it. Applicable to essentially every replicated service. The exception is a service so small that `distinctInstance` is affordable and the additional instance-failure protection is worth the cap on scale.
-
-### Target tracking on load per unit of capacity
-
-Scale on a metric that falls when you add tasks: requests per target, backlog per task, or CPU for CPU-bound work. This is not a stylistic preference but a requirement of the control algorithm, which multiplies current capacity by the ratio of current value to target. A metric that does not respond to capacity makes the loop unstable by construction.
-
-### Scheduled floor plus reactive ceiling
-
-For calendar-driven load, a scheduled action raises the minimum capacity before the peak and lowers it afterwards, while target tracking handles variance above the floor. This combines anticipation for the predictable part with reaction for the rest, and it is strictly better than either alone for a service with a known load shape.
-
-### Rolling update with two independent abort mechanisms
-
-The circuit breaker catches tasks that will not run; alarm-based rollback on 5xx rate and p99 latency catches releases that run but are wrong. Together they cover both halves of the failure space, and neither is a substitute for the other. This is the default deployment pattern for most services.
-
-### Blue/green with validation hooks
-
-Two target groups, a full green task set, validation before any production traffic, canary shifting, a bake period, and rollback as a routing change. The cost is double capacity and considerably more configuration; the benefit is pre-production validation against the real environment and rollback measured in seconds. Justified for services where a bad release is expensive and where the validation hooks will actually be written — an unwritten hook makes blue/green an expensive rolling update.
-
-### Deploy dark, release with a flag
-
-Ship the code with the new behaviour switched off, confirm the deployment is healthy on its own terms, then enable the behaviour progressively through AWS AppConfig. Turning a flag off is instant and carries none of a rollback's risk. This is the highest-leverage risk reduction in deployment engineering, and it works with any deployment controller.
-
-### Worker scaling on backlog with an independent latency alarm
-
-Scale on backlog per task, but alarm on `ApproximateAgeOfOldestMessage`, because the two answer different questions: the first is the control input, the second is whether the promise to the business is being kept. A worker that scales correctly and still breaches its latency target is telling you the target value or the maximum capacity is wrong.
-
-### Singleton task with `min 0, max 100`
-
-For a workload that must never run twice concurrently — a scheduler, a leader, a holder of an exclusive lock — the deployment must stop the old task before starting the new one, accepting a brief gap. Naming this pattern explicitly matters because the usual advice (`min 100`) is exactly wrong here, and applying it produces two concurrent instances of something that must be unique.
-
----
-
-## Industry Use Cases
-
-| Sector | Workload | Orchestration configuration | Reasoning |
-|---|---|---|---|
-| Higher education | Timetabled exam portal | Scheduled minimum before each exam window, target tracking above it, spread on AZ | Load is known in advance; reactive scaling alone cannot meet a step change |
-| E-commerce | Checkout | Spread on AZ, `min 100 / max 200`, circuit breaker plus alarm rollback, canary via CodeDeploy | Availability-critical and revenue-critical; both abort mechanisms justified |
-| E-commerce | Order-event workers | Backlog-per-task scaling, Fargate Spot, alarm on oldest-message age | Interruption-tolerant; the correct signal is backlog, not CPU |
-| Media | Transcoding fleet | `binpack` on CPU, EC2 Spot with mixed instance types, spread on instance ID | Cost-dominated batch work; instance diversity mitigates Spot pool reclamation |
-| Media | Live-event API | Scheduled pre-scaling hours before broadcast, `min 100 / max 150` | Deployment during an event must not reduce capacity; the peak is a known step |
-| Retail banking | Payment initiation | `distinctInstance`, spread on AZ, blue/green with business-assertion hooks | A bad release is expensive and a health check cannot detect it |
-| Healthcare | Integration adapters | Independent scaling policies per adapter, rolling updates, feature flags | Each vendor integration has its own load shape and its own release risk |
-| Industrial IoT | Telemetry ingestion | Scaling on stream lag via custom metric, EC2 capacity, binpack on memory | Sustained throughput where lag, not CPU, is the constraint |
-| Logistics | Route optimisation | Scheduled scaling for the nightly batch, scale to zero between runs | Entirely predictable; reactive scaling would be pure overhead |
-| Government | Multi-supplier portal | Standard deployment module enforced across suppliers, alarm rollback mandatory | Consistency of safety mechanisms across teams that do not share a codebase |
-| SaaS | Pooled multi-tenant API | Target tracking on requests per target, canary shifting, feature flags per tenant tier | One deployment affects every tenant, so gradual exposure is essential |
-| Gaming | Match services | `distinctInstance`, spread on AZ, `min 0 / max 100` for singleton coordinators | Stateful and latency-sensitive; the coordinator must not run twice |
-
----
+Read architecturally, this shows the three loops closing at different speeds and the deliberate separation of deploy from release. The **scaling loop** closes in minutes and is driven by a metric that must be normalised per task. The **placement loop** closes in seconds but is constrained by capacity that may take minutes to appear. The **deployment loop** closes in minutes and has two independent abort mechanisms  one for tasks that will not run, one for releases that run but are wrong. And the feature-flag path bypasses all three: it changes behaviour without changing what is deployed, which is why it is the fastest and safest control available.
 
 ## Advantages
 
@@ -944,7 +695,7 @@ For a workload that must never run twice concurrently — a scheduler, a leader,
 
 **Blue/green provides pre-production validation against the real environment.** Lifecycle hooks let you run a smoke suite against a full-scale green task set, in the production VPC with production dependencies, before any user reaches it. No staging environment reproduces that fidelity.
 
-**Fargate removes one entire loop.** With no capacity layer to configure, the most common production failure in this chapter — tasks stuck in `PROVISIONING` because only the task layer was scaled — cannot occur.
+**Fargate removes one entire loop.** With no capacity layer to configure, the most common production failure in this chapter  tasks stuck in `PROVISIONING` because only the task layer was scaled  cannot occur.
 
 ---
 
@@ -954,7 +705,7 @@ For a workload that must never run twice concurrently — a scheduler, a leader,
 
 **Constraints can silently cap scaling.** `distinctInstance`, a `memberOf` expression, subnet IP availability, and instance capacity all bound the achievable task count, and none reports the cap as an error. The service simply stops growing while the policy keeps asking.
 
-**The circuit breaker detects only health failures.** A release that starts, passes `/health`, and returns wrong answers or runs 40 per cent slower will deploy successfully. Detecting that requires alarms on behavioural metrics, or a canary with validation — and detecting it *reliably* requires the alarms to be sensitive enough to fire within the bake period, which is a genuinely hard tuning problem.
+**The circuit breaker detects only health failures.** A release that starts, passes `/health`, and returns wrong answers or runs 40 per cent slower will deploy successfully. Detecting that requires alarms on behavioural metrics, or a canary with validation  and detecting it *reliably* requires the alarms to be sensitive enough to fire within the bake period, which is a genuinely hard tuning problem.
 
 **Rolling updates shift by task count, not by traffic percentage.** For a service with four tasks, the smallest possible exposure step is 25 per cent of traffic. Percentage-based canaries require CodeDeploy, which requires the blue/green topology to have been designed in from the start.
 
@@ -982,7 +733,6 @@ For a workload that must never run twice concurrently — a scheduler, a leader,
 | Equal scale-out and scale-in cooldowns | Either slow response or flapping | Short out, long in |
 | `minimumHealthyPercent: 50` in production | Every deployment halves capacity | 100, with `maximumPercent: 200` |
 | Circuit breaker disabled | A failing deployment drains healthy capacity | Enable it with rollback on every service |
-| Health-check grace period of 0 with a slow start | Tasks are killed while warming; the service never stabilises | Set it above the measured cold start |
 | Believing the circuit breaker catches bad releases | It catches unhealthy tasks, not wrong answers | Add alarm-based rollback on 5xx and latency |
 | A target value chosen as a round number | Either permanent over-provisioning or unprotected latency | Derive from a load test |
 | Deploying `latest` and expecting rollback to work | The previous tag may now point at different bytes | Immutable tags and digest-pinned revisions, per 2.1 |
@@ -1025,91 +775,23 @@ For a workload that must never run twice concurrently — a scheduler, a leader,
 
 ---
 
-<!-- ## AWS Certification Tips
-
-### Exam tips
-
-Each scenario contains one discriminating constraint. Identify the loop it belongs to — placement, scaling, or deployment — then eliminate.
-
-- "Must survive an Availability Zone failure" points to **`spread` on `attribute:ecs.availability-zone`**, first in the strategy list.
-- "Minimise the number of instances" or "maximise density" points to **`binpack`**, but as the *second* strategy when availability also matters.
-- "No two tasks on the same instance" points to **`distinctInstance`**, and you should remember it caps task count.
-- "Tasks will not place despite free capacity" points to a **placement constraint** or **subnet IP exhaustion**, not to a strategy.
-- "Service does not scale although load is high" points to the **wrong metric** (CPU on an I/O-bound service), a **clamped maximum**, or a **placement cap**.
-- "Scaling oscillates" points to a metric that is **not normalised per task**, most often raw queue depth.
-- "Known peak at a known time" points to **scheduled scaling**, raising the minimum.
-- "Capacity must never drop during deployment" points to **`minimumHealthyPercent: 100`** with **`maximumPercent: 200`**.
-- "Automatically stop and reverse a failing deployment" points to the **deployment circuit breaker with rollback**.
-- "Release is healthy but wrong" points to **alarm-based rollback** or **CodeDeploy hooks** — never the circuit breaker.
-- "Shift a small percentage of traffic and evaluate" points to **CodeDeploy canary**.
-- "Roll back in seconds" points to **blue/green**, where rollback is a routing change.
-- "Deploy the code but do not expose the feature yet" points to **feature flags in AWS AppConfig**. -->
-
-### Frequently confused pairs
-
-| Pair | The distinguishing fact |
-|---|---|
-| **Constraint vs strategy** | Constraints filter and can block placement; strategies sort and cannot |
-| **`spread` vs `binpack`** | Availability across a failure domain versus density within one; order matters and spread comes first |
-| **`spread` on AZ vs `distinctInstance`** | Zone-level distribution versus one task per instance; they solve different failures and can be combined |
-| **Target tracking vs step scaling** | Proportional control from one target value versus explicit adjustments per threshold band |
-| **Target tracking vs scheduled scaling** | Reactive versus anticipatory; scheduled sets the floor, target tracking handles variance |
-| **`ALBRequestCountPerTarget` vs raw request count** | Per-target normalisation is what makes the control loop converge |
-| **Queue depth vs backlog per task** | Only the second responds to added capacity |
-| **`ApproximateNumberOfMessagesVisible` vs `ApproximateAgeOfOldestMessage`** | The first is a control input; the second measures whether the promise is kept |
-| **Service auto scaling vs capacity provider managed scaling** | Task count versus instance count; both needed on EC2, only the first on Fargate |
-| **`minimumHealthyPercent` vs `maximumPercent`** | The floor on healthy tasks versus the ceiling on total tasks |
-| **Circuit breaker vs alarm-based rollback** | Unhealthy tasks versus harmful behaviour; both are needed |
-| **Rolling update vs blue/green** | In-place replacement by task count versus a second task set with percentage traffic shifting |
-| **Canary vs linear shifting** | A small share then the remainder after a bake, versus fixed increments at fixed intervals |
-| **Deploy vs release** | Getting code onto servers versus exposing behaviour to users; feature flags separate them |
-| **`rolloutState` vs deployment `status`** | `rolloutState` reports whether the rollout is converging; `status` reports which deployment is primary |
-| **`forceNewDeployment` vs updating the revision** | Redeploys the current revision versus moving to a new one |
-
-### Memory aids
-
-- **"Constraints filter, strategies sort."**
-- **"Spread across zones, pack within them."** In that order, always.
-- **"Scale on load per task, or the loop will not converge."**
-- **"Depth has no denominator."** The queue-scaling mistake in four words.
-- **"Short out, long in."** Cooldown asymmetry.
-- **"100 and 200."** The production deployment default.
-- **"The breaker asks did it start; the alarm asks is it hurting; the hook asks is it correct."**
-- **"Deploy dark, release with a flag."**
-- **"Scheduled sets the floor, tracking handles the rest."**
-
-!!! danger "Common certification traps"
-
-    - Believing a placement strategy can prevent placement, or that a constraint merely influences it.
-    - Putting `binpack` before `spread` and calling the result multi-AZ.
-    - Expecting instance-level placement strategies to apply on Fargate.
-    - Scaling on CPU for an I/O-bound service, or on raw queue depth for a consumer.
-    - Believing the deployment circuit breaker catches a behavioural regression.
-    - Choosing `maximumPercent: 100` with `minimumHealthyPercent: 100` and expecting the deployment to progress.
-    - Applying `minimumHealthyPercent: 100` to a singleton workload that must never run twice.
-    - Forgetting that `distinctInstance` and subnet IP capacity silently cap auto scaling.
-    - Expecting reactive scaling to absorb a step change in load.
-    - Assuming blue/green is safer even without validation hooks.
-    - Believing rollback rebuilds the previous version rather than pointing at an existing immutable revision.
-    - Leaving the scalable target's maximum effectively unbounded.
-
----
-
 ## Summary
 
-First, **orchestration is three control loops, and an architect's job is to specify their setpoints rather than to operate them**. Placement answers where, scaling answers how many, and deployment answers which version and how we get there. Each runs continuously without being asked, each has a small number of settings that encode real engineering decisions, and each has defaults that are adequate for a demonstration and wrong for production. The discipline that follows is that when reality does not match intent, the specification is where you look first — the platform is doing exactly what it was told.
+First, **orchestration is three control loops, and an architect's job is to specify their setpoints rather than to operate them**. Placement answers where, scaling answers how many, and deployment answers which version and how we get there. Each runs continuously without being asked, each has a small number of settings that encode real engineering decisions, and each has defaults that are adequate for a demonstration and wrong for production. The discipline that follows is that when reality does not match intent, the specification is where you look first  the platform is doing exactly what it was told.
 
-Second, **placement is an availability decision disguised as a scheduling detail**. An Availability Zone is a correlated failure domain, so where replicas live determines what a zone event costs you. `spread` on availability zone followed by `binpack` on memory buys availability across the domain that matters and density within it, in two lines of configuration. But supplying three subnets only *permits* even distribution — it does not guarantee it — so verification by counting tasks per zone is part of the design rather than an optional extra. And because constraints filter before strategies sort, a stale `memberOf` expression stops a service entirely on a cluster with abundant capacity, while `distinctInstance` silently caps how far that service can scale.
+Second, **placement is an availability decision disguised as a scheduling detail**. An Availability Zone is a correlated failure domain, so where replicas live determines what a zone event costs you. `spread` on availability zone followed by `binpack` on memory buys availability across the domain that matters and density within it, in two lines of configuration. But supplying three subnets only *permits* even distribution  it does not guarantee it  so verification by counting tasks per zone is part of the design rather than an optional extra. And because constraints filter before strategies sort, a stale `memberOf` expression stops a service entirely on a cluster with abundant capacity, while `distinctInstance` silently caps how far that service can scale.
 
-Third, **the scaling signal matters more than the scaling mechanism, and the requirement is mathematical rather than stylistic**. Target tracking computes new capacity by multiplying current capacity by the ratio of the metric to the target, which converges only if the metric falls as capacity is added. `ALBRequestCountPerTarget` and backlog per task have that property; CPU has it only for CPU-bound work; raw queue depth does not have it at all, which is why scaling on it oscillates no matter how the cooldowns are tuned. The target value should come from a load test — the load per task at which p99 degrades, discounted for the scaling delay — and the cooldowns should be deliberately asymmetric, because under-capacity harms users immediately and over-capacity costs a little money for a few minutes.
+Third, **the scaling signal matters more than the scaling mechanism, and the requirement is mathematical rather than stylistic**. Target tracking computes new capacity by multiplying current capacity by the ratio of the metric to the target, which converges only if the metric falls as capacity is added. `ALBRequestCountPerTarget` and backlog per task have that property; CPU has it only for CPU-bound work; raw queue depth does not have it at all, which is why scaling on it oscillates no matter how the cooldowns are tuned. The target value should come from a load test  the load per task at which p99 degrades, discounted for the scaling delay  and the cooldowns should be deliberately asymmetric, because under-capacity harms users immediately and over-capacity costs a little money for a few minutes.
 
-Fourth, **reactive scaling has a floor on its response time that no configuration removes**. Metric publication, alarm evaluation, capacity acquisition, image pull, container start, and health-check confirmation sum to minutes. For load that arrives predictably — a timetable, a market open, a nightly batch — the correct answer is scheduled scaling that raises the floor beforehand, with target tracking handling only the variance above it. Recognising which part of a load pattern is predictable, and refusing to solve it reactively, is one of the more valuable judgements in this chapter.
+Fourth, **reactive scaling has a floor on its response time that no configuration removes**. Metric publication, alarm evaluation, capacity acquisition, image pull, container start, and health-check confirmation sum to minutes. For load that arrives predictably  a timetable, a market open, a nightly batch  the correct answer is scheduled scaling that raises the floor beforehand, with target tracking handling only the variance above it. Recognising which part of a load pattern is predictable, and refusing to solve it reactively, is one of the more valuable judgements in this chapter.
 
-Fifth, **deployment safety requires two independent mechanisms because there are two independent failure classes**. The circuit breaker catches tasks that will not run and costs nothing, so it belongs on every service by default. It cannot catch a release that starts cleanly, passes its health check, and returns wrong answers or runs substantially slower — for that you need alarm-based rollback on error rate and latency, and for genuine pre-exposure validation you need CodeDeploy hooks running assertions against a green task set before any user reaches it. A team that has enabled the circuit breaker and stopped there is protected against roughly half of what actually goes wrong.
+Fifth, **deployment safety requires two independent mechanisms because there are two independent failure classes**. The circuit breaker catches tasks that will not run and costs nothing, so it belongs on every service by default. It cannot catch a release that starts cleanly, passes its health check, and returns wrong answers or runs substantially slower  for that you need alarm-based rollback on error rate and latency, and for genuine pre-exposure validation you need CodeDeploy hooks running assertions against a green task set before any user reaches it. A team that has enabled the circuit breaker and stopped there is protected against roughly half of what actually goes wrong.
 
 Sixth, **rollback is only trustworthy because the artefacts are immutable**, which is the payoff for the discipline established in 2.1. A task-definition revision names exact bytes, so rolling back is a pointer change to a specification that was known good rather than another untested deployment. This property is what makes automatic rollback safe enough to enable everywhere, and it evaporates the moment a service deploys mutable tags. The three chapters of this unit are connected precisely here: the artefact discipline in 2.1 is what makes the deployment automation in 2.3 safe.
 
-Seventh, and most valuable in practice, **deploying code and releasing behaviour are separable, and separating them is the largest available risk reduction**. A feature flag lets a deployment become a frequent, boring, low-risk event and turns the risky decision — exposing new behaviour — into a separately controlled one that is reversible in seconds without a deployment at all. Every mechanism in this chapter bounds the damage of a bad release; only this one prevents the exposure. It works with any deployment controller, costs far less than blue/green, and shifts the release decision to a moment when the team is watching rather than to whenever the pipeline happens to finish.
+Seventh, and most valuable in practice, **deploying code and releasing behaviour are separable, and separating them is the largest available risk reduction**. A feature flag lets a deployment become a frequent, boring, low-risk event and turns the risky decision  exposing new behaviour  into a separately controlled one that is reversible in seconds without a deployment at all. Every mechanism in this chapter bounds the damage of a bad release; only this one prevents the exposure. It works with any deployment controller, costs far less than blue/green, and shifts the release decision to a moment when the team is watching rather than to whenever the pipeline happens to finish.
 
 ---
 
+!!! question "Practice and interview questions"
+    Questions for this topic are kept separately: [Practice questions](../Questions/unit2.md#23-container-orchestration-with-amazon-ecs) · [Interview questions](../interviewquestions/unit2.md#23-container-orchestration-with-amazon-ecs).

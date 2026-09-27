@@ -86,7 +86,7 @@ title: Service Icons
     <img src="../assets/icons/service/aws-glue.svg" alt="AWS Glue" loading="lazy">
     <span class="aws-tile-name">AWS Glue</span>
   </a>
-  <a class="aws-tile" href="../assets/icons/service/aws-glue-data-brew.svg" data-name="aws glue databrew aws-glue-data-brew visual data preparation — clean and normalise data without writing code" data-slug="aws-glue-data-brew" data-title="AWS Glue DataBrew" data-desc="Visual data preparation — clean and normalise data without writing code" data-path="assets/icons/service/aws-glue-data-brew.svg">
+  <a class="aws-tile" href="../assets/icons/service/aws-glue-data-brew.svg" data-name="aws glue databrew aws-glue-data-brew visual data preparation  clean and normalise data without writing code" data-slug="aws-glue-data-brew" data-title="AWS Glue DataBrew" data-desc="Visual data preparation  clean and normalise data without writing code" data-path="assets/icons/service/aws-glue-data-brew.svg">
     <img src="../assets/icons/service/aws-glue-data-brew.svg" alt="AWS Glue DataBrew" loading="lazy">
     <span class="aws-tile-name">AWS Glue DataBrew</span>
   </a>
@@ -170,7 +170,7 @@ title: Service Icons
     <img src="../assets/icons/service/amazon-code-whisperer.svg" alt="Amazon CodeWhisperer" loading="lazy">
     <span class="aws-tile-name">Amazon CodeWhisperer</span>
   </a>
-  <a class="aws-tile" href="../assets/icons/service/amazon-comprehend.svg" data-name="amazon comprehend amazon-comprehend natural language processing — entities, sentiment and key phrases from text" data-slug="amazon-comprehend" data-title="Amazon Comprehend" data-desc="Natural language processing — entities, sentiment and key phrases from text" data-path="assets/icons/service/amazon-comprehend.svg">
+  <a class="aws-tile" href="../assets/icons/service/amazon-comprehend.svg" data-name="amazon comprehend amazon-comprehend natural language processing  entities, sentiment and key phrases from text" data-slug="amazon-comprehend" data-title="Amazon Comprehend" data-desc="Natural language processing  entities, sentiment and key phrases from text" data-path="assets/icons/service/amazon-comprehend.svg">
     <img src="../assets/icons/service/amazon-comprehend.svg" alt="Amazon Comprehend" loading="lazy">
     <span class="aws-tile-name">Amazon Comprehend</span>
   </a>
@@ -230,7 +230,7 @@ title: Service Icons
     <img src="../assets/icons/service/amazon-q.svg" alt="Amazon Q" loading="lazy">
     <span class="aws-tile-name">Amazon Q</span>
   </a>
-  <a class="aws-tile" href="../assets/icons/service/amazon-rekognition.svg" data-name="amazon rekognition amazon-rekognition image and video analysis — objects, faces, text and moderation" data-slug="amazon-rekognition" data-title="Amazon Rekognition" data-desc="Image and video analysis — objects, faces, text and moderation" data-path="assets/icons/service/amazon-rekognition.svg">
+  <a class="aws-tile" href="../assets/icons/service/amazon-rekognition.svg" data-name="amazon rekognition amazon-rekognition image and video analysis  objects, faces, text and moderation" data-slug="amazon-rekognition" data-title="Amazon Rekognition" data-desc="Image and video analysis  objects, faces, text and moderation" data-path="assets/icons/service/amazon-rekognition.svg">
     <img src="../assets/icons/service/amazon-rekognition.svg" alt="Amazon Rekognition" loading="lazy">
     <span class="aws-tile-name">Amazon Rekognition</span>
   </a>
@@ -438,7 +438,7 @@ title: Service Icons
     <img src="../assets/icons/service/amazon-dcv.svg" alt="Amazon DCV" loading="lazy">
     <span class="aws-tile-name">Amazon DCV</span>
   </a>
-  <a class="aws-tile" href="../assets/icons/service/amazon-ec2.svg" data-name="amazon ec2 amazon-ec2 resizable virtual servers in the cloud — the core aws compute service" data-slug="amazon-ec2" data-title="Amazon EC2" data-desc="Resizable virtual servers in the cloud — the core AWS compute service" data-path="assets/icons/service/amazon-ec2.svg">
+  <a class="aws-tile" href="../assets/icons/service/amazon-ec2.svg" data-name="amazon ec2 amazon-ec2 resizable virtual servers in the cloud  the core aws compute service" data-slug="amazon-ec2" data-title="Amazon EC2" data-desc="Resizable virtual servers in the cloud  the core AWS compute service" data-path="assets/icons/service/amazon-ec2.svg">
     <img src="../assets/icons/service/amazon-ec2.svg" alt="Amazon EC2" loading="lazy">
     <span class="aws-tile-name">Amazon EC2</span>
   </a>
@@ -558,7 +558,7 @@ title: Service Icons
     <img src="../assets/icons/service/amazon-elastic-kubernetes-service.svg" alt="Amazon Elastic Kubernetes Service" loading="lazy">
     <span class="aws-tile-name">Amazon Elastic Kubernetes Service</span>
   </a>
-  <a class="aws-tile" href="../assets/icons/service/aws-fargate.svg" data-name="aws fargate aws-fargate serverless compute for containers — no ec2 instances to manage" data-slug="aws-fargate" data-title="AWS Fargate" data-desc="Serverless compute for containers — no EC2 instances to manage" data-path="assets/icons/service/aws-fargate.svg">
+  <a class="aws-tile" href="../assets/icons/service/aws-fargate.svg" data-name="aws fargate aws-fargate serverless compute for containers  no ec2 instances to manage" data-slug="aws-fargate" data-title="AWS Fargate" data-desc="Serverless compute for containers  no EC2 instances to manage" data-path="assets/icons/service/aws-fargate.svg">
     <img src="../assets/icons/service/aws-fargate.svg" alt="AWS Fargate" loading="lazy">
     <span class="aws-tile-name">AWS Fargate</span>
   </a>
@@ -646,7 +646,7 @@ title: Service Icons
     <img src="../assets/icons/service/amazon-neptune.svg" alt="Amazon Neptune" loading="lazy">
     <span class="aws-tile-name">Amazon Neptune</span>
   </a>
-  <a class="aws-tile" href="../assets/icons/service/amazon-rds.svg" data-name="amazon rds amazon-rds managed relational databases — postgres, mysql, sql server, oracle, mariadb" data-slug="amazon-rds" data-title="Amazon RDS" data-desc="Managed relational databases — Postgres, MySQL, SQL Server, Oracle, MariaDB" data-path="assets/icons/service/amazon-rds.svg">
+  <a class="aws-tile" href="../assets/icons/service/amazon-rds.svg" data-name="amazon rds amazon-rds managed relational databases  postgres, mysql, sql server, oracle, mariadb" data-slug="amazon-rds" data-title="Amazon RDS" data-desc="Managed relational databases  Postgres, MySQL, SQL Server, Oracle, MariaDB" data-path="assets/icons/service/amazon-rds.svg">
     <img src="../assets/icons/service/amazon-rds.svg" alt="Amazon RDS" loading="lazy">
     <span class="aws-tile-name">Amazon RDS</span>
   </a>
@@ -858,7 +858,7 @@ title: Service Icons
     <img src="../assets/icons/service/aws-app-config.svg" alt="AWS AppConfig" loading="lazy">
     <span class="aws-tile-name">AWS AppConfig</span>
   </a>
-  <a class="aws-tile" href="../assets/icons/service/aws-application-auto-scaling.svg" data-name="aws application auto scaling aws-application-auto-scaling scales resources beyond ec2 — dynamodb, ecs, aurora and more" data-slug="aws-application-auto-scaling" data-title="AWS Application Auto Scaling" data-desc="Scales resources beyond EC2 — DynamoDB, ECS, Aurora and more" data-path="assets/icons/service/aws-application-auto-scaling.svg">
+  <a class="aws-tile" href="../assets/icons/service/aws-application-auto-scaling.svg" data-name="aws application auto scaling aws-application-auto-scaling scales resources beyond ec2  dynamodb, ecs, aurora and more" data-slug="aws-application-auto-scaling" data-title="AWS Application Auto Scaling" data-desc="Scales resources beyond EC2  DynamoDB, ECS, Aurora and more" data-path="assets/icons/service/aws-application-auto-scaling.svg">
     <img src="../assets/icons/service/aws-application-auto-scaling.svg" alt="AWS Application Auto Scaling" loading="lazy">
     <span class="aws-tile-name">AWS Application Auto Scaling</span>
   </a>
@@ -874,7 +874,7 @@ title: Service Icons
     <img src="../assets/icons/service/aws-chatbot.svg" alt="AWS Chatbot" loading="lazy">
     <span class="aws-tile-name">AWS Chatbot</span>
   </a>
-  <a class="aws-tile" href="../assets/icons/service/aws-cloud-formation.svg" data-name="aws cloudformation aws-cloud-formation infrastructure as code — provisions resources from templates" data-slug="aws-cloud-formation" data-title="AWS CloudFormation" data-desc="Infrastructure as code — provisions resources from templates" data-path="assets/icons/service/aws-cloud-formation.svg">
+  <a class="aws-tile" href="../assets/icons/service/aws-cloud-formation.svg" data-name="aws cloudformation aws-cloud-formation infrastructure as code  provisions resources from templates" data-slug="aws-cloud-formation" data-title="AWS CloudFormation" data-desc="Infrastructure as code  provisions resources from templates" data-path="assets/icons/service/aws-cloud-formation.svg">
     <img src="../assets/icons/service/aws-cloud-formation.svg" alt="AWS CloudFormation" loading="lazy">
     <span class="aws-tile-name">AWS CloudFormation</span>
   </a>
@@ -950,7 +950,7 @@ title: Service Icons
     <img src="../assets/icons/service/aws-service-management-connector.svg" alt="AWS Service Management Connector" loading="lazy">
     <span class="aws-tile-name">AWS Service Management Connector</span>
   </a>
-  <a class="aws-tile" href="../assets/icons/service/aws-systems-manager.svg" data-name="aws systems manager aws-systems-manager operations hub — patching, run commands, parameters and inventory" data-slug="aws-systems-manager" data-title="AWS Systems Manager" data-desc="Operations hub — patching, run commands, parameters and inventory" data-path="assets/icons/service/aws-systems-manager.svg">
+  <a class="aws-tile" href="../assets/icons/service/aws-systems-manager.svg" data-name="aws systems manager aws-systems-manager operations hub  patching, run commands, parameters and inventory" data-slug="aws-systems-manager" data-title="AWS Systems Manager" data-desc="Operations hub  patching, run commands, parameters and inventory" data-path="assets/icons/service/aws-systems-manager.svg">
     <img src="../assets/icons/service/aws-systems-manager.svg" alt="AWS Systems Manager" loading="lazy">
     <span class="aws-tile-name">AWS Systems Manager</span>
   </a>
@@ -1370,7 +1370,7 @@ title: Service Icons
     <img src="../assets/icons/service/amazon-s3-on-outposts.svg" alt="Amazon S3 on Outposts" loading="lazy">
     <span class="aws-tile-name">Amazon S3 on Outposts</span>
   </a>
-  <a class="aws-tile" href="../assets/icons/service/amazon-simple-storage-service.svg" data-name="amazon simple storage service amazon-simple-storage-service durable, virtually unlimited object storage — the backbone of aws data" data-slug="amazon-simple-storage-service" data-title="Amazon Simple Storage Service" data-desc="Durable, virtually unlimited object storage — the backbone of AWS data" data-path="assets/icons/service/amazon-simple-storage-service.svg">
+  <a class="aws-tile" href="../assets/icons/service/amazon-simple-storage-service.svg" data-name="amazon simple storage service amazon-simple-storage-service durable, virtually unlimited object storage  the backbone of aws data" data-slug="amazon-simple-storage-service" data-title="Amazon Simple Storage Service" data-desc="Durable, virtually unlimited object storage  the backbone of AWS data" data-path="assets/icons/service/amazon-simple-storage-service.svg">
     <img src="../assets/icons/service/amazon-simple-storage-service.svg" alt="Amazon Simple Storage Service" loading="lazy">
     <span class="aws-tile-name">Amazon Simple Storage Service</span>
   </a>

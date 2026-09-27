@@ -1,6 +1,6 @@
 # AWS Identity and Access Management (IAM)
 
-> **Module SE4xx-CLD-01 — Practical AWS with Floci**
+> **Module SE4xx-CLD-01  Practical AWS with Floci**
 > Faculty of Software Engineering · College of Science and Technology, Royal University of Bhutan
 
 | Attribute | Value |
@@ -9,7 +9,7 @@
 | Target audience | 4th-year Software Engineering (B.E. SE) |
 | Delivery | 70% hands-on lab / 30% conceptual |
 | Contact hours | 2 lectures (2 h) + 4 lab sessions (8 h) + 6 h self-study |
-| Environment | Floci CLI — local AWS emulator (Docker-based) |
+| Environment | Floci CLI  local AWS emulator (Docker-based) |
 | Interface | **AWS CLI v2 only.** The AWS Management Console is *not* used in this module. |
 | Certification alignment | AWS Certified Solutions Architect – Associate (SAA-C03), Domain 1 *Design Secure Architectures* |
 | Assessment | Mini challenges (20%), debugging challenges (20%), viva (30%), enterprise scenario report (30%) |
@@ -20,7 +20,7 @@
 
 ### 0.1 Why IAM is the first module in this course
 
-Every single AWS API call you will ever make — `aws s3 ls`, `aws ec2 run-instances`, a Lambda function reading DynamoDB — is authenticated and authorised by IAM before anything else happens. If you do not understand IAM, you do not understand AWS; you are just typing commands and hoping.
+Every single AWS API call you will ever make  `aws s3 ls`, `aws ec2 run-instances`, a Lambda function reading DynamoDB  is authenticated and authorised by IAM before anything else happens. If you do not understand IAM, you do not understand AWS; you are just typing commands and hoping.
 
 IAM is also the single most common source of production incidents and security breaches in cloud environments. Leaked long-lived access keys, over-permissive `"Action": "*"` policies, and roles trusting `"Principal": "*"` are the top findings in nearly every cloud security audit.
 
@@ -37,8 +37,8 @@ Before your first lab session, confirm each item:
 | 2 | Floci CLI installed | `floci --version` | a version string |
 | 3 | AWS CLI v2 installed | `aws --version` | `aws-cli/2.x.x ...` |
 | 4 | `jq` installed | `jq --version` | `jq-1.6` or later |
-| 5 | Comfortable with JSON | — | you can read/write nested JSON by hand |
-| 6 | Comfortable with Bash | — | variables, heredocs, exit codes, `$?` |
+| 5 | Comfortable with JSON |  | you can read/write nested JSON by hand |
+| 6 | Comfortable with Bash |  | variables, heredocs, exit codes, `$?` |
 
 !!! warning "Install `jq` now"
     Every verification step in this module pipes JSON through `jq`. On Debian/Ubuntu: `sudo apt-get install -y jq`. On macOS: `brew install jq`.
@@ -126,7 +126,7 @@ mkdir -p ~/iam-lab/policies ~/iam-lab/out && cd ~/iam-lab
 
     Without `pymdownx.details`, the `??? note` hint blocks in §12 render as plain text and the answers become visible immediately.
 
-### 0.5 Floci support tiers — and how to verify them yourself
+### 0.5 Floci support tiers  and how to verify them yourself
 
 Floci implements roughly **68 IAM operations and 7 STS operations** behind the unified endpoint `http://localhost:4566`. Floci is an *emulator*, not AWS, so three categories exist:
 
@@ -141,18 +141,18 @@ Floci implements roughly **68 IAM operations and 7 STS operations** behind the u
 
     Therefore this module teaches IAM on **two tracks, always side by side**:
 
-    * **Track A — Modelling & structure (verifiable in Floci).** Does the policy document exist, parse, attach, and version correctly? Does the trust policy allow `AssumeRole` to return credentials? Is the boundary attached to the principal?
-    * **Track B — Enforcement semantics (reasoned, and tested for *if* Floci enforces).** What would real AWS decide for this request, and why? Every "Break it" step tells you the AWS-correct verdict, then has you *test whether your Floci build enforces it*.
+    * **Track A  Modelling & structure (verifiable in Floci).** Does the policy document exist, parse, attach, and version correctly? Does the trust policy allow `AssumeRole` to return credentials? Is the boundary attached to the principal?
+    * **Track B  Enforcement semantics (reasoned, and tested for *if* Floci enforces).** What would real AWS decide for this request, and why? Every "Break it" step tells you the AWS-correct verdict, then has you *test whether your Floci build enforces it*.
 
     Never write in a lab report "IAM denied my request" unless you observed the `AccessDenied` yourself. Write "AWS would deny this request because …; my Floci build returned …".
 
 #### 0.5.1 The support-probe harness (run this once, keep the output)
 
-Rather than trusting any table in any document — including this one — you will empirically discover your build's support surface. Save this as `~/iam-lab/probe-support.sh`:
+Rather than trusting any table in any document  including this one  you will empirically discover your build's support surface. Save this as `~/iam-lab/probe-support.sh`:
 
 ```bash
 #!/usr/bin/env bash
-# probe-support.sh — discover which IAM/STS operations this Floci build implements.
+# probe-support.sh  discover which IAM/STS operations this Floci build implements.
 # Strategy: call each operation with harmless/read-only or throwaway arguments and
 # classify the result by the ERROR CODE, not by success alone.
 set -uo pipefail
@@ -222,14 +222,14 @@ echo
 echo "SUMMARY:"; awk -F'\t' '{c[$2]++} END{for(k in c) printf "  %-22s %d\n", k, c[k]}' "$OUT"
 ```
 
-Run it and archive the result — you will cite this file in every lab report:
+Run it and archive the result  you will cite this file in every lab report:
 
 ```bash
 chmod +x ~/iam-lab/probe-support.sh
 ~/iam-lab/probe-support.sh | tee ~/iam-lab/out/support-report.txt
 ```
 
-Expected output shape (your values will differ — that is the point):
+Expected output shape (your values will differ  that is the point):
 
 ```
 iam:list-users                   SUPPORTED             -
@@ -246,12 +246,12 @@ SUMMARY:
 ```
 
 !!! tip "How to read the probe results"
-    * `SUPPORTED` — the call succeeded outright.
-    * `SUPPORTED(validated)` — the call was *routed to a real handler* which then rejected your fake input (`NoSuchEntity`, `ValidationError`). This is strong evidence the operation exists.
-    * `UNSUPPORTED` — the emulator does not know this action at all (`InvalidAction`, `NotImplemented`).
-    * `UNKNOWN` — inspect the message manually and reclassify by hand.
+    * `SUPPORTED`  the call succeeded outright.
+    * `SUPPORTED(validated)`  the call was *routed to a real handler* which then rejected your fake input (`NoSuchEntity`, `ValidationError`). This is strong evidence the operation exists.
+    * `UNSUPPORTED`  the emulator does not know this action at all (`InvalidAction`, `NotImplemented`).
+    * `UNKNOWN`  inspect the message manually and reclassify by hand.
 
-    Note that `NoSuchEntity` on `get-account-password-policy` lands in `SUPPORTED(validated)` and means **supported but not yet configured** — you will set it in §4.6.
+    Note that `NoSuchEntity` on `get-account-password-policy` lands in `SUPPORTED(validated)` and means **supported but not yet configured**  you will set it in §4.6.
 
 #### 0.5.2 The enforcement-probe harness
 
@@ -324,40 +324,40 @@ On successful completion of this module, a student will be able to:
 
 IAM is:
 
-* **Global** — not regional. An IAM user created "in" `us-east-1` is visible in every region. (The endpoint `iam.amazonaws.com` lives in `us-east-1`.)
-* **Free** — IAM itself incurs no charge.
-* **Eventually consistent** — a newly created role may not be immediately usable everywhere; AWS documents propagation delay. This is why real-world scripts retry `AssumeRole` after `CreateRole`.
-* **Deny-by-default** — a brand-new IAM user can do literally nothing, not even `aws sts get-caller-identity`'s underlying reads on other services.
+* **Global**  not regional. An IAM user created "in" `us-east-1` is visible in every region. (The endpoint `iam.amazonaws.com` lives in `us-east-1`.)
+* **Free**  IAM itself incurs no charge.
+* **Eventually consistent**  a newly created role may not be immediately usable everywhere; AWS documents propagation delay. This is why real-world scripts retry `AssumeRole` after `CreateRole`.
+* **Deny-by-default**  a brand-new IAM user can do literally nothing, not even `aws sts get-caller-identity`'s underlying reads on other services.
 
-### 2.2 Why IAM exists — the problems it solves
+### 2.2 Why IAM exists  the problems it solves
 
 | Problem without IAM | IAM's answer |
 |---|---|
 | One root login shared by the whole team; no attribution | Individual **users**, one identity per human |
 | Every developer has full account power | **Policies** granting only what the job requires |
-| Managing permissions per-person doesn't scale to 200 engineers | **Groups** — attach a policy once, add people to it |
+| Managing permissions per-person doesn't scale to 200 engineers | **Groups**  attach a policy once, add people to it |
 | An application on a server needs credentials, but hard-coded keys leak into Git | **Roles** + **instance profiles** deliver short-lived, auto-rotated credentials with no secrets on disk |
-| Contractors from another company need limited access to one bucket | **Cross-account roles** with an external trust policy — no user created in your account |
+| Contractors from another company need limited access to one bucket | **Cross-account roles** with an external trust policy  no user created in your account |
 | Corporate staff already have Active Directory / Google accounts; a second password set is a liability | **Federation** (SAML / OIDC) → `sts:AssumeRoleWith*` |
-| A junior admin with `iam:*` could grant themselves anything | **Permissions boundaries** — a ceiling that delegated admins cannot exceed |
+| A junior admin with `iam:*` could grant themselves anything | **Permissions boundaries**  a ceiling that delegated admins cannot exceed |
 | A leaked key remains valid indefinitely | Temporary credentials that expire in 15 min – 12 h |
 | Auditors ask "who deleted the production database on 14 March?" | IAM identity in every CloudTrail event |
 
 ### 2.3 Typical use cases
 
-1. **Human access** — per-engineer users in groups mapped to job functions (developer, DBA, auditor, admin).
-2. **Workload access** — EC2/ECS/Lambda assume roles to reach S3, DynamoDB, SQS with no stored secrets.
-3. **Cross-account access** — a central security account assumes a read-only audit role in every workload account.
-4. **Federation** — SSO from a corporate identity provider; zero IAM users for humans (the modern best practice).
-5. **CI/CD** — a build pipeline assumes a deploy role scoped to one CloudFormation stack.
-6. **Delegated administration** — a team lead can create users, but only within a permissions boundary.
-7. **Break-glass** — a rarely used, heavily audited, MFA-protected emergency admin role.
+1. **Human access**  per-engineer users in groups mapped to job functions (developer, DBA, auditor, admin).
+2. **Workload access**  EC2/ECS/Lambda assume roles to reach S3, DynamoDB, SQS with no stored secrets.
+3. **Cross-account access**  a central security account assumes a read-only audit role in every workload account.
+4. **Federation**  SSO from a corporate identity provider; zero IAM users for humans (the modern best practice).
+5. **CI/CD**  a build pipeline assumes a deploy role scoped to one CloudFormation stack.
+6. **Delegated administration**  a team lead can create users, but only within a permissions boundary.
+7. **Break-glass**  a rarely used, heavily audited, MFA-protected emergency admin role.
 
 ### 2.4 Industry examples
 
 | Sector | IAM pattern in production |
 |---|---|
-| Banking (core banking on AWS) | Separate accounts per environment; no IAM users for humans at all — federated SSO only; every workload uses a role with a permissions boundary; `Deny` on `kms:Decrypt` outside approved VPC endpoints |
+| Banking (core banking on AWS) | Separate accounts per environment; no IAM users for humans at all  federated SSO only; every workload uses a role with a permissions boundary; `Deny` on `kms:Decrypt` outside approved VPC endpoints |
 | E-commerce | Lambda functions each get their own minimal execution role; a "checkout" role cannot read the "analytics" bucket |
 | Hospital / health data | Resource-based policies on S3 buckets denying any request where `aws:SecureTransport` is `false`; ABAC via tags so a clinician role only reads records tagged with their own department |
 | University | Groups per faculty; student lab accounts limited by permissions boundary to `t3.micro` instances in one region; auto-expiring roles for research grants |
@@ -374,7 +374,7 @@ IAM is:
 | Recording who did what | **CloudTrail** (IAM supplies the identity; CloudTrail records it) |
 | Org-wide guardrails across many accounts | **AWS Organizations SCPs** (IAM enforces the intersection) |
 
-!!! note "Recap — §2"
+!!! note "Recap  §2"
     IAM is a global, free, deny-by-default authorisation engine. It replaces shared root credentials with per-identity principals, replaces hard-coded keys with temporary role credentials, and scales permission management through groups and managed policies.
 
 ---
@@ -479,9 +479,9 @@ IAM is:
 ```
 
 !!! note "Where Floci fits in this diagram"
-    Steps 1, 2, 4 and 6 are client-side or plumbing and behave normally. Step 3 (SigV4 validation) is implemented in Floci for a subset of services. **Step 5 is the step you cannot assume.** Floci is documented as supporting "full IAM authentication and SigV4 validation" for services such as Lambda, EC2, ECS, RDS, ElastiCache, EKS, MSK, OpenSearch, ECR and CodeBuild — but you must confirm behaviour for your build with the harness in §0.5.2 before treating a local `Allow` as meaningful.
+    Steps 1, 2, 4 and 6 are client-side or plumbing and behave normally. Step 3 (SigV4 validation) is implemented in Floci for a subset of services. **Step 5 is the step you cannot assume.** Floci is documented as supporting "full IAM authentication and SigV4 validation" for services such as Lambda, EC2, ECS, RDS, ElastiCache, EKS, MSK, OpenSearch, ECR and CodeBuild  but you must confirm behaviour for your build with the harness in §0.5.2 before treating a local `Allow` as meaningful.
 
-### 3.3 Policy evaluation logic — the decision pipeline
+### 3.3 Policy evaluation logic  the decision pipeline
 
 This flowchart is examinable. Memorise it.
 
@@ -605,19 +605,19 @@ arn : aws : iam :: 000000000000 : role / dnb/dev/ dnb-dev-app-role
 | `arn:aws:iam::000000000000:policy/dnb-s3-statements-read` | Customer managed policy |
 | `arn:aws:iam::aws:policy/ReadOnlyAccess` | AWS managed policy (note `aws` in the account field) |
 | `arn:aws:iam::000000000000:instance-profile/dnb-dev-app-profile` | Instance profile |
-| `arn:aws:sts::000000000000:assumed-role/dnb-dev-app-role/session-1` | An **assumed-role session** — note service `sts`, not `iam` |
+| `arn:aws:sts::000000000000:assumed-role/dnb-dev-app-role/session-1` | An **assumed-role session**  note service `sts`, not `iam` |
 | `arn:aws:sts::000000000000:federated-user/carol` | A federated user session |
 
 !!! warning "Assumed-role ARNs are the #1 cause of broken policies"
     When a role is assumed, the caller's ARN is **not** `arn:aws:iam::…:role/X`. It is `arn:aws:sts::…:assumed-role/X/<session-name>`. A `Condition` on `aws:PrincipalArn` or a bucket policy `Principal` written against the `iam:role` form will still match for `Principal` (AWS resolves it), but a *string comparison* against the caller ARN will not. Always print `aws sts get-caller-identity` before writing conditions.
 
-!!! note "Recap — §3"
+!!! note "Recap  §3"
     IAM is an object graph (principals, policies, resources) plus a deterministic evaluation pipeline. Explicit deny wins; implicit deny is the default; boundaries and session policies intersect rather than grant. Cross-account access requires an allow on both sides.
 
 ---
 ## 4. Component-by-Component Deep Dive
 
-Each subsection opens with a **Floci support tier** banner. Confirm every banner against your own `support-matrix.tsv` from §0.5.1 — the tiers below describe a typical build, not a guarantee for yours.
+Each subsection opens with a **Floci support tier** banner. Confirm every banner against your own `support-matrix.tsv` from §0.5.1  the tiers below describe a typical build, not a guarantee for yours.
 
 ---
 
@@ -658,13 +658,13 @@ aws sts get-caller-identity
 ```
 
 ```bash
-# Cache the account id — every policy file in this module uses it
+# Cache the account id  every policy file in this module uses it
 export ACCOUNT_ID="$(aws sts get-caller-identity --query Account --output text)"
 echo "$ACCOUNT_ID"
 ```
 
 !!! warning "Your Floci session is effectively root"
-    The `test`/`test` credentials Floci exports behave as an all-powerful account principal. That is *why* you must never conclude "IAM allowed it" from a successful command run under the default profile — you were running as the equivalent of root. All enforcement testing must be done under a **separate named profile** backed by an IAM user's access key (Lab 5) or an assumed role (Lab 6).
+    The `test`/`test` credentials Floci exports behave as an all-powerful account principal. That is *why* you must never conclude "IAM allowed it" from a successful command run under the default profile  you were running as the equivalent of root. All enforcement testing must be done under a **separate named profile** backed by an IAM user's access key (Lab 5) or an assumed role (Lab 6).
 
 ---
 
@@ -677,8 +677,8 @@ echo "$ACCOUNT_ID"
 | **Purpose** | Paths give IAM a virtual folder hierarchy (`/dnb/dev/`). Tags give arbitrary key–value metadata used for cost allocation and **ABAC**. |
 | **Configuration** | `--path /dnb/dev/` at creation. `--tags Key=…,Value=…` at creation or via `tag-user`/`tag-role`. |
 | **Lifecycle** | **Role** paths are fixed at create time. **User** and **group** paths can be changed later (`update-user --new-path`, `update-group --new-path`). Tags mutable at any time; max 50 per entity. |
-| **Relationships** | Paths appear inside ARNs, so a policy can grant `iam:*` on `arn:aws:iam::123:user/dnb/dev/*` — path-scoped delegation. Tags feed `aws:PrincipalTag/*`, `aws:ResourceTag/*`, `aws:RequestTag/*`, `aws:TagKeys`. |
-| **Security** | ABAC via tags scales far better than writing one policy per resource, but a principal who can *edit* tags can escalate privilege — always deny `iam:TagRole`/`iam:UntagRole` on security-relevant tags. |
+| **Relationships** | Paths appear inside ARNs, so a policy can grant `iam:*` on `arn:aws:iam::123:user/dnb/dev/*`  path-scoped delegation. Tags feed `aws:PrincipalTag/*`, `aws:ResourceTag/*`, `aws:RequestTag/*`, `aws:TagKeys`. |
+| **Security** | ABAC via tags scales far better than writing one policy per resource, but a principal who can *edit* tags can escalate privilege  always deny `iam:TagRole`/`iam:UntagRole` on security-relevant tags. |
 | **Limitations** | Names: 1–64 chars for users and roles, 1–128 for groups; character set `[\w+=,.@-]`. Names are **case-insensitive for uniqueness** (`Alice` and `alice` collide). Paths ≤ 512 chars, must start and end with `/`. |
 | **Naming convention (this module)** | `dnb-<env>-<function>[-<type>]`, path `/dnb/<env>/` |
 
@@ -700,15 +700,15 @@ aws iam list-users --path-prefix /dnb/dev/ \
 | Aspect | Detail |
 |---|---|
 | **Purpose** | A persistent identity for **one human** (or, legacy, one application). Holds long-term credentials. |
-| **Configuration** | Name, path, tags, optional permissions boundary. Up to 2 access keys, 1 login profile, up to 8 MFA devices, 10 attached managed policies (default quota, adjustable to 20), and membership of up to 10 groups. There is **no count limit on inline policies** — the constraint is an aggregate 2 048-character budget per user. |
+| **Configuration** | Name, path, tags, optional permissions boundary. Up to 2 access keys, 1 login profile, up to 8 MFA devices, 10 attached managed policies (default quota, adjustable to 20), and membership of up to 10 groups. There is **no count limit on inline policies**  the constraint is an aggregate 2 048-character budget per user. |
 | **Lifecycle** | `CreateUser` → attach permissions (ideally via group) → optionally create credentials → *use* → rotate keys → detach/delete children → `DeleteUser`. **`DeleteUser` fails while dependents exist.** |
 | **Relationships** | ⊂ groups; ← attached managed policies; ⊂ inline policies; → access keys, login profile, MFA, signing certs, SSH keys, service-specific credentials; ⊤ permissions boundary. |
 | **Security** | Long-lived credentials are the highest-risk artefact in AWS. Prefer roles/federation. If users are unavoidable: MFA mandatory, rotate keys ≤ 90 days, no keys for console-only staff. |
-| **Limitations** | Default quota 5 000 users per account — a hint that users are not the intended scaling mechanism for humans. Users are global; no per-region users. |
+| **Limitations** | Default quota 5 000 users per account  a hint that users are not the intended scaling mechanism for humans. Users are global; no per-region users. |
 | **Best practice** | *Never* attach a policy directly to a user. Attach to a group. This makes onboarding/offboarding a one-line change and makes audit trivial. |
 | **Common mistakes** | Creating a user per application (use a role); leaving `AdministratorAccess` attached "temporarily"; sharing one user between two people; forgetting that deleting a user does **not** revoke already-issued STS sessions derived from it. |
 
-**Deletion dependency order (memorise — this is Debugging Challenge 1)**
+**Deletion dependency order (memorise  this is Debugging Challenge 1)**
 
 ```
 DeleteUser  requires, in order:
@@ -737,8 +737,8 @@ DeleteUser  requires, in order:
 | **Configuration** | Name, path, attached managed policies, inline policies. |
 | **Lifecycle** | `CreateGroup` → attach policies → `AddUserToGroup` … → `RemoveUserFromGroup` → detach policies → `DeleteGroup`. |
 | **Relationships** | Contains users only. |
-| **Security** | Model groups on **job functions**, not on projects or teams — job functions change far less often. |
-| **Limitations** | **Groups cannot be nested.** **Groups are not principals** — you cannot write `"Principal": {"AWS": "arn:aws:iam::123:group/devs"}` in a trust policy or bucket policy, and a group cannot assume a role. Max 300 groups per account; a user may belong to 10. |
+| **Security** | Model groups on **job functions**, not on projects or teams  job functions change far less often. |
+| **Limitations** | **Groups cannot be nested.** **Groups are not principals**  you cannot write `"Principal": {"AWS": "arn:aws:iam::123:group/devs"}` in a trust policy or bucket policy, and a group cannot assume a role. Max 300 groups per account; a user may belong to 10. |
 | **Best practice** | `dnb-developers`, `dnb-auditors`, `dnb-dbadmins`, `dnb-admins`. One group = one coherent set of duties. |
 | **Common mistakes** | Trying to use a group as a `Principal` (silently invalid / `MalformedPolicyDocument`); expecting nested groups; putting *both* an allow-all and a deny in the same group and being surprised the deny wins. |
 
@@ -765,13 +765,13 @@ DeleteUser  requires, in order:
 | **Purpose** | Programmatic authentication: an `AccessKeyId` (public, `AKIA…`) plus a `SecretAccessKey` (private) used to compute the SigV4 signature. |
 | **Configuration** | `iam create-access-key --user-name X`. Status `Active` \| `Inactive`. |
 | **Lifecycle** | Create → distribute → use → *(rotate: create 2nd key → update apps → mark 1st `Inactive` → verify → delete 1st)* → delete. |
-| **Relationships** | Belong to exactly one IAM user. Roles never have access keys — they get temporary ones from STS. |
+| **Relationships** | Belong to exactly one IAM user. Roles never have access keys  they get temporary ones from STS. |
 | **Security** | The secret is shown **exactly once**, at creation. It cannot be retrieved later. If lost, delete and recreate. Never commit to Git, never bake into an AMI or container image, never paste into Slack. |
-| **Limitations** | Max **2 per user** — deliberately, so that zero-downtime rotation is possible and hoarding is not. |
+| **Limitations** | Max **2 per user**  deliberately, so that zero-downtime rotation is possible and hoarding is not. |
 | **Best practice** | The four-phase rotation above. Automate with a scheduled job. Alarm on keys older than 90 days. Prefer eliminating keys entirely via roles/SSO. |
 | **Common mistakes** | Deleting the old key before verifying the new one works (outage); rotating by deleting-then-creating (outage); storing keys in `~/.aws/credentials` on a laptop with no disk encryption. |
 
-**Key prefixes — know them for the exam and for triage**
+**Key prefixes  know them for the exam and for triage**
 
 | Prefix | Credential type |
 |---|---|
@@ -786,7 +786,7 @@ DeleteUser  requires, in order:
 
 ### 4.6 Login Profiles and the Account Password Policy
 
-**Floci support:** ⚠️ `create/get/update/delete-login-profile` typically supported as data storage — but Floci has **no console**, so a login profile can never actually be used to sign in. ❌/⚠️ `get/update/delete-account-password-policy` — probe it; if `get` returns `NoSuchEntity` the operation exists but no policy is set. Password *complexity enforcement* is almost certainly not evaluated locally.
+**Floci support:** ⚠️ `create/get/update/delete-login-profile` typically supported as data storage  but Floci has **no console**, so a login profile can never actually be used to sign in. ❌/⚠️ `get/update/delete-account-password-policy`  probe it; if `get` returns `NoSuchEntity` the operation exists but no policy is set. Password *complexity enforcement* is almost certainly not evaluated locally.
 
 | Aspect | Detail |
 |---|---|
@@ -795,7 +795,7 @@ DeleteUser  requires, in order:
 | **Configuration (policy)** | `--minimum-password-length`, `--require-symbols`, `--require-numbers`, `--require-uppercase-characters`, `--require-lowercase-characters`, `--allow-users-to-change-password`, `--max-password-age`, `--password-reuse-prevention`, `--hard-expiry`. |
 | **Lifecycle** | Create profile with a temporary password + reset-required → user changes it → periodic expiry per policy → delete on offboarding. |
 | **Relationships** | One profile per user. The account policy is a singleton account-level object. |
-| **Security** | `--hard-expiry` locks a user out rather than letting them self-serve a reset — powerful but a support burden. Passwords are irrelevant if you federate; that's the point of federating. |
+| **Security** | `--hard-expiry` locks a user out rather than letting them self-serve a reset  powerful but a support burden. Passwords are irrelevant if you federate; that's the point of federating. |
 | **Limitations** | Password policy does not apply to the **root** user. Length 6–128 (AWS floor); reuse prevention 1–24. |
 | **Best practice (CIS AWS Foundations Benchmark)** | length ≥ 14, all four character classes, reuse prevention 24, and prefer SSO so that no IAM passwords exist at all. |
 
@@ -834,9 +834,9 @@ aws iam get-account-password-policy
 
 ---
 
-### 4.7 Policies I — Types and Storage
+### 4.7 Policies I  Types and Storage
 
-**Floci support:** ✅ `create-policy`, `get-policy`, `list-policies`, `attach/detach-*-policy`, `put/get/delete-*-policy` (inline), `create-policy-version`, `set-default-policy-version`, `list-policy-versions`, `delete-policy-version`, `list-entities-for-policy`. ⚠️ AWS **managed** policies (`arn:aws:iam::aws:policy/…`) may only be partially seeded — probe before relying on `ReadOnlyAccess` etc.
+**Floci support:** ✅ `create-policy`, `get-policy`, `list-policies`, `attach/detach-*-policy`, `put/get/delete-*-policy` (inline), `create-policy-version`, `set-default-policy-version`, `list-policy-versions`, `delete-policy-version`, `list-entities-for-policy`. ⚠️ AWS **managed** policies (`arn:aws:iam::aws:policy/…`) may only be partially seeded  probe before relying on `ReadOnlyAccess` etc.
 
 There are exactly six ways a policy can enter the evaluation pipeline:
 
@@ -846,12 +846,12 @@ There are exactly six ways a policy can enter the evaluation pipeline:
 | 2 | **Identity-based, customer managed** | user / group / role | Yes | ✅ |
 | 3 | **Identity-based, inline** | exactly one user / group / role | Yes | ✅ |
 | 4 | **Resource-based** (bucket policy, key policy, queue policy, **trust policy**) | a resource | Yes (and can grant cross-account) | ⚠️ varies by service; trust policies ✅ |
-| 5 | **Permissions boundary** | user / role | **No** — filters only | ⚠️ stored; enforcement unlikely |
-| 6 | **Session policy** | passed at `AssumeRole --policy` | **No** — filters only | ⚠️ accepted; enforcement unlikely |
+| 5 | **Permissions boundary** | user / role | **No**  filters only | ⚠️ stored; enforcement unlikely |
+| 6 | **Session policy** | passed at `AssumeRole --policy` | **No**  filters only | ⚠️ accepted; enforcement unlikely |
 
-Plus two org-level types that IAM *intersects* with but does not own: **SCPs** and **RCPs** (AWS Organizations) — ❌ in Floci, conceptual only.
+Plus two org-level types that IAM *intersects* with but does not own: **SCPs** and **RCPs** (AWS Organizations)  ❌ in Floci, conceptual only.
 
-#### Managed vs inline — the decision table
+#### Managed vs inline  the decision table
 
 | Criterion | Managed (customer) | Inline |
 |---|---|---|
@@ -863,7 +863,7 @@ Plus two org-level types that IAM *intersects* with but does not own: **SCPs** a
 | Right choice for | virtually everything | a one-off exception that **must never** be reused, and must vanish with the principal |
 
 !!! tip "Exam-ready answer"
-    "Use customer managed policies by default for reuse, versioning and central auditability; use inline policies only for a strict one-to-one relationship you never want inherited elsewhere — for example a single break-glass role's unique grant."
+    "Use customer managed policies by default for reuse, versioning and central auditability; use inline policies only for a strict one-to-one relationship you never want inherited elsewhere  for example a single break-glass role's unique grant."
 
 #### Policy version lifecycle
 
@@ -878,7 +878,7 @@ Plus two org-level types that IAM *intersects* with but does not own: **SCPs** a
    │ Max 5 versions. The 6th create FAILS with   │
    │ LimitExceeded until you delete one.         │
    │ You cannot delete the DEFAULT version.      │
-   │ Deleting the POLICY deletes all versions —  │
+   │ Deleting the POLICY deletes all versions   │
    │ but only after it is detached from every    │
    │ principal (else DeleteConflict).            │
    └─────────────────────────────────────────────┘
@@ -886,9 +886,9 @@ Plus two org-level types that IAM *intersects* with but does not own: **SCPs** a
 
 ---
 
-### 4.8 Policies II — The Policy Language
+### 4.8 Policies II  The Policy Language
 
-**Floci support:** ✅ documents are stored and returned verbatim; ⚠️ `Condition` evaluation is the least likely part to be enforced locally. ❌ `iam simulate-principal-policy` / `simulate-custom-policy` are frequently absent — probe them, because they are your best Track-A verification tool when present.
+**Floci support:** ✅ documents are stored and returned verbatim; ⚠️ `Condition` evaluation is the least likely part to be enforced locally. ❌ `iam simulate-principal-policy` / `simulate-custom-policy` are frequently absent  probe them, because they are your best Track-A verification tool when present.
 
 #### Grammar
 
@@ -917,7 +917,7 @@ Plus two org-level types that IAM *intersects* with but does not own: **SCPs** a
 
 | Element | Required? | Notes |
 |---|---|---|
-| `Version` | Yes, in practice | **Must be the literal string `"2012-10-17"`.** Omitting it silently defaults to `2008-10-17`, which **disables policy variables** — a classic silent failure. |
+| `Version` | Yes, in practice | **Must be the literal string `"2012-10-17"`.** Omitting it silently defaults to `2008-10-17`, which **disables policy variables**  a classic silent failure. |
 | `Id` | No | Free-form policy identifier; some services reject it. |
 | `Sid` | No, but do it | Statement ID. Makes `simulate-principal-policy` output and audit reviews readable. Must be unique within the policy. |
 | `Effect` | Yes | `Allow` \| `Deny`. |
@@ -933,7 +933,7 @@ Plus two org-level types that IAM *intersects* with but does not own: **SCPs** a
 |---|---|
 | `"s3:*"` | every S3 action |
 | `"s3:Get*"` | `GetObject`, `GetBucketPolicy`, … |
-| `"*"` | every action of every service — **only ever correct for `AdministratorAccess`** |
+| `"*"` | every action of every service  **only ever correct for `AdministratorAccess`** |
 | `"arn:aws:s3:::dnb-statements-dev/*"` | every **object** in the bucket |
 | `"arn:aws:s3:::dnb-statements-dev"` | the **bucket itself** (needed for `ListBucket`) |
 | `?` | exactly one character |
@@ -941,7 +941,7 @@ Plus two org-level types that IAM *intersects* with but does not own: **SCPs** a
 !!! danger "The single most common S3+IAM bug in the world"
     `s3:ListBucket` acts on the **bucket ARN**. `s3:GetObject` acts on the **object ARN** (`bucket/*`). If you list only one of the two ARNs, half your operations fail. You need **both** entries in `Resource`.
 
-#### `NotAction` — allow-everything-except
+#### `NotAction`  allow-everything-except
 
 ```json
 {
@@ -958,7 +958,7 @@ Plus two org-level types that IAM *intersects* with but does not own: **SCPs** a
 ```
 
 !!! warning "`NotAction` with `Allow` is dangerous"
-    It grants every *future* AWS action too — including services that do not exist yet. `Deny` + `NotAction` is the safer idiom for guardrails ("deny everything that is not one of these approved actions"). Prefer explicit allow-lists in production.
+    It grants every *future* AWS action too  including services that do not exist yet. `Deny` + `NotAction` is the safer idiom for guardrails ("deny everything that is not one of these approved actions"). Prefer explicit allow-lists in production.
 
 #### Condition operators
 
@@ -983,7 +983,7 @@ Plus two org-level types that IAM *intersects* with but does not own: **SCPs** a
 | `aws:PrincipalTag/<k>` | tag on the calling user/role (**ABAC subject**) |
 | `aws:RequestTag/<k>`, `aws:TagKeys` | tags being *submitted* in this request |
 | `aws:ResourceTag/<k>` | tag on the target resource (**ABAC object**) |
-| `aws:SourceIp` | caller's public IP (**not** valid via VPC endpoints — use `aws:VpcSourceIp`) |
+| `aws:SourceIp` | caller's public IP (**not** valid via VPC endpoints  use `aws:VpcSourceIp`) |
 | `aws:SourceVpce`, `aws:SourceVpc` | VPC endpoint / VPC of the request |
 | `aws:SecureTransport` | was TLS used |
 | `aws:MultiFactorAuthPresent`, `aws:MultiFactorAuthAge` | MFA on this session |
@@ -1064,14 +1064,14 @@ One policy, N users, each confined to their own prefix. This is the canonical "h
 
 The second is a **guardrail**: note the `NotAction` exemptions for global services, whose endpoints live in `us-east-1` and which would otherwise break.
 
-!!! note "Recap — §4.7–4.8"
-    Six policy types feed one pipeline. `Version` must be `2012-10-17`. Identity policies must not contain `Principal`; resource policies must. S3 needs both bucket and object ARNs. Conditions are where least privilege actually happens — and are the part your emulator is least likely to enforce.
+!!! note "Recap  §4.7–4.8"
+    Six policy types feed one pipeline. `Version` must be `2012-10-17`. Identity policies must not contain `Principal`; resource policies must. S3 needs both bucket and object ARNs. Conditions are where least privilege actually happens  and are the part your emulator is least likely to enforce.
 
 ---
 
 ### 4.9 Resource-Based Policies and Trust Policies
 
-**Floci support:** ✅ role trust policies (`create-role --assume-role-policy-document`, `update-assume-role-policy`). ⚠️ S3 bucket policies, KMS key policies, SQS/SNS access policies — the *put/get* calls generally work; whether the policy is *evaluated* varies by service.
+**Floci support:** ✅ role trust policies (`create-role --assume-role-policy-document`, `update-assume-role-policy`). ⚠️ S3 bucket policies, KMS key policies, SQS/SNS access policies  the *put/get* calls generally work; whether the policy is *evaluated* varies by service.
 
 | Aspect | Detail |
 |---|---|
@@ -1079,7 +1079,7 @@ The second is a **guardrail**: note the `NotAction` exemptions for global servic
 | **Distinguishing feature** | Requires a `Principal` element. |
 | **Trust policy** | The resource-based policy *of an IAM role*. It answers "**who may assume me?**", never "what may I do?". |
 | **Lifecycle** | Created with the resource (or with `create-role`), updated in place, deleted with the resource. |
-| **Security** | `"Principal": {"AWS": "*"}` on a role trust policy or bucket policy is a critical finding — it makes the resource world-readable/assumable. Always pair a third-party trust with `sts:ExternalId`. |
+| **Security** | `"Principal": {"AWS": "*"}` on a role trust policy or bucket policy is a critical finding  it makes the resource world-readable/assumable. Always pair a third-party trust with `sts:ExternalId`. |
 | **Limitations** | Not every service supports them (e.g. EC2 instances do not). Bucket policy max 20 KB. |
 | **Best practice** | Prefer identity-based policies for your own account; reserve resource-based policies for cross-account and for service principals. |
 
@@ -1126,9 +1126,9 @@ The second is a **guardrail**: note the `NotAction` exemptions for global servic
 | **Lifecycle** | `CreateRole` (with trust) → attach permissions → assume → session expires → (rotate policies) → detach children → `DeleteRole`. |
 | **Relationships** | Trusted by principals; wraps into an **instance profile** for EC2; referenced by Lambda as `--role`; by ECS as task/execution role; chained role→role. |
 | **Security** | Never trust `"*"`. Use `sts:ExternalId` for third parties. Keep `--max-session-duration` short. Deny `iam:PassRole` broadly and scope it tightly. `aws:SourceIdentity`/`RoleSessionName` for attribution. |
-| **Limitations** | **Role chaining caps the session at 1 hour**, regardless of `--max-session-duration`, and `--duration-seconds > 3600` on a chained call fails. Cannot attach a role to a group. Sessions cannot be revoked directly — you revoke by attaching a `Deny` policy conditioned on `aws:TokenIssueTime`. Max 1 000 roles/account (adjustable). |
+| **Limitations** | **Role chaining caps the session at 1 hour**, regardless of `--max-session-duration`, and `--duration-seconds > 3600` on a chained call fails. Cannot attach a role to a group. Sessions cannot be revoked directly  you revoke by attaching a `Deny` policy conditioned on `aws:TokenIssueTime`. Max 1 000 roles/account (adjustable). |
 | **Best practice** | One role per workload, minimal permissions, short sessions, meaningful `--role-session-name` (use the human's identity so CloudTrail is useful). |
-| **Common mistakes** | Confusing trust and permissions policies; assuming a role you already are (`AccessDenied` on `sts:AssumeRole` because the *caller's identity policy* lacks it — a role assumption needs an allow on **both** sides); expecting long sessions from chained roles; forgetting `AWS_SESSION_TOKEN`. |
+| **Common mistakes** | Confusing trust and permissions policies; assuming a role you already are (`AccessDenied` on `sts:AssumeRole` because the *caller's identity policy* lacks it  a role assumption needs an allow on **both** sides); expecting long sessions from chained roles; forgetting `AWS_SESSION_TOKEN`. |
 
 **The AssumeRole handshake (both sides must allow)**
 
@@ -1196,12 +1196,12 @@ The second is a **guardrail**: note the `NotAction` exemptions for global servic
 }
 ```
 
-!!! danger "The confused-deputy problem — why `ExternalId` exists"
-    Your auditor firm has 50 clients and one AWS account. If your trust policy names only their account, then *any* of their staff who can assume roles could reach into your account — and a malicious client could trick the auditor's tooling into assuming **your** role. `sts:ExternalId` is a secret you give only to them, which they must present. It converts "anyone in that account" into "that account, acting deliberately on your behalf". For AWS-service principals the equivalent keys are `aws:SourceArn` and `aws:SourceAccount`.
+!!! danger "The confused-deputy problem  why `ExternalId` exists"
+    Your auditor firm has 50 clients and one AWS account. If your trust policy names only their account, then *any* of their staff who can assume roles could reach into your account  and a malicious client could trick the auditor's tooling into assuming **your** role. `sts:ExternalId` is a secret you give only to them, which they must present. It converts "anyone in that account" into "that account, acting deliberately on your behalf". For AWS-service principals the equivalent keys are `aws:SourceArn` and `aws:SourceAccount`.
 
-**`iam:PassRole` — the permission everyone forgets**
+**`iam:PassRole`  the permission everyone forgets**
 
-To launch an EC2 instance with a role, or create a Lambda with an execution role, the *caller* needs `iam:PassRole` for that role — otherwise `AccessDenied` even though `ec2:RunInstances` is allowed.
+To launch an EC2 instance with a role, or create a Lambda with an execution role, the *caller* needs `iam:PassRole` for that role  otherwise `AccessDenied` even though `ec2:RunInstances` is allowed.
 
 ```json
 {
@@ -1232,7 +1232,7 @@ To launch an EC2 instance with a role, or create a Lambda with an execution role
 | `AssumeRoleWithWebIdentity` | OIDC token (Cognito, Google, GitHub Actions) | temp creds | 15 min – 12 h |
 | `GetSessionToken` | IAM user | temp creds **for the same user**, usually to satisfy MFA | 15 min – 36 h (root: ≤1 h) |
 | `GetFederationToken` | IAM user | federated-user creds | 15 min – 36 h |
-| `GetCallerIdentity` | anyone | who am I — **requires no permissions at all** | n/a |
+| `GetCallerIdentity` | anyone | who am I  **requires no permissions at all** | n/a |
 
 !!! tip "`GetCallerIdentity` needs no permission"
     It is therefore the perfect first diagnostic in *any* IAM incident. If it fails, your problem is authentication (bad key, missing session token, clock skew), not authorisation.
@@ -1241,7 +1241,7 @@ To launch an EC2 instance with a role, or create a Lambda with an execution role
 
 ### 4.11 Instance Profiles
 
-**Floci support:** ✅ `create-instance-profile`, `add-role-to-instance-profile`, `get/list/delete`. ⚠️ Whether a Floci EC2 instance actually serves those credentials over an IMDS endpoint at `169.254.169.254` is build-dependent — probe it.
+**Floci support:** ✅ `create-instance-profile`, `add-role-to-instance-profile`, `get/list/delete`. ⚠️ Whether a Floci EC2 instance actually serves those credentials over an IMDS endpoint at `169.254.169.254` is build-dependent  probe it.
 
 | Aspect | Detail |
 |---|---|
@@ -1249,8 +1249,8 @@ To launch an EC2 instance with a role, or create a Lambda with an execution role
 | **Configuration** | Name + path; add exactly one role. |
 | **Lifecycle** | `CreateInstanceProfile` → `AddRoleToInstanceProfile` → associate with instance (`ec2 associate-iam-instance-profile` or `--iam-instance-profile` at launch) → replace/disassociate → `RemoveRoleFromInstanceProfile` → `DeleteInstanceProfile`. |
 | **Relationships** | 1 profile : **1** role (hard limit). 1 role : many profiles. 1 instance : ≤1 profile. |
-| **Security** | Credentials are delivered via IMDS and auto-rotated. **Enforce IMDSv2** (`--metadata-options HttpTokens=required`) — IMDSv1's simple GET is exploitable via SSRF and has caused real breaches. |
-| **Limitations** | Only one role per profile. Console users never see profiles because the console creates them implicitly — CLI users must create them explicitly. This asymmetry surprises everyone once. |
+| **Security** | Credentials are delivered via IMDS and auto-rotated. **Enforce IMDSv2** (`--metadata-options HttpTokens=required`)  IMDSv1's simple GET is exploitable via SSRF and has caused real breaches. |
+| **Limitations** | Only one role per profile. Console users never see profiles because the console creates them implicitly  CLI users must create them explicitly. This asymmetry surprises everyone once. |
 | **Best practice** | Name the profile after the role (`dnb-dev-app-role` → `dnb-dev-app-profile`) so the mapping is obvious in audit output. |
 
 ```
@@ -1282,7 +1282,7 @@ To launch an EC2 instance with a role, or create a Lambda with an execution role
 | **Semantics** | Effective permissions = identity policies **∩** boundary. A boundary **never grants**. |
 | **Configuration** | A managed policy ARN attached as the boundary of a principal. |
 | **Lifecycle** | Put → (principal's effective permissions immediately shrink) → delete boundary. |
-| **Relationships** | Applies to users and roles only — **not groups**, not resources. |
+| **Relationships** | Applies to users and roles only  **not groups**, not resources. |
 | **Security** | The delegation pattern: allow a team lead `iam:CreateUser`/`iam:CreateRole` **only if** they attach a specific boundary (`iam:PermissionsBoundary` condition key), and deny them `iam:DeleteUserPermissionsBoundary`. Without that condition, the lead simply creates an unbounded admin and escalates. |
 | **Limitations** | Only one boundary per principal. Does not restrict resource-based policy grants to that principal in *other* accounts. Does not apply to the root user or to service-linked roles. |
 | **Best practice** | Have a small library of boundaries: `dnb-boundary-developer`, `dnb-boundary-dataops`. Always allow `iam:GetRole`/`iam:ListRoles` inside the boundary so tooling doesn't break mysteriously. |
@@ -1343,7 +1343,7 @@ To launch an EC2 instance with a role, or create a Lambda with an execution role
 | **Configuration** | `--policy '<json>'` (inline, ≤2 048 chars after compaction) and/or `--policy-arns arn=…` (up to 10 managed policies). |
 | **Lifecycle** | Exists only for the lifetime of the credentials it produced. |
 | **Use cases** | Multi-tenant SaaS (one role, per-tenant session scoped to that tenant's prefix); a CI job that should only touch one stack; giving a support engineer 30 minutes of read-only on one bucket. |
-| **Limitations** | Cannot exceed the role's permissions. Cannot be changed after assumption — you must re-assume. |
+| **Limitations** | Cannot exceed the role's permissions. Cannot be changed after assumption  you must re-assume. |
 | **Best practice** | Pair with `--tags` (session tags) and ABAC so the session policy can be generic. |
 
 ```bash
@@ -1366,7 +1366,7 @@ aws sts assume-role \
 | **Configuration** | `aws iam create-service-linked-role --aws-service-name autoscaling.amazonaws.com`. Usually created implicitly the first time you use the service. |
 | **Lifecycle** | Created by the service or by you → used → `delete-service-linked-role` (asynchronous; poll `get-service-linked-role-deletion-status`). |
 | **Relationships** | Lives at path `/aws-service-role/`. Its trust policy and permissions are managed by AWS. |
-| **Security** | You **cannot** edit its permissions — which is the point: it is tamper-resistant. You can deny its use via SCP. |
+| **Security** | You **cannot** edit its permissions  which is the point: it is tamper-resistant. You can deny its use via SCP. |
 | **Limitations** | One per service per account. Cannot be repurposed. |
 | **Common mistakes** | Trying to delete one that is still in use (fails); trying to edit its policy (fails); confusing it with a normal service role that *you* create with a `Service` principal. A **service role** is yours to edit; a **service-linked role** is not. |
 
@@ -1384,7 +1384,7 @@ aws sts assume-role \
 | **Lifecycle** | Create device → enable (bind to user) → use in `sts get-session-token --serial-number … --token-code …` → resync/deactivate → delete. |
 | **Relationships** | Bound to a user. Surfaces as the condition keys `aws:MultiFactorAuthPresent` (Bool) and `aws:MultiFactorAuthAge` (seconds since authentication). |
 | **Security** | Mandatory for root and for any human with write access. Enforce it in policy, not just by asking nicely. |
-| **Limitations** | MFA cannot be enforced on an IAM **role** session's original authentication unless the trust policy demands it. Access keys alone never carry MFA — you must exchange them via `GetSessionToken` with an MFA code to obtain an MFA-bearing session. |
+| **Limitations** | MFA cannot be enforced on an IAM **role** session's original authentication unless the trust policy demands it. Access keys alone never carry MFA  you must exchange them via `GetSessionToken` with an MFA code to obtain an MFA-bearing session. |
 
 **The self-service MFA policy (canonical, appears in exams)**
 
@@ -1448,9 +1448,9 @@ aws sts assume-role \
 
 | Tool | AWS operation | What it answers |
 |---|---|---|
-| **Credential report** | `generate-credential-report` then `get-credential-report` (base64 CSV) | For every user: MFA enabled? password age? key age? key last used? — the standard quarterly audit artefact |
-| **Access key last used** | `get-access-key-last-used` | Which service/region/date this key last touched — the input to "is this key abandoned?" |
-| **Access Advisor** | `generate-service-last-accessed-details` → `get-service-last-accessed-details` | Which services this principal has actually used — the input to right-sizing an over-permissive policy |
+| **Credential report** | `generate-credential-report` then `get-credential-report` (base64 CSV) | For every user: MFA enabled? password age? key age? key last used?  the standard quarterly audit artefact |
+| **Access key last used** | `get-access-key-last-used` | Which service/region/date this key last touched  the input to "is this key abandoned?" |
+| **Access Advisor** | `generate-service-last-accessed-details` → `get-service-last-accessed-details` | Which services this principal has actually used  the input to right-sizing an over-permissive policy |
 | **IAM Access Analyzer** | (separate service) | Which resources are reachable from **outside** your account/org; policy validation and unused-access findings |
 | **Policy simulator** | `simulate-principal-policy`, `simulate-custom-policy` | "Would this request be allowed?" **without making the request** |
 | **CloudTrail** | (separate service) | The immutable record of who did what, when, from where |
@@ -1482,7 +1482,7 @@ column -t -s, ~/iam-lab/out/credential-report.csv | head -20
 | **AWS Organizations** | Multi-account hierarchy: management account, OUs, member accounts | The real unit of isolation is the *account*, not the IAM policy |
 | **Service Control Policies (SCP)** | Org-level **filters** on what member accounts may do | An SCP allowing nothing means even the account's admin can do nothing. SCPs never grant; they cap. Do not apply to the management account's root. |
 | **Resource Control Policies (RCP)** | Org-level filters on **resources**, e.g. "no S3 bucket in this org may be public" | Complements SCPs from the resource side |
-| **IAM Identity Center (successor to AWS SSO)** | Central workforce identity → permission sets → roles in every account | **The modern answer to "how do humans get access?" — no IAM users at all** |
+| **IAM Identity Center (successor to AWS SSO)** | Central workforce identity → permission sets → roles in every account | **The modern answer to "how do humans get access?"  no IAM users at all** |
 | **Identity federation (SAML 2.0 / OIDC)** | Corporate IdP issues an assertion; STS exchanges it for role credentials | Zero passwords in AWS; joiners/leavers handled in the IdP |
 | **`aws:PrincipalOrgID`** | Condition key matching any principal in your org | One condition instead of enumerating 60 account IDs |
 | **Tag policies** | Enforce tag keys/values org-wide | Makes ABAC and cost allocation trustworthy |
@@ -1503,8 +1503,8 @@ column -t -s, ~/iam-lab/out/credential-report.csv | head -20
                          minus any explicit Deny at any layer
 ```
 
-!!! note "Recap — §4"
-    Users are for humans (and ideally replaced by federation). Groups are for scaling permissions to humans. Roles are for everything else, and always need *two* policies. Boundaries and session policies filter, never grant. Instance profiles are the EC2-shaped wrapper around a role. Everything above the account — Organizations, SCPs, Identity Center — is AWS-only and must be learned conceptually.
+!!! note "Recap  §4"
+    Users are for humans (and ideally replaced by federation). Groups are for scaling permissions to humans. Roles are for everything else, and always need *two* policies. Boundaries and session policies filter, never grant. Instance profiles are the EC2-shaped wrapper around a role. Everything above the account  Organizations, SCPs, Identity Center  is AWS-only and must be learned conceptually.
 
 ---
 ## 5. Hands-on Labs
@@ -1514,7 +1514,7 @@ column -t -s, ~/iam-lab/out/credential-report.csv | head -20
 * Labs are **cumulative**. Lab 6 uses the user from Lab 1 and the policy from Lab 3. Do not clean up until §16.
 * Every lab has the same shape: **Objective → Prerequisites → Architecture → Implementation → Verification → Break it → Fix it → Recap**.
 * Every command block is followed by a parameter table. Do not copy-paste without reading it.
-* Expected outputs are shown. Yours may differ in IDs and timestamps — that is normal. If they differ in *structure*, investigate.
+* Expected outputs are shown. Yours may differ in IDs and timestamps  that is normal. If they differ in *structure*, investigate.
 * Maintain a lab logbook: `~/iam-lab/out/logbook.md`. Record every `DIVERGES-FROM-AWS` finding.
 
 ```bash
@@ -1529,9 +1529,9 @@ echo "endpoint=$AWS_ENDPOINT_URL account=$ACCOUNT_ID"
 
 ---
 
-### Lab 0 — Environment, Identity, and Support Discovery
+### Lab 0  Environment, Identity, and Support Discovery
 
-**Objective.** Establish a verified Floci session, discover the account identity, and produce your build's IAM support matrix — the reference document for every later lab.
+**Objective.** Establish a verified Floci session, discover the account identity, and produce your build's IAM support matrix  the reference document for every later lab.
 
 **Prerequisites.** §0.2 checklist complete.
 
@@ -1546,7 +1546,7 @@ echo "endpoint=$AWS_ENDPOINT_URL account=$ACCOUNT_ID"
         └── probe-support.sh ──────────────► support-matrix.tsv
 ```
 
-#### Step 0.1 — Start and verify
+#### Step 0.1  Start and verify
 
 ```bash
 floci start --persist ./floci-state --detach
@@ -1558,14 +1558,14 @@ eval "$(floci env)"
 | Command | Purpose |
 |---|---|
 | `floci start --persist … --detach` | Launch the emulator with durable state, returning control immediately |
-| `floci wait --timeout 2m` | Poll the health endpoint until ready — prevents "connection refused" races |
+| `floci wait --timeout 2m` | Poll the health endpoint until ready  prevents "connection refused" races |
 | `floci status -o json` | Machine-readable state; `jq` extracts just what we care about |
 | `eval "$(floci env)"` | Injects `AWS_ENDPOINT_URL`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_DEFAULT_REGION` into this shell |
 
 !!! warning "`eval` is per-shell"
     Open a new terminal tab and those variables are gone; your next `aws` command may silently hit real AWS. Add `eval "$(floci env)"` to your lab shell's startup, or re-run it every time.
 
-#### Step 0.2 — Who am I?
+#### Step 0.2  Who am I?
 
 ```bash
 aws sts get-caller-identity
@@ -1583,7 +1583,7 @@ aws sts get-caller-identity
 |---|---|
 | `UserId` | Unique, immutable internal ID. For a user `AIDA…`, role `AROA…`, assumed-role session `AROA…:<session-name>` |
 | `Account` | The 12-digit account. Floci uses a synthetic value |
-| `Arn` | **The principal you are acting as.** Note it is the account root here — you are effectively unrestricted |
+| `Arn` | **The principal you are acting as.** Note it is the account root here  you are effectively unrestricted |
 
 ```bash
 export ACCOUNT_ID="$(aws sts get-caller-identity --query Account --output text)"
@@ -1591,10 +1591,10 @@ export ACCOUNT_ID="$(aws sts get-caller-identity --query Account --output text)"
 
 | Flag | Purpose |
 |---|---|
-| `--query Account` | Client-side JMESPath filter — extracts one field |
+| `--query Account` | Client-side JMESPath filter  extracts one field |
 | `--output text` | Strips JSON quoting so the value is shell-usable |
 
-#### Step 0.3 — Baseline the account
+#### Step 0.3  Baseline the account
 
 ```bash
 aws iam get-account-summary --query 'SummaryMap' 2>/dev/null | jq '.' || echo "get-account-summary not supported"
@@ -1607,13 +1607,13 @@ aws iam list-policies --scope AWS   --output json | jq '{awsManagedSeeded: (.Pol
 | Flag | Purpose |
 |---|---|
 | `--scope Local` | Only **customer managed** policies (created by you) |
-| `--scope AWS` | Only **AWS managed** policies — reveals how many Floci has seeded |
+| `--scope AWS` | Only **AWS managed** policies  reveals how many Floci has seeded |
 | `--only-attached` | (optional) restrict to policies currently attached to something |
 
 !!! tip "Record the AWS-managed count now"
-    If `--scope AWS` returns 0 or a handful, you cannot rely on `arn:aws:iam::aws:policy/ReadOnlyAccess` and friends in later labs. Every lab in this module therefore uses **customer managed** policies you build yourself — which is better pedagogy anyway, since you will write policies from scratch in your career, not just attach Amazon's.
+    If `--scope AWS` returns 0 or a handful, you cannot rely on `arn:aws:iam::aws:policy/ReadOnlyAccess` and friends in later labs. Every lab in this module therefore uses **customer managed** policies you build yourself  which is better pedagogy anyway, since you will write policies from scratch in your career, not just attach Amazon's.
 
-#### Step 0.4 — Produce the support matrix
+#### Step 0.4  Produce the support matrix
 
 ```bash
 chmod +x ~/iam-lab/probe-support.sh
@@ -1630,13 +1630,13 @@ grep -E 'UNSUPPORTED|UNKNOWN' ~/iam-lab/out/support-matrix.tsv || echo "Everythi
 | 3 | `support-matrix.tsv` exists and is non-empty | `wc -l ~/iam-lab/out/support-matrix.tsv` |
 | 4 | You have recorded the AWS-managed policy count | in your logbook |
 
-**Break it.** Unset the endpoint and observe what the CLI tries to do — then immediately restore it.
+**Break it.** Unset the endpoint and observe what the CLI tries to do  then immediately restore it.
 
 ```bash
 ( unset AWS_ENDPOINT_URL; timeout 8 aws iam list-users 2>&1 | head -3 )
 ```
 
-Expected: a timeout, a DNS/TLS error, or `InvalidClientTokenId` from **real AWS** (`iam.amazonaws.com`). Note the subshell parentheses — they contain the damage.
+Expected: a timeout, a DNS/TLS error, or `InvalidClientTokenId` from **real AWS** (`iam.amazonaws.com`). Note the subshell parentheses  they contain the damage.
 
 !!! danger "Never run that outside a subshell"
     This exercise exists to burn one lesson into you: the endpoint variable is the only thing between your lab commands and a real AWS account.
@@ -1645,7 +1645,7 @@ Expected: a timeout, a DNS/TLS error, or `InvalidClientTokenId` from **real AWS*
 
 ---
 
-### Lab 1 — IAM Users: Creation, Paths, Tags, Inspection
+### Lab 1  IAM Users: Creation, Paths, Tags, Inspection
 
 **Objective.** Create the Druk National Bank development identities with correct paths and mandatory tags; inspect them; understand deletion dependencies.
 
@@ -1658,13 +1658,13 @@ Expected: a timeout, a DNS/TLS error, or `InvalidClientTokenId` from **real AWS*
    └── path /dnb/dev/
         ├── dnb-dev-alice     (backend developer)
         ├── dnb-dev-bob       (frontend developer)
-        └── dnb-dev-carol     (internal auditor — read-only)
+        └── dnb-dev-carol     (internal auditor  read-only)
    └── path /dnb/svc/
-        └── dnb-svc-batch     (legacy nightly batch job — a deliberate anti-pattern
+        └── dnb-svc-batch     (legacy nightly batch job  a deliberate anti-pattern
                                we will critique and replace with a role in Lab 6)
 ```
 
-#### Step 1.1 — Create users
+#### Step 1.1  Create users
 
 ```bash
 for u in alice bob carol; do
@@ -1700,9 +1700,9 @@ aws iam create-user \
 ```
 
 !!! tip "Read the ARN carefully"
-    `user/dnb/dev/dnb-dev-alice` — the path is *inside* the ARN. This is what makes `arn:aws:iam::*:user/dnb/dev/*` a meaningful policy resource.
+    `user/dnb/dev/dnb-dev-alice`  the path is *inside* the ARN. This is what makes `arn:aws:iam::*:user/dnb/dev/*` a meaningful policy resource.
 
-#### Step 1.2 — Inspect
+#### Step 1.2  Inspect
 
 ```bash
 # All users, with path
@@ -1737,9 +1737,9 @@ aws iam list-user-tags --user-name dnb-dev-alice --query 'Tags' --output table
 ```
 
 !!! note "`PermissionsBoundary` is absent from this output"
-    That is expected — none is attached yet. In Lab 9 this same command will show a `PermissionsBoundary` block. If your build never shows it, record the divergence.
+    That is expected  none is attached yet. In Lab 9 this same command will show a `PermissionsBoundary` block. If your build never shows it, record the divergence.
 
-#### Step 1.3 — Modify tags and rename
+#### Step 1.3  Modify tags and rename
 
 ```bash
 # Add a tag after creation
@@ -1766,7 +1766,7 @@ test "$(aws iam list-user-tags --user-name dnb-dev-alice --query 'length(Tags)' 
   && echo "PASS: tags present" || echo "FAIL"
 ```
 
-#### Break it — dependency-blocked deletion
+#### Break it  dependency-blocked deletion
 
 ```bash
 aws iam create-user --user-name dnb-temp-victim --path /dnb/dev/ >/dev/null
@@ -1781,7 +1781,7 @@ An error occurred (DeleteConflict) when calling the DeleteUser operation:
 Cannot delete entity, must delete access keys first.
 ```
 
-#### Fix it — the correct teardown order
+#### Fix it  the correct teardown order
 
 ```bash
 KEY_ID="$(aws iam list-access-keys --user-name dnb-temp-victim --query 'AccessKeyMetadata[0].AccessKeyId' --output text)"
@@ -1797,7 +1797,7 @@ aws iam get-user         --user-name dnb-temp-victim 2>&1 | grep -q NoSuchEntity
 
 ---
 
-### Lab 2 — Groups: Scaling Permissions to People
+### Lab 2  Groups: Scaling Permissions to People
 
 **Objective.** Replace per-user permissions with job-function groups; demonstrate that groups are not principals.
 
@@ -1816,7 +1816,7 @@ aws iam get-user         --user-name dnb-temp-victim 2>&1 | grep -q NoSuchEntity
    dnb-admins    ───── (empty; break-glass only)
 ```
 
-#### Step 2.1 — Create groups
+#### Step 2.1  Create groups
 
 ```bash
 for g in developers auditors admins; do
@@ -1830,7 +1830,7 @@ done
 | `--group-name` | 1–128 chars |
 | `--path` | as with users; changeable later via `update-group --new-path` |
 
-Note: `create-group` accepts **no `--tags`** — groups are not taggable in IAM. This asymmetry is worth remembering.
+Note: `create-group` accepts **no `--tags`**  groups are not taggable in IAM. This asymmetry is worth remembering.
 
 ```
 dnb-developers  arn:aws:iam::000000000000:group/dnb/dnb-developers
@@ -1838,7 +1838,7 @@ dnb-auditors    arn:aws:iam::000000000000:group/dnb/dnb-auditors
 dnb-admins      arn:aws:iam::000000000000:group/dnb/dnb-admins
 ```
 
-#### Step 2.2 — Add members
+#### Step 2.2  Add members
 
 ```bash
 aws iam add-user-to-group --group-name dnb-developers --user-name dnb-dev-alice
@@ -1846,9 +1846,9 @@ aws iam add-user-to-group --group-name dnb-developers --user-name dnb-dev-bob
 aws iam add-user-to-group --group-name dnb-auditors   --user-name dnb-dev-carol
 ```
 
-`add-user-to-group` is idempotent — running it twice is harmless and produces no output on success.
+`add-user-to-group` is idempotent  running it twice is harmless and produces no output on success.
 
-#### Step 2.3 — Inspect from both directions
+#### Step 2.3  Inspect from both directions
 
 ```bash
 # Group → members
@@ -1870,17 +1870,17 @@ aws iam list-groups --query 'Groups[].[GroupName,Path]' --output table
 }
 ```
 
-#### Break it (three ways) — the limits of groups
+#### Break it (three ways)  the limits of groups
 
 ```bash
 # 1. Groups cannot be nested. There is no such operation.
 aws iam add-user-to-group --group-name dnb-developers --user-name dnb-auditors 2>&1 | tail -2
 ```
 
-Expected: `NoSuchEntity: The user with name dnb-auditors cannot be found.` — because `--user-name` only accepts users. **There is no `add-group-to-group` API at all.**
+Expected: `NoSuchEntity: The user with name dnb-auditors cannot be found.`  because `--user-name` only accepts users. **There is no `add-group-to-group` API at all.**
 
 ```bash
-# 2. A group is not a principal — it cannot be trusted by a role.
+# 2. A group is not a principal  it cannot be trusted by a role.
 cat > policies/bad-trust-group.json <<'JSON'
 {
   "Version": "2012-10-17",
@@ -1906,7 +1906,7 @@ Invalid principal in policy: "AWS":"arn:aws:iam::000000000000:group/dnb/dnb-deve
 ```
 
 !!! note "If Floci accepts the group principal"
-    It will have created a role whose trust policy can never match anything in real AWS. Delete it and record the divergence — this is exactly the class of bug an emulator can hide from you:
+    It will have created a role whose trust policy can never match anything in real AWS. Delete it and record the divergence  this is exactly the class of bug an emulator can hide from you:
 
     ```bash
     aws iam delete-role --role-name dnb-broken-group-trust 2>/dev/null
@@ -1915,7 +1915,7 @@ Invalid principal in policy: "AWS":"arn:aws:iam::000000000000:group/dnb/dnb-deve
 ```bash
 # 3. Group quota: a user may be in at most 10 groups (default quota).
 aws iam get-account-summary --query 'SummaryMap.{Groups: Groups, GroupsQuota: GroupsQuota, GroupsPerUserQuota: GroupsPerUserQuota}' 2>/dev/null \
-  || echo "get-account-summary unsupported here — quota values are AWS-side (300 groups/account, 10 groups/user)"
+  || echo "get-account-summary unsupported here  quota values are AWS-side (300 groups/account, 10 groups/user)"
 ```
 
 #### Verification
@@ -1929,7 +1929,7 @@ test "$(aws iam get-group --group-name dnb-developers --query 'length(Users)' --
 
 ---
 
-### Lab 3 — Customer Managed Policies and the Version Lifecycle
+### Lab 3  Customer Managed Policies and the Version Lifecycle
 
 **Objective.** Author a least-privilege S3 policy from scratch, attach it to a group, then evolve it through versions and roll back.
 
@@ -1946,7 +1946,7 @@ test "$(aws iam get-group --group-name dnb-developers --query 'length(Users)' --
              └── attached to → dnb-developers group → alice, bob
 ```
 
-#### Step 3.1 — Create the target bucket
+#### Step 3.1  Create the target bucket
 
 ```bash
 aws s3 mb "s3://dnb-statements-dev"
@@ -1956,7 +1956,7 @@ aws s3 cp out/statement-1001.csv s3://dnb-statements-dev/2026/07/statement-1001.
 aws s3 ls s3://dnb-statements-dev --recursive
 ```
 
-#### Step 3.2 — Author v1
+#### Step 3.2  Author v1
 
 ```bash
 cat > policies/dnb-s3-statements-read-v1.json <<JSON
@@ -2005,7 +2005,7 @@ echo "$POLICY_ARN" | tee out/policy-arn.txt
 | Parameter | Meaning |
 |---|---|
 | `--policy-name` | 1–128 chars; unique per account |
-| `--policy-document file://…` | **`file://` prefix is mandatory** — without it the CLI treats the path as the literal document |
+| `--policy-document file://…` | **`file://` prefix is mandatory**  without it the CLI treats the path as the literal document |
 | `--path /dnb/` | Appears in the ARN: `…:policy/dnb/dnb-s3-statements-read` |
 | `--description` | **Immutable after creation.** Write it properly the first time |
 | `--tags` | Policies are taggable |
@@ -2017,7 +2017,7 @@ arn:aws:iam::000000000000:policy/dnb/dnb-s3-statements-read
 !!! warning "`file://` vs `fileb://` vs no prefix"
     `file://path` reads a text file. `fileb://path` reads binary. Omitting the prefix passes the string `"policies/foo.json"` as the policy document, producing a confusing `MalformedPolicyDocument`. This is the single most common CLI mistake in IAM labs.
 
-#### Step 3.3 — Attach to the group (never to the user)
+#### Step 3.3  Attach to the group (never to the user)
 
 ```bash
 aws iam attach-group-policy --group-name dnb-developers --policy-arn "$POLICY_ARN"
@@ -2041,7 +2041,7 @@ aws iam list-entities-for-policy --policy-arn "$POLICY_ARN" \
 !!! tip "`list-entities-for-policy` is the killer feature of managed policies"
     Ask "who has this permission?" and get an answer in one call. With inline policies you would have to enumerate every user, group and role and read each embedded document. This alone justifies the managed-policy default.
 
-#### Step 3.4 — v2: add a TLS guardrail
+#### Step 3.4  v2: add a TLS guardrail
 
 ```bash
 cat > policies/dnb-s3-statements-read-v2.json <<'JSON'
@@ -2087,7 +2087,7 @@ aws iam create-policy-version \
 | Parameter | Meaning |
 |---|---|
 | `--set-as-default` | Makes the new version live **immediately** for every attached principal |
-| omit `--set-as-default` | Version is stored but inert — useful for staging a change for review |
+| omit `--set-as-default` | Version is stored but inert  useful for staging a change for review |
 
 ```
 v2   True   2026-08-04T09:31:07+00:00
@@ -2096,7 +2096,7 @@ v2   True   2026-08-04T09:31:07+00:00
 !!! danger "`--set-as-default` is an instant production change"
     There is no gradual rollout. Every principal attached to this policy changes permissions the moment the call returns. In a real organisation this belongs in a code-reviewed IaC pipeline, never in an ad-hoc CLI call.
 
-#### Step 3.5 — v3: the over-permissive change we reject
+#### Step 3.5  v3: the over-permissive change we reject
 
 ```bash
 cat > policies/dnb-s3-statements-read-v3.json <<'JSON'
@@ -2139,7 +2139,7 @@ aws iam get-policy-version --policy-arn "$POLICY_ARN" --version-id v3 \
 }
 ```
 
-#### Step 3.6 — Roll back (the whole point of versioning)
+#### Step 3.6  Roll back (the whole point of versioning)
 
 ```bash
 aws iam list-policy-versions --policy-arn "$POLICY_ARN" \
@@ -2166,7 +2166,7 @@ aws iam list-policy-versions --policy-arn "$POLICY_ARN" --query 'Versions[].Vers
 
 **Rollback took one API call and zero seconds of downtime.** That is the operational argument for managed policies.
 
-#### Break it — three version-lifecycle failures
+#### Break it  three version-lifecycle failures
 
 ```bash
 # (a) Cannot delete the default version
@@ -2212,7 +2212,7 @@ Expected: `DeleteConflict: Cannot delete a policy attached to entities.`
 #### Fix it
 
 ```bash
-# Detach first, then delete — but we still need this policy, so only demonstrate the order:
+# Detach first, then delete  but we still need this policy, so only demonstrate the order:
 echo "correct order: list-entities-for-policy → detach-*-policy for each → delete-policy"
 aws iam list-entities-for-policy --policy-arn "$POLICY_ARN" --query 'PolicyGroups[].GroupName' --output text
 ```
@@ -2233,7 +2233,7 @@ Expected Sids: `ListTheStatementsBucket ReadObjectsInStatementsBucket DenyAnyReq
 
 ---
 
-### Lab 4 — Inline Policies, and Choosing Between the Two
+### Lab 4  Inline Policies, and Choosing Between the Two
 
 **Objective.** Attach an inline policy, observe its distinct API surface and lifecycle, and articulate when it is the right choice.
 
@@ -2249,7 +2249,7 @@ Expected Sids: `ListTheStatementsBucket ReadObjectsInStatementsBucket DenyAnyReq
                                                       or outlive the group
 ```
 
-#### Step 4.1 — A reusable managed policy for auditors
+#### Step 4.1  A reusable managed policy for auditors
 
 ```bash
 cat > policies/dnb-s3-audit-read.json <<'JSON'
@@ -2299,7 +2299,7 @@ echo "$AUDIT_ARN" | tee out/audit-policy-arn.txt
 !!! tip "`iam:Get*` + `iam:List*` is the standard auditor grant"
     It is broad but read-only. Note it deliberately excludes `iam:GetCredentialReport`'s write-side sibling patterns and any `iam:Create*`/`iam:Put*`/`iam:Attach*`/`iam:Delete*`. Auditors read; they do not change.
 
-#### Step 4.2 — An inline policy: the belt-and-braces deny
+#### Step 4.2  An inline policy: the belt-and-braces deny
 
 ```bash
 cat > policies/inline-deny-auditor-writes.json <<'JSON'
@@ -2337,16 +2337,16 @@ aws iam get-group-policy --group-name dnb-auditors --policy-name DenyAuditorsAny
 | API family | Managed policies | Inline policies |
 |---|---|---|
 | Create | `create-policy` (standalone object with an ARN) | `put-user-policy` / `put-group-policy` / `put-role-policy` |
-| Attach | `attach-{user,group,role}-policy --policy-arn` | *no attach step — the put **is** the attach* |
+| Attach | `attach-{user,group,role}-policy --policy-arn` | *no attach step  the put **is** the attach* |
 | Read | `get-policy` + `get-policy-version` | `get-{user,group,role}-policy --policy-name` |
 | List on principal | `list-attached-{user,group,role}-policies` | `list-{user,group,role}-policies` |
 | Delete | `detach-…` then `delete-policy` | `delete-{user,group,role}-policy` |
 | Reverse lookup | `list-entities-for-policy` ✅ | **impossible** ❌ |
 
 !!! danger "`list-attached-user-policies` and `list-user-policies` are different commands"
-    The first lists **managed** attachments; the second lists **inline** documents. A permissions audit that runs only one of them will miss half the story. Real-world audits get this wrong constantly. `get-account-authorization-details` returns both in one call and is the correct tool — probe whether your build supports it.
+    The first lists **managed** attachments; the second lists **inline** documents. A permissions audit that runs only one of them will miss half the story. Real-world audits get this wrong constantly. `get-account-authorization-details` returns both in one call and is the correct tool  probe whether your build supports it.
 
-#### Step 4.3 — Full picture of one principal's permissions
+#### Step 4.3  Full picture of one principal's permissions
 
 ```bash
 audit_principal() {
@@ -2373,7 +2373,7 @@ audit_principal user  dnb-dev-carol
 !!! warning "A user's effective permissions are a union of four sources"
     ① their attached managed policies ② their inline policies ③ **every group they belong to**, including both of that group's policy types ④ minus the intersection with their permissions boundary. Auditing only ① and ② is the most common cause of "but I thought Carol was read-only".
 
-#### Break it — inline policy size limits
+#### Break it  inline policy size limits
 
 ```bash
 # Generate an oversized inline document (group inline limit is 5120 chars in AWS)
@@ -2396,7 +2396,7 @@ aws iam put-group-policy --group-name dnb-auditors --policy-name TooBig \
 Expected in real AWS: `LimitExceeded: Maximum policy size of 5120 bytes exceeded for group dnb-auditors`.
 
 !!! note "Why the limit matters architecturally"
-    Inline policy budgets are *per principal and cumulative*. Ten small inline policies can collectively hit the ceiling and block the eleventh. Managed policies have a 6 144-byte limit each but a principal can attach 10 (default) of them — roughly 60 KB of policy. Hitting inline limits is a signal you should have used managed policies.
+    Inline policy budgets are *per principal and cumulative*. Ten small inline policies can collectively hit the ceiling and block the eleventh. Managed policies have a 6 144-byte limit each but a principal can attach 10 (default) of them  roughly 60 KB of policy. Hitting inline limits is a signal you should have used managed policies.
 
 #### Decision exercise (write this in your logbook)
 
@@ -2413,7 +2413,7 @@ For each requirement, state managed or inline and justify in one sentence.
 **Lab 4 recap.** Inline policies have no ARN, no versions, no reverse lookup, and die with their principal. Managed policies are the default; inline is for deliberate one-offs. Auditing a principal requires checking managed + inline + groups + boundary.
 
 ---
-### Lab 5 — Access Keys, Named Profiles, and Zero-Downtime Rotation
+### Lab 5  Access Keys, Named Profiles, and Zero-Downtime Rotation
 
 **Objective.** Issue long-term credentials, use them under a **separate named profile** (this is what finally lets you test enforcement), and perform a correct four-phase rotation.
 
@@ -2434,9 +2434,9 @@ For each requirement, state managed or inline and justify in one sentence.
 ```
 
 !!! danger "Why a named profile is mandatory from here on"
-    Until now every command ran as the Floci account root — effectively unlimited. **Any success you observed proves nothing about permissions.** From this lab onward, all enforcement testing runs under `--profile carol` (or an assumed-role profile), which is backed by a real IAM principal with real, limited policies.
+    Until now every command ran as the Floci account root  effectively unlimited. **Any success you observed proves nothing about permissions.** From this lab onward, all enforcement testing runs under `--profile carol` (or an assumed-role profile), which is backed by a real IAM principal with real, limited policies.
 
-#### Step 5.1 — Create a key and capture the secret exactly once
+#### Step 5.1  Create a key and capture the secret exactly once
 
 ```bash
 aws iam create-access-key --user-name dnb-dev-carol --output json > out/carol-key1.json
@@ -2457,9 +2457,9 @@ chmod 600 out/carol-key1.json
 ```
 
 !!! danger "`SecretAccessKey` appears in this response and never again"
-    There is no `get-secret-access-key` API. If you lose it, your only recourse is `delete-access-key` + `create-access-key`. In production you would inject it straight into Secrets Manager or your CI secret store, never write it to disk — and `out/carol-key1.json` on your lab machine is itself a bad habit we are permitting only because these are throwaway emulator credentials.
+    There is no `get-secret-access-key` API. If you lose it, your only recourse is `delete-access-key` + `create-access-key`. In production you would inject it straight into Secrets Manager or your CI secret store, never write it to disk  and `out/carol-key1.json` on your lab machine is itself a bad habit we are permitting only because these are throwaway emulator credentials.
 
-#### Step 5.2 — Configure a named profile
+#### Step 5.2  Configure a named profile
 
 ```bash
 CK_ID="$(jq -r '.AccessKey.AccessKeyId' out/carol-key1.json)"
@@ -2489,7 +2489,7 @@ carol sts get-caller-identity
   2. environment variables  (AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_SESSION_TOKEN)
   3. ~/.aws/credentials      [profile]
   4. ~/.aws/config           [profile x]  (incl. sso / credential_process / role_arn)
-  5. container credentials   (ECS task role — AWS_CONTAINER_CREDENTIALS_RELATIVE_URI)
+  5. container credentials   (ECS task role  AWS_CONTAINER_CREDENTIALS_RELATIVE_URI)
   6. instance profile        (EC2 IMDS at 169.254.169.254)
 ```
 
@@ -2504,9 +2504,9 @@ Expected:
 ```
 
 !!! tip "If that ARN still says `:root`, stop"
-    Your wrapper is not isolating the environment. Fix it before continuing — every enforcement result from here on is meaningless otherwise.
+    Your wrapper is not isolating the environment. Fix it before continuing  every enforcement result from here on is meaningless otherwise.
 
-#### Step 5.3 — Exercise Carol's actual permissions (first real enforcement test)
+#### Step 5.3  Exercise Carol's actual permissions (first real enforcement test)
 
 ```bash
 echo "--- SHOULD SUCCEED (auditor has s3:ListBucket + GetObject) ---"
@@ -2530,7 +2530,7 @@ carol iam list-users --query 'length(Users)' --output text
 |---|---|---|
 | `s3 ls s3://dnb-statements-dev/` | **Allow** | `dnb-s3-audit-read` Sid `ListBothBuckets` |
 | `s3 cp … s3://…/statement-1001.csv -` | **Allow** | Sid `ReadObjectsInBothBuckets` |
-| `s3 cp out/tamper.txt s3://…` | **Deny** | inline `DenyAuditorsAnyWrite` — `s3:PutObject` is not in the `NotAction` allow-list, and explicit deny is final |
+| `s3 cp out/tamper.txt s3://…` | **Deny** | inline `DenyAuditorsAnyWrite`  `s3:PutObject` is not in the `NotAction` allow-list, and explicit deny is final |
 | `iam create-user` | **Deny** | no `Allow` for `iam:CreateUser` anywhere (implicit deny) **and** an explicit deny from the inline policy |
 | `iam list-users` | **Allow** | `iam:List*` in `dnb-s3-audit-read` |
 
@@ -2554,7 +2554,7 @@ ENFORCED-CORRECTLY  expect=allow actual=allow  cmd=aws iam list-users
 !!! danger "Interpreting `DIVERGES-FROM-AWS` correctly"
     If your build allowed the write, it means **this Floci build does not evaluate identity policies for that service's data plane.** Your policy is still *correct*; the emulator simply is not the enforcement point. Write in your logbook:
 
-    > `s3:PutObject` under `dnb-dev-carol`: AWS would return `AccessDenied` because the inline policy `DenyAuditorsAnyWrite` explicitly denies every action outside its `NotAction` list, and explicit deny is final in the evaluation pipeline. My Floci build returned success — enforcement not emulated for S3 data-plane calls.
+    > `s3:PutObject` under `dnb-dev-carol`: AWS would return `AccessDenied` because the inline policy `DenyAuditorsAnyWrite` explicitly denies every action outside its `NotAction` list, and explicit deny is final in the evaluation pipeline. My Floci build returned success  enforcement not emulated for S3 data-plane calls.
 
     Then clean up the object you should not have been able to create:
 
@@ -2563,7 +2563,7 @@ ENFORCED-CORRECTLY  expect=allow actual=allow  cmd=aws iam list-users
     aws iam delete-user --user-name dnb-should-not-exist 2>/dev/null
     ```
 
-#### Step 5.4 — Four-phase zero-downtime rotation
+#### Step 5.4  Four-phase zero-downtime rotation
 
 ```
   PHASE 1  create the second key            keys: [old Active] [new Active]
@@ -2587,12 +2587,12 @@ NEW_SEC="$(jq -r '.AccessKey.SecretAccessKey' out/carol-key2.json)"
 aws iam list-access-keys --user-name dnb-dev-carol \
   --query 'AccessKeyMetadata[].[AccessKeyId,Status,CreateDate]' --output table
 
-# PHASE 2 — deploy (here: update the profile)
+# PHASE 2  deploy (here: update the profile)
 aws configure set aws_access_key_id     "$NEW_KEY" --profile carol
 aws configure set aws_secret_access_key "$NEW_SEC" --profile carol
 carol sts get-caller-identity --query Arn --output text     # must still be Carol
 
-# PHASE 3 — deactivate, do not delete
+# PHASE 3  deactivate, do not delete
 aws iam update-access-key --user-name dnb-dev-carol --access-key-id "$OLD_KEY" --status Inactive
 aws iam list-access-keys --user-name dnb-dev-carol \
   --query 'AccessKeyMetadata[].[AccessKeyId,Status]' --output table
@@ -2601,7 +2601,7 @@ aws iam list-access-keys --user-name dnb-dev-carol \
 AWS_ACCESS_KEY_ID="$OLD_KEY" AWS_SECRET_ACCESS_KEY="$CK_SECRET" AWS_SESSION_TOKEN= \
   aws sts get-caller-identity 2>&1 | tail -2
 
-# PHASE 4 — delete
+# PHASE 4  delete
 aws iam delete-access-key --user-name dnb-dev-carol --access-key-id "$OLD_KEY"
 aws iam list-access-keys --user-name dnb-dev-carol --query 'AccessKeyMetadata[].[AccessKeyId,Status]' --output table
 ```
@@ -2609,13 +2609,13 @@ aws iam list-access-keys --user-name dnb-dev-carol --query 'AccessKeyMetadata[].
 | Parameter | Meaning |
 |---|---|
 | `update-access-key --status Inactive` | Key still exists but must be rejected at authentication. **The reversible step.** |
-| `--status Active` | Reactivate — the rollback |
+| `--status Active` | Reactivate  the rollback |
 | `delete-access-key` | Irreversible |
 
 !!! note "Probe: does your build reject an Inactive key?"
     Real AWS returns `InvalidClientTokenId: The security token included in the request is invalid`. If Floci still authenticates it, record the divergence. This matters: in an incident, "I deactivated the leaked key" must actually mean the key is dead.
 
-#### Step 5.5 — The third key
+#### Step 5.5  The third key
 
 ```bash
 aws iam create-access-key --user-name dnb-dev-carol >/dev/null 2>&1
@@ -2633,7 +2633,7 @@ done
 aws iam list-access-keys --user-name dnb-dev-carol --query 'AccessKeyMetadata[].[AccessKeyId,Status]' --output table
 ```
 
-#### Step 5.6 — Key age audit (the script you will reuse in your career)
+#### Step 5.6  Key age audit (the script you will reuse in your career)
 
 ```bash
 cat > key-age-audit.sh <<'SCRIPT'
@@ -2672,7 +2672,7 @@ carol sts get-caller-identity --query Arn --output text | grep -q dnb-dev-carol 
 
 ---
 
-### Lab 6 — Roles, Trust Policies, AssumeRole, and Role Chaining
+### Lab 6  Roles, Trust Policies, AssumeRole, and Role Chaining
 
 **Objective.** Replace the `dnb-svc-batch` user anti-pattern with a role; write trust policies; obtain and use temporary credentials; observe role chaining's 1-hour cap.
 
@@ -2695,7 +2695,7 @@ carol sts get-caller-identity --query Arn --output text | grep -q dnb-dev-carol 
       └── PERMISSIONS: read-only on dnb-audit-logs-dev
 ```
 
-#### Step 6.1 — Give Alice a key and a profile
+#### Step 6.1  Give Alice a key and a profile
 
 ```bash
 aws iam create-access-key --user-name dnb-dev-alice --output json > out/alice-key.json
@@ -2708,7 +2708,7 @@ alice() { AWS_ACCESS_KEY_ID= AWS_SECRET_ACCESS_KEY= AWS_SESSION_TOKEN= aws --pro
 alice sts get-caller-identity --query Arn --output text
 ```
 
-#### Step 6.2 — Create the role with a trust policy
+#### Step 6.2  Create the role with a trust policy
 
 ```bash
 cat > policies/trust-batch-role.json <<JSON
@@ -2731,7 +2731,7 @@ jq empty policies/trust-batch-role.json && echo valid
 aws iam create-role \
   --role-name dnb-dev-batch-role \
   --path /dnb/dev/ \
-  --description "Nightly statement batch job — replaces the dnb-svc-batch user" \
+  --description "Nightly statement batch job  replaces the dnb-svc-batch user" \
   --assume-role-policy-document file://policies/trust-batch-role.json \
   --max-session-duration 3600 \
   --tags $TAGS Key=Workload,Value=NightlyBatch \
@@ -2751,9 +2751,9 @@ dnb-dev-batch-role  arn:aws:iam::000000000000:role/dnb/dev/dnb-dev-batch-role  3
 ```
 
 !!! danger "A role with only a trust policy can do nothing"
-    You have created an identity that Alice may become — and which, right now, has **zero** permissions. Two policies are always required. Forgetting the second half is the number-one role bug in the field.
+    You have created an identity that Alice may become  and which, right now, has **zero** permissions. Two policies are always required. Forgetting the second half is the number-one role bug in the field.
 
-#### Step 6.3 — Attach permissions to the role
+#### Step 6.3  Attach permissions to the role
 
 ```bash
 cat > policies/dnb-s3-batch-write.json <<'JSON'
@@ -2806,7 +2806,7 @@ aws iam list-attached-role-policies --role-name dnb-dev-batch-role \
 !!! tip "The `NeverDeleteAnything` statement is doing real work"
     Even if someone later attaches `AdministratorAccess` to this role, the explicit `Deny` still blocks deletes. This is the correct way to encode "this workload is append-only" as an invariant rather than a hope.
 
-#### Step 6.4 — Grant Alice permission to assume it
+#### Step 6.4  Grant Alice permission to assume it
 
 Remember: **both** sides must allow.
 
@@ -2834,7 +2834,7 @@ aws iam attach-group-policy --group-name dnb-developers --policy-arn "$ASSUME_AR
 echo "$ASSUME_ARN" | tee out/assume-policy-arn.txt
 ```
 
-#### Step 6.5 — Assume the role
+#### Step 6.5  Assume the role
 
 ```bash
 alice sts assume-role \
@@ -2852,7 +2852,7 @@ jq '{AccessKeyId: .Credentials.AccessKeyId,
 | Parameter | Meaning |
 |---|---|
 | `--role-arn` | The role to become |
-| `--role-session-name` | 2–64 chars. **Appears in the session ARN and in every CloudTrail event.** Use the human's identity or the job id — never `session1` |
+| `--role-session-name` | 2–64 chars. **Appears in the session ARN and in every CloudTrail event.** Use the human's identity or the job id  never `session1` |
 | `--duration-seconds` | 900 – role's `MaxSessionDuration`. Shorter is safer |
 | `--policy` / `--policy-arns` | Session policy (Lab 9) |
 | `--external-id` | Required if the trust policy demands `sts:ExternalId` |
@@ -2869,10 +2869,10 @@ jq '{AccessKeyId: .Credentials.AccessKeyId,
 }
 ```
 
-!!! warning "Look at that ARN — it is `sts:assumed-role`, not `iam:role`"
+!!! warning "Look at that ARN  it is `sts:assumed-role`, not `iam:role`"
     `arn:aws:sts::000000000000:assumed-role/<RoleName>/<SessionName>`. Note also that the **path is dropped** from the assumed-role ARN even though the role was created at `/dnb/dev/`. Any condition you write against the caller's ARN must match this form, not the `iam` form. This trips up almost everyone once.
 
-#### Step 6.6 — Use the temporary credentials
+#### Step 6.6  Use the temporary credentials
 
 ```bash
 export AWS_ACCESS_KEY_ID="$(jq -r '.Credentials.AccessKeyId'     out/batch-session.json)"
@@ -2909,7 +2909,7 @@ aws iam list-users 2>&1 | tail -2                                               
     ```
     Forgetting this is the cause of half of all "why is this command suddenly failing?" moments in the next lab.
 
-#### Step 6.7 — A cleaner way: `role_arn` in the profile
+#### Step 6.7  A cleaner way: `role_arn` in the profile
 
 The AWS CLI can assume a role for you on every call, refreshing automatically.
 
@@ -2933,7 +2933,7 @@ batch sts get-caller-identity --query Arn --output text
 
 This is how professionals work day to day. No manual token juggling.
 
-#### Step 6.8 — Role chaining and the one-hour cap
+#### Step 6.8  Role chaining and the one-hour cap
 
 ```bash
 cat > policies/trust-reporting-role.json <<JSON
@@ -3033,7 +3033,7 @@ The requested DurationSeconds exceeds the 1 hour session limit for roles assumed
 !!! tip "Design implication"
     A long-running job that needs >1 h must **not** be built on chained roles. Either assume the final role directly, or have the job refresh its credentials. This is a real production failure mode: the job runs fine for 59 minutes and then dies with `ExpiredToken`.
 
-#### Break it — four trust-policy failures
+#### Break it  four trust-policy failures
 
 ```bash
 # (a) Wrong ExternalId
@@ -3086,7 +3086,7 @@ carol sts assume-role --role-arn "arn:aws:iam::${ACCOUNT_ID}:role/dnb/dev/dnb-de
   --role-session-name carol-tries 2>&1 | tail -2
 ```
 
-Expected: `AccessDenied: User: arn:aws:iam::000000000000:user/dnb/dev/dnb-dev-carol is not authorized to perform: sts:AssumeRole on resource: …` — and note it fails on **both** counts: Carol has no `sts:AssumeRole` grant, and the trust policy does not name her.
+Expected: `AccessDenied: User: arn:aws:iam::000000000000:user/dnb/dev/dnb-dev-carol is not authorized to perform: sts:AssumeRole on resource: …`  and note it fails on **both** counts: Carol has no `sts:AssumeRole` grant, and the trust policy does not name her.
 
 ```bash
 # (d) Using temp creds without the session token
@@ -3102,7 +3102,7 @@ Expected: `InvalidClientTokenId: The security token included in the request is i
 !!! tip "Diagnostic rule"
     `ASIA…` key + missing `AWS_SESSION_TOKEN` → always `InvalidClientTokenId`. If you see that error, check for the session token before anything else.
 
-#### Step 6.9 — Retire the anti-pattern
+#### Step 6.9  Retire the anti-pattern
 
 ```bash
 # The batch job now uses a role. Delete the service user's credentials.
@@ -3129,7 +3129,7 @@ batch sts get-caller-identity --query Arn --output text | grep -q assumed-role &
 
 ---
 
-### Lab 7 — Instance Profiles: Giving an EC2 Instance a Role
+### Lab 7  Instance Profiles: Giving an EC2 Instance a Role
 
 **Objective.** Build the EC2 credential-delivery chain with no secrets on disk.
 
@@ -3150,7 +3150,7 @@ batch sts get-caller-identity --query Arn --output text | grep -q assumed-role &
   IMDS 169.254.169.254 → ASIA… + token, auto-rotated
 ```
 
-#### Step 7.1 — Role with a service principal
+#### Step 7.1  Role with a service principal
 
 ```bash
 cat > policies/trust-ec2.json <<'JSON'
@@ -3180,9 +3180,9 @@ aws iam attach-role-policy --role-name dnb-dev-app-role \
 ```
 
 !!! warning "Service principals are literal strings"
-    `ec2.amazonaws.com` — not `ec2.us-east-1.amazonaws.com`, not `EC2`, not `ec2`. Get one character wrong and the role exists but can never be assumed by EC2, with no error until launch time. Common ones: `lambda.amazonaws.com`, `ecs-tasks.amazonaws.com`, `rds.amazonaws.com`, `states.amazonaws.com`, `events.amazonaws.com`, `apigateway.amazonaws.com`, `codebuild.amazonaws.com`, `glue.amazonaws.com`.
+    `ec2.amazonaws.com`  not `ec2.us-east-1.amazonaws.com`, not `EC2`, not `ec2`. Get one character wrong and the role exists but can never be assumed by EC2, with no error until launch time. Common ones: `lambda.amazonaws.com`, `ecs-tasks.amazonaws.com`, `rds.amazonaws.com`, `states.amazonaws.com`, `events.amazonaws.com`, `apigateway.amazonaws.com`, `codebuild.amazonaws.com`, `glue.amazonaws.com`.
 
-#### Step 7.2 — Create and populate the instance profile
+#### Step 7.2  Create and populate the instance profile
 
 ```bash
 aws iam create-instance-profile \
@@ -3207,9 +3207,9 @@ aws iam get-instance-profile --instance-profile-name dnb-dev-app-profile \
 ```
 
 !!! tip "Why the console hides this step"
-    In the AWS Console, creating an "EC2 role" silently creates a same-named instance profile for you. Via CLI/CloudFormation/Terraform you must create it explicitly. Every engineer discovers this the hard way exactly once — usually with `Invalid IAM Instance Profile name`.
+    In the AWS Console, creating an "EC2 role" silently creates a same-named instance profile for you. Via CLI/CloudFormation/Terraform you must create it explicitly. Every engineer discovers this the hard way exactly once  usually with `Invalid IAM Instance Profile name`.
 
-#### Step 7.3 — The one-role limit
+#### Step 7.3  The one-role limit
 
 ```bash
 aws iam create-role --role-name dnb-dev-second-role \
@@ -3227,7 +3227,7 @@ Expected: `LimitExceeded: Cannot exceed quota for InstanceSessionsPerInstancePro
 aws iam delete-role --role-name dnb-dev-second-role
 ```
 
-#### Step 7.4 — Attach to an instance
+#### Step 7.4  Attach to an instance
 
 ```bash
 # Discover a usable AMI in this environment
@@ -3247,7 +3247,7 @@ if [ -n "$AMI_ID" ] && [ "$AMI_ID" != "None" ]; then
   aws ec2 describe-instances --instance-ids "$INSTANCE_ID" \
     --query 'Reservations[0].Instances[0].{Id: InstanceId, State: State.Name, Profile: IamInstanceProfile.Arn, Imds: MetadataOptions.HttpTokens}'
 else
-  echo "EC2 image listing unsupported in this build — record as a divergence and read the block below."
+  echo "EC2 image listing unsupported in this build  record as a divergence and read the block below."
 fi
 ```
 
@@ -3255,7 +3255,7 @@ fi
 |---|---|
 | `--iam-instance-profile Name=…` | Attach the profile at launch. `Arn=…` also accepted |
 | `--metadata-options HttpTokens=required` | **Force IMDSv2.** Requires a PUT to obtain a session token before any metadata GET |
-| `HttpPutResponseHopLimit=1` | Metadata responses cannot leave the instance — blocks container/SSRF pivots |
+| `HttpPutResponseHopLimit=1` | Metadata responses cannot leave the instance  blocks container/SSRF pivots |
 | `--tag-specifications` | Tags applied atomically at launch, so ABAC and cost allocation work from second zero |
 
 ```json
@@ -3267,7 +3267,7 @@ fi
 }
 ```
 
-#### Step 7.5 — Attach/replace on a running instance
+#### Step 7.5  Attach/replace on a running instance
 
 ```bash
 if [ -f out/instance-id.txt ]; then
@@ -3276,7 +3276,7 @@ if [ -f out/instance-id.txt ]; then
     --filters "Name=instance-id,Values=$INSTANCE_ID" \
     --query 'IamInstanceProfileAssociations[0].AssociationId' --output text 2>/dev/null)"
   echo "association=$ASSOC"
-  # Replace (zero downtime) — NOT disassociate-then-associate
+  # Replace (zero downtime)  NOT disassociate-then-associate
   # aws ec2 replace-iam-instance-profile-association --association-id "$ASSOC" \
   #     --iam-instance-profile Name=dnb-dev-other-profile
 fi
@@ -3285,7 +3285,7 @@ fi
 | Operation | Use |
 |---|---|
 | `associate-iam-instance-profile` | Attach to an instance that has none |
-| `replace-iam-instance-profile-association` | **Swap** profiles with no gap — the correct way to change a running instance's role |
+| `replace-iam-instance-profile-association` | **Swap** profiles with no gap  the correct way to change a running instance's role |
 | `disassociate-iam-instance-profile` | Remove entirely (creates a credential gap) |
 
 !!! note "IMDS in Floci"
@@ -3300,7 +3300,7 @@ fi
 
     Floci is unlikely to emulate the link-local IMDS address. Verify the **IAM side** (profile exists, contains the role, role has permissions, instance shows `IamInstanceProfile`) and treat credential *delivery* as conceptual. Record it in your logbook.
 
-#### Break it — the two classic instance-profile errors
+#### Break it  the two classic instance-profile errors
 
 ```bash
 # (a) Referencing a non-existent profile
@@ -3332,7 +3332,7 @@ aws iam get-role --role-name dnb-dev-app-role \
 
 ---
 
-### Lab 8 — Resource-Based Policies: Identity vs Resource, and Cross-Account
+### Lab 8  Resource-Based Policies: Identity vs Resource, and Cross-Account
 
 **Objective.** Write an S3 bucket policy; reason about the OR (same account) / AND (cross account) rule; use a bucket policy as a hard guardrail.
 
@@ -3349,7 +3349,7 @@ aws iam get-role --role-name dnb-dev-app-role \
                                           └─ (evaluated together, same account → OR)
 ```
 
-#### Step 8.1 — Write the bucket policy
+#### Step 8.1  Write the bucket policy
 
 ```bash
 cat > policies/bucket-policy-statements.json <<JSON
@@ -3414,15 +3414,15 @@ aws s3api get-bucket-policy --bucket dnb-statements-dev \
 
 | Element | Note |
 |---|---|
-| `Principal` | **Required** — this is what makes it a resource-based policy |
+| `Principal` | **Required**  this is what makes it a resource-based policy |
 | `Id` | Optional policy identifier, allowed in bucket policies |
-| `"Principal": "*"` with `Effect: Deny` | Safe and idiomatic — "nobody, ever" |
+| `"Principal": "*"` with `Effect: Deny` | Safe and idiomatic  "nobody, ever" |
 | `"Principal": "*"` with `Effect: Allow` | **Public access.** Almost always a critical finding |
 
 !!! danger "`NobodyMayDeleteThisBucket` includes `s3:DeleteBucketPolicy` deliberately"
-    Without that, an administrator could delete the policy and then delete the bucket. Guardrails must protect themselves. Note the escape hatch: in real AWS the **account root user** can always remove a bucket policy that has locked everyone out — which is one of the few legitimate reasons root exists.
+    Without that, an administrator could delete the policy and then delete the bucket. Guardrails must protect themselves. Note the escape hatch: in real AWS the **account root user** can always remove a bucket policy that has locked everyone out  which is one of the few legitimate reasons root exists.
 
-#### Step 8.2 — Reason about OR vs AND
+#### Step 8.2  Reason about OR vs AND
 
 Fill this in yourself before running anything:
 
@@ -3437,7 +3437,7 @@ Fill this in yourself before running anything:
 | 7 | a role in account `111111111111` | Allow `s3:GetObject` (in their account) | silent | **no** | ? |
 | 8 | a role in account `111111111111` | Allow `s3:GetObject` | Allow that role | **no** | ? |
 
-**Answers:** 1 Allow (identity alone suffices — same-account OR). 2 Allow. 3 Allow (resource alone suffices). 4 Allow. 5 **Deny** (explicit deny is final, and no `Allow` anywhere can override it). 6 **Deny**. 7 **Deny** (cross-account needs both; the resource side is missing). 8 Allow (both sides present).
+**Answers:** 1 Allow (identity alone suffices  same-account OR). 2 Allow. 3 Allow (resource alone suffices). 4 Allow. 5 **Deny** (explicit deny is final, and no `Allow` anywhere can override it). 6 **Deny**. 7 **Deny** (cross-account needs both; the resource side is missing). 8 Allow (both sides present).
 
 ```bash
 echo "--- Carol: allowed by identity policy alone ---"
@@ -3455,14 +3455,14 @@ aws s3api delete-bucket --bucket dnb-statements-dev 2>&1 | tail -2
 ```
 
 !!! warning "That last one should fail even as root-equivalent"
-    In real AWS, `s3:DeleteBucket` on this bucket is explicitly denied for `Principal: "*"` — the deny reaches everyone, including IAM admins. (The account **root** user is the documented exception for regaining control of a bucket policy.) If your Floci build deletes the bucket, record the divergence — and recreate the bucket before continuing:
+    In real AWS, `s3:DeleteBucket` on this bucket is explicitly denied for `Principal: "*"`  the deny reaches everyone, including IAM admins. (The account **root** user is the documented exception for regaining control of a bucket policy.) If your Floci build deletes the bucket, record the divergence  and recreate the bucket before continuing:
 
     ```bash
     aws s3 mb s3://dnb-statements-dev 2>/dev/null
     aws s3api put-bucket-policy --bucket dnb-statements-dev --policy file://policies/bucket-policy-statements.json 2>/dev/null
     ```
 
-#### Step 8.3 — Cross-account, conceptually
+#### Step 8.3  Cross-account, conceptually
 
 Floci is a single account, so you cannot execute this. You must be able to write both halves.
 
@@ -3543,7 +3543,7 @@ aws s3api get-bucket-policy --bucket dnb-statements-dev --query Policy --output 
 
 ---
 
-### Lab 9 — Permissions Boundaries and Session Policies
+### Lab 9  Permissions Boundaries and Session Policies
 
 **Objective.** Build a safe IAM-delegation model; demonstrate that boundaries and session policies intersect rather than grant.
 
@@ -3552,7 +3552,7 @@ aws s3api get-bucket-policy --bucket dnb-statements-dev --query Policy --output 
 **Architecture.**
 
 ```
-  dnb-dev-bob (team lead — delegated IAM admin)
+  dnb-dev-bob (team lead  delegated IAM admin)
       ├── identity: dnb-delegated-iam-admin
       │      Allow  iam:CreateUser/CreateRole/Attach*  ONLY IF
       │             iam:PermissionsBoundary == dnb-boundary-developer
@@ -3563,7 +3563,7 @@ aws s3api get-bucket-policy --bucket dnb-statements-dev --query Policy --output 
       └── boundary: dnb-boundary-developer   ← ceiling Bob cannot raise
 ```
 
-#### Step 9.1 — Create the boundary policy
+#### Step 9.1  Create the boundary policy
 
 ```bash
 cat > policies/dnb-boundary-developer.json <<'JSON'
@@ -3627,7 +3627,7 @@ echo "$BOUNDARY_ARN" | tee out/boundary-arn.txt
 !!! warning "Notice the deliberate tension"
     Statement 1 allows `iam:Get*`/`iam:List*` so tooling works. Statement 3 denies `iam:PassRole` and every policy-mutation action, because a developer with `iam:PassRole` can escalate to admin via Lambda. Statement 2 makes the boundary environment-aware via ABAC. A boundary that only allows and never denies is far weaker than it looks.
 
-#### Step 9.2 — Attach the boundary and observe the intersection
+#### Step 9.2  Attach the boundary and observe the intersection
 
 ```bash
 # Give Bob broad identity permissions FIRST, so the intersection is visible
@@ -3692,7 +3692,7 @@ bob() { AWS_ACCESS_KEY_ID= AWS_SECRET_ACCESS_KEY= AWS_SESSION_TOKEN= aws --profi
 bob sts get-caller-identity --query Arn --output text
 
 # Probe against a THROWAWAY object. Never point a destructive probe at lab data you
-# still need — if the emulator does not enforce the deny, the probe succeeds and the
+# still need  if the emulator does not enforce the deny, the probe succeeds and the
 # object is gone.
 echo "disposable" > out/probe-victim.csv
 aws s3 cp out/probe-victim.csv s3://dnb-statements-dev/probe/probe-victim.csv
@@ -3714,7 +3714,7 @@ aws s3 ls s3://dnb-statements-dev/2026/07/statement-1001.csv \
 !!! danger "Expect `DIVERGES-FROM-AWS` here"
     Permissions-boundary evaluation is among the least likely IAM behaviours to be emulated. When Bob successfully creates a user, do **not** conclude the boundary is wrong. Conclude that the emulator is not an authorisation engine, write the AWS-correct reasoning in your logbook, and move on. This is precisely the LO12 skill being assessed.
 
-#### Step 9.3 — The safe-delegation policy
+#### Step 9.3  The safe-delegation policy
 
 ```bash
 cat > policies/dnb-delegated-iam-admin.json <<JSON
@@ -3797,9 +3797,9 @@ aws iam delete-user-policy --user-name dnb-dev-bob --policy-name DeliberatelyBro
 echo "$DELEG_ARN" | tee out/delegation-arn.txt
 ```
 
-#### Step 9.3a — Bob needs a *wider* boundary than the people he onboards
+#### Step 9.3a  Bob needs a *wider* boundary than the people he onboards
 
-Stop and think before running the next block. Bob currently carries `dnb-boundary-developer`, whose only IAM allowances are `iam:Get*` and `iam:List*`. Effective permissions are the **intersection** of identity and boundary — so the delegation policy you just attached grants Bob nothing at all. `iam:CreateUser` is outside his ceiling.
+Stop and think before running the next block. Bob currently carries `dnb-boundary-developer`, whose only IAM allowances are `iam:Get*` and `iam:List*`. Effective permissions are the **intersection** of identity and boundary  so the delegation policy you just attached grants Bob nothing at all. `iam:CreateUser` is outside his ceiling.
 
 This is not a flaw in the design; it is the design working. A delegated administrator needs a boundary that permits delegation, and it must still be *narrower* than full IAM power.
 
@@ -3864,16 +3864,16 @@ aws iam get-user --user-name dnb-dev-bob \
   --query 'User.PermissionsBoundary.PermissionsBoundaryArn' --output text
 ```
 
-!!! tip "Two boundaries, two populations — this is the shape to remember"
+!!! tip "Two boundaries, two populations  this is the shape to remember"
     | Principal | Boundary | Can create principals? | Can attach policies? |
     |---|---|---|---|
     | Bob (team lead) | `dnb-boundary-delegated-admin` | yes, under `/dnb/dev/` only, boundary mandatory | **no** |
     | Dana, and anyone Bob creates | `dnb-boundary-developer` | no | no |
 
-    Bob can *create* principals but cannot *empower* them beyond the developer boundary — he has no `iam:Attach*`, no `iam:Put*Policy`, and no `iam:PassRole`. Group membership is his only lever for granting permissions, and `dnb-admins` is explicitly denied to him. That is the whole safety argument in one paragraph.
+    Bob can *create* principals but cannot *empower* them beyond the developer boundary  he has no `iam:Attach*`, no `iam:Put*Policy`, and no `iam:PassRole`. Group membership is his only lever for granting permissions, and `dnb-admins` is explicitly denied to him. That is the whole safety argument in one paragraph.
 
 !!! danger "`AddUserToGroup` acts on the **group**, not the user"
-    This is why membership management needs its own statement with a `group/…` ARN. Scoping it to `user/dnb/dev/*` — the intuitive but wrong choice — produces a policy that can never authorise `AddUserToGroup`, and you get `AccessDenied` on an action you believe you granted. Check the *Resource types* column of the [IAM service authorization reference](https://docs.aws.amazon.com/service-authorization/latest/reference/list_awsidentityandaccessmanagement.html) whenever an action's target is not obvious. Note that `dnb-admins` is still unreachable: Sid `NeverTouchProductionPrincipalsOrAdmins` denies `iam:*` on that group ARN, and explicit deny wins.
+    This is why membership management needs its own statement with a `group/…` ARN. Scoping it to `user/dnb/dev/*`  the intuitive but wrong choice  produces a policy that can never authorise `AddUserToGroup`, and you get `AccessDenied` on an action you believe you granted. Check the *Resource types* column of the [IAM service authorization reference](https://docs.aws.amazon.com/service-authorization/latest/reference/list_awsidentityandaccessmanagement.html) whenever an action's target is not obvious. Note that `dnb-admins` is still unreachable: Sid `NeverTouchProductionPrincipalsOrAdmins` denies `iam:*` on that group ARN, and explicit deny wins.
 
 **Reason through what Bob can now do in real AWS:**
 
@@ -3886,15 +3886,15 @@ All verdicts below assume Bob now carries `dnb-boundary-delegated-admin` (Step 9
 | `create-user --path /dnb/prod/` | **Deny** | Resource ARN outside `user/dnb/dev/*`, plus explicit deny |
 | `create-user` with a **different** boundary | **Deny** | Condition demands that exact ARN |
 | `delete-user-permissions-boundary` on his own user | **Deny** | Explicit deny in Sid 4 |
-| `create-policy-version` on the boundary policy | **Deny** | Explicit deny — he cannot weaken the ceiling |
+| `create-policy-version` on the boundary policy | **Deny** | Explicit deny  he cannot weaken the ceiling |
 | `add-user-to-group dnb-admins` | **Deny** | `iam:*` denied on that group ARN |
-| `attach-user-policy AdministratorAccess` to a user he created | **Deny** | His own boundary explicitly denies `iam:AttachUserPolicy` — and the delegation policy never granted it either |
+| `attach-user-policy AdministratorAccess` to a user he created | **Deny** | His own boundary explicitly denies `iam:AttachUserPolicy`  and the delegation policy never granted it either |
 | `create-user --path /dnb/dev/` while still holding `dnb-boundary-developer` | **Deny** | Pre-Step-9.3a state: `iam:CreateUser` is outside the developer ceiling |
 
 !!! danger "Remove the `iam:PermissionsBoundary` condition and you have handed out root"
     Without it, Bob creates an unbounded user, attaches `AdministratorAccess`, generates a key, and is now account admin. That single missing condition is the difference between safe delegation and full compromise. It is the most important line in this lab.
 
-#### Step 9.4 — Session policies
+#### Step 9.4  Session policies
 
 ```bash
 # The batch role can Put on all of dnb-statements-dev/*.
@@ -3932,9 +3932,9 @@ aws s3 rm s3://dnb-statements-dev/tenant-99/t99.csv 2>/dev/null
 ```
 
 !!! tip "This is how multi-tenant SaaS is built on AWS"
-    **One** role, N tenants. At request time the application assumes the role with a session policy (or a session tag + ABAC) scoped to the authenticated tenant. Tenant isolation becomes a property enforced by AWS itself, not by application `if` statements — so an application bug cannot leak across tenants.
+    **One** role, N tenants. At request time the application assumes the role with a session policy (or a session tag + ABAC) scoped to the authenticated tenant. Tenant isolation becomes a property enforced by AWS itself, not by application `if` statements  so an application bug cannot leak across tenants.
 
-#### Step 9.5 — A boundary cannot grant
+#### Step 9.5  A boundary cannot grant
 
 ```bash
 aws iam create-user --user-name dnb-dev-dana --path /dnb/dev/ \
@@ -3945,7 +3945,7 @@ aws iam list-user-policies --user-name dnb-dev-dana --query 'PolicyNames' --outp
 aws iam list-groups-for-user --user-name dnb-dev-dana --query 'Groups' --output json
 ```
 
-Dana has a boundary allowing `s3:Get*`, `lambda:InvokeFunction`, and more — and **zero** identity policies.
+Dana has a boundary allowing `s3:Get*`, `lambda:InvokeFunction`, and more  and **zero** identity policies.
 
 **Dana's effective permissions in real AWS: nothing at all.** ∅ ∩ boundary = ∅.
 
@@ -3974,7 +3974,7 @@ aws iam get-policy --policy-arn "$DELEG_ARN" --query 'Policy.PolicyName' --outpu
 
 ---
 
-### Lab 10 — Integration: A Lambda Execution Role End to End
+### Lab 10  Integration: A Lambda Execution Role End to End
 
 **Objective.** Build the complete IAM chain for a serverless workload, including `iam:PassRole`.
 
@@ -3997,7 +3997,7 @@ aws iam get-policy --policy-arn "$DELEG_ARN" --query 'Policy.PolicyName' --outpu
            └── s3:PutObject on dnb-statements-dev/processed/*
 ```
 
-#### Step 10.1 — The execution role
+#### Step 10.1  The execution role
 
 ```bash
 cat > policies/trust-lambda.json <<'JSON'
@@ -4064,9 +4064,9 @@ echo "$LAMBDA_POLICY_ARN" | tee out/lambda-policy-arn.txt
 ```
 
 !!! tip "Scoping the log-group ARN is not pedantry"
-    `AWSLambdaBasicExecutionRole` (the AWS managed policy everyone attaches) grants logs actions on `"Resource": "*"` — meaning your function can write into **any** log group in the account, including audit log groups. Scoping to `/aws/lambda/<function-name>:*` is the least-privilege version and is exactly the kind of tightening an auditor will ask for.
+    `AWSLambdaBasicExecutionRole` (the AWS managed policy everyone attaches) grants logs actions on `"Resource": "*"`  meaning your function can write into **any** log group in the account, including audit log groups. Scoping to `/aws/lambda/<function-name>:*` is the least-privilege version and is exactly the kind of tightening an auditor will ask for.
 
-#### Step 10.2 — `iam:PassRole` for the deployer
+#### Step 10.2  `iam:PassRole` for the deployer
 
 ```bash
 cat > policies/dnb-lambda-deployer.json <<JSON
@@ -4107,9 +4107,9 @@ echo "$DEPLOY_ARN" | tee out/deployer-arn.txt
 ```
 
 !!! danger "The escalation path this policy closes"
-    With `"Action": "iam:PassRole", "Resource": "*"`, Alice could create a Lambda whose execution role is an **admin** role, invoke it, and have it do anything — from a starting position of `lambda:CreateFunction` only. Both the narrow `Resource` and the `iam:PassedToService` condition are load-bearing. Search any real account for unscoped `iam:PassRole`; you will usually find some.
+    With `"Action": "iam:PassRole", "Resource": "*"`, Alice could create a Lambda whose execution role is an **admin** role, invoke it, and have it do anything  from a starting position of `lambda:CreateFunction` only. Both the narrow `Resource` and the `iam:PassedToService` condition are load-bearing. Search any real account for unscoped `iam:PassRole`; you will usually find some.
 
-#### Step 10.3 — Deploy
+#### Step 10.3  Deploy
 
 ```bash
 mkdir -p fn && cat > fn/handler.py <<'PY'
@@ -4145,12 +4145,12 @@ aws lambda create-function \
 | Parameter | Meaning |
 |---|---|
 | `--role` | **The execution role ARN.** Requires `iam:PassRole` on the caller |
-| `--zip-file fileb://…` | Binary file prefix — `file://` would corrupt the zip |
+| `--zip-file fileb://…` | Binary file prefix  `file://` would corrupt the zip |
 | `--handler module.function` | Entry point |
-| `--environment` | Config, never secrets — use Secrets Manager for those |
+| `--environment` | Config, never secrets  use Secrets Manager for those |
 
 !!! note "If `lambda create-function` is unsupported in your build"
-    Record it and verify the IAM chain instead — the IAM knowledge is the assessed content:
+    Record it and verify the IAM chain instead  the IAM knowledge is the assessed content:
 
     ```bash
     aws iam get-role --role-name dnb-dev-lambda-exec-role \
@@ -4161,7 +4161,7 @@ aws lambda create-function \
       --query 'PolicyVersion.Document.Statement[].Sid' --output text
     ```
 
-#### Step 10.4 — Invoke and read the logs
+#### Step 10.4  Invoke and read the logs
 
 ```bash
 aws lambda invoke --function-name dnb-dev-statement-processor \
@@ -4173,7 +4173,7 @@ aws logs describe-log-groups --log-group-name-prefix /aws/lambda/dnb-dev-stateme
   --query 'logGroups[].logGroupName' --output text 2>/dev/null
 ```
 
-#### Break it — three integration failures
+#### Break it  three integration failures
 
 ```bash
 # (a) Trust the wrong service
@@ -4195,7 +4195,7 @@ assumed by Lambda.
 ```
 
 !!! warning "Why changing `--timeout` would NOT have reproduced this"
-    An unrelated configuration change does not re-validate the role, so the call succeeds, no error appears — and the function is now silently un-invokable. Internalise the asymmetry: **an IAM misconfiguration usually surfaces at the next operation that touches it, not at the moment you introduce it.**
+    An unrelated configuration change does not re-validate the role, so the call succeeds, no error appears  and the function is now silently un-invokable. Internalise the asymmetry: **an IAM misconfiguration usually surfaces at the next operation that touches it, not at the moment you introduce it.**
 
 ```bash
 # Fix
@@ -4206,13 +4206,13 @@ aws iam get-role --role-name dnb-dev-lambda-exec-role \
 ```
 
 ```bash
-# (b) Missing iam:PassRole — the classic
+# (b) Missing iam:PassRole  the classic
 carol lambda create-function --function-name dnb-dev-carol-fn \
   --runtime python3.12 --handler handler.lambda_handler \
   --role "$(cat out/lambda-role-arn.txt)" --zip-file fileb://out/fn.zip 2>&1 | tail -3
 ```
 
-AWS: `AccessDenied: User … is not authorized to perform: iam:PassRole on resource …` — even though the role itself is perfectly configured. **The failure is on the caller, not the role.**
+AWS: `AccessDenied: User … is not authorized to perform: iam:PassRole on resource …`  even though the role itself is perfectly configured. **The failure is on the caller, not the role.**
 
 ```bash
 # (c) Execution role missing logs permissions
@@ -4224,7 +4224,7 @@ cat out/nolog-response.json 2>/dev/null; echo
 aws iam attach-role-policy --role-name dnb-dev-lambda-exec-role --policy-arn "$LAMBDA_POLICY_ARN"
 ```
 
-In real AWS the function **still runs** but produces no CloudWatch logs at all — the single most confusing Lambda symptom there is. "My function has no logs" almost always means the execution role lacks `logs:*`, not that the function did not execute.
+In real AWS the function **still runs** but produces no CloudWatch logs at all  the single most confusing Lambda symptom there is. "My function has no logs" almost always means the execution role lacks `logs:*`, not that the function did not execute.
 
 **Verification**
 
@@ -4236,17 +4236,17 @@ aws iam get-policy-version --policy-arn "$DEPLOY_ARN" \
   --query 'PolicyVersion.Document.Statement[?Sid==`PassOnlyApprovedExecutionRolesAndOnlyToLambda`].Condition' --output json
 ```
 
-**Lab 10 recap.** A serverless workload needs **three** IAM pieces: the execution role's trust policy (`lambda.amazonaws.com`), its permissions policy (always including scoped `logs:*`), and `iam:PassRole` on the deployer — scoped by `Resource` and `iam:PassedToService`. Missing logs permissions is silent.
+**Lab 10 recap.** A serverless workload needs **three** IAM pieces: the execution role's trust policy (`lambda.amazonaws.com`), its permissions policy (always including scoped `logs:*`), and `iam:PassRole` on the deployer  scoped by `Resource` and `iam:PassedToService`. Missing logs permissions is silent.
 
 ---
 
-### Lab 11 — The Enforcement Audit (Break, Diagnose, Document)
+### Lab 11  The Enforcement Audit (Break, Diagnose, Document)
 
 **Objective.** Systematically map which parts of the IAM model your Floci build enforces, and produce the divergence report that accompanies your lab submission.
 
 **Prerequisites.** All previous labs.
 
-#### Step 11.1 — Run the matrix
+#### Step 11.1  Run the matrix
 
 ```bash
 cat > enforcement-audit.sh <<'SCRIPT'
@@ -4288,7 +4288,7 @@ aws iam delete-user --user-name __audit_probe__     2>/dev/null
 aws iam delete-user --user-name __audit_probe_bob__ 2>/dev/null
 aws s3 rm s3://dnb-statements-dev/__audit_probe__   2>/dev/null
 aws s3 rm s3://dnb-statements-dev/probe/probe-victim.csv 2>/dev/null
-# The lab dataset must survive the audit — restore it if a probe removed it
+# The lab dataset must survive the audit  restore it if a probe removed it
 aws s3 ls s3://dnb-statements-dev/2026/07/statement-1001.csv >/dev/null 2>&1 \
   || aws s3 cp out/statement-1001.csv s3://dnb-statements-dev/2026/07/statement-1001.csv 2>/dev/null
 SCRIPT
@@ -4296,7 +4296,7 @@ chmod +x enforcement-audit.sh
 ./enforcement-audit.sh | tee out/enforcement-audit.txt
 ```
 
-#### Step 11.2 — Produce the divergence report
+#### Step 11.2  Produce the divergence report
 
 ````bash
 {
@@ -4329,7 +4329,7 @@ chmod +x enforcement-audit.sh
 wc -l out/divergence-report.md
 ````
 
-#### Step 11.3 — Six diagnostics to internalise
+#### Step 11.3  Six diagnostics to internalise
 
 | Symptom | First command to run | Most likely cause |
 |---|---|---|
@@ -4350,10 +4350,10 @@ whoami_aws() {
 whoami_aws
 ```
 
-**Lab 11 recap.** You now hold two artefacts: a support matrix (what exists) and an enforcement audit (what is decided). Together they define the exact boundary of what your local environment can teach you — and where you must reason from the AWS specification instead.
+**Lab 11 recap.** You now hold two artefacts: a support matrix (what exists) and an enforcement audit (what is decided). Together they define the exact boundary of what your local environment can teach you  and where you must reason from the AWS specification instead.
 
 ---
-## 6. Enterprise Scenario — Druk National Bank
+## 6. Enterprise Scenario  Druk National Bank
 
 ### 6.1 The brief
 
@@ -4419,7 +4419,7 @@ whoami_aws
 
    alice deliberately carries NO boundary: dnb-boundary-developer denies iam:PassRole,
    which would disable the Lambda deployment path R2 depends on. Bounding a deployer
-   needs a boundary permitting iam:PassRole narrowed by iam:PassedToService — that is
+   needs a boundary permitting iam:PassRole narrowed by iam:PassedToService  that is
    the real difficulty in Mini Challenge MC5.
 
    BUCKETS                               GUARDRAILS
@@ -4445,7 +4445,7 @@ whoami_aws
 | R9 | Temporary credentials expire; long-term keys `update-access-key --status Inactive`; sessions revoked via `aws:TokenIssueTime` deny | §6.5 below |
 | R10 | `DevelopersMayNeverTouchProduction` deny on `aws:ResourceTag/Environment = prod` in the boundary | Lab 9 |
 
-### 6.4 R7 — the time-boxed external auditor role
+### 6.4 R7  the time-boxed external auditor role
 
 ```bash
 cat > policies/trust-external-audit.json <<JSON
@@ -4489,13 +4489,13 @@ Four independent controls, each of which alone is insufficient:
 |---|---|
 | Named account principal | Anyone outside KPMG's account |
 | `sts:ExternalId` | The confused-deputy attack from KPMG's other clients |
-| `DateGreaterThan` + `DateLessThan` | Access before or after the audit window — **no cleanup ticket required** |
+| `DateGreaterThan` + `DateLessThan` | Access before or after the audit window  **no cleanup ticket required** |
 | `aws:MultiFactorAuthPresent` | A stolen KPMG credential without the second factor |
 
 !!! tip "Self-expiring access is the mark of a mature IAM design"
     The control that requires a human to remember to revoke it in two weeks is the control that fails. Encode the expiry in the policy.
 
-### 6.5 R9 — revoking access in under five minutes
+### 6.5 R9  revoking access in under five minutes
 
 | Credential type | Revocation method | Time to effect |
 |---|---|---|
@@ -4524,7 +4524,7 @@ cat > policies/revoke-old-sessions.json <<'JSON'
 JSON
 jq empty policies/revoke-old-sessions.json && echo valid
 
-# Applied as an INLINE policy on the compromised role — the AWS-documented
+# Applied as an INLINE policy on the compromised role  the AWS-documented
 # "Revoke sessions" mechanism.
 aws iam put-role-policy --role-name dnb-dev-batch-role \
   --policy-name AWSRevokeOlderSessions \
@@ -4533,14 +4533,14 @@ aws iam list-role-policies --role-name dnb-dev-batch-role --query PolicyNames --
 ```
 
 !!! danger "You cannot un-issue an STS token"
-    A leaked `ASIA…` triple is valid until its `Expiration`, full stop. The only remedy is a `Deny` on every session issued before now. This is why short `--max-session-duration` values are a security control, not an inconvenience — they bound your worst-case exposure window.
+    A leaked `ASIA…` triple is valid until its `Expiration`, full stop. The only remedy is a `Deny` on every session issued before now. This is why short `--max-session-duration` values are a security control, not an inconvenience  they bound your worst-case exposure window.
 
     Remember to remove this policy when the incident is closed, or all new sessions will keep working while nothing older than the cutoff ever does again:
     ```bash
     aws iam delete-role-policy --role-name dnb-dev-batch-role --policy-name AWSRevokeOlderSessions
     ```
 
-### 6.6 Onboarding Dana — the full runbook
+### 6.6 Onboarding Dana  the full runbook
 
 ```bash
 # Executed by Bob (delegated IAM admin), under his boundary.
@@ -4553,7 +4553,7 @@ bob iam create-user --user-name dnb-dev-dana2 --path /dnb/dev/ \
          Key=Owner,Value=bob Key=CostCenter,Value=CC-4400 \
          Key=ManagedBy,Value=floci-lab Key=StartDate,Value=2026-08-04 2>&1 | tail -3
 
-# 2. Job-function group membership — never a direct policy attachment
+# 2. Job-function group membership  never a direct policy attachment
 bob iam add-user-to-group --group-name dnb-developers --user-name dnb-dev-dana2 2>&1 | tail -2
 
 # 3. Verify the result before telling Dana she is set up
@@ -4580,7 +4580,7 @@ aws iam list-attached-user-policies --user-name dnb-dev-dana2 --query 'AttachedP
 ```
 
 !!! warning "Step 1 before step 8, and step 4 at all"
-    Deactivating first gives you a rollback if you offboarded the wrong person. And a user deleted at step 9 whose STS session was issued at step 0 **still has a working session** until it expires — step 4 is not optional.
+    Deactivating first gives you a rollback if you offboarded the wrong person. And a user deleted at step 9 whose STS session was issued at step 0 **still has a working session** until it expires  step 4 is not optional.
 
 ### 6.7 Deliverable
 
@@ -4603,7 +4603,7 @@ Submit `dnb-iam-design.md` containing:
 
 ---
 
-## 7. Verification — Reading the Output Like an Auditor
+## 7. Verification  Reading the Output Like an Auditor
 
 ### 7.1 The universal inspection commands
 
@@ -4616,7 +4616,7 @@ aws iam get-user --user-name dnb-dev-alice
 aws iam get-role --role-name dnb-dev-batch-role
 aws iam get-group --group-name dnb-developers
 
-# ── Permissions attached to a principal (BOTH kinds — never just one) ──
+# ── Permissions attached to a principal (BOTH kinds  never just one) ──
 aws iam list-attached-user-policies --user-name dnb-dev-alice     # managed
 aws iam list-user-policies          --user-name dnb-dev-alice     # inline
 aws iam list-groups-for-user        --user-name dnb-dev-alice     # inherited
@@ -4637,7 +4637,7 @@ aws iam get-role --role-name dnb-dev-batch-role --query 'Role.AssumeRolePolicyDo
 aws iam get-account-authorization-details > out/authz-details.json 2>/dev/null \
   && jq '{users:(.UserDetailList|length), groups:(.GroupDetailList|length),
           roles:(.RoleDetailList|length), policies:(.Policies|length)}' out/authz-details.json \
-  || echo "get-account-authorization-details unsupported — enumerate manually"
+  || echo "get-account-authorization-details unsupported  enumerate manually"
 ```
 
 ### 7.2 Interpreting fields that matter
@@ -4645,7 +4645,7 @@ aws iam get-account-authorization-details > out/authz-details.json 2>/dev/null \
 | Field | Where | What it tells you |
 |---|---|---|
 | `Arn` | everywhere | The exact principal/resource. Watch `iam:` vs `sts:` |
-| `UserId` prefix | `get-caller-identity` | `AIDA…`=IAM user, `AROA…`=role, `AROA…:<session>`=assumed-role session, 12 digits=account root. (`AKIA…`/`ASIA…` are *access-key* prefixes and never appear here — see §4.5) |
+| `UserId` prefix | `get-caller-identity` | `AIDA…`=IAM user, `AROA…`=role, `AROA…:<session>`=assumed-role session, 12 digits=account root. (`AKIA…`/`ASIA…` are *access-key* prefixes and never appear here  see §4.5) |
 | `CreateDate` | users, keys, roles | Age. Keys > 90 days are a finding |
 | `PasswordLastUsed` | `get-user` | Absent ⇒ never signed in. Dormant identities are a finding |
 | `PermissionsBoundary` | `get-user` / `get-role` | Present = bounded. **Absent on a delegated admin is a critical finding** |
@@ -4667,7 +4667,7 @@ set -uo pipefail
 FINDINGS=0
 finding() { FINDINGS=$((FINDINGS+1)); printf '  [FINDING %02d] %s\n' "$FINDINGS" "$*"; }
 
-echo "=== 1. Policies attached DIRECTLY to users (should be zero — use groups) ==="
+echo "=== 1. Policies attached DIRECTLY to users (should be zero  use groups) ==="
 for u in $(aws iam list-users --query 'Users[].UserName' --output text); do
   n=$(aws iam list-attached-user-policies --user-name "$u" --query 'length(AttachedPolicies)' --output text 2>/dev/null || echo 0)
   i=$(aws iam list-user-policies          --user-name "$u" --query 'length(PolicyNames)'      --output text 2>/dev/null || echo 0)
@@ -4754,7 +4754,7 @@ if aws iam simulate-principal-policy \
      --resource-arns "arn:aws:s3:::dnb-statements-dev/2026/07/statement-1001.csv" \
      --query 'EvaluationResults[].[EvalActionName,EvalDecision,MatchedStatements[0].SourcePolicyId]' \
      --output table 2>/dev/null; then
-  echo "Simulator available — this is your best Track-A verification tool."
+  echo "Simulator available  this is your best Track-A verification tool."
 else
   echo "simulate-principal-policy unsupported. Verify structurally instead:"
   echo " 1. does the statement exist?  2. is the ARN exactly right (bucket vs bucket/*)?"
@@ -4777,11 +4777,11 @@ Expected shape when available:
 | `EvalDecision` | Meaning |
 |---|---|
 | `allowed` | An `Allow` matched and nothing denied |
-| `explicitDeny` | A `Deny` statement matched — read `MatchedStatements` to find it |
-| `implicitDeny` | Nothing matched at all — you are missing an `Allow` |
+| `explicitDeny` | A `Deny` statement matched  read `MatchedStatements` to find it |
+| `implicitDeny` | Nothing matched at all  you are missing an `Allow` |
 
-!!! note "Recap — §7"
-    Audit a principal by reading managed **and** inline policies **and** group memberships **and** the boundary. `list-entities-for-policy` answers "who has this permission". `simulate-principal-policy` distinguishes explicit from implicit deny — which is the difference between "remove a Deny" and "add an Allow".
+!!! note "Recap  §7"
+    Audit a principal by reading managed **and** inline policies **and** group memberships **and** the boundary. `list-entities-for-policy` answers "who has this permission". `simulate-principal-policy` distinguishes explicit from implicit deny  which is the difference between "remove a Deny" and "add an Allow".
 
 ---
 
@@ -4842,7 +4842,7 @@ Expected shape when available:
         │
         └─ AccessDenied / UnauthorizedOperation?
               └─ AUTHORISATION problem. Walk §3.3 in order:
-                 1. aws sts get-caller-identity  — am I who I think I am?
+                 1. aws sts get-caller-identity   am I who I think I am?
                  2. Read the error: it names the ACTION and the RESOURCE. Copy them exactly.
                  3. Any explicit Deny? identity, resource, boundary, session, SCP
                     → simulate-principal-policy shows explicitDeny + the Sid
@@ -4874,7 +4874,7 @@ Extract four facts before touching anything:
 | Resource | `arn:aws:s3:::dnb-statements-dev/report.pdf` |
 | **Verdict type** | **explicit deny in an identity-based policy** |
 
-That last phrase is the whole diagnosis. It is *not* a missing `Allow` — adding one changes nothing. Find the `Deny`:
+That last phrase is the whole diagnosis. It is *not* a missing `Allow`  adding one changes nothing. Find the `Deny`:
 
 ```bash
 aws iam list-groups-for-user --user-name dnb-dev-carol --query 'Groups[].GroupName' --output text
@@ -4883,17 +4883,17 @@ aws iam get-group-policy --group-name dnb-auditors --policy-name DenyAuditorsAny
   --query 'PolicyDocument' | jq '.'
 ```
 
-The inline `AuditorsMayNeverMutateAnything` statement denies everything outside its `NotAction` list, and `s3:PutObject` is not in that list. **This is working exactly as designed** — Carol is an auditor. The correct resolution is not to weaken the policy but to give Carol a different, sanctioned path (a role she can assume for a specific approved task) or to reject the request.
+The inline `AuditorsMayNeverMutateAnything` statement denies everything outside its `NotAction` list, and `s3:PutObject` is not in that list. **This is working exactly as designed**  Carol is an auditor. The correct resolution is not to weaken the policy but to give Carol a different, sanctioned path (a role she can assume for a specific approved task) or to reject the request.
 
 !!! tip "AWS tells you the verdict *type*, and it is the most valuable word in the message"
     | Phrase in the error | What to do |
     |---|---|
-    | `with an explicit deny in an identity-based policy` | Find and reconsider the `Deny` — adding `Allow` is futile |
+    | `with an explicit deny in an identity-based policy` | Find and reconsider the `Deny`  adding `Allow` is futile |
     | `with an explicit deny in a resource-based policy` | Look at the bucket/key/queue policy |
     | `with an explicit deny in a permissions boundary` | The ceiling excludes it |
     | `with an explicit deny in a service control policy` | Org-level; escalate to the org admin |
     | `with a session policy` | Re-assume without (or with a wider) `--policy` |
-    | *(no explanatory phrase)* | Implicit deny — you are missing an `Allow` |
+    | *(no explanatory phrase)* | Implicit deny  you are missing an `Allow` |
 
 ### 8.4 Floci-specific troubleshooting
 
@@ -4913,8 +4913,8 @@ floci doctor
 floci logs --tail 80
 ```
 
-!!! note "Recap — §8"
-    Classify first: connection, authentication, malformed, quota/dependency, or authorisation. For authorisation, the error message's verdict-type phrase tells you whether to remove a `Deny` or add an `Allow` — never guess between the two.
+!!! note "Recap  §8"
+    Classify first: connection, authentication, malformed, quota/dependency, or authorisation. For authorisation, the error message's verdict-type phrase tells you whether to remove a `Deny` or add an `Allow`  never guess between the two.
 
 ---
 
@@ -4936,11 +4936,11 @@ floci logs --tail 80
 | 10 | **Condition every broad grant** | Region, TLS, tags, source VPCE, time window |
 | 11 | **Encrypt in transit and at rest, and enforce it in policy** | `aws:SecureTransport`, `s3:x-amz-server-side-encryption`, KMS key policies |
 | 12 | **Log everything, immutably** | CloudTrail org trail → dedicated account, S3 Object Lock, log file validation |
-| 13 | **Tag everything, and mean it** | Tags drive ABAC, cost allocation, and automated cleanup — and must themselves be protected |
+| 13 | **Tag everything, and mean it** | Tags drive ABAC, cost allocation, and automated cleanup  and must themselves be protected |
 | 14 | **Review continuously** | IAM Access Analyzer, credential reports, unused-access findings, quarterly attestation |
 | 15 | **Clean up** | Orphaned policies, unused roles, dormant users, `Inactive` keys, expired external access |
 
-### 9.2 Least privilege in practice — the four-step method
+### 9.2 Least privilege in practice  the four-step method
 
 ```
   1. START AT ZERO
@@ -5069,8 +5069,8 @@ done | sort -u
 | SOC 2 CC6 | logical access provisioning/removal, least privilege, credential management, boundary enforcement |
 | RMA / central-bank style controls | segregation of duties (developers ≠ approvers), dual authorisation for destructive actions, immutable audit trail, time-boxed third-party access |
 
-!!! note "Recap — §9"
-    Seal root, prefer roles, prefer temporary credentials, never attach to users, condition every broad grant, encode invariants as explicit denies, and audit specifically for the privilege-escalation vectors in §9.4 — of which unscoped `iam:PassRole` is the most common in real accounts.
+!!! note "Recap  §9"
+    Seal root, prefer roles, prefer temporary credentials, never attach to users, condition every broad grant, encode invariants as explicit denies, and audit specifically for the privilege-escalation vectors in §9.4  of which unscoped `iam:PassRole` is the most common in real accounts.
 
 ---
 
@@ -5112,11 +5112,11 @@ done | sort -u
 | **ECS/Fargate** | **Two** roles: *task execution role* (pull image from ECR, write logs) and *task role* (what your code does) | Confusing these is the #1 ECS IAM bug | ⚠️ |
 | **EKS** | IRSA (OIDC provider + `sts:AssumeRoleWithWebIdentity`) or EKS Pod Identity | Trust policy conditions on the service-account subject | ⚠️ |
 | **S3** | Identity policy + bucket policy + ACL (legacy) + Block Public Access + VPCE policy | BPA overrides everything; two ARNs for bucket vs objects | ⚠️ |
-| **KMS** | **Key policy is authoritative** — an IAM policy alone is not enough | A key policy that omits your principal denies it regardless of IAM | ⚠️ |
+| **KMS** | **Key policy is authoritative**  an IAM policy alone is not enough | A key policy that omits your principal denies it regardless of IAM | ⚠️ |
 | **DynamoDB** | Identity policy; fine-grained via `dynamodb:LeadingKeys` condition | Row-level multi-tenancy without application logic | ⚠️ |
 | **SQS/SNS** | Resource access policy | Cross-account publish/subscribe; use `aws:SourceArn` to prevent confused deputy | ⚠️ |
 | **RDS** | IAM database authentication: `rds-db:connect` on `arn:aws:rds-db:…:dbuser:<resource-id>/<db-user>` | 15-minute token instead of a stored password | ⚠️ |
-| **Secrets Manager** | Identity policy + secret resource policy + KMS key policy — **all three** | Rotation Lambda needs its own role | ⚠️ |
+| **Secrets Manager** | Identity policy + secret resource policy + KMS key policy  **all three** | Rotation Lambda needs its own role | ⚠️ |
 | **API Gateway** | `AWS_IAM` authorizer → `execute-api:Invoke`; or a Lambda authorizer | SigV4-signed client requests | ⚠️ |
 | **CloudFormation** | Stack **service role** (`cloudformation.amazonaws.com`) | Deploy with a scoped role so the *pipeline* need not be admin | ⚠️ |
 | **CloudTrail** | Consumer of IAM, not controlled by it | `userIdentity` block; source of truth for least-privilege tightening | ⚠️ |
@@ -5150,7 +5150,7 @@ done | sort -u
 | Role | Used by | Grants |
 |---|---|---|
 | **Task execution role** | the ECS agent, *before* your container starts | `ecr:GetAuthorizationToken`, `ecr:BatchGetImage`, `logs:CreateLogStream`, `logs:PutLogEvents`, `secretsmanager:GetSecretValue` for injected secrets |
-| **Task role** | your application code, at runtime | `s3:GetObject`, `dynamodb:Query`, … — whatever the app actually does |
+| **Task role** | your application code, at runtime | `s3:GetObject`, `dynamodb:Query`, …  whatever the app actually does |
 
 !!! danger "Symptom → cause for the ECS two-role confusion"
     Task stuck in `PENDING` with `CannotPullContainerError` ⇒ the **execution** role lacks ECR permissions. Task runs but your code gets `AccessDenied` on S3 ⇒ the **task** role lacks S3 permissions. Same account, same cluster, two entirely different roles.
@@ -5176,7 +5176,7 @@ done | sort -u
 }
 ```
 
-The partition key must equal the caller's `TenantId` tag. Tenant isolation becomes an AWS-enforced invariant — an application SQL-injection-style bug cannot cross tenants.
+The partition key must equal the caller's `TenantId` tag. Tenant isolation becomes an AWS-enforced invariant  an application SQL-injection-style bug cannot cross tenants.
 
 ### 10.4 Where Floci integration testing stops
 
@@ -5190,31 +5190,31 @@ The partition key must equal the caller's `TenantId` tag. Tenant isolation becom
 | JSON structure, ARNs, `Sid`s, conditions present | Condition-key evaluation |
 | Deletion dependency ordering (often) | SCP intersection, Access Analyzer findings |
 
-!!! note "Recap — §10"
-    Every AWS service integrates with IAM through one of three shapes: a **service role** it assumes (Lambda, ECS, CloudFormation), a **resource policy** it owns (S3, KMS, SQS, Secrets Manager), or a **condition-key** surface for fine-grained control (`dynamodb:LeadingKeys`, `s3:prefix`, `rds-db:connect`). KMS is the one where the resource policy is *authoritative* — remember it.
+!!! note "Recap  §10"
+    Every AWS service integrates with IAM through one of three shapes: a **service role** it assumes (Lambda, ECS, CloudFormation), a **resource policy** it owns (S3, KMS, SQS, Secrets Manager), or a **condition-key** surface for fine-grained control (`dynamodb:LeadingKeys`, `s3:prefix`, `rds-db:connect`). KMS is the one where the resource policy is *authoritative*  remember it.
 
 ---
 ## 11. Mini Challenges
 
-Complete these without step-by-step guidance. For each, submit: the commands you ran, the policy documents you wrote, your verification evidence, and — where enforcement is not emulated — the AWS-correct verdict with the reasoning from §3.3.
+Complete these without step-by-step guidance. For each, submit: the commands you ran, the policy documents you wrote, your verification evidence, and  where enforcement is not emulated  the AWS-correct verdict with the reasoning from §3.3.
 
-### MC1 — Home directories (⭐)
+### MC1  Home directories (⭐)
 
-Create three users `dnb-dev-e1`, `dnb-dev-e2`, `dnb-dev-e3` and a bucket `dnb-home-dev`. Write **one single policy**, attached to **one group**, such that each user can read, write, and list *only* their own prefix `dnb-home-dev/<their-username>/` and cannot see any other user's prefix — not even the list of prefixes.
+Create three users `dnb-dev-e1`, `dnb-dev-e2`, `dnb-dev-e3` and a bucket `dnb-home-dev`. Write **one single policy**, attached to **one group**, such that each user can read, write, and list *only* their own prefix `dnb-home-dev/<their-username>/` and cannot see any other user's prefix  not even the list of prefixes.
 
 * Constraint: exactly one policy document. No per-user policies.
 * Hint: `${aws:username}` and the `s3:prefix` condition on `s3:ListBucket`.
 * Verify: `e1` can `put` to `e1/`, cannot `put` to `e2/`, and `s3 ls s3://dnb-home-dev/` shows nothing while `s3 ls s3://dnb-home-dev/e1/` works.
 
-### MC2 — Region guardrail (⭐)
+### MC2  Region guardrail (⭐)
 
 Write a policy that permits all of `ec2:*` and `s3:*` **except** in regions other than `us-east-1` and `ap-south-1`. Global services (IAM, STS, CloudFront, Route 53, Support, Organizations) must keep working.
 
 * Constraint: use `Deny` + `NotAction`, not a giant allow-list.
-* Note on ordering: steps 4 and 5 of §3.3 are both AND-gates, so their relative order never changes a verdict — but AWS's published flowchart evaluates the **permissions boundary before the session policy**, and that is the order you will be marked on.
+* Note on ordering: steps 4 and 5 of §3.3 are both AND-gates, so their relative order never changes a verdict  but AWS's published flowchart evaluates the **permissions boundary before the session policy**, and that is the order you will be marked on.
 * Explain in two sentences why the global-service exemption is necessary.
 
-### MC3 — Time-boxed contractor (⭐⭐)
+### MC3  Time-boxed contractor (⭐⭐)
 
 Create `dnb-contractor-role`, assumable only by `dnb-dev-alice`, only between two timestamps 24 hours apart, only from the CIDR `103.0.0.0/8`, and requiring an `ExternalId`. Permissions: read-only on `dnb-statements-dev`. Sessions must be 15 minutes.
 
@@ -5223,7 +5223,7 @@ Create `dnb-contractor-role`, assumable only by `dnb-dev-alice`, only between tw
 * Verify: successful assume with correct parameters; failed assume with each of the four conditions violated in turn (four separate tests).
 * Where Floci does not evaluate a condition, state the AWS verdict and cite the condition operator responsible.
 
-### MC4 — Right-size an over-permissive policy (⭐⭐)
+### MC4  Right-size an over-permissive policy (⭐⭐)
 
 You are handed this policy from a code review:
 
@@ -5249,9 +5249,9 @@ logs:PutLogEvents     on  the same log group
 kms:Decrypt           on  arn:aws:kms:us-east-1:000000000000:key/1234abcd-…
 ```
 
-Rewrite it as a least-privilege policy. Add a TLS condition and one explicit `Deny` invariant of your choosing, justified in one sentence. Count how many distinct actions the original granted versus yours (`aws iam list-policies` will not tell you — reason about it).
+Rewrite it as a least-privilege policy. Add a TLS condition and one explicit `Deny` invariant of your choosing, justified in one sentence. Count how many distinct actions the original granted versus yours (`aws iam list-policies` will not tell you  reason about it).
 
-### MC5 — Safe delegation, from scratch (⭐⭐⭐)
+### MC5  Safe delegation, from scratch (⭐⭐⭐)
 
 Without looking at Lab 9, build a delegation model where `dnb-dev-lead` can create, tag, key, and delete users under `/dnb/dev/` but:
 
@@ -5263,7 +5263,7 @@ Without looking at Lab 9, build a delegation model where `dnb-dev-lead` can crea
 
 Then write a **five-step attack narrative** attempting to escalate from `dnb-dev-lead` to account admin, and show which statement blocks each step.
 
-### MC6 — Multi-tenant SaaS isolation (⭐⭐⭐)
+### MC6  Multi-tenant SaaS isolation (⭐⭐⭐)
 
 `dnb-tenant-role` serves 500 tenants from `dnb-statements-dev/tenant-<id>/`. Design isolation such that:
 
@@ -5271,24 +5271,24 @@ Then write a **five-step attack narrative** attempting to escalate from `dnb-dev
 * a session for tenant 42 mathematically cannot read tenant 43's data;
 * isolation is enforced by AWS, not by application code.
 
-Provide **two** designs — one using session policies, one using session tags + ABAC — and a paragraph comparing them on scalability, auditability, and blast radius. State which you would ship and why.
+Provide **two** designs  one using session policies, one using session tags + ABAC  and a paragraph comparing them on scalability, auditability, and blast radius. State which you would ship and why.
 
-### MC7 — Break-glass role (⭐⭐⭐)
+### MC7  Break-glass role (⭐⭐⭐)
 
 Design an emergency admin role for DNB satisfying: MFA required; sessions no longer than 15 minutes; assumable only by the members of `dnb-admins`; `SourceIdentity` required so the human stays attributable through role chaining; every assumption should be alarmable; and permissions are `AdministratorAccess`-equivalent minus the ability to disable CloudTrail or delete the role itself.
 
 * Trap: **a group cannot be a trust-policy `Principal`** (§4.4). You must find another way to express "members of `dnb-admins`". State the two viable approaches and which you would ship.
-* Trap: the 15-minute limit is not a role property — see MC3.
+* Trap: the 15-minute limit is not a role property  see MC3.
 
 Write the trust policy, the permissions policy, and describe the CloudWatch/EventBridge detective control in three sentences.
 
-### MC8 — Cross-account audit, both halves (⭐⭐⭐⭐)
+### MC8  Cross-account audit, both halves (⭐⭐⭐⭐)
 
 Account `111111111111` (security) must let its role `sec-auditor` read every S3 bucket in `222222222222` (workloads), scoped to the organisation `o-druk1example`, over TLS only, and only for buckets **not** tagged `Environment=prod`.
 
 Write all four artefacts: the trust policy in `222222222222`, the permissions policy on the assumed role in `222222222222`, the identity policy in `111111111111`, and one representative bucket policy. Then explain precisely why three of the four are insufficient on their own.
 
-### MC9 — Policy-as-code validator (⭐⭐⭐⭐)
+### MC9  Policy-as-code validator (⭐⭐⭐⭐)
 
 Write `validate-policy.sh` that takes a policy JSON file and **fails** (non-zero exit) on any of:
 
@@ -5312,7 +5312,7 @@ Each challenge installs a broken configuration. **Diagnose from the CLI before r
 mkdir -p ~/iam-lab/debug && cd ~/iam-lab
 ```
 
-### DC1 — The user that will not delete
+### DC1  The user that will not delete
 
 ```bash
 cat > debug/dc1-setup.sh <<'SCRIPT'
@@ -5335,9 +5335,9 @@ aws iam delete-user --user-name dnb-dc1-user
 **Task.** Delete the user and the group with no leftovers. Write a **general-purpose** `purge-user.sh` that handles every dependency in the correct order and is idempotent. Then run `aws iam get-user --user-name dnb-dc1-user` and confirm `NoSuchEntity`.
 
 ??? note "Hint (open only after 15 minutes)"
-    Five dependency classes exist here: group membership, access keys, login profile, inline policy, attached managed policy. `DeleteConflict` tells you *a* blocker, not *all* of them — so it will fail repeatedly until every class is cleared.
+    Five dependency classes exist here: group membership, access keys, login profile, inline policy, attached managed policy. `DeleteConflict` tells you *a* blocker, not *all* of them  so it will fail repeatedly until every class is cleared.
 
-### DC2 — The auditor who cannot read
+### DC2  The auditor who cannot read
 
 ```bash
 cat > debug/dc2-setup.sh <<'SCRIPT'
@@ -5370,7 +5370,7 @@ chmod +x debug/dc2-setup.sh && ./debug/dc2-setup.sh
 ??? note "Hint"
     Compare the ARN in `Resource` against the ARN the *failing* action operates on. Re-read the "two-ARN rule" danger box in §4.8.
 
-### DC3 — The role nobody can assume
+### DC3  The role nobody can assume
 
 ```bash
 cat > debug/dc3-setup.sh <<'SCRIPT'
@@ -5405,7 +5405,7 @@ alice sts assume-role --role-arn "arn:aws:iam::${ACCOUNT_ID}:role/dnb-dc3-role" 
 ??? note "Hint"
     Print `alice sts get-caller-identity --query Arn --output text` and compare it character by character with the `Principal` in the trust policy. Then read `dnb-assume-batch-role`'s `Resource` element.
 
-### DC4 — The Lambda with no logs
+### DC4  The Lambda with no logs
 
 ```bash
 cat > debug/dc4-setup.sh <<'SCRIPT'
@@ -5453,7 +5453,7 @@ aws iam get-role --role-name dnb-dc4-exec --query 'Role.AssumeRolePolicyDocument
 ??? note "Hint"
     Read the service principal string out loud, one token at a time. Then list every action a function needs in order for CloudWatch Logs to receive anything.
 
-### DC5 — The boundary that grants nothing
+### DC5  The boundary that grants nothing
 
 ```bash
 cat > debug/dc5-setup.sh <<'SCRIPT'
@@ -5462,7 +5462,7 @@ set -uo pipefail
 aws iam create-user --user-name dnb-dc5-dev --path /dnb/dev/ \
   --permissions-boundary "$(cat out/boundary-arn.txt)" >/dev/null 2>&1
 echo "DC5 ready. Symptom: the ticket says 'dnb-dc5-dev has a boundary allowing s3:Get*,"
-echo "so she should be able to read the statements bucket' — but every call is denied."
+echo "so she should be able to read the statements bucket'  but every call is denied."
 SCRIPT
 chmod +x debug/dc5-setup.sh && ./debug/dc5-setup.sh
 aws iam get-user --user-name dnb-dc5-dev --query 'User.PermissionsBoundary'
@@ -5472,7 +5472,7 @@ aws iam list-user-policies --user-name dnb-dc5-dev --query 'PolicyNames' --outpu
 
 **Task.** Explain the misconception in the ticket in one sentence, then fix it correctly (do **not** remove the boundary). Verify the intersection is what you intend.
 
-### DC6 — The policy that will not save
+### DC6  The policy that will not save
 
 ```bash
 cat > debug/dc6-broken.json <<'JSON'
@@ -5496,7 +5496,7 @@ aws iam create-policy --policy-name dnb-dc6-policy --policy-document file://debu
 ??? note "Hint"
     Run `jq empty debug/dc6-broken.json` first. Then check: is this identity-based or resource-based? Is the condition operator a real one? What is missing at the top level?
 
-### DC7 — The mysterious 60-minute failure
+### DC7  The mysterious 60-minute failure
 
 ```bash
 cat > debug/dc7-setup.sh <<'SCRIPT'
@@ -5517,7 +5517,7 @@ JSON
 aws iam create-role --role-name dnb-dc7-longjob --max-session-duration 43200 \
   --assume-role-policy-document file://debug/dc7-trust.json >/dev/null 2>&1
 # Grant the CALLER side of the handshake too, so the only remaining variable is the
-# role-chaining session cap — otherwise the challenge fails for the wrong reason.
+# role-chaining session cap  otherwise the challenge fails for the wrong reason.
 cat > debug/dc7-caller.json <<JSON
 {
   "Version": "2012-10-17",
@@ -5542,7 +5542,7 @@ batch sts assume-role --role-arn "arn:aws:iam::${ACCOUNT_ID}:role/dnb-dc7-longjo
 
 **Task.** Explain the exactly-one-hour behaviour, then propose **two** architecturally different fixes and state which you would choose for a nightly batch job and why.
 
-### DC8 — The privilege escalation
+### DC8  The privilege escalation
 
 ```bash
 cat > debug/dc8-setup.sh <<'SCRIPT'
@@ -5610,7 +5610,7 @@ chmod +x debug/dc8-setup.sh && ./debug/dc8-setup.sh
 1. Explain IAM's policy evaluation logic. In what order are the layers evaluated, and which verdicts are final?
 2. What is the difference between authentication and authorisation, and which errors correspond to each?
 3. Why can an IAM group not be a `Principal`?
-4. Explain the difference between an identity-based policy, a resource-based policy, a permissions boundary, and a session policy — and which of them can *grant* permissions.
+4. Explain the difference between an identity-based policy, a resource-based policy, a permissions boundary, and a session policy  and which of them can *grant* permissions.
 5. Why does a role need two policies? Name them and state the question each answers.
 6. What is `iam:PassRole` and why is it dangerous when unscoped?
 7. Why does S3 usually require two ARNs in a policy?
@@ -5622,7 +5622,7 @@ chmod +x debug/dc8-setup.sh && ./debug/dc8-setup.sh
 13. What is an instance profile, and why does it exist when a role would seem sufficient?
 14. Why can you not revoke an active STS session, and what do you do instead?
 15. What is ABAC and when does it beat RBAC?
-16. Explain the difference between an SCP and a permissions boundary — both are "ceilings".
+16. Explain the difference between an SCP and a permissions boundary  both are "ceilings".
 17. Which credential prefixes exist and what do they tell you during triage?
 18. What is the difference between `explicitDeny` and `implicitDeny` in simulator output, and how does the fix differ?
 19. Why is `NotAction` with `Allow` risky?
@@ -5717,7 +5717,7 @@ chmod +x debug/dc8-setup.sh && ./debug/dc8-setup.sh
 
 For a 15–20 minute oral examination. The examiner should ask candidates to **demonstrate at the terminal**, not merely describe.
 
-### Tier 1 — Foundations (must pass)
+### Tier 1  Foundations (must pass)
 
 | # | Question | Look for |
 |---|---|---|
@@ -5725,34 +5725,34 @@ For a 15–20 minute oral examination. The examiner should ask candidates to **d
 | V2 | Decompose this ARN aloud: `arn:aws:iam::000000000000:role/dnb/dev/dnb-dev-app-role`. | Names all six fields; explains why region is empty |
 | V3 | Create a user with our naming convention and mandatory tags. | Correct prefix, path, all five tags, no typos |
 | V4 | Why should this user not have a policy attached directly? | Groups; onboarding/offboarding; auditability |
-| V5 | What can a brand-new IAM user do? | Nothing — implicit deny by default |
+| V5 | What can a brand-new IAM user do? | Nothing  implicit deny by default |
 | V6 | Difference between authentication and authorisation, with the error code for each. | `InvalidClientTokenId`/`SignatureDoesNotMatch` vs `AccessDenied` |
 
-### Tier 2 — Policies
+### Tier 2  Policies
 
 | # | Question | Look for |
 |---|---|---|
 | V7 | Write a policy allowing read of one bucket. Explain each element. | Two ARNs, two statements, `Version`, `Sid`s |
 | V8 | Why two ARNs? | Bucket-level vs object-level actions |
-| V9 | Managed vs inline — when would you deliberately choose inline? | Reuse/versioning/audit vs one-off tied to a principal's lifetime |
+| V9 | Managed vs inline  when would you deliberately choose inline? | Reuse/versioning/audit vs one-off tied to a principal's lifetime |
 | V10 | Show me the live document of a managed policy. | `get-policy` → `DefaultVersionId` → `get-policy-version` |
 | V11 | Roll a policy back to a previous version. | `set-default-policy-version`, one call |
 | V12 | What happens if you omit `Version`? | Defaults to 2008-10-17; policy variables become literals; silent failure |
 | V13 | Explain `Deny` + `NotAction` versus `Allow` + `NotAction`. | Guardrail vs unbounded future-action grant |
 
-### Tier 3 — Roles and STS
+### Tier 3  Roles and STS
 
 | # | Question | Look for |
 |---|---|---|
 | V14 | Create a role assumable by EC2 and explain both policies. | Exact service principal; trust vs permissions |
 | V15 | Assume a role and show that your identity changed. | `sts:assumed-role` ARN; session name; path dropped |
-| V16 | Both sides must allow — show me both. | Caller identity policy **and** trust policy |
+| V16 | Both sides must allow  show me both. | Caller identity policy **and** trust policy |
 | V17 | Why is a chained session capped at one hour? | Chaining rule; the `ExpiredToken` symptom |
 | V18 | Explain the confused deputy and defend against it. | `sts:ExternalId`; `aws:SourceArn`/`aws:SourceAccount` |
 | V19 | Show me an instance profile and explain why it exists. | 1:1 with role; EC2 cannot reference a role directly |
 | V20 | Revoke a live session right now. | `Deny` on `aws:TokenIssueTime`; explains why deletion is impossible |
 
-### Tier 4 — Evaluation and defence
+### Tier 4  Evaluation and defence
 
 | # | Question | Look for |
 |---|---|---|
@@ -5761,10 +5761,10 @@ For a 15–20 minute oral examination. The examiner should ask candidates to **d
 | V23 | Does a permissions boundary grant anything? Prove it. | Dana: boundary + no policies = no access |
 | V24 | Design safe IAM delegation. What is the one indispensable condition? | `iam:PermissionsBoundary` on create actions |
 | V25 | Here is a policy with `iam:PassRole` on `*` and `lambda:CreateFunction`. What have I given away? | Full account admin; explains the chain |
-| V26 | This error says "explicit deny in an identity-based policy". What will you do first? | Find the `Deny` — adding an `Allow` is futile |
+| V26 | This error says "explicit deny in an identity-based policy". What will you do first? | Find the `Deny`  adding an `Allow` is futile |
 | V27 | Diagnose `AccessDenied` on `s3:PutObject` for an auditor. | Groups → inline → `NotAction` list → correct architectural answer |
 
-### Tier 5 — Floci literacy (LO12)
+### Tier 5  Floci literacy (LO12)
 
 | # | Question | Look for |
 |---|---|---|
@@ -5823,7 +5823,7 @@ Answer in prose, 150–250 words each, in `reflection.md`.
 
 17. IAM is free and global. What does its being free tell you about how AWS views it, and what does its being global cost you operationally?
 18. Where does IAM sit in a defence-in-depth architecture alongside VPCs, security groups, KMS, and CloudTrail? Which layers are preventive and which detective?
-19. The modern recommendation is zero IAM users — federation only. If IAM users are the wrong answer for humans, why does the service still centre on them, and what would you tell a team starting a greenfield AWS account today?
+19. The modern recommendation is zero IAM users  federation only. If IAM users are the wrong answer for humans, why does the service still centre on them, and what would you tell a team starting a greenfield AWS account today?
 20. You are now the most IAM-literate person on a five-person startup team about to launch on AWS. Write the five rules you would put in the team's engineering handbook on day one.
 
 ---
@@ -5831,7 +5831,7 @@ Answer in prose, 150–250 words each, in `reflection.md`.
 ## 16. Cleanup
 
 !!! danger "Cleanup order matters"
-    IAM enforces dependencies. Detach before delete, remove children before parents, and delete non-default policy versions before the policy. The script below is idempotent — safe to run repeatedly.
+    IAM enforces dependencies. Detach before delete, remove children before parents, and delete non-default policy versions before the policy. The script below is idempotent  safe to run repeatedly.
 
 ### 16.1 The full teardown script
 
@@ -5847,7 +5847,7 @@ say() { printf '\n\033[1m== %s ==\033[0m\n' "$*"; }
 
 case "${AWS_ENDPOINT_URL:-}" in
   *localhost*|*127.0.0.1*|*floci*) : ;;
-  *) echo "REFUSING: AWS_ENDPOINT_URL is '${AWS_ENDPOINT_URL:-<empty>}' — not a Floci endpoint." >&2; exit 1 ;;
+  *) echo "REFUSING: AWS_ENDPOINT_URL is '${AWS_ENDPOINT_URL:-<empty>}'  not a Floci endpoint." >&2; exit 1 ;;
 esac
 ACCT="$(aws sts get-caller-identity --query Account --output text)"
 
@@ -6015,7 +6015,7 @@ printf 'remaining dnb policies: %s\n' "$(aws iam list-policies --scope Local --q
 printf 'remaining profiles    : %s\n' "$(aws iam list-instance-profiles --query 'length(InstanceProfiles[?starts_with(InstanceProfileName, `dnb-`)])' --output text 2>/dev/null)"
 printf 'remaining buckets     : %s\n' "$(aws s3 ls 2>/dev/null | grep -c dnb- || echo 0)"
 echo
-echo "All counts should read 0. Any non-zero value indicates a dependency the script missed —"
+echo "All counts should read 0. Any non-zero value indicates a dependency the script missed "
 echo "investigate with list-entities-for-policy / get-group / list-attached-*-policies."
 SCRIPT
 chmod +x ~/iam-lab/cleanup.sh
@@ -6048,7 +6048,7 @@ aws iam list-users --query 'length(Users)' --output text     # → 0
 
 | Keep | Why |
 |---|---|
-| `~/iam-lab/policies/*.json` | Your policy portfolio — submitted work and a genuinely useful personal reference |
+| `~/iam-lab/policies/*.json` | Your policy portfolio  submitted work and a genuinely useful personal reference |
 | `~/iam-lab/out/support-matrix.tsv` | Evidence for LO12 |
 | `~/iam-lab/out/divergence-report.md` | Assessed deliverable |
 | `~/iam-lab/out/posture-audit.txt` | Assessed deliverable |
@@ -6068,11 +6068,11 @@ aws iam list-users --query 'length(Users)' --output text     # → 0
 2. **Explicit deny always wins; absence of an allow is a deny.**
 3. **Users** are for humans (ideally replaced by federation); **groups** scale permissions to humans; **roles** are for everything else.
 4. A role always needs **two** policies: a trust policy (who may assume) and permissions policies (what the session may do).
-5. Role assumption requires an allow on **both** sides — the caller's identity policy and the role's trust policy.
+5. Role assumption requires an allow on **both** sides  the caller's identity policy and the role's trust policy.
 6. **Permissions boundaries and session policies filter; they never grant.** Effective permissions are an intersection.
 7. Same-account access needs identity **OR** resource policy; cross-account needs **both**.
 8. **Temporary credentials beat long-term keys** every time; the only safe access key is the one that does not exist.
-9. **Unscoped `iam:PassRole` is account takeover** — scope it by `Resource` and `iam:PassedToService`.
+9. **Unscoped `iam:PassRole` is account takeover**  scope it by `Resource` and `iam:PassedToService`.
 10. An emulator stores policies; **AWS enforces them**. Never treat local success as proof of a permission model.
 
 ### 17.2 Command reference
@@ -6108,7 +6108,7 @@ aws iam list-groups-for-user --user-name U
 aws iam delete-group --group-name G
 ```
 
-**Policies — managed**
+**Policies  managed**
 
 ```bash
 aws iam create-policy --policy-name P --path /p/ --description D --policy-document file://f.json --tags Key=K,Value=V
@@ -6127,7 +6127,7 @@ aws iam delete-policy --policy-arn ARN
 aws iam list-policies --scope Local|AWS|All [--only-attached]
 ```
 
-**Policies — inline**
+**Policies  inline**
 
 ```bash
 aws iam put-user-policy    --user-name  U --policy-name P --policy-document file://f.json
@@ -6239,8 +6239,8 @@ floci config show | floci config profile list
 
 ```
  [ ] Root sealed: hardware MFA, zero access keys, alarm on any root API call
- [ ] Zero IAM users for humans — federated via IAM Identity Center
- [ ] Zero long-term access keys for workloads — roles only
+ [ ] Zero IAM users for humans  federated via IAM Identity Center
+ [ ] Zero long-term access keys for workloads  roles only
  [ ] No policy attached directly to a user
  [ ] No Allow with Action:* on Resource:* outside a reviewed AdministratorAccess
  [ ] No role trusting Principal:*  ·  no bucket policy with Allow to Principal:*
@@ -6274,7 +6274,7 @@ floci config show | floci config profile list
 | Next step | Why |
 |---|---|
 | **A real AWS free-tier sandbox account** | Run your §15 Q16 validation plan and confirm what Floci could not: condition evaluation, boundaries, SCPs, IMDS, Access Analyzer |
-| **The KMS module** | Key policies are *authoritative* over IAM — the most important exception to everything here |
+| **The KMS module** | Key policies are *authoritative* over IAM  the most important exception to everything here |
 | **The S3 module** | Bucket policies, Block Public Access, Object Ownership, and access points in depth |
 | **The Organizations / Identity Center module** | The layers above IAM that real multi-account AWS actually runs on |
 | **IAM as code** | Rebuild the entire DNB design in CloudFormation, then diff it against what you built by hand |
@@ -6284,17 +6284,17 @@ floci config show | floci config profile list
 
 ## End-of-Module Exercises
 
-**Submission bundle** — one archive containing:
+**Submission bundle**  one archive containing:
 
 | # | Artefact | Weight |
 |---|---|---|
 | 1 | `out/support-matrix.tsv` + `out/support-report.txt` | 5% |
 | 2 | `out/divergence-report.md`, with your written explanation of every divergence | 15% |
-| 3 | `policies/` — every policy document, each statement carrying a `Sid` and a one-line comment justifying it | 15% |
-| 4 | `dnb-iam-design.md` — the §6.7 enterprise deliverable, including the threat model | 25% |
-| 5 | `mini-challenges.md` — MC1–MC9 with commands, policies, and verification evidence | 15% |
-| 6 | `debugging-challenges.md` — DC1–DC8 using the §12 answer template | 15% |
-| 7 | `reflection.md` — the §15 questions | 5% |
+| 3 | `policies/`  every policy document, each statement carrying a `Sid` and a one-line comment justifying it | 15% |
+| 4 | `dnb-iam-design.md`  the §6.7 enterprise deliverable, including the threat model | 25% |
+| 5 | `mini-challenges.md`  MC1–MC9 with commands, policies, and verification evidence | 15% |
+| 6 | `debugging-challenges.md`  DC1–DC8 using the §12 answer template | 15% |
+| 7 | `reflection.md`  the §15 questions | 5% |
 | 8 | `out/posture-audit.txt` + your `validate-policy.sh` and `purge-user.sh` | 5% |
 
 **Marking notes for the assessor**
@@ -6302,12 +6302,12 @@ floci config show | floci config profile list
 * A student who reports "the policy worked in Floci" without a named profile has not demonstrated LO12 and cannot pass Tier 5 of the viva.
 * Reward correctly identified divergences highly. Finding a limitation and reasoning past it is the harder skill than making a command succeed.
 * Penalise any policy containing `Action: *` with `Resource: *` outside an explicitly justified `AdministratorAccess` equivalent.
-* Penalise unscoped `iam:PassRole` heavily — it is the single most consequential mistake in the module.
+* Penalise unscoped `iam:PassRole` heavily  it is the single most consequential mistake in the module.
 * Every statement in every submitted policy must have a `Sid`. No exceptions.
 
 ---
 
-## Appendix A — Quick JSON templates
+## Appendix A  Quick JSON templates
 
 ```json
 { "Version": "2012-10-17", "Statement": [ { "Sid": "", "Effect": "Allow", "Action": [], "Resource": [] } ] }
@@ -6325,7 +6325,7 @@ floci config show | floci config profile list
 { "Version": "2012-10-17", "Statement": [ { "Sid": "DenyGuardrail", "Effect": "Deny", "NotAction": [ "iam:*", "sts:*" ], "Resource": "*", "Condition": { "StringNotEquals": { "aws:RequestedRegion": [ "us-east-1" ] } } } ] }
 ```
 
-## Appendix B — Service principal reference
+## Appendix B  Service principal reference
 
 | Service | Principal string |
 |---|---|
@@ -6356,7 +6356,7 @@ floci config show | floci config profile list
 | Batch | `batch.amazonaws.com` |
 | SageMaker | `sagemaker.amazonaws.com` |
 
-## Appendix C — Quotas (defaults; many are adjustable)
+## Appendix C  Quotas (defaults; many are adjustable)
 
 | Object | Limit |
 |---|---|
@@ -6372,28 +6372,28 @@ floci config show | floci config profile list
 | Roles per instance profile | 1 |
 | Instance profiles per account | 1 000 |
 | Managed policy size | 6 144 characters |
-| Inline policy size — user / group / role | 2 048 / 5 120 / 10 240 characters |
+| Inline policy size  user / group / role | 2 048 / 5 120 / 10 240 characters |
 | Session policy size (inline) | 2 048 characters |
 | Bucket policy size | 20 KB |
 | Role session duration | 900 s – 43 200 s (**3 600 s if chained**) |
 | `GetSessionToken` duration | 900 s – 129 600 s (root: ≤ 3 600 s) |
 | Tags per IAM entity | 50 |
 | Path length | 512 characters |
-| Name length — user/role/group | 64 / 64 / 128 characters |
+| Name length  user/role/group | 64 / 64 / 128 characters |
 | `RoleSessionName` length | 2 – 64 characters |
 
 ---
 
 ## Sources
 
-* [Floci — Local Cloud Emulators](https://floci.io/) — product overview
-* [floci — Fast, Free AWS Emulator](https://floci.io/aws/) — supported AWS services, IAM (68+ ops) and STS (7 ops), unified endpoint `localhost:4566`
-* [floci-io/floci on GitHub](https://github.com/floci-io/floci) — service coverage, Docker Compose, environment variables
-* [floci-io/floci-cli on GitHub](https://github.com/floci-io/floci-cli) — `floci start|stop|status|env|logs|doctor|wait|config` syntax and global flags
-* [Floci — Local AWS Emulator (docs)](https://fredpena-floci.mintlify.app/introduction) — pointing the AWS CLI at the emulator
-* [AWS IAM API Reference — Actions](https://docs.aws.amazon.com/IAM/latest/APIReference/API_Operations.html) — canonical IAM operation list
-* [AWS IAM — SimulatePrincipalPolicy](https://docs.aws.amazon.com/IAM/latest/APIReference/API_SimulatePrincipalPolicy.html) — policy simulation semantics
-* [Hacking the Cloud — AWS IAM privilege escalation techniques](https://hackingthe.cloud/aws/exploitation/iam_privilege_escalation/) — the escalation vectors catalogued in §9.4
+* [Floci  Local Cloud Emulators](https://floci.io/)  product overview
+* [floci  Fast, Free AWS Emulator](https://floci.io/aws/)  supported AWS services, IAM (68+ ops) and STS (7 ops), unified endpoint `localhost:4566`
+* [floci-io/floci on GitHub](https://github.com/floci-io/floci)  service coverage, Docker Compose, environment variables
+* [floci-io/floci-cli on GitHub](https://github.com/floci-io/floci-cli)  `floci start|stop|status|env|logs|doctor|wait|config` syntax and global flags
+* [Floci  Local AWS Emulator (docs)](https://fredpena-floci.mintlify.app/introduction)  pointing the AWS CLI at the emulator
+* [AWS IAM API Reference  Actions](https://docs.aws.amazon.com/IAM/latest/APIReference/API_Operations.html)  canonical IAM operation list
+* [AWS IAM  SimulatePrincipalPolicy](https://docs.aws.amazon.com/IAM/latest/APIReference/API_SimulatePrincipalPolicy.html)  policy simulation semantics
+* [Hacking the Cloud  AWS IAM privilege escalation techniques](https://hackingthe.cloud/aws/exploitation/iam_privilege_escalation/)  the escalation vectors catalogued in §9.4
 
 !!! warning "Verify the Floci support tiers against your own build"
-    Floci publishes an operation *count* rather than a per-operation list, and does not document whether control-plane authorisation is evaluated. Every ✅ / ⚠️ / ❌ in this module is a conservative estimate. **Your `support-matrix.tsv` and `divergence-report.md` are the authoritative record for your environment** — that is why producing them is Lab 0 and Lab 11 rather than an appendix.
+    Floci publishes an operation *count* rather than a per-operation list, and does not document whether control-plane authorisation is evaluated. Every ✅ / ⚠️ / ❌ in this module is a conservative estimate. **Your `support-matrix.tsv` and `divergence-report.md` are the authoritative record for your environment**  that is why producing them is Lab 0 and Lab 11 rather than an appendix.

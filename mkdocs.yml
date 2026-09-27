@@ -161,79 +161,84 @@ nav:
 
   - Unit 1:
       - Overview: unit1/overview.md
-      - 1.1 AWS Cloud overview: unit1/topic1.md
+      - 1.1 AWS Cloud Overview: unit1/topic1.md
       - 1.2 AWS IAM: unit1/topic2.md
       - 1.3 AWS Compute Services: unit1/topic3.md
       - 1.4 AWS Storage Services: unit1/topic4.md
-      - 1.5 AWS Datebase Services: unit1/topic5.md
+      - 1.5 AWS Database Services: unit1/topic5.md
       - 1.6 AWS Network Services: unit1/topic6.md
-      - 1.7 Cloud Native Design Patterns: unit1/topic7.md
-      
+      - 1.7 Cloud-Native Design Patterns: unit1/topic7.md
 
   - Unit 2:
       - Overview: unit2/overview.md
       - 2.1 Docker Fundamentals: unit2/topic1.md
-      - 2.2 AWS ECS: unit2/topic2.md
+      - 2.2 Amazon ECS: unit2/topic2.md
       - 2.3 Container Orchestration with Amazon ECS: unit2/topic3.md
-
 
   - Unit 3:
       - Overview: unit3/overview.md
-      - 3.1 EKS Architecture: unit3/topic1.md
-      - 3.2 Deploying App in EKS: unit3/topic2.md
-      - 3.3 EKS advanced concepts: unit3/topic3.md
-
+      - 3.1 Amazon EKS Architecture: unit3/topic1.md
+      - 3.2 Deploying Applications on Amazon EKS: unit3/topic2.md
+      - 3.3 Amazon EKS Advanced Concepts: unit3/topic3.md
 
   - Unit 4:
       - Overview: unit4/overview.md
-      - 4.1 Microservice Design Principle: unit4/topic1.md
-      - 4.2 API management: unit4/topic2.md
-      - 4.3 AWS Resilience: unit4/topic3.md
+      - 4.1 Microservices Design Principles: unit4/topic1.md
+      - 4.2 API Management and Service Mesh: unit4/topic2.md
+      - 4.3 Resilience in AWS Microservices: unit4/topic3.md
 
+  - Unit 5:
+      - Overview: unit5/overview.md
+      - 5.1 AWS CI/CD Services: unit5/topic1.md
+      - 5.2 CI/CD Pipelines with CodePipeline and ECR: unit5/topic2.md
+      - 5.3 Infrastructure as Code: unit5/topic3.md
 
-  # - Unit 5:
-  #     - Overview: unit5/overview.md
-  #     - 5.1 Comparison-based Sorting Analysis: unit5/topic1.md
-  #     - 5.2 Lower Bound for Sortings: unit5/topic2.md
-  #     - 5.3 Quicksort Analysis and Performance: unit5/topic3.md
-  #     - 5.4 Randomised Quicksort and Analysis: unit5/topic4.md
-  #     - 5.5 Linear-Time Sorting( Counting Sort): unit5/topic5.md
-  #     - 5.6 Linear-Time Sorting( Radix Sort): unit5/topic6.md
-  #     - 5.7 Special Sorting Problems - Inversion Index: unit5/topic7.md
-  #     - Summary: unit5/summary.md
+  - Unit 6:
+      - Overview: unit6/overview.md
+      - 6.1 AWS Storage Solutions: unit6/topic1.md
+      - 6.2 AWS Database Services: unit6/topic2.md
+      - 6.3 Messaging and Event Streaming: unit6/topic3.md
 
-  # - Unit 6:
-  #     - Overview: unit6/overview.md
-  #     - 6.1 Dynamic Programming Design Principles: unit6/topic1.md
-  #     - 6.2 Rod Cutting Problem: unit6/topic2.md
-  #     - 6.3 Matrix Chain Multiplication: unit6/topic3.md
-  #     - 6.4 Longest Common Subsequence: unit6/topic4.md
-  #     - Summary: unit6/summary.md
+  - Unit 7:
+      - Overview: unit7/overview.md
+      - 7.1 Monitoring Cloud-Native Applications: unit7/topic1.md
+      - 7.2 Centralized Logging: unit7/topic2.md
+      - 7.3 Observability and Alerting: unit7/topic3.md
 
-  # - Unit 7:
-  #     - Overview: unit7/overview.md
-  #     - 7.1 Greedy Algorithm Design Principles: unit7/topic1.md
-  #     - 7.2 Fractional Knapsack Problem: unit7/topic2.md
-  #     - 7.3 Huffman Coding: unit7/topic3.md
-  #     - 7.4 Activity Selection Problems: unit7/topic4.md
-  #     - 7.5 Dijkstra's Algorithm: unit7/topic5.md
-  #     - 7.6 Minimum Spanning Tree (Prim's and Kruskal's Algorithms): unit7/topic6.md
+  - Unit 8:
+      - Overview: unit8/overview.md
+      - 8.1 AWS Identity and Access Management: unit8/topic1.md
+      - 8.2 Network Security: unit8/topic2.md
+      - 8.3 Data Protection and Encryption: unit8/topic3.md
 
   - Services:
-      - Overview: Services/overview.md 
-      - Services: Services/services.md 
-      - Groups: Services/groups.md 
+      - Overview: Services/overview.md
+      - Services: Services/services.md
+      - Groups: Services/groups.md
 
   - Practice Questions:
-      - Unit 1 : Questions/unit1.md
-      - Unit 2 : Questions/unit2.md
-      - Unit 3 : Questions/mids.md
-      # - Unit 4 : unit9_misc/unit4.md
-      # - Unit 5 : unit9_misc/unit5.md
-      # - Unit 6 : unit9_misc/unit6.md
+      - Unit 1: Questions/unit1.md
+      - Unit 2: Questions/unit2.md
+      - Unit 3: Questions/unit3.md
+      - Unit 4: Questions/unit4.md
+      - Unit 5: Questions/unit5.md
+      - Unit 6: Questions/unit6.md
+      - Unit 7: Questions/unit7.md
+      - Unit 8: Questions/unit8.md
+      - Mid-term Question Pool: Questions/mids.md
+
+  - Interview Questions:
+      - Unit 1: interviewquestions/unit1.md
+      - Unit 2: interviewquestions/unit2.md
+      - Unit 3: interviewquestions/unit3.md
+      - Unit 4: interviewquestions/unit4.md
+      - Unit 5: interviewquestions/unit5.md
+      - Unit 6: interviewquestions/unit6.md
+      - Unit 7: interviewquestions/unit7.md
+      - Unit 8: interviewquestions/unit8.md
 
   # - Sample Answers:
-  #     - unit 2: Answers/unit2.md
+  #     - Unit 2: Answers/unit2.md
 
   - Lab:
       - Lab Overview: Lab/overview.md
@@ -252,6 +257,6 @@ nav:
       - Lab 13 - Monitoring: Lab/Lab-13-monitoring.md
       - Checkpoint 1: Lab/Lab-14-checkpoint.md
 
-  - Solutions: Solutions.md
+#   - Solutions: Solutions.md
 
-  - Simulation: https://staging.d35mqjjki99omf.amplifyapp.com
+  - Simulation: https://main.dcaowu8w5ohp0.amplifyapp.com

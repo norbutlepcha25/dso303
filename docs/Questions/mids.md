@@ -1,7 +1,7 @@
-# DSO303 — Cloud Native Solution Design
-## Practice Question Pool
+# Mid-term Question Pool
+DSO303  Cloud Native Solution Design
 
-# SECTION A
+## Section A
 *Choose the single best answer. Each also asks you to state, in one line, why the distractors fail.*
 
 Q1. 
@@ -71,10 +71,10 @@ An EC2 instance in a private subnet must call the S3 API. The subnet has no NAT 
 Q9. 
 Which pairing of statefulness and scope is correct?
 
-1. Security Group — stateless, subnet level; NACL — stateful, ENI level
-1. Security Group — stateful, ENI level; NACL — stateless, subnet level
+1. Security Group  stateless, subnet level; NACL  stateful, ENI level
+1. Security Group  stateful, ENI level; NACL  stateless, subnet level
 1. Both stateful at the ENI level, differing only in rule ordering
-1. Security Group — stateful, subnet level; NACL — stateless, ENI level
+1. Security Group  stateful, subnet level; NACL  stateless, ENI level
 
 Q10. 
 A team wants twelve EC2 instances spread across three Availability Zones to share one POSIX file tree with simultaneous read/write. Which service satisfies this natively?
@@ -86,7 +86,7 @@ A team wants twelve EC2 instances spread across three Availability Zones to shar
 
 ---
 
-# SECTION B
+## Section B
 
 Q11. 
 A university AWS account has 480 IAM users spread across four faculties. Each faculty must have distinct S3 permissions, and users occasionally transfer between faculties. Design the identity structure. Explain why attaching policies directly to users is a poor design here, and state what has to change when a user transfers.
@@ -125,7 +125,7 @@ Study the following policy:
 1. The user reports that `aws s3 ls s3://student-uploads/dorji/` works but `aws s3 rm` fails. Explain why, and state the minimum change required to permit deletion within the user's own prefix only.
 
 Q15. 
-A contractor's account (Account B) must read objects in a bucket owned by your account (Account A) for 90 days. Compare two approaches — a cross-account IAM role assumed via `sts:AssumeRole`, versus a bucket policy granting the contractor's IAM user direct access. Discuss credential lifetime, auditability, and revocation, and recommend one.
+A contractor's account (Account B) must read objects in a bucket owned by your account (Account A) for 90 days. Compare two approaches  a cross-account IAM role assumed via `sts:AssumeRole`, versus a bucket policy granting the contractor's IAM user direct access. Discuss credential lifetime, auditability, and revocation, and recommend one.
 
 Q16. 
 Define an IAM permissions boundary. A developer has an identity policy allowing `ec2:*` but a permissions boundary allowing only `ec2:Describe*`. State the effective permissions and explain the evaluation logic in one sentence.
@@ -134,7 +134,7 @@ Q17.
 Your organisation requires that no IAM policy in any member account may grant access to services outside the `ap-south-1` and `ap-southeast-1` regions. Explain what mechanism enforces this across accounts and why an identity policy alone is insufficient.
 
 
-# SECTION C
+## Section C
 
 Q18. 
 A media archive holds 40 TB of finished video. Objects are downloaded frequently in the first 30 days, occasionally over the next 11 months, and after that are retained for seven years for compliance with retrieval expected at most once a year (a 12-hour retrieval time is acceptable). Write the lifecycle configuration in words: each transition, the day it fires, and the target storage class. Justify each choice on cost and retrieval characteristics.
@@ -159,7 +159,7 @@ Your team enabled S3 Intelligent-Tiering for a bucket containing 5 million objec
 
 ---
 
-# SECTION D
+## Section D
 Q25. 
 For each requirement select the storage service and volume type, and justify in one or two lines:
 
@@ -187,7 +187,7 @@ Compare EBS and EFS across five dimensions: attachment model, AZ scope, pricing 
 Q31. 
 An EBS snapshot is described as "incremental". Explain what that means for storage cost and for restore time, and state whether deleting an older snapshot in a chain destroys the ability to restore from a newer one.
 
-# SECTION E
+## Section E
 Q32. 
 Differentiate the ECS EC2 launch type from the ECS Fargate launch type across: who patches the operating system, how compute capacity scales, the billing unit, and supported network modes.
 
@@ -206,7 +206,7 @@ Explain the `awsvpc` network mode. Why is it mandatory for Fargate, and what doe
 Q37. 
 A Fargate task writing temporary transcoded files fails with "no space left on device". Explain the Fargate ephemeral storage model, its default size, how it can be increased, and one architectural alternative that removes the dependence on task-local storage entirely.
 
-# SECTION F 
+## Section F
 
 Q38. 
 An application tier in subnet `10.0.10.0/24` must reach a Redis cache in subnet `10.0.20.0/24` on TCP 6379. Security groups are correct on both sides, but connections hang. Both subnets use custom NACLs.
@@ -222,7 +222,7 @@ Q40.
 A bastion host in a public subnet accepts SSH from the campus network `202.144.128.0/19` and must SSH into private instances in `10.0.30.0/24`. Write the security group design: name each group, state its inbound rules, and explain how referencing a security group as a source (rather than a CIDR) improves the design.
 
 Q41. 
-Explain why a Security Group cannot contain a `Deny` rule, and describe how the same outcome — permitting all of a subnet except one host — must be achieved.
+Explain why a Security Group cannot contain a `Deny` rule, and describe how the same outcome  permitting all of a subnet except one host  must be achieved.
 
 Q42. 
 Instances in a private subnet must download OS patches from the internet but must never be reachable from it. Describe the components and route-table entries required. Explain why placing a NAT Gateway in the private subnet itself is a configuration error, and state which subnet it belongs in.
@@ -235,7 +235,7 @@ Explain what the VPC "implicit deny" at the end of every NACL means, and contras
 
 ---
 
-# SECTION G 
+## Section G
 
 Q45. 
 For the subnet `10.0.4.0/24`, list the five addresses AWS reserves and state the purpose of each. How many addresses remain assignable to EC2 instances?

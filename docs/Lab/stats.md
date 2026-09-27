@@ -1,4 +1,4 @@
-# AWS CLI + Floci Course — Cumulative State
+# AWS CLI + Floci Course  Cumulative State
 
 Running record of what exists after each lab. **Read this before generating a new lab.**
 
@@ -23,16 +23,16 @@ Resource naming convention: every resource is prefixed `usms-`.
 | Snapshot | `floci snapshot save lab-01-iam-complete` |
 
 Key Floci caveat carried through the whole course: **IAM policies are stored but not enforced by
-default** — mark enforcement-dependent behaviour as *Conceptual / Real AWS*.
+default**  mark enforcement-dependent behaviour as *Conceptual / Real AWS*.
 
 ## Lab index
 
 | Lab | Topic | Status | Doc |
 | --- | --- | --- | --- |
 | 01 | IAM | ✅ written | `labs/lab-01-iam.md` |
-| 02 | VPC | ⬜ not written | — |
+| 02 | VPC | ⬜ not written |  |
 
-## Resources created — Lab 01 (IAM)
+## Resources created  Lab 01 (IAM)
 
 **Groups:** `usms-admins`, `usms-developers`, `usms-auditors`
 
@@ -40,13 +40,13 @@ default** — mark enforcement-dependent behaviour as *Conceptual / Real AWS*.
 
 **Customer managed policies**
 
-- `USMSDeveloperBase` — currently **v2** (v3 is Exercise 5); read infra + VPC-build actions
+- `USMSDeveloperBase`  currently **v2** (v3 is Exercise 5); read infra + VPC-build actions
   conditioned on `us-east-1`; explicit Deny on IAM escalation actions
-- `USMSStudentDataReadWrite` — bucket ARN `arn:aws:s3:::usms-student-data` + object ARN `/*`;
+- `USMSStudentDataReadWrite`  bucket ARN `arn:aws:s3:::usms-student-data` + object ARN `/*`;
   Deny on `s3:DeleteBucket`
-- `USMSAssumeAppRoles` — `sts:AssumeRole` on `usms-developer-role`
-- `USMSLambdaBasic` — CloudWatch Logs write + `s3:GetObject` on student data
-- `USMSReadOnly` — only if the Floci build lacks the AWS managed `ReadOnlyAccess`
+- `USMSAssumeAppRoles`  `sts:AssumeRole` on `usms-developer-role`
+- `USMSLambdaBasic`  CloudWatch Logs write + `s3:GetObject` on student data
+- `USMSReadOnly`  only if the Floci build lacks the AWS managed `ReadOnlyAccess`
 
 **Inline policy:** `USMSSelfManageCredentials` on `usms-dev-01` (uses `${aws:username}`)
 
@@ -90,6 +90,6 @@ waiters (`aws ... wait`), CloudFormation, tagging-based cost allocation.
 
 ## Next lab
 
-**Lab 02 — VPC.** Should open by sourcing `configs/course.env` + `configs/lab-01.env`, assuming
+**Lab 02  VPC.** Should open by sourcing `configs/course.env` + `configs/lab-01.env`, assuming
 `usms-developer-role`, and building `10.0.0.0/16` with public + private subnets, IGW, route tables,
 security groups. Introduce `--filters` and `aws ec2 wait`.

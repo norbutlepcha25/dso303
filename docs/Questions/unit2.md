@@ -1,5 +1,4 @@
-
-# Unit 2:  Practice Questions
+# Unit 2: Practice Questions
 
 ## 2.1 Docker Fundamentals
 
@@ -19,7 +18,9 @@
 14. An organisation running forty services on Fargate observes that scale-out during traffic spikes takes ninety seconds from alarm to serving capacity, and users experience errors during that window. Decompose the ninety seconds into its contributing phases, identify which phases you can influence and by how much, propose specific changes ordered by expected effect, and state which part of the problem cannot be solved by making the image smaller and what you would do about that instead.
 15. Critique the following proposal: "We will use a single shared base image for all services, containing our standard JDK, our monitoring agent, our logging library, curl, the AWS CLI, and a shell, so that every team gets the same tooling and debugging is easy. We will tag it `company/base:latest` and rebuild it nightly so it is always patched." Identify at least five specific defects, propose a corrected design, and state which parts of the original intent you would preserve and how.
 
-## 2.2 AWS ECS
+---
+
+## 2.2 Amazon ECS
 
 1. Define an ECS cluster and list the four boundaries it provides. State one thing a cluster is not.
 2. Explain the difference between a task and a service, and give one example of work suited to each.
@@ -32,10 +33,12 @@
 9. Explain the four settings that together determine whether a deployment is user-visible, state how each should be derived from a measurement, and describe the symptom produced when each is wrong.
 10. Your organisation runs eleven ECS services, each behind its own Application Load Balancer, in private subnets with no VPC endpoints and Container Insights disabled. Identify the three largest problems, ranked by the harm they cause, and the remediation for each.
 11. A team of five running eight services on Fargate has been told by a consultant to migrate to EC2 capacity because "Fargate is 20 per cent more expensive per vCPU". Write the response you would give. Address what is correct in the claim, what the total-cost comparison actually looks like, what conditions would make the migration right, and what evidence you would gather before deciding either way.
-12. Design the complete ECS topology — accounts, clusters, capacity providers, load balancing, and service discovery — for a SaaS company with a pooled multi-tenant tier and a contractually siloed enterprise tier. Justify every boundary, state where the two tiers share infrastructure and where they must not, and identify the one design decision you would find hardest to reverse later.
-13. A service suffers a complete outage. The trigger was a single Availability Zone becoming unreachable for eleven minutes. The service was configured with three subnets and a desired count of six, and yet all traffic failed. Explain every design defect that must have been present for this outcome to occur, and specify the changes — with configuration specifics — that would have reduced the impact to a brief degradation.
+12. Design the complete ECS topology  accounts, clusters, capacity providers, load balancing, and service discovery  for a SaaS company with a pooled multi-tenant tier and a contractually siloed enterprise tier. Justify every boundary, state where the two tiers share infrastructure and where they must not, and identify the one design decision you would find hardest to reverse later.
+13. A service suffers a complete outage. The trigger was a single Availability Zone becoming unreachable for eleven minutes. The service was configured with three subnets and a desired count of six, and yet all traffic failed. Explain every design defect that must have been present for this outcome to occur, and specify the changes  with configuration specifics  that would have reduced the impact to a brief degradation.
 14. Compare, with a total-cost-of-ownership argument, running twenty-two services in one shared ECS cluster against four clusters divided by team. Include IAM scoping, blast radius, capacity sharing on EC2, observability, cost attribution, and the cost of cross-cutting change. Then argue the opposite position as strongly as you can, and state what evidence would change your mind.
 15. Critique the following proposal from a platform team: "We will run everything on EC2 capacity in `bridge` mode with dynamic port mapping for maximum density, one cluster for the whole company, target capacity at 100 per cent to avoid waste, an internal ALB between every pair of services for reliability, Cloud Map DNS with a 300-second TTL to reduce lookups, and a single shared security group so services can reach each other without rule maintenance." Identify at least six specific defects, propose a corrected design, and state which parts of the original intent are legitimate and how you would satisfy them.
+
+---
 
 ## 2.3 Container Orchestration with Amazon ECS
 
@@ -52,5 +55,5 @@
 11. A service's auto scaling policy asks for 40 tasks but the service never exceeds 12, with no error reported anywhere. Enumerate every mechanism that could impose that cap, describe the single diagnostic comparison that narrows the cause fastest, and explain why none of these caps surfaces as an error.
 12. Design the complete orchestration configuration for a payment service with a 99.99 per cent availability target, a twice-daily traffic peak, and a regulatory requirement that no release reaches more than five per cent of users before validation. Specify placement, capacity, scaling, and deployment settings; justify each value; and identify the one requirement your design satisfies only partially and why.
 13. A team argues that blue/green deployment should be mandatory across all forty of their services. Write the response you would give. Address what blue/green genuinely provides over rolling updates, what it costs, the specific condition under which it degenerates into an expensive rolling update, which services you would apply it to and why, and what cheaper intervention would improve safety across all forty.
-14. An organisation's ECS estate suffers a full outage. The trigger was a deployment of a service whose new revision passed all health checks. The outage lasted fifty minutes and affected services that were not deployed. Explain a plausible mechanism in detail, identify every design defect that must have been present, and specify the changes — with configuration specifics — that would have bounded the incident to a degraded few minutes for one service.
+14. An organisation's ECS estate suffers a full outage. The trigger was a deployment of a service whose new revision passed all health checks. The outage lasted fifty minutes and affected services that were not deployed. Explain a plausible mechanism in detail, identify every design defect that must have been present, and specify the changes  with configuration specifics  that would have bounded the incident to a degraded few minutes for one service.
 15. Critique the following configuration standard proposed by a platform team: "All services will use `binpack` on CPU for cost efficiency, scale on CPU utilisation at a 60 per cent target with 300-second cooldowns in both directions, deploy with `minimumHealthyPercent: 50` and `maximumPercent: 100` to avoid extra capacity cost, rely on the deployment circuit breaker for safety, and set scaling maximum to 1000 so we never run out of capacity." Identify at least six specific defects, propose a corrected standard, and state which parts of the original intent are legitimate and how you would satisfy them.

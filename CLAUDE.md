@@ -6,7 +6,7 @@ sends — do not mix the two instruction sets.
 | Trigger | Mode | Instructions | Output |
 | --- | --- | --- | --- |
 | Bare topic, or explicit "lab" / "LAB" (e.g. `VPC`, `lab: EKS scaling`) | **Lab generation** | Part I (§1–20 below) | `docs/Lab/lab-NN-<topic>.md` |
-| `unit<N> <topic>` or `Unit N: <topic>` (e.g. `unit2 Load Balancing`) | **Unit notes generation** | Part II below | `docs/unit<N>/<topic>.md` |
+| `unit<N> <topic>` or `Unit N: <topic>` (e.g. `unit2 Load Balancing`) | **Unit notes generation** | Part II below | `docs/unit<N>/topic<M>.md` + question files |
 
 If it's ambiguous which mode applies, ask rather than guess — the two output structures are
 incompatible (lab has Steps/Checkpoints/exercises; notes have the section list in Part II).
@@ -1118,7 +1118,7 @@ If everything above compresses to a single instruction, it is this:
 # PART II — Unit Notes Generator (DSO303 Lecture Notes)
 
 Triggered by `unit<N> <topic>` (e.g. `unit2 Elastic Load Balancing`). Output saved to
-`docs/unit<N>/<topic-slug>.md`, `<N>` matching an existing `docs/unit1`–`docs/unit8` folder. Do not
+`docs/unit<N>/topic<M>.md`, `<N>` matching an existing `docs/unit1`–`docs/unit8` folder. Do not
 use the Lab structure (§8 of Part I) for this mode — this is a separate document shape for a
 separate purpose (lecture/exam prep, not a hands-on walkthrough).
 
@@ -1172,9 +1172,7 @@ rather than silently dropping it).
 ## Why This Service or Concept Exists
 ## Core Concepts
 ## AWS Service Deep Dive
-## Internal Working
 ## Architecture Components
-## Request Lifecycle
 ## Important AWS Terminology
 ## Configuration Options (if applicable)
 ## Design Considerations
@@ -1189,12 +1187,17 @@ rather than silently dropping it).
 ## Advantages
 ## Limitations
 ## Common Mistakes
-## Code Examples
 ## Architecture Diagrams
 ## Summary
-## Questions
-## Practice Questions
 ```
+
+Do **not** add Learning Objectives, Real-World Motivation, Internal Working, Request Lifecycle,
+Hands-on Lab, Code Examples, AWS Certification Tips (exam tips, frequently confused pairs, memory
+aids), or "Where this topic sits in DSO303" boxes — these were deliberately removed from all notes.
+Short inline snippets inside other sections are fine where they explain a concept.
+
+Questions are **not** part of the note. They go into two per-unit files (see Question files
+below), so that notes stay readable and questions can be reviewed in one place.
 
 Use MkDocs admonitions (`!!! note`, `!!! tip`, `!!! warning`, `!!! danger`, `!!! info`) throughout
 the body wherever they add value — not only in a dedicated section.
@@ -1214,16 +1217,10 @@ between concepts.
 and recommendations, performance characteristics, scaling behaviour, availability, security
 features, service limits, common configurations.
 
-**Internal Working** — what happens behind the scenes: internal architecture, request flow, resource
-creation, control plane vs data plane where applicable, networking path where applicable.
-
 **Architecture Components** — explain the responsibility of every relevant component (Client,
 Route53, CloudFront, ALB, NLB, API Gateway, VPC, Subnets, Security Groups, EC2, Lambda, ECS, EKS,
 Docker, IAM, S3, CloudWatch, RDS, DynamoDB, SNS, SQS, EventBridge, Step Functions, CloudFormation —
 whichever are relevant to this topic).
-
-**Request Lifecycle** — step-by-step how requests travel through the architecture; communication
-between AWS services; synchronous vs asynchronous where relevant.
 
 **Important AWS Terminology** — a glossary table:
 
@@ -1266,19 +1263,38 @@ weaknesses.
 
 **Common Mistakes** — beginner mistakes and production mistakes, kept distinct.
 
-**Code Examples** — as appropriate: AWS CLI, Python (boto3), CloudFormation, Terraform, Docker,
-Kubernetes YAML, JSON, YAML, Shell.
-
 **Architecture Diagrams** — Mermaid diagrams used extensively: `flowchart`, `sequenceDiagram`,
 `graph TD`, `stateDiagram`, `journey`, ER diagrams where applicable.
 
 **Summary** — summarize the topic; highlight architectural lessons.
 
-**Questions** — conceptual questions, scenario questions, architecture questions, troubleshooting
-questions.
+### Question files
 
-**Practice Questions** — exactly 5 beginner, 5 intermediate, 5 advanced; mix conceptual, practical,
-and architecture questions.
+Every generated topic also produces two question blocks, appended to the unit's question files
+under a `## <N>.<M> <Topic Title>` heading (topics in numeric order, blocks separated by `---`):
+
+| File | Heading structure under `## N.M Title` | Content |
+| --- | --- | --- |
+| `docs/Questions/unit<N>.md` (H1 `# Unit N: Practice Questions`) | `### Beginner Questions`, `### Intermediate Questions`, `### Advanced Questions` | Exactly 5 per level; mix conceptual, practical, and architecture questions |
+| `docs/interviewquestions/unit<N>.md` (H1 `# Unit N: Interview Questions`) | `### Conceptual Questions`, `### Scenario Questions`, `### Architecture Questions`, `### Troubleshooting Questions`, `### Certification-style Questions` | Questions with model answers |
+
+Create the file with its H1 if it does not exist, and add it to the Practice Questions /
+Interview Questions nav sections (flag the nav change as described under Output handling).
+
+### Avoiding duplication across notes
+
+Unit 1 is a survey: it owns only global infrastructure (1.1), VPC fundamentals and Route 53 (1.6),
+EC2/Lambda basics (1.3) and the pattern survey (1.7). Everything else has a dedicated owner:
+Docker/ECR fundamentals 2.1, ECS 2.2–2.3, EKS 3.x, microservices 4.1, API Gateway and service mesh
+4.2, resilience 4.3, CodeCommit/CodeBuild/CodeDeploy 5.1, CodePipeline 5.2, IaC 5.3, S3/EBS/EFS/
+ElastiCache 6.1, RDS/Aurora/DynamoDB/Neptune/Redshift 6.2, SQS/SNS/Kinesis/EventBridge 6.3,
+CloudWatch metrics/X-Ray/health checks 7.1, logging 7.2, dashboards/alarms/incident response 7.3,
+IAM policies/roles/SCPs 8.1, security groups/NACLs/WAF/Shield 8.2, KMS/ACM/Secrets Manager 8.3.
+Before writing a section, check whether the owning topic already explains it; if so, write one or
+two sentences and link to it (`[6.1 AWS Storage Solutions](../unit6/topic1.md)`) instead of
+repeating the explanation. Multi-part topics (units 6–8) use one `##` heading per part, numbered
+N.M.K only in the question files. Cross-references use
+the nav numbering (1.1–1.7, 2.1–2.3, ...), never an older scheme such as 1.2.1.
 
 ## Formatting rules
 
@@ -1299,7 +1315,10 @@ and architecture questions.
 
 1. Confirm the unit folder exists (`docs/unit<N>/`); if `<N>` doesn't match an existing folder, say
    so and ask rather than creating a stray new one.
-2. Save the generated notes to `docs/unit<N>/<topic-slug>.md` (lowercase, hyphenated slug of the
-   topic).
-3. If `mkdocs.yml` nav needs a new entry for the file to be reachable, flag that explicitly rather
+2. Save the generated notes to `docs/unit<N>/topic<M>.md`, where `<M>` is the topic's number within
+   the unit (e.g. 4.2 -> `docs/unit4/topic2.md`), matching the existing files. Update
+   `docs/unit<N>/overview.md` (Topics table) to include it.
+3. Append the topic's questions to `docs/Questions/unit<N>.md` and
+   `docs/interviewquestions/unit<N>.md` as described under Question files.
+4. If `mkdocs.yml` nav needs a new entry for the file to be reachable, flag that explicitly rather
    than silently editing the nav — nav structure is a separate decision from content generation.

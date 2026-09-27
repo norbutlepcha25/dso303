@@ -1,7 +1,6 @@
+# Unit 1: Practice Questions
 
-# Unit 1: Questions for Practice
-
-## 1.1 : Global Infrustrusture
+## 1.1 AWS Cloud Overview
 
 1. Define Region, Availability Zone, and Edge Location, and state the primary purpose of each layer.
 2. Why does AWS require (in modern Regions) a minimum of three AZs rather than one large data centre?
@@ -17,12 +16,12 @@
 11. Design a multi-Region architecture for a payments API with RPO ≤ 1 second and RTO ≤ 5 minutes. Specify the data technology, the traffic-steering mechanism and its health signal, and how you avoid control-plane dependence during failover. State the consistency trade-off you accepted.
 12. Explain _static stability_ and redesign the following to satisfy it: "On AZ failure, a Lambda triggered by a CloudWatch alarm updates the Auto Scaling group to launch replacements and calls the Route 53 API to change weights."
 13. A microservices platform on EKS shows large inter-AZ data-transfer charges and elevated p99 latency. Discuss the tension between AZ-spread for resilience and AZ-affinity for cost/latency, and describe a topology-aware routing approach that balances them.
-14. Your global user base is 60% in regions where you have no AWS Region within 150 ms. Compare three remedies — additional Regions (active-active), CloudFront with an aggressive caching strategy, and Global Accelerator — for a workload that is 80% cacheable reads and 20% authenticated writes. Recommend and justify a combination.
+14. Your global user base is 60% in regions where you have no AWS Region within 150 ms. Compare three remedies  additional Regions (active-active), CloudFront with an aggressive caching strategy, and Global Accelerator  for a workload that is 80% cacheable reads and 20% authenticated writes. Recommend and justify a combination.
 15. During a partial edge-network event, some users receive errors while all Regional metrics are green and synthetic canaries in-Region pass. Construct the observability strategy (metrics locations, log types, external vantage points, AWS Health integration) that would have detected this class of failure, and the automated mitigation you would attach to it.
 
-## 1.2
+---
 
-## 1.3 : Compute Services
+## 1.3 AWS Compute Services
 
 1. Define an Amazon Machine Image, an instance type, and an instance profile, and explain the role each plays when an EC2 instance launches.
 2. Explain the difference between object-level responsibility in the AWS shared responsibility model for EC2 versus for AWS Lambda. Name three things that become the customer's responsibility with EC2 but not with Lambda.
@@ -40,7 +39,9 @@
 14. An organisation runs a stateful, latency-sensitive trading engine that requires sub-millisecond inter-node communication, cannot tolerate noisy neighbours, and must satisfy a regulatory requirement for hardware isolation and detailed audit evidence. Design the compute layer, addressing placement groups, instance tenancy, enhanced networking with Elastic Fabric Adapter or SR-IOV, IMDS hardening, and the observability and audit trail required. Explain which cloud-native principles you are deliberately sacrificing and why that sacrifice is defensible here.
 15. Design the control loop for a multi-tenant SaaS platform in which each tenant's workload must be isolated, tenants have wildly different load profiles, and the platform must scale from 10 to 10,000 tenants without a linear increase in operational effort. Compare a pool model (shared compute, logical isolation), a silo model (dedicated compute per tenant), and a hybrid bridge model. Address noisy neighbours, blast radius, cost attribution per tenant, deployment strategy, and the specific AWS compute primitives you would use for each model.
 
-## 1.4 : AWS storage Service
+---
+
+## 1.4 AWS Storage Services
 
 1. Define object storage, block storage, and file storage, and name the primary AWS service that implements each. For each, give one workload that suits it and one that does not.
 
@@ -68,11 +69,13 @@
 
 13. An EKS platform hosts both stateless web services and a stateful analytics workload. Explain how the EBS and EFS CSI drivers differ in access mode, provisioning behaviour, and scheduling implications. Describe the failure mode that occurs when an EBS-backed pod cannot be scheduled in its volume's Availability Zone, and design around it.
 
-14. A machine learning team's training jobs are bottlenecked reading a fifty-terabyte dataset from S3 across two hundred instances. Analyse where the bottleneck could be — client concurrency, prefix partitioning, instance network capacity, or storage throughput — and describe how you would measure each. Then propose a solution and explain why the durable system of record should remain S3.
+14. A machine learning team's training jobs are bottlenecked reading a fifty-terabyte dataset from S3 across two hundred instances. Analyse where the bottleneck could be  client concurrency, prefix partitioning, instance network capacity, or storage throughput  and describe how you would measure each. Then propose a solution and explain why the durable system of record should remain S3.
 
 15. Your organisation's monthly AWS bill shows storage costs growing twenty percent per quarter while data volume grows only five percent. Design a systematic investigation using Storage Lens, S3 Inventory, Cost Explorer, and Trusted Advisor. Identify at least six specific, distinct sources of waste you would expect to find, and give the remediation for each. State which remediations are safe to automate and which require human judgement.
 
-## 1.5 AWS database Service
+---
+
+## 1.5 AWS Database Services
 
 1. Define ACID and explain what each property guarantees. Give one example of an application requirement that depends on each.
 2. Explain the difference between a partition key and a sort key in Amazon DynamoDB, and give an example of an access pattern that requires both.
@@ -85,10 +88,12 @@
 9. An AWS Lambda function scaling to 800 concurrent executions exhausts connections to an Aurora PostgreSQL cluster. Explain the mechanism of the failure and design a complete remedy addressing connection management, blast-radius containment, and failover behaviour.
 10. Explain the thundering-herd problem in caching. Describe three distinct mitigations and explain the circumstances under which each is preferable.
 11. Design the complete data architecture for a global e-commerce platform serving customers in North America, Europe, and Asia. It must guarantee that orders and payments are transactionally correct, serve product catalogue reads at under 20 milliseconds p99 in all three regions, support full-text product search, retain seven years of order history for audit, and survive the loss of an entire AWS Region. Specify every data store, justify each against a stated rejected alternative, identify precisely where eventual consistency is introduced, and explain how the design prevents that eventual consistency from producing an incorrect financial outcome.
-12. A DynamoDB single-table design must support the following access patterns: retrieve a customer by identifier; list a customer's orders newest first; retrieve an order with all its line items in one request; list all orders in a given status placed in the last 24 hours; and retrieve the ten highest-value orders for a customer. Design the complete key schema, including partition key, sort key, and any secondary indexes with their projections. Justify each index, identify which patterns are eventually consistent, and explain what you would do differently if a sixth pattern — arbitrary full-text search across order notes — were added.
+12. A DynamoDB single-table design must support the following access patterns: retrieve a customer by identifier; list a customer's orders newest first; retrieve an order with all its line items in one request; list all orders in a given status placed in the last 24 hours; and retrieve the ten highest-value orders for a customer. Design the complete key schema, including partition key, sort key, and any secondary indexes with their projections. Justify each index, identify which patterns are eventually consistent, and explain what you would do differently if a sixth pattern  arbitrary full-text search across order notes  were added.
 13. Critically evaluate the claim that "DynamoDB is cheaper than Aurora". Construct a quantitative comparison for a workload of 5,000 reads and 500 writes per second on items averaging 3 KB, with 2 TB of stored data. State every assumption explicitly, identify the conditions under which each service wins, and then explain why the financial comparison alone is insufficient grounds for the architectural decision.
 14. A financial institution requires a ledger that is auditable, tamper-evident, strictly ordered, and able to sustain 20,000 appends per second, with the ability to reconstruct account balances at any historical instant. Design the persistence layer using an event-sourcing approach. Address the choice of store, the key schema or table design, optimistic concurrency control, snapshotting strategy, the read model and how it is maintained, retention and archival to S3, encryption and key management, and the audit trail. Identify the specific failure modes your design accepts and explain why they are tolerable.
 15. An organisation operates 40 microservices, each with its own database, and finds that cross-service reporting has become impossible without querying production databases directly, which is degrading them. Design a solution that restores analytical capability without coupling services or affecting production performance. Address change-data capture, the landing and transformation layers, schema evolution across 40 independently versioned services, data freshness expectations, cost, governance, and how you would prevent the analytical layer from becoming a new form of coupling between the services.
+
+---
 
 ## 1.6 AWS Network Services
 
@@ -122,7 +127,9 @@
 
 15. An organisation's monthly bill shows large charges for `NatGateway-Bytes`, `DataTransfer-Regional-Bytes`, and `PublicIPv4:InUseAddress`. Describe a systematic investigation using VPC Flow Logs, Athena, and Cost Explorer, then propose a remediation for each of the three charges. For each remediation, state the new cost it introduces and the conditions under which the change would **not** be worthwhile.
 
-## 1.7 Cloud Native Design Pattern
+---
+
+## 1.7 Cloud-Native Design Patterns
 
 1. Define cloud-native and explain why simply moving a virtual machine to EC2 does not make an application cloud-native.
 2. List three characteristics of serverless computing and give one AWS service that exemplifies each.

@@ -4,7 +4,7 @@ title: Group Icons
 
 # Group & Container Icons
 
-The containers used to frame resources in an architecture diagram — the AWS Cloud boundary, Regions, VPCs, subnets, Auto Scaling groups and the rest.
+The containers used to frame resources in an architecture diagram  the AWS Cloud boundary, Regions, VPCs, subnets, Auto Scaling groups and the rest.
 
 <div class="aws-grid" markdown="0">
   <a class="aws-tile" href="../assets/icons/group/auto-scaling-group.svg" data-name="auto scaling group auto-scaling-group boundary around instances managed together by an auto scaling group" data-slug="auto-scaling-group" data-title="Auto Scaling Group" data-desc="Boundary around instances managed together by an Auto Scaling group" data-path="assets/icons/group/auto-scaling-group.svg">

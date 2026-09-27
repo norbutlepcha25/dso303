@@ -4,13 +4,21 @@
 
 **Amazon Elastic Container Service (ECS)** is an AWS-native container orchestrator: a managed control plane that stores your declared desired state, schedules containers onto capacity, replaces them when they fail, and integrates them with AWS networking, identity, load balancing, and observability.
 
-An **ECS cluster** is a logical grouping of services, tasks, and — on EC2 capacity — container instances. It is a namespace, a capacity boundary, and a permissions boundary. It is not a physical thing: the cluster has no endpoint, no version, no control-plane charge, and nothing to patch. Creating one is an API call that costs nothing and completes instantly.
+An **ECS cluster** is a logical grouping of services, tasks, and  on EC2 capacity  container instances. It is a namespace, a capacity boundary, and a permissions boundary. It is not a physical thing: the cluster has no endpoint, no version, no control-plane charge, and nothing to patch. Creating one is an API call that costs nothing and completes instantly.
 
 A **capacity provider** names *where* tasks may run. `FARGATE` and `FARGATE_SPOT` are built-in; an Auto Scaling group capacity provider wraps an ASG of EC2 instances and can manage that ASG's size on your behalf.
 
 **AWS Fargate** is serverless compute for containers: you declare CPU and memory, AWS provisions an isolated microVM, runs your task in it, and bills per second for the resources you declared.
 
-**Service discovery** is the mechanism by which one component learns another's current address, given that task IP addresses are ephemeral. **Load balancing** is the mechanism by which requests are distributed across the healthy instances of a service.
+**Service discovery** is the mechanism by which one component learns another's current address, given that task IP addresses are ephemeral. 
+
+**Load balancing** is the mechanism by which requests are distributed across the healthy instances of a service.
+
+<figure markdown="span">
+    ![3layerglobalinfra](../img/U2/t2/ECSComponents.png){width="80%"}
+    <figcaption>Components of ECS</figcaption>
+    <p align='right' style="font-size:0.8em"><i>Image Source: AI Generaed (Google Gemini)</i></p>
+</figure>
 
 | Layer | The question it answers | ECS mechanism |
 |---|---|---|
@@ -22,23 +30,17 @@ A **capacity provider** names *where* tasks may run. `FARGATE` and `FARGATE_SPOT
 | **North-south** | How does external traffic reach a task? | ALB, NLB, or API Gateway, with target type `ip` or `instance` |
 | **East-west** | How does one service reach another? | Service Connect, Cloud Map, internal load balancer, VPC Lattice |
 
-Within an AWS architecture, ECS sits in the application tier: behind an edge of Amazon Route 53, Amazon CloudFront, AWS WAF, and a load balancer; inside private subnets of a VPC; in front of Amazon RDS, Amazon DynamoDB, Amazon ElastiCache, and Amazon S3; and connected to peers by a mixture of direct calls and asynchronous messaging over Amazon SQS, Amazon SNS, and Amazon EventBridge.
-
 !!! note "The cluster is free, and that fact has architectural consequences"
 
-    Amazon EKS charges an hourly fee per cluster, which pushes organisations towards a small number of large, multi-tenant clusters with namespace isolation inside them. ECS charges nothing for clusters, so a cluster-per-team, cluster-per-environment, or cluster-per-application topology costs nothing extra. This asymmetry is not trivia: it means that on ECS, isolation between teams can be obtained by creating another cluster rather than by engineering it inside a shared one — which is a genuine and frequently decisive advantage.
-
----
+    Amazon EKS charges an hourly fee per cluster, which pushes organisations towards a small number of large, multi-tenant clusters with namespace isolation inside them. ECS charges nothing for clusters, so a cluster-per-team, cluster-per-environment, or cluster-per-application topology costs nothing extra. This asymmetry is not trivia: it means that on ECS, isolation between teams can be obtained by creating another cluster rather than by engineering it inside a shared one  which is a genuine and frequently decisive advantage.
 
 ## Why This Service or Concept Exists
 
 ### The problem ECS solves
 
-Chapter 2.1 ended with an EC2 instance running a container under `systemd`, and a list of things that arrangement cannot do. Each item on that list is a variant of the same problem: **there is no continuous process comparing what should be running with what is running, and acting on the difference**.
-
 | The gap in manual container hosting | What is actually required |
 |---|---|
-| A container dies and `systemd` restarts it — but only on that host | A controller that can place a replacement anywhere in a fleet |
+| A container dies and `systemd` restarts it  but only on that host | A controller that can place a replacement anywhere in a fleet |
 | An instance fails and its containers are simply gone | A controller that notices the loss and schedules replacements on healthy capacity |
 | Deciding which container runs on which host | A scheduler evaluating resources, constraints, and strategy |
 | Three containers wanting port 8080 | A network model that gives each workload its own address, or dynamic port allocation the platform tracks |
@@ -52,7 +54,7 @@ Kubernetes solves the same problem. ECS solves it with a deliberately smaller co
 
 ### Why capacity providers exist
 
-Early ECS forced you to state a **launch type** — `EC2` or `FARGATE` — in the service definition, coupling the workload declaration to the capacity decision. That coupling caused two real problems: you could not run part of a service on Spot and part on On-Demand, and changing the capacity model meant changing the service.
+Early ECS forced you to state a **launch type**  `EC2` or `FARGATE`  in the service definition, coupling the workload declaration to the capacity decision. That coupling caused two real problems: you could not run part of a service on Spot and part on On-Demand, and changing the capacity model meant changing the service.
 
 Capacity providers separate the two. The service says "run twenty tasks according to this strategy"; the strategy says "two on Fargate On-Demand as a guaranteed base, and the remainder split four-to-one between Fargate Spot and On-Demand". The workload declaration no longer names the capacity, which is what makes mixed On-Demand and Spot fleets, and migration between capacity models, straightforward.
 
@@ -81,7 +83,7 @@ The mechanisms differ in **where the routing decision is made**, and that is the
 
 !!! warning "Service discovery is not a naming convenience"
 
-    Students routinely treat service discovery as "a nicer way to write a hostname". It is not. It is the mechanism that keeps a distributed system connected while its members are constantly being replaced. Get it wrong — hard-code an IP, cache a DNS record past its TTL, put a `DescribeTasks` call on the request path — and the failure appears only under change: during a deployment, during scale-in, during an AZ event. Those are precisely the moments when you least want a second failure.
+    Students routinely treat service discovery as "a nicer way to write a hostname". It is not. It is the mechanism that keeps a distributed system connected while its members are constantly being replaced. Get it wrong  hard-code an IP, cache a DNS record past its TTL, put a `DescribeTasks` call on the request path  and the failure appears only under change: during a deployment, during scale-in, during an AZ event. Those are precisely the moments when you least want a second failure.
 
 ## Core Concepts
 
@@ -108,7 +110,7 @@ Cluster settings worth knowing: `containerInsights` (`disabled`, `enabled`, or `
 
 !!! tip "Choose cluster boundaries by blast radius and IAM, not by tidiness"
 
-    The useful questions are: who should be able to deploy here, what should fail together, and what should be observed together. If two workloads have the same answers to all three, they belong in the same cluster. On EC2 capacity there is a fourth question — should these workloads share instances — because sharing improves bin packing and worsens isolation.
+    The useful questions are: who should be able to deploy here, what should fail together, and what should be observed together. If two workloads have the same answers to all three, they belong in the same cluster. On EC2 capacity there is a fourth question  should these workloads share instances  because sharing improves bin packing and worsens isolation.
 
 ### Container instances and the ECS agent
 
@@ -118,7 +120,7 @@ On EC2 capacity, a **container instance** is an EC2 instance that has registered
 |---|---|---|
 | **Registered resources** | Total CPU units, memory, and ports the instance offers | The scheduler's view of capacity |
 | **Remaining resources** | What is left after placed tasks | Placement fails when no instance has enough remaining |
-| **Attributes** | Key-value facts: AZ, instance type, AMI ID, agent version, custom attributes you set | The vocabulary of placement constraints in 2.3.1 |
+| **Attributes** | Key-value facts: AZ, instance type, AMI ID, agent version, custom attributes you set | The vocabulary of placement constraints in [2.3](topic3.md#placement-constraints) |
 | **Agent connectivity** | Whether the agent is currently connected | A disconnected agent means no new placements on that instance |
 | **Instance status** | `ACTIVE`, `DRAINING`, `REGISTERING`, `DEREGISTERING` | `DRAINING` stops new placement and moves service tasks off, which is how you patch an instance safely |
 | **Managed draining** | Capacity provider feature that drains an instance automatically when the ASG terminates it | Prevents scale-in and instance refresh from killing tasks abruptly |
@@ -134,20 +136,6 @@ A **capacity provider strategy** is a list of providers, each with a `base` and 
 
 For example, `FARGATE` with `base=2, weight=1` and `FARGATE_SPOT` with `weight=4`: the first two tasks go to On-Demand; beyond that, one in five goes to On-Demand and four in five to Spot. At a desired count of twelve, that is two plus two On-Demand and eight Spot.
 
-```mermaid
-flowchart TD
-    S["Service desiredCount = 12"] --> STRAT["Capacity provider strategy"]
-    STRAT --> B["Step 1: satisfy base — 2 tasks on FARGATE"]
-    B --> W["Step 2: distribute remaining 10 by weight 1:4"]
-    W --> OD["2 more tasks on FARGATE On-Demand"]
-    W --> SP["8 tasks on FARGATE_SPOT"]
-    OD --> RES["Result: 4 On-Demand, 8 Spot"]
-    SP --> RES
-    RES --> NOTE["Guaranteed floor of 2 survives a Spot reclamation event"]
-```
-
-Generate a educational content with clean and neat diagram with white background
-
 <figure markdown="span">
     ![3layerglobalinfra](../img/U2/t2/fargatecapacity.png){width="80%"}
     <figcaption>Example of Fargate Capacity Provider</figcaption>
@@ -162,15 +150,38 @@ Generate a educational content with clean and neat diagram with white background
 | **Managed termination protection** | Prevents the ASG scaling in an instance that is still running tasks | Without it, scale-in kills running work |
 | **Managed draining** | Sets an instance to `DRAINING` on termination so service tasks are relocated first | Makes instance refresh and Spot interruption graceful |
 
-**Target capacity** deserves explanation because it is routinely misconfigured. Setting it to 100 per cent means ECS aims for no spare room, so every scale-out waits for an instance launch — typically one to three minutes. Setting it to 80 per cent keeps roughly a fifth of the cluster free, so tasks place immediately and the instance launch happens behind them. You are trading a little idle cost for scale-out latency, and for a user-facing service that trade is almost always worth making.
+**Target capacity** deserves explanation because it is routinely misconfigured. Setting it to 100 per cent means ECS aims for no spare room, so every scale-out waits for an instance launch  typically one to three minutes. Setting it to 80 per cent keeps roughly a fifth of the cluster free, so tasks place immediately and the instance launch happens behind them. You are trading a little idle cost for scale-out latency, and for a user-facing service that trade is almost always worth making.
 
 !!! danger "Two scaling layers on EC2, one on Fargate"
 
-    **Service auto scaling** (Application Auto Scaling) changes `desiredCount` — how many tasks you want. **Cluster capacity scaling** (capacity provider managed scaling) changes how many EC2 instances exist for those tasks to run on. They are separate systems and both must be configured. The classic symptom of configuring only the first is a service that raises its desired count during peak and then sits with tasks in `PROVISIONING` forever, while the CPU graphs of the existing instances look fine. On Fargate the second layer does not exist, which removes an entire class of misconfiguration — and is one of the strongest practical arguments for Fargate.
+    **Service auto scaling** (Application Auto Scaling) changes `desiredCount`  how many tasks you want. **Cluster capacity scaling** (capacity provider managed scaling) changes how many EC2 instances exist for those tasks to run on. They are separate systems and both must be configured. The classic symptom of configuring only the first is a service that raises its desired count during peak and then sits with tasks in `PROVISIONING` forever, while the CPU graphs of the existing instances look fine. On Fargate the second layer does not exist, which removes an entire class of misconfiguration  and is one of the strongest practical arguments for Fargate.
+
+### Tasks, services, and the reconciliation loop
+
+A **task** is one running instantiation of a task-definition revision. A **service** is a controller with a `desiredCount` that continuously compares desired state with observed state and issues the API calls that close the gap. This control loop is the whole idea, and it is worth stating precisely:
+
+1. Observe the set of `RUNNING` tasks belonging to this service.
+2. Compare its size and task-definition revision with the desired count and revision.
+3. If fewer tasks are running than desired, or a task is unhealthy, place replacements according to the placement strategy and capacity provider strategy.
+4. If more are running than desired, or tasks run an old revision during a deployment, deregister and stop the surplus, honouring the deployment configuration.
+5. Register newly healthy tasks with any configured load-balancer target groups, and deregister stopping ones first.
+6. Repeat, forever.
+
+Use a **standalone task** (`RunTask`) for work that finishes: a database migration, a batch job, a scheduled report. Use a **service** for work that should always be running: an API, a queue consumer, a web front end.
+
+<figure markdown="span">
+    ![3layerglobalinfra](../img/U2/t1/TaskReconciliationLoop.png){width="80%"}
+    <figcaption>AWS Task Reconciliation Loop</figcaption>
+    <p align='right' style="font-size:0.8em"><i>Image Source: AI Generaed (Google Gemini)</i></p>
+</figure>
+
+!!! tip "Read the state a task is stuck in  it names the cause"
+
+    A task stuck in `PROVISIONING` is waiting for capacity or a network interface: no EC2 room, no free subnet IP addresses, or a Fargate quota. A task that reaches `PENDING` and then `STOPPED` almost always failed to pull the image: check the ECR repository name, the Region, the execution role's permissions, and whether a private subnet has the three endpoints it needs (see [2.1](topic1.md#amazon-ecr-concepts)). A task that reaches `RUNNING` and immediately stops is an application failure: read `stoppedReason` and the container `exitCode`. Reading the state before guessing turns a thirty-minute investigation into a two-minute one.
 
 ### Services
 
-A **service** maintains a desired number of tasks from a specified task-definition revision, replaces failures, and registers tasks with load-balancer target groups. Its key properties, beyond the scheduler behaviour covered in 2.3:
+A **service** maintains a desired number of tasks from a specified task-definition revision, replaces failures, and registers tasks with load-balancer target groups. Its key properties, beyond the scheduler behaviour covered in [2.3](topic3.md):
 
 | Property | Purpose |
 |---|---|
@@ -182,12 +193,23 @@ A **service** maintains a desired number of tasks from a specified task-definiti
 | `serviceRegistries` | Cloud Map registration for DNS-based discovery |
 | `serviceConnectConfiguration` | Service Connect namespace, advertised services, client aliases |
 | `healthCheckGracePeriodSeconds` | How long to ignore load-balancer health checks after a task starts |
-| `deploymentConfiguration` | Minimum healthy percent, maximum percent, circuit breaker — see 2.3.3 |
+| `deploymentConfiguration` | Minimum healthy percent, maximum percent, circuit breaker  see [2.3](topic3.md#deployment-the-rolling-update) |
 | `enableExecuteCommand` | Whether ECS Exec is permitted |
 | `propagateTags` | Whether service or task-definition tags are copied to tasks, which matters for cost attribution |
 | `schedulingStrategy` | `REPLICA` (a desired count) or `DAEMON` (one task per eligible container instance, EC2 only) |
 
-The **`DAEMON`** scheduling strategy is worth noting because it is the ECS analogue of a Kubernetes DaemonSet: exactly one task per eligible container instance, automatically placed on new instances as they join. It is how you run a node-level log collector or monitoring agent — and it is unavailable on Fargate, and also unsupported with the `CODE_DEPLOY` and `EXTERNAL` deployment controllers, which is precisely why Fargate workloads must use sidecars for collection and pay that overhead per task.
+The **`DAEMON`** scheduling strategy is worth noting because it is the ECS analogue of a Kubernetes DaemonSet: exactly one task per eligible container instance, automatically placed on new instances as they join. It is how you run a node-level log collector or monitoring agent  and it is unavailable on Fargate, and also unsupported with the `CODE_DEPLOY` and `EXTERNAL` deployment controllers, which is precisely why Fargate workloads must use sidecars for collection and pay that overhead per task.
+
+### Task network modes
+
+A task definition's `networkMode` (see [2.1](topic1.md#ecs-task-definitions)) determines how a task gets network identity, and it constrains everything that follows: which load-balancer target type can be used, whether each task has its own security group, and how many subnet IP addresses the service consumes.
+
+| Mode | Behaviour | When to use |
+|---|---|---|
+| `awsvpc` | Task gets its own ENI, private IP, and security groups. **Required on Fargate** | The default for everything; per-task security groups are the security model |
+| `bridge` | Docker's virtual bridge; container ports map to host ports, optionally dynamic (host port 0) | EC2 launch type with dynamic port mapping behind an ALB, for density |
+| `host` | Container shares the host's network namespace directly | Highest performance, no port isolation; monitoring agents and specialised cases |
+| `none` | No external networking | Batch work that needs no network |
 
 ### North-south: getting traffic in
 
@@ -195,7 +217,7 @@ The **`DAEMON`** scheduling strategy is worth noting because it is the ECS analo
 |---|---|---|---|---|
 | **Application Load Balancer** | 7 (HTTP/HTTPS) | Host and path routing, one ALB shared by many services, WebSockets, HTTP/2, gRPC, OIDC authentication, weighted target groups | HTTP only; per-hour plus LCU cost | The default for HTTP services |
 | **Network Load Balancer** | 4 (TCP/UDP/TLS) | Extreme throughput, very low latency, static IPs, preserves source IP, non-HTTP protocols | No content-based routing | Non-HTTP protocols, static IP requirements, very high connection counts |
-| **Amazon API Gateway** | 7, API-oriented | Per-consumer API keys, usage plans, request validation, throttling, WebSocket APIs, direct AWS service integrations | Higher per-request cost; another hop | You need API management, not just routing — see 1.3.4 |
+| **Amazon API Gateway** | 7, API-oriented | Per-consumer API keys, usage plans, request validation, throttling, WebSocket APIs, direct AWS service integrations | Higher per-request cost; another hop | You need API management, not just routing  see [Chapter 1.7](../unit1/topic7.md) and [4.2](../unit4/topic2.md) |
 | **CloudFront in front of any of these** | Edge | TLS termination near the user, caching, AWS WAF and Shield, absorbs read load | Cache invalidation discipline required | Public-facing services with global users or cacheable content |
 
 **Target types** determine what the load balancer sends packets to:
@@ -205,7 +227,7 @@ The **`DAEMON`** scheduling strategy is worth noting because it is the ECS analo
 | `ip` | The task's own private IP | `awsvpc` mode; **required on Fargate** | No extra hop; health checks test the task directly; each task consumes a subnet IP |
 | `instance` | The container instance and a host port | `bridge` or `host` mode on EC2 | Enables dynamic port mapping for density; adds a NAT hop on the instance |
 
-**Dynamic port mapping** is the reason `instance` targets still exist. In `bridge` mode with a container port of 8080 and a host port of `0`, Docker assigns an ephemeral host port at start, ECS learns it, and ECS registers *that* port with the target group. This lets many copies of the same service share one instance without port conflicts — the problem you hit manually in the 2.1 lab. It is the density play on EC2 capacity, and its cost is losing per-task security groups.
+**Dynamic port mapping** is the reason `instance` targets still exist. In `bridge` mode with a container port of 8080 and a host port of `0`, Docker assigns an ephemeral host port at start, ECS learns it, and ECS registers *that* port with the target group. This lets many copies of the same service share one instance without port conflicts. It is the density play on EC2 capacity, and its cost is losing per-task security groups.
 
 **Health checks** exist at two levels and mean different things, which was introduced in 2.1 and matters operationally here:
 
@@ -214,23 +236,9 @@ The **`DAEMON`** scheduling strategy is worth noting because it is the ECS analo
 | Container `healthCheck` | The ECS agent, inside the container | Whether ECS considers the container healthy; drives `dependsOn: HEALTHY` | `startPeriod` shorter than the application's cold start, producing a restart loop |
 | Target group health check | The load balancer, over the network | Whether the target receives traffic | Wrong port, wrong path, path requiring authentication, or security group blocking the load balancer |
 
-**Draining settings** determine whether a deployment is invisible. The **deregistration delay** on the target group is what protects in-flight requests: the target is removed from rotation and existing connections are allowed to finish for that many seconds. It must exceed the p99 request duration, and it must be shorter than or comparable to the task's `stopTimeout`, since ECS will otherwise `SIGKILL` a task that is still draining.
+The two can disagree, and when they do the difference is diagnostic: container healthy but target unhealthy points at security groups, the wrong port, or a path that requires authentication.
 
-```mermaid
-sequenceDiagram
-    participant ECS as "ECS service scheduler"
-    participant TG as "Target group"
-    participant OLD as "Old task"
-    participant CLIENT as "In-flight client request"
-    ECS->>TG: "deregister old task target"
-    TG->>TG: "state draining, stop sending new requests"
-    CLIENT->>OLD: "existing request still being served"
-    TG->>TG: "wait deregistration_delay seconds"
-    OLD-->>CLIENT: "response completed"
-    ECS->>OLD: "SIGTERM"
-    OLD->>OLD: "application stops accepting, finishes work, exits"
-    ECS->>OLD: "SIGKILL after stopTimeout, if still running"
-```
+**Draining settings** determine whether a deployment is invisible. The **deregistration delay** on the target group is what protects in-flight requests: the target is removed from rotation and existing connections are allowed to finish for that many seconds. It must exceed the p99 request duration, and it must be shorter than or comparable to the task's `stopTimeout`, since ECS will otherwise `SIGKILL` a task that is still draining. The full shutdown sequence is deregister, drain, `SIGTERM`, `SIGKILL`.
 
 ### East-west: services finding each other
 
@@ -241,11 +249,11 @@ sequenceDiagram
 | **ECS Service Connect** | In an AWS-managed, Envoy-based proxy on localhost | No | Yes: client-side load balancing, outlier ejection, retries, per-call metrics | Sidecar resource overhead per task | Within a Cloud Map namespace |
 | **Amazon VPC Lattice** | In the VPC data plane, transparently | Managed, no sidecar | Retries, weighted routing, IAM auth policies | Per-request and per-hour | Yes, across VPCs, accounts, and compute types |
 
-**ECS Service Connect** is the pragmatic default for ECS-to-ECS HTTP and gRPC. You name a Cloud Map namespace, declare on the server side that a named port mapping is advertised under a discovery name with a client alias, and enable the client side on callers. ECS injects and manages a sidecar proxy in each task — Envoy-based, but not present in your task definition and not configurable by you. Callers then use `http://catalog:8080`, resolved locally. What you get, without writing proxy configuration: connection pooling, client-side load balancing across healthy endpoints, automatic ejection of failing endpoints, and per-request metrics broken down **by client and by server** in the `ECS/ServiceConnect` CloudWatch namespace — telemetry that answers "which caller is causing this callee's errors" without any application instrumentation.
+**ECS Service Connect** is the pragmatic default for ECS-to-ECS HTTP and gRPC. You name a Cloud Map namespace, declare on the server side that a named port mapping is advertised under a discovery name with a client alias, and enable the client side on callers. ECS injects and manages a sidecar proxy in each task  Envoy-based, but not present in your task definition and not configurable by you. Callers then use `http://catalog:8080`, resolved locally. What you get, without writing proxy configuration: connection pooling, client-side load balancing across healthy endpoints, automatic ejection of failing endpoints, and per-request metrics broken down **by client and by server** in the `ECS/ServiceConnect` CloudWatch namespace  telemetry that answers "which caller is causing this callee's errors" without any application instrumentation.
 
 Two constraints are worth stating. The `portMappings` entry in the **server** task definition **must have a `name`**, because that name is what the service definition advertises; client-only services have no such requirement. And enabling Service Connect on an existing service requires a new deployment, since the proxy is injected at task start.
 
-**AWS Cloud Map** registers task IPs as DNS A records (or SRV records for `bridge` mode with dynamic ports) in a private hosted zone. It is simple and protocol-agnostic, which is why it remains correct for non-HTTP traffic. Its weakness is DNS caching: some client libraries and runtimes cache resolutions well beyond the TTL — the JVM historically cached indefinitely by default — so a caller can hold the address of a task that stopped minutes ago.
+**AWS Cloud Map** registers task IPs as DNS A records (or SRV records for `bridge` mode with dynamic ports) in a private hosted zone. It is simple and protocol-agnostic, which is why it remains correct for non-HTTP traffic. Its weakness is DNS caching: some client libraries and runtimes cache resolutions well beyond the TTL  the JVM historically cached indefinitely by default  so a caller can hold the address of a task that stopped minutes ago.
 
 **Amazon VPC Lattice** is the AWS-native answer to connectivity *between* boundaries: across VPCs, across accounts, and across compute types, so an ECS service can call a Lambda function or an EKS workload through one application-layer network with IAM auth policies and weighted routing, without sidecars. Its natural use case is exactly the one Service Connect does not cover.
 
@@ -255,45 +263,7 @@ Two constraints are worth stating. The `portMappings` entry in the **server** ta
 
 ---
 
-## Internal Working
-
-### Control plane and data plane
-
-ECS separates a **control plane** — AWS-owned, multi-tenant, entirely invisible, with no endpoint you manage and no charge — from a **data plane** that runs your containers and serves your traffic.
-
-The control plane holds cluster, service, and task-definition state and runs two loops: the **scheduler**, which decides where a task goes, and the **service reconciliation loop**, which compares desired with observed and issues the calls that close the gap.
-
-| Aspect | ECS |
-|---|---|
-| Control-plane location | AWS-owned and multi-tenant; no endpoint, no version, no patching |
-| Control-plane cost | None |
-| API | `ecs:*` AWS API calls, authorised by IAM |
-| Data plane | Fargate microVMs, or EC2 instances running the ECS agent |
-| Node-to-control-plane path | Outbound only, initiated by the agent |
-
-The consequence that matters: **a control-plane impairment does not stop running traffic**. Existing tasks keep serving, the ALB keeps routing to healthy targets, and established connections are unaffected. What you lose is the ability to *change* things — no new deployments, no replacement of failed tasks, no scaling. This bounds the blast radius of a control-plane incident to "serious but survivable", provided nothing in your request path depends on a control-plane call.
-
-!!! danger "Never place a control-plane call on the request path"
-
-    If a service calls `ecs:DescribeTasks` or `ecs:ListTasks` to discover a peer on every request, it has coupled its own availability to the control plane's and thrown away the isolation the architecture provided. It will also hit API throttling, which appears as a latency cliff under exactly the load you least want it. Discover peers through the Service Connect proxy on localhost, or through DNS resolved from a local cache — both keep working when the control plane does not.
-
-### How a task is placed and started on Fargate
-
-```mermaid
-sequenceDiagram
-    participant API as "ECS API"
-    participant SCHED as "ECS scheduler"
-    participant FAR as "Fargate control plane"
-    participant MVM as "Fargate microVM"
-    participant ENI as "VPC ENI service"
-    participant ECR as "Amazon ECR"
-    participant TG as "Target group"
-    API->>SCHED: "service desired count increased"
-    SCHED->>SCHED: "select capacity provider by base and weight"
-    SCHED->>FAR: "request a task slot with the declared vCPU and memory"
-    FAR->>MVM: "provision a dedicated microVM on AWS-managed capacity"
-    FAR->>ENI: "create and attach an ENI in the chosen subnet"
-    ENI-->>MVM: "private IP assigned, security groups applied"
+>MVM: "private IP assigned, security groups applied"
     MVM->>ECR: "assume execution role, pull image, verify digests"
     MVM->>MVM: "start containers in dependsOn order"
     MVM->>MVM: "container healthCheck passes"
@@ -303,7 +273,7 @@ sequenceDiagram
     TG-->>SCHED: "target healthy, receiving traffic"
 ```
 
-The two slow steps are **ENI attachment** and **image pull**, and only the second is under your control — which is why 2.1 treated image size as a scaling property. There is no shared image cache between Fargate tasks, so every task pays the full pull.
+The two slow steps are **ENI attachment** and **image pull**, and only the second is under your control  which is why 2.1 treated image size as a scaling property. There is no shared image cache between Fargate tasks, so every task pays the full pull.
 
 **Fargate platform versions** determine the feature set and the underlying agent and kernel. `LATEST` is the sensible default; pinning a version is appropriate only when you have a specific compatibility requirement, and it then becomes something you must remember to move.
 
@@ -336,7 +306,7 @@ sequenceDiagram
     SCHED->>TG: "register instance and host port, or task IP in awsvpc mode"
 ```
 
-The branch is the whole point. When capacity exists, placement is nearly instant. When it does not, the task waits for an instance launch — one to three minutes — which is why target capacity below 100 per cent is worth its idle cost for user-facing services. And the image pull is frequently free on a warm instance, because layers pulled for a previous task are already in the local store.
+The branch is the whole point. When capacity exists, placement is nearly instant. When it does not, the task waits for an instance launch  one to three minutes  which is why target capacity below 100 per cent is worth its idle cost for user-facing services. And the image pull is frequently free on a warm instance, because layers pulled for a previous task are already in the local store.
 
 ### Where task start latency goes
 
@@ -348,7 +318,7 @@ The branch is the whole point. When capacity exists, placement is nearly instant
 | Container start | Application-dependent | Application-dependent | Application-dependent |
 | Health check and registration | 15–60 seconds depending on thresholds | Same | Same |
 
-This table is the honest basis for the launch-type decision when scale-out latency matters: EC2 with warm capacity is faster, and Fargate is simpler. If your service must absorb a step change in load within seconds, either keep warm capacity or scale ahead of demand on a schedule — no orchestrator can make a cold start instant.
+This table is the honest basis for the launch-type decision when scale-out latency matters: EC2 with warm capacity is faster, and Fargate is simpler. If your service must absorb a step change in load within seconds, either keep warm capacity or scale ahead of demand on a schedule  no orchestrator can make a cold start instant.
 
 ### How the ALB reaches a task
 
@@ -365,7 +335,8 @@ With `ip` targets the ALB sends packets directly to the task's own ENI: one fewe
 
 The security-group relationship is where most "target unhealthy" incidents live. The correct pattern is a **security group reference**, not a CIDR: the task's security group allows port 8080 *from the ALB's security group*. This states an identity relationship, survives subnet changes, and is self-documenting.
 
----
+--- 
+-->
 
 ## Architecture Components
 
@@ -395,7 +366,7 @@ The security-group relationship is where most "target unhealthy" incidents live.
 | **AWS Cloud Map** | The service registry backing both Service Connect namespaces and DNS-based discovery |
 | **ECS Service Connect** | AWS-managed, Envoy-based proxies providing east-west discovery, load balancing, retries, and telemetry |
 | **Amazon VPC Lattice** | Cross-VPC, cross-account, cross-compute application networking with IAM auth policies |
-| **Task execution role** | Pulls images, creates log streams, decrypts secrets — before your code runs |
+| **Task execution role** | Pulls images, creates log streams, decrypts secrets  before your code runs |
 | **Task role** | The application's own AWS identity |
 | **Container instance role** | The EC2 instance profile used by the agent; must not carry application permissions |
 | **AWS Secrets Manager and SSM Parameter Store** | Sources for the `secrets` block |
@@ -403,29 +374,9 @@ The security-group relationship is where most "target unhealthy" incidents live.
 | **AWS CloudTrail** | Audit of `RegisterTaskDefinition`, `UpdateService`, `ExecuteCommand`, and every other control-plane call |
 | **AWS Systems Manager** | ECS Exec sessions without SSH or bastion hosts |
 
-Read architecturally, these form three rings. The **edge ring** — Route 53, CloudFront, WAF, ALB — is shared across services rather than duplicated per service, which is what keeps decomposition from multiplying the edge bill. The **orchestration ring** — cluster, capacity providers, services, agent or Fargate — is where the control loop lives, and its defining property is that it is declarative: you state desired state and the platform closes the gap continuously. The **connectivity ring** — security groups, endpoints, Service Connect, Cloud Map, Lattice — is where most production incidents actually occur, because it is the part that fails only under change rather than under load.
+Read architecturally, these form three rings. The **edge ring**  Route 53, CloudFront, WAF, ALB  is shared across services rather than duplicated per service, which is what keeps decomposition from multiplying the edge bill. The **orchestration ring**  cluster, capacity providers, services, agent or Fargate  is where the control loop lives, and its defining property is that it is declarative: you state desired state and the platform closes the gap continuously. The **connectivity ring**  security groups, endpoints, Service Connect, Cloud Map, Lattice  is where most production incidents actually occur, because it is the part that fails only under change rather than under load.
 
----
-
-## Request Lifecycle
-
-Two lifecycles matter in this chapter: a user request arriving from outside, and a service calling another service inside.
-
-### North-south, end to end
-
-```mermaid
-sequenceDiagram
-    participant U as "Browser"
-    participant R53 as "Amazon Route 53"
-    participant CF as "Amazon CloudFront"
-    participant WAF as "AWS WAF"
-    participant ALB as "Application Load Balancer"
-    participant TG as "Target group, type ip"
-    participant TASK as "Fargate task ENI"
-    participant APP as "Application container"
-    participant CW as "CloudWatch Logs"
-    U->>R53: "resolve shop.example.edu"
-    R53-->>U: "CloudFront distribution address"
+>U: "CloudFront distribution address"
     U->>CF: "HTTPS GET /orders/123"
     CF->>WAF: "evaluate managed and rate-based rules"
     WAF-->>CF: "allow"
@@ -468,7 +419,7 @@ sequenceDiagram
     Note over PXY,CAT1: "If catalog task 1 starts failing, the proxy ejects it as an outlier"
 ```
 
-The critical property is the note at the top: **endpoint discovery happens in the background, not on the request path**. The application resolves a name on localhost; no DNS lookup crosses the network per request, no control-plane call is made, and the proxy's endpoint list is maintained continuously. This is what makes the mechanism resilient to control-plane impairment and immune to DNS caching problems.
+The critical property is the note at the top: **endpoint discovery happens in the background, not on the request path**. The application resolves a name on localhost; no DNS lookup crosses the network per request, no control-plane call is made, and the proxy's endpoint list is maintained continuously. This is what makes the mechanism resilient to control-plane impairment and immune to DNS caching problems. -->
 
 ### Synchronous versus asynchronous, restated for ECS
 
@@ -483,15 +434,13 @@ The critical property is the note at the top: **endpoint discovery happens in th
 
 !!! tip "Every synchronous hop you remove multiplies out of your availability calculation"
 
-    Six services at 99.9 per cent in series produce roughly 99.4 per cent — about 3.5 hours of downtime per month from six components that each look excellent on their own dashboard. The same arithmetic applies to tail latency. Before adding a synchronous call between two ECS services, ask whether the caller genuinely needs the answer before responding to its own caller. If not, publish an event.
-
----
+    Six services at 99.9 per cent in series produce roughly 99.4 per cent  about 3.5 hours of downtime per month from six components that each look excellent on their own dashboard. The same arithmetic applies to tail latency. Before adding a synchronous call between two ECS services, ask whether the caller genuinely needs the answer before responding to its own caller. If not, publish an event.
 
 ## AWS Service Deep Dive
 
 !!! warning "On numbers and quotas"
 
-    Figures here are representative as of 2026 and most quotas are **soft** — adjustable through AWS Service Quotas or a support case. They vary by Region and account. Verify in the Service Quotas console for the account and Region you are designing in. Pricing is described as **dimensions** and **relative positions** only; model actual cost in the AWS Pricing Calculator.
+    Figures here are representative as of 2026 and most quotas are **soft**  adjustable through AWS Service Quotas or a support case. They vary by Region and account. Verify in the Service Quotas console for the account and Region you are designing in. Pricing is described as **dimensions** and **relative positions** only; model actual cost in the AWS Pricing Calculator.
 
 ### Amazon ECS
 
@@ -501,19 +450,19 @@ The critical property is the note at the top: **endpoint discovery happens in th
 
 **Important features.** Immutable versioned task definitions; `REPLICA` and `DAEMON` scheduling strategies; capacity providers with base-and-weight strategies mixing On-Demand and Spot; `awsvpc` networking with per-task ENIs and security groups; ECS Service Connect; Cloud Map service discovery; deployment configuration with a circuit breaker and automatic rollback; blue/green through AWS CodeDeploy; ECS Exec over Systems Manager; task-definition secret injection; container dependency ordering; `stopTimeout`; ECS Anywhere for on-premises capacity; scheduled tasks through EventBridge Scheduler.
 
-**Limitations.** No ecosystem of third-party controllers, operators, or custom resource types — what AWS ships is what exists, and there is no admission-control extension point. No portability: an ECS task definition runs nowhere but AWS. Scheduling is coarser than Kubernetes': placement strategies and constraints rather than affinity, anti-affinity, topology spread, priority, and preemption. Ten containers per task definition. No native equivalent to a Kubernetes operator for running complex stateful software.
+**Limitations.** No ecosystem of third-party controllers, operators, or custom resource types  what AWS ships is what exists, and there is no admission-control extension point. No portability: an ECS task definition runs nowhere but AWS. Scheduling is coarser than Kubernetes': placement strategies and constraints rather than affinity, anti-affinity, topology spread, priority, and preemption. Ten containers per task definition. No native equivalent to a Kubernetes operator for running complex stateful software.
 
-**Pricing model.** The control plane and clusters are free. You pay for the data plane — Fargate per vCPU-hour and GB-hour billed per second with a one-minute minimum, or EC2 instance hours — plus the ancillaries: ALB hours and LCUs, NAT gateway hours and data processing, CloudWatch Logs ingestion, ECR storage, and inter-AZ data transfer. In a small estate those ancillaries frequently exceed the compute bill, which surprises people.
+**Pricing model.** The control plane and clusters are free. You pay for the data plane  Fargate per vCPU-hour and GB-hour billed per second with a one-minute minimum, or EC2 instance hours  plus the ancillaries: ALB hours and LCUs, NAT gateway hours and data processing, CloudWatch Logs ingestion, ECR storage, and inter-AZ data transfer. In a small estate those ancillaries frequently exceed the compute bill, which surprises people.
 
 **Performance characteristics.** Fargate task start is typically tens of seconds, dominated by ENI attachment and image pull. EC2 capacity with a warm instance and cached layers starts in seconds. Fargate provides no burstable CPU credits: you get the vCPU you declared, consistently, which is an advantage over burstable EC2 families for latency-sensitive work.
 
-**Scaling behaviour.** Two layers on EC2 — service auto scaling for tasks, capacity provider managed scaling for instances — and one layer on Fargate. Covered in depth in 2.3.2.
+**Scaling behaviour.** Two layers on EC2  service auto scaling for tasks, capacity provider managed scaling for instances  and one layer on Fargate. Covered in depth in [2.3](topic3.md#application-auto-scaling-on-ecs).
 
 **Availability.** Spread tasks across at least two and preferably three Availability Zones. On Fargate this is achieved simply by supplying subnets in three AZs; on EC2 it additionally requires the ASG to span three AZs and a `spread` placement strategy on `attribute:ecs.availability-zone`.
 
 **Security features.** Three distinct IAM roles; per-task security groups in `awsvpc` mode; no shared Docker socket on Fargate; read-only root filesystem and non-root user through the task definition; secrets injected rather than baked; ECS Exec audited through CloudTrail and optionally logged to S3 or CloudWatch with KMS encryption; Amazon GuardDuty ECS Runtime Monitoring.
 
-**Service limits (representative, mostly soft).** Clusters per account, services per cluster, and tasks per service are in the thousands and adjustable. Container instances per cluster is in the thousands. Task definition size has a hard ceiling in the low tens of kilobytes — reachable with many environment variables. Ten containers per task definition. Load balancer target groups per service is limited to a small number. Verify all of these in Service Quotas.
+**Service limits (representative, mostly soft).** Clusters per account, services per cluster, and tasks per service are in the thousands and adjustable. Container instances per cluster is in the thousands. Task definition size has a hard ceiling in the low tens of kilobytes  reachable with many environment variables. Ten containers per task definition. Load balancer target groups per service is limited to a small number. Verify all of these in Service Quotas.
 
 **Common configurations.** Fargate launch type or a capacity provider strategy; `awsvpc` mode; private subnets with `assignPublicIp: DISABLED` and VPC endpoints; `awslogs` to a log group with retention set; deployment circuit breaker with rollback enabled; minimum healthy percent 100 and maximum percent 200; Service Connect enabled with one namespace per environment; Container Insights enabled at the cluster.
 
@@ -523,11 +472,11 @@ The critical property is the note at the top: **endpoint discovery happens in th
 
 **Architecture.** Each task runs in its own lightweight virtual machine on AWS-managed capacity, with its own kernel and its own ENI. There is no host you share with another task and no host you can log into.
 
-**Resource model.** Task CPU and memory must come from a **fixed valid matrix**: 0.25 vCPU with 0.5, 1, or 2 GB; 0.5 vCPU with 1 to 4 GB; 1 vCPU with 2 to 8 GB; 2 vCPU with 4 to 16 GB; 4 vCPU with 8 to 30 GB; 8 vCPU with 16 to 60 GB; 16 vCPU with 32 to 120 GB; and 32 vCPU with the three discrete values 60, 120, or 244 GB. Sizes of 8 vCPU and above are Linux-only. Ephemeral storage defaults to 20 GB and is expandable to 200 GB, encrypted, and destroyed with the task.
+**Resource model.** Task CPU and memory must come from a **fixed valid matrix**: 0.25 vCPU with 0.5, 1, or 2 GB; 0.5 vCPU with 1 to 4 GB; 1 vCPU with 2 to 8 GB; 2 vCPU with 4 to 16 GB; 4 vCPU with 8 to 30 GB; 8 vCPU with 16 to 60 GB; 16 vCPU with 32 to 120 GB; and 32 vCPU with the three discrete values 60, 120, or 244 GB. An invalid pair is rejected at task-definition registration, and sizes of 8 vCPU and above are Linux-only. Ephemeral storage defaults to 20 GB and is expandable to 200 GB, encrypted, and destroyed with the task.
 
 **Important features.** Per-task microVM isolation; ARM64 (Graviton) support at lower cost than x86; Fargate Spot at a steep discount with two minutes of interruption notice; platform versions; ephemeral storage sizing; EFS volume support for shared persistent storage; ECS Exec.
 
-**Limitations.** A per-vCPU premium over equivalent EC2 capacity, which becomes significant at sustained high utilisation. No GPUs. No local NVMe. No privileged containers, no host-level daemons, and no `DAEMON` scheduling strategy — so log and metric collection must be sidecars, whose overhead multiplies by replica count. No Windows-plus-GPU niches. Slower start than a warm EC2 instance. Fargate Spot is not available for all configurations and should never carry the synchronous request path alone.
+**Limitations.** A per-vCPU premium over equivalent EC2 capacity, which becomes significant at sustained high utilisation. No GPUs. No local NVMe. No privileged containers, no host-level daemons, and no `DAEMON` scheduling strategy  so log and metric collection must be sidecars, whose overhead multiplies by replica count. No Windows-plus-GPU niches. Slower start than a warm EC2 instance. Fargate Spot is not available for all configurations and should never carry the synchronous request path alone.
 
 **Pricing model.** Per vCPU-hour and per GB-hour of declared resources, billed per second with a one-minute minimum, plus ephemeral storage above the included allowance. Fargate Spot is substantially discounted. Compute Savings Plans apply to Fargate as well as EC2 and Lambda, which makes a committed baseline worth covering.
 
@@ -555,7 +504,7 @@ The critical property is the note at the top: **endpoint discovery happens in th
 
 !!! danger "The instance is a shared trust boundary"
 
-    On EC2 capacity, every task on an instance shares a kernel and, unless you prevent it, can reach the instance metadata service and assume the container instance role. That single fact defeats per-task IAM roles across the entire instance. Enforce IMDSv2 with a hop limit of 1, keep the container instance role limited to cluster registration, ECR pull, and log writing, and never mount `/var/run/docker.sock` into a container — doing so grants root on the host to whatever is in that container.
+    On EC2 capacity, every task on an instance shares a kernel and, unless you prevent it, can reach the instance metadata service and assume the container instance role  and if that role has been given application permissions "for convenience", it obtains those too. That single fact defeats per-task IAM roles across the entire instance. Enforce IMDSv2 with a hop limit of 1, keep the container instance role limited to cluster registration, ECR pull, and log writing, and never mount `/var/run/docker.sock` into a container  doing so grants root on the host to whatever is in that container.
 
 ### The launch-type decision, made honestly
 
@@ -571,9 +520,10 @@ The critical property is the note at the top: **endpoint discovery happens in th
 | GPU, privileged, host daemons, local NVMe | Available | Unavailable |
 | `DAEMON` strategy for node agents | Available | Unavailable; use sidecars |
 | Operational surface | AMIs, ASGs, agent versions, draining, IMDS | Effectively none |
+| Host access | Full root and SSH access; custom kernel configuration | None; runtime debugging through ECS Exec |
 | Right for | Sustained high-utilisation fleets, special hardware, teams with platform capability | Spiky load, many small services, small teams, strict per-task isolation |
 
-The decision rule that holds up in practice: **start on Fargate, and move a workload to EC2 capacity when a measured constraint requires it** — a hardware requirement Fargate cannot meet, a sustained-utilisation profile where the premium is material, or a start-latency requirement that only a warm cache satisfies. The reverse migration path — starting on EC2 because it is cheaper per vCPU and discovering you have accidentally acquired a platform team — is the more expensive mistake, because the cost appears as engineering time rather than as a line on an invoice.
+The decision rule that holds up in practice: **start on Fargate, and move a workload to EC2 capacity when a measured constraint requires it**  a hardware requirement Fargate cannot meet, a sustained-utilisation profile where the premium is material, or a start-latency requirement that only a warm cache satisfies. The reverse migration path  starting on EC2 because it is cheaper per vCPU and discovering you have accidentally acquired a platform team  is the more expensive mistake, because the cost appears as engineering time rather than as a line on an invoice.
 
 Amazon ECS offers two primary compute launch types: **EC2 Launch Type** (customer-managed compute) and **AWS Fargate** (serverless compute). The fundamental split lies between having direct control over the host virtual machines versus abstracting them away entirely.
 
@@ -594,20 +544,6 @@ Amazon ECS offers two primary compute launch types: **EC2 Launch Type** (custome
    └─────────────────────────────────────┘      └───────────────────────────────────┘
 
 ```
-
----
-
-### Core Differences
-
-| Dimension | ECS EC2 Launch Type | ECS Fargate Launch Type |
-| --- | --- | --- |
-| **Infrastructure Management** | Customer manages EC2 instances, OS patching, AMI updates, instance sizing, and cluster autoscaling. | Fully managed by AWS (Serverless). No EC2 instances, OS updates, or host patching to maintain. |
-| **Workload Execution** | Multiple containers/tasks share the resources of a single EC2 host; agent schedules tasks onto existing nodes. | Each task runs in its own isolated microVM with dedicated compute and memory allocated on demand. |
-| **Scaling Mechanism** | Two-tier: Scale container tasks (ECS Service Autoscaling) **and** scale EC2 host nodes (Auto Scaling Group / Capacity Providers). | Single-tier: Scale container tasks only; compute scales automatically per task definition. |
-| **Host Access & Control** | Full root/SSH access to underlying EC2 hosts; support for specialized hardware (GPUs) and custom kernel configs. | No host-level access (no SSH/OS visibility). Runtime debugging is handled via **ECS Exec**. |
-| **Billing Model** | Pay for the EC2 instances and attached EBS volumes running in the cluster, regardless of container utilization. | Pay solely for the vCPU and memory allocated per running task, measured down to per-second granularity. |
-
----
 
 ### Working Mechanisms
 
@@ -650,11 +586,14 @@ Amazon ECS offers two primary compute launch types: **EC2 Launch Type** (custome
 | **Platform version** | The Fargate runtime version determining available features |
 | **Ephemeral storage** | The temporary encrypted volume attached to a Fargate task, destroyed with it |
 | **Service** | The controller maintaining a desired count of tasks and registering them with load balancers |
+| **Task** | A running instantiation of a task-definition revision |
+| **Standalone task** | A task launched with `RunTask` that runs to completion and is not maintained |
 | **`REPLICA` scheduling strategy** | Maintain a desired number of tasks |
 | **`DAEMON` scheduling strategy** | Run exactly one task per eligible container instance; EC2 capacity only, and not supported with the `CODE_DEPLOY` or `EXTERNAL` deployment controllers |
 | **`healthCheckGracePeriodSeconds`** | How long a service ignores load-balancer health checks after a task starts |
 | **`awsvpc` network mode** | Each task receives its own ENI, private IP, and security groups; required on Fargate |
 | **`bridge` network mode** | Docker bridge networking with static or dynamic host-port mapping |
+| **Task metadata endpoint** | The link-local endpoint supplying task metadata and task-role credentials to containers |
 | **Dynamic port mapping** | Host port `0` in `bridge` mode; ECS registers the assigned ephemeral port with the target group |
 | **Target group** | The Elastic Load Balancing resource holding targets, the health check, and the deregistration delay |
 | **Target type `ip`** | Registers the task's own IP; required for `awsvpc` and Fargate |
@@ -730,11 +669,11 @@ Amazon ECS offers two primary compute launch types: **EC2 Launch Type** (custome
 | **`portMappings.name`** | Any name | **Required** for Service Connect; a mapping without a name cannot be advertised |
 | **Client alias** | Hostname and port | Use the logical service name and its natural port, so application configuration reads as `http://catalog:8080` |
 | **Namespace** | One per environment, or shared | One per environment; a shared namespace across environments invites a staging service resolving a production peer |
-| **Cloud Map TTL** | Seconds | Low, 15 to 30 seconds, and accept that some clients ignore it entirely — which is the argument for Service Connect |
+| **Cloud Map TTL** | Seconds | Low, 15 to 30 seconds, and accept that some clients ignore it entirely  which is the argument for Service Connect |
 
 !!! warning "`healthCheckGracePeriodSeconds` is the setting that causes endless replacement loops"
 
-    A service registered with a load balancer will have its tasks killed by the ALB's health check if they are not healthy in time. If your application takes 45 seconds to warm up and the grace period is 0, every task is killed at around 30 seconds, replaced, killed again, and the service never stabilises — while the logs show an application that was starting perfectly normally. Set the grace period above the measured cold start, and set the container `healthCheck`'s `startPeriod` too.
+    A service registered with a load balancer will have its tasks killed by the ALB's health check if they are not healthy in time. If your application takes 45 seconds to warm up and the grace period is 0, every task is killed at around 30 seconds, replaced, killed again, and the service never stabilises  while the logs show an application that was starting perfectly normally. Set the grace period above the measured cold start, and set the container `healthCheck`'s `startPeriod` too.
 
 ---
 
@@ -772,7 +711,7 @@ flowchart TD
 
 !!! danger "Subnet sizing bounds your task count, and you cannot fix it later"
 
-    Every `awsvpc` task consumes one private IP address, and so does every ENI on every container instance. A `/24` subnet offers roughly 251 usable addresses, so three `/24` private subnets cap you at a few hundred concurrent tasks across the whole VPC — a limit teams reliably discover during their first real scale-out event, under load. Subnet CIDRs cannot be resized, so the remedy at that point is a new VPC. Size private subnets for the estate you expect in three years: `/20` or larger per AZ is not extravagant.
+    Every `awsvpc` task consumes one private IP address, and so does every ENI on every container instance. A `/24` subnet offers roughly 251 usable addresses, so three `/24` private subnets cap you at a few hundred concurrent tasks across the whole VPC  a limit teams reliably discover during their first real scale-out event, under load. Subnet CIDRs cannot be resized, so the remedy at that point is a new VPC. Size private subnets for the estate you expect in three years: `/20` or larger per AZ is not extravagant. CIDR planning itself is covered in [Chapter 1.6](../unit1/topic6.md#cidr-and-address-planning).
 
 ---
 
@@ -780,7 +719,7 @@ flowchart TD
 
 ### Operational Excellence
 
-Define clusters, capacity providers, task definitions, services, target groups, and alarms in CloudFormation, CDK, or Terraform, so that the running configuration is reviewable and reproducible. Give every service the same shape — the same health-check path, the same log format, the same required tags, the same dashboard template — so an engineer paged for an unfamiliar service is not simultaneously learning a new convention. Enable Container Insights at the cluster and ECS Exec with session logging, so that investigation does not require a change. Practise deployments and rollbacks until both are boring, and enable the deployment circuit breaker so rollback is automatic rather than a human decision at three in the morning. Run game days: stop a task, drain an instance, reclaim a Spot task, and confirm the alarms fire and the dashboards explain what happened.
+Define clusters, capacity providers, task definitions, services, target groups, and alarms in CloudFormation, CDK, or Terraform, so that the running configuration is reviewable and reproducible. Give every service the same shape  the same health-check path, the same log format, the same required tags, the same dashboard template  so an engineer paged for an unfamiliar service is not simultaneously learning a new convention. Enable Container Insights at the cluster and ECS Exec with session logging, so that investigation does not require a change. Practise deployments and rollbacks until both are boring, and enable the deployment circuit breaker so rollback is automatic rather than a human decision at three in the morning. Run game days: stop a task, drain an instance, reclaim a Spot task, and confirm the alarms fire and the dashboards explain what happened.
 
 ### Security
 
@@ -792,7 +731,7 @@ Deploy across three Availability Zones and verify on a dashboard that tasks are 
 
 ### Performance Efficiency
 
-Right-size tasks from Container Insights measurements rather than from guesses, and revisit quarterly. Keep images small, because on Fargate image size is scale-out latency. Prefer Service Connect to internal load balancers for east-west traffic: no extra hop, no hourly charge, connection pooling included. Use `least_outstanding_requests` on the ALB where request cost varies. Choose Graviton where dependencies permit. Cache at CloudFront and ElastiCache, because the cheapest request is the one that never reaches a task. Measure p50, p90, p99, and p99.9 separately — an average conceals exactly the behaviour users complain about.
+Right-size tasks from Container Insights measurements rather than from guesses, and revisit quarterly. Keep images small, because on Fargate image size is scale-out latency. Prefer Service Connect to internal load balancers for east-west traffic: no extra hop, no hourly charge, connection pooling included. Use `least_outstanding_requests` on the ALB where request cost varies. Choose Graviton where dependencies permit. Cache at CloudFront and ElastiCache, because the cheapest request is the one that never reaches a task. Measure p50, p90, p99, and p99.9 separately  an average conceals exactly the behaviour users complain about.
 
 ### Cost Optimization
 
@@ -819,15 +758,17 @@ flowchart TD
 
 **The cluster as an IAM boundary.** Because `ecs:*` actions can be scoped to a cluster ARN, "this pipeline may update services in `dso303-staging` and nothing else" is directly expressible. This is one of the strongest practical arguments for a cluster-per-environment topology, and it costs nothing.
 
-**Per-task identity, restated.** The three roles from 1.3.2 and 2.1 apply unchanged. The addition in this chapter is the capacity dimension: on Fargate there is no container instance role and no instance metadata service to reach, so per-task identity is airtight by construction. On EC2 capacity it is airtight only if you configure IMDSv2 with a hop limit of 1. That difference is a genuine security argument for Fargate and should be stated as such rather than dismissed as a cost decision.
+**Per-task identity: the three roles.** ECS uses three distinct IAM identities, first introduced in [Chapter 1.3](../unit1/topic3.md). The **task execution role** acts before your code runs: the agent uses it to pull the image, create the log stream, and decrypt the values in the `secrets` block. The **task role** is what your application code uses, delivered through the task metadata endpoint. The **container instance role** is the EC2 instance profile the agent uses on EC2 capacity. Giving the execution role your application's data permissions means the image-pull identity also holds database access; giving the task role permission to read every secret in the account means one compromised container reads them all. Scope all three narrowly.
 
-**Network policy through security groups.** In `awsvpc` mode each task has its own security group, so service-to-service permission is expressible as identity: the catalog service's group allows port 8080 *from the orders service's group*. In `bridge` mode this granularity is lost — every task on an instance shares the instance's security group — which is a real security cost of choosing dynamic port mapping for density.
+The capacity dimension then decides whether that separation holds: on Fargate there is no container instance role and no instance metadata service to reach, so per-task identity is airtight by construction. On EC2 capacity it is airtight only if you configure IMDSv2 with a hop limit of 1. That difference is a genuine security argument for Fargate and should be stated as such rather than dismissed as a cost decision.
+
+**Network policy through security groups.** In `awsvpc` mode each task has its own security group, so service-to-service permission is expressible as identity: the catalog service's group allows port 8080 *from the orders service's group*. In `bridge` mode this granularity is lost  every task on an instance shares the instance's security group  which is a real security cost of choosing dynamic port mapping for density.
 
 **Endpoints as a security control.** A task in a private subnet with the full endpoint set can pull its image, write its logs, fetch its secrets, and be reached by ECS Exec, all without any route to the internet. That is a materially stronger posture than a NAT gateway, and it is cheaper.
 
-**ECS Exec.** It is the right way to get a shell into a container — no SSH, no bastion, no inbound ports, and every session recorded in CloudTrail. It is also a production shell, so treat it accordingly: enable session logging to CloudWatch or S3 with KMS encryption at the cluster, restrict `ecs:ExecuteCommand` by cluster and tag, and review sessions.
+**ECS Exec.** It is the right way to get a shell into a container  no SSH, no bastion, no inbound ports, and every session recorded in CloudTrail. It is also a production shell, so treat it accordingly: enable session logging to CloudWatch or S3 with KMS encryption at the cluster, restrict `ecs:ExecuteCommand` by cluster and tag, and review sessions.
 
-**Isolation strength, stated plainly.** Containers on a shared kernel are an appropriate boundary between workloads you trust to the same degree. They are not a sufficient boundary between mutually hostile workloads. Fargate's per-task microVM raises that boundary substantially. For the strongest boundary — regulatory isolation, genuinely hostile multi-tenancy — the answer is a separate AWS account, because then the boundary is an AWS boundary rather than a configuration claim you must prove.
+**Isolation strength, stated plainly.** Containers on a shared kernel are an appropriate boundary between workloads you trust to the same degree. They are not a sufficient boundary between mutually hostile workloads. Fargate's per-task microVM raises that boundary substantially. For the strongest boundary  regulatory isolation, genuinely hostile multi-tenancy  the answer is a separate AWS account, because then the boundary is an AWS boundary rather than a configuration claim you must prove.
 
 !!! danger "Three failures that recur in production ECS estates"
 
@@ -843,9 +784,9 @@ flowchart TD
 
 **Load-balancer configuration.** `least_outstanding_requests` outperforms round robin whenever request cost varies, because round robin will send a cheap request to a task already handling an expensive one. Enable HTTP/2 to clients. Understand that cross-zone load balancing improves distribution and generates inter-AZ transfer charges, and decide deliberately.
 
-**Scale on the right signal.** For a request-serving service, `ALBRequestCountPerTarget` tracks the actual driver of load; CPU is a proxy that works only for CPU-bound work and leaves I/O-bound services queueing while CPU graphs look calm. For queue consumers, scale on backlog per task. This is developed fully in 2.3.2, but the choice belongs to the service design.
+**Scale on the right signal.** For a request-serving service, `ALBRequestCountPerTarget` tracks the actual driver of load; CPU is a proxy that works only for CPU-bound work and leaves I/O-bound services queueing while CPU graphs look calm. For queue consumers, scale on backlog per task. This is developed fully in [2.3](topic3.md#choosing-the-scaling-metric), but the choice belongs to the service design.
 
-**Capacity headroom.** On EC2 capacity, target capacity below 100 per cent means a task can start immediately rather than waiting for an instance launch. On Fargate the equivalent lever is scaling earlier — a lower target value on the scaling policy — or pre-scaling on a schedule when the load is calendar-driven. Reactive scaling cannot outrun a step change in load; only anticipation can.
+**Capacity headroom.** On EC2 capacity, target capacity below 100 per cent means a task can start immediately rather than waiting for an instance launch. On Fargate the equivalent lever is scaling earlier  a lower target value on the scaling policy  or pre-scaling on a schedule when the load is calendar-driven. Reactive scaling cannot outrun a step change in load; only anticipation can.
 
 **Task start time.** Small images, cached layers on EC2, and an application that defers expensive initialisation. Measure with `pullStartedAt` and `pullStoppedAt` from `DescribeTasks` rather than guessing which phase dominates.
 
@@ -859,7 +800,7 @@ flowchart TD
 |---|---|---|
 | **Fargate compute** | Per vCPU-hour and GB-hour, per second, one-minute minimum | Over-sized tasks multiplied by replica count; ephemeral storage raised and forgotten |
 | **EC2 capacity** | Instance hours | Idle headroom in half-empty instances; target capacity set too low |
-| **ECS control plane** | Nothing | Genuinely free, unlike EKS — a real architectural asymmetry |
+| **ECS control plane** | Nothing | Genuinely free, unlike EKS  a real architectural asymmetry |
 | **Application Load Balancer** | Per hour plus LCU | One ALB per service instead of one shared by many through listener rules |
 | **NAT gateway** | Per hour plus per GB processed | Every image pull, log write, and secret fetch from private subnets without endpoints |
 | **VPC interface endpoints** | Per hour per AZ plus per GB | Cheaper than the NAT traffic they replace, but not free; consolidate where possible |
@@ -909,24 +850,24 @@ flowchart LR
 | **`RunningTaskCount` versus `DesiredTaskCount`** | Container Insights | A persistent gap means placement failure: no capacity, no free IPs, or failing health checks |
 | **`CapacityProviderReservation`** | ECS capacity provider | Whether the cluster capacity layer is keeping up; a sustained value above target means instances are being added |
 | **`UnHealthyHostCount`** | ALB target group | The single most informative deployment-failure signal; if it rises during a deploy, roll back |
-| **`HTTPCode_Target_5XX_Count`** | ALB | Application errors — distinct from `HTTPCode_ELB_5XX_Count`, which means no healthy target or an ALB-level failure |
+| **`HTTPCode_Target_5XX_Count`** | ALB | Application errors  distinct from `HTTPCode_ELB_5XX_Count`, which means no healthy target or an ALB-level failure |
 | **`TargetResponseTime` p99** | ALB | User-perceived latency including queueing, not just server-side processing |
 | **`ALBRequestCountPerTarget`** | ALB target group | Load per task; the best auto-scaling signal for request-serving services |
 | **`CPUUtilization`, `MemoryUtilization`** | Container Insights | Saturation and the input to right-sizing |
 | **Task restart count** | Container Insights | Crash loops and repeated `OOMKilled` events |
-| **Service events** | `DescribeServices` | Placement failures, registration, scaling actions — usually name the cause outright |
+| **Service events** | `DescribeServices` | Placement failures, registration, scaling actions  usually name the cause outright |
 | **`stoppedReason` and `exitCode`** | `DescribeTasks` | Why an individual task died; read this before hypothesising |
 | **Service Connect request count and error rate by client** | `ECS/ServiceConnect` | Which caller is causing a callee's errors, with no application instrumentation |
 | **Spot interruption events** | EventBridge | Whether Spot reclamation is affecting your service, and how often |
 | **Error-budget burn rate** | Derived from SLIs | The only alarm that reliably corresponds to user harm |
 
-**The diagnostic order that works.** For any ECS problem: read the **service events** first, because they name placement failures explicitly; then compare **desired against running**; then read the most recent stopped task's **`stoppedReason` and `exitCode`**; then check **target health** and its reason string; then, and only then, read application logs. Reversing this order — starting with application logs — is the most common cause of long investigations of problems the API had already named.
+**The diagnostic order that works.** For any ECS problem: read the **service events** first, because they name placement failures explicitly; then compare **desired against running**; then read the most recent stopped task's **`stoppedReason` and `exitCode`**; then check **target health** and its reason string; then, and only then, read application logs. Reversing this order  starting with application logs  is the most common cause of long investigations of problems the API had already named.
 
 **Logs.** Structured JSON to `stdout` with a correlation ID, trace ID, service name, and version on every line. Set retention on every log group. Use metric filters to turn log patterns into alarmable metrics where a condition is only visible in logs.
 
 **Tracing.** Instrument with OpenTelemetry through ADOT rather than a vendor SDK, so the destination is a configuration choice. Propagate context across asynchronous boundaries in SQS message attributes or EventBridge payloads, or traces fracture at exactly the boundary you most need to understand. The trace-derived service map is also the most reliable architecture diagram you will have, because it reflects what the system does rather than what a document claims.
 
-**Alarms.** Alert on symptoms users feel — error rate, latency, backlog age, unhealthy host count — and reserve resource alarms for capacity planning rather than paging. Add CloudWatch Synthetics canaries against critical paths so you learn of an outage from a probe rather than from a customer.
+**Alarms.** Alert on symptoms users feel  error rate, latency, backlog age, unhealthy host count  and reserve resource alarms for capacity planning rather than paging. Add CloudWatch Synthetics canaries against critical paths so you learn of an outage from a probe rather than from a customer.
 
 ---
 
@@ -1017,34 +958,11 @@ Clusters separate environments cheaply and give IAM a natural scope. Accounts se
 
 ### Blue/green with CodeDeploy
 
-Two target groups and a listener that shifts traffic between them, with pre-traffic and post-traffic validation hooks and instant rollback by shifting back. Covered in depth in 2.3.3; noted here because it changes the load-balancer topology, requiring a second target group from the outset.
-
----
-
-## Industry Use Cases
-
-| Sector | Workload | Capacity and networking choice | Reasoning |
-|---|---|---|---|
-| Higher education | Semester-peaked submission portal | Fargate, small On-Demand base plus Spot, shared ALB | Extreme duty cycle makes idle provisioned capacity the dominant cost |
-| Media | Continuous transcoding | EC2 capacity, GPU instances, Spot, Savings Plans | Hardware requirement plus sustained utilisation; Fargate cannot run it |
-| Media | Catalogue API | Fargate behind CloudFront and a shared ALB | Read-heavy and cacheable; no platform team required |
-| E-commerce | Checkout | Fargate On-Demand, three AZs, minimum healthy percent 100 | Availability-critical synchronous path; no Spot on the request path |
-| E-commerce | Order-event workers | Fargate Spot, no load balancer, scale on queue backlog | Interruption-tolerant; the cheapest correct capacity |
-| Retail banking | Payment initiation | Fargate in a dedicated AWS account, private subnets, endpoints only | microVM isolation and account-level audit boundary |
-| Healthcare | Vendor integration adapters | Fargate, one service per integration, Service Connect internally | Independent failure domains per vendor with minimal operational overhead |
-| Industrial IoT | Telemetry ingestion | EC2 Graviton capacity at high sustained utilisation | Predictable high throughput where unit cost dominates |
-| Logistics | Tracking API | Fargate with DynamoDB, shared ALB | Simple access pattern, elastic load, minimal operations |
-| Government | Multi-supplier portal | Cluster per supplier, shared ALB with listener rules per path | Contractual independence of deployment; shared edge to control cost |
-| SaaS | Pooled multi-tenant API | Fargate, one service, tenant context per request | Highest density; one artefact for all tenants |
-| SaaS | Siloed enterprise tenants | Cluster per tenant, or account per tenant | Contractual isolation expressed as topology, not as a code fork |
-| Gaming | Account services | Fargate | Stateless, elastic, no ecosystem requirement |
-| Gaming | Match servers | EC2 capacity, `bridge` mode with dynamic ports, NLB | Stateful, latency-sensitive, needs host-level control and UDP |
-
----
+Two target groups and a listener that shifts traffic between them, with pre-traffic and post-traffic validation hooks and instant rollback by shifting back. Covered in depth in [2.3](topic3.md#bluegreen-with-aws-codedeploy); noted here because it changes the load-balancer topology, requiring a second target group from the outset.
 
 ## Advantages
 
-**No control plane to operate, and no charge for it.** There is no cluster endpoint, no etcd, no API server, no version, and no upgrade. For an organisation without a platform team this removes an entire category of recurring work — and unlike EKS, clusters themselves are free, so isolation between teams or environments can be bought by creating another cluster rather than engineered inside a shared one.
+**No control plane to operate, and no charge for it.** There is no cluster endpoint, no etcd, no API server, no version, and no upgrade. For an organisation without a platform team this removes an entire category of recurring work  and unlike EKS, clusters themselves are free, so isolation between teams or environments can be bought by creating another cluster rather than engineered inside a shared one.
 
 **A small, closed conceptual surface.** Clusters, capacity providers, task definitions, tasks, and services. A competent engineer is productive in days rather than months. There are no third-party controllers to select, install, secure, and upgrade, which means the platform does not quietly become a project.
 
@@ -1064,7 +982,7 @@ Two target groups and a listener that shifts traffic between them, with pre-traf
 
 **No ecosystem and no extension points.** What AWS ships is what exists. There is no admission control, no custom resource type, no operator pattern for running complex stateful software, and no community controller for a capability AWS has not built. If your requirement is one of those, ECS cannot meet it and the honest answer is EKS.
 
-**No portability.** An ECS task definition runs on AWS and nowhere else. If a genuine multi-cloud or hybrid requirement exists, that is a strong argument against ECS — though it is worth testing whether the requirement is genuine, since Kubernetes manifests port while the surrounding IAM, load-balancer controller, and CNI configuration do not.
+**No portability.** An ECS task definition runs on AWS and nowhere else. If a genuine multi-cloud or hybrid requirement exists, that is a strong argument against ECS  though it is worth testing whether the requirement is genuine, since Kubernetes manifests port while the surrounding IAM, load-balancer controller, and CNI configuration do not.
 
 **Coarser scheduling.** Placement strategies and constraints are less expressive than affinity, anti-affinity, topology spread, priority, and preemption. For most workloads this does not matter; for dense mixed-workload clusters it does.
 
@@ -1105,7 +1023,6 @@ Two target groups and a listener that shifts traffic between them, with pre-traf
 | Mistake | Consequence | Remedy |
 |---|---|---|
 | Managed termination protection disabled | ASG scale-in terminates instances still running tasks | Enable it, and enable managed draining |
-| No `SIGTERM` handling in the application | Every deployment cuts in-flight requests | Trap `SIGTERM`, drain, exit; align `stopTimeout` and deregistration delay |
 | DNS-based discovery with clients that cache indefinitely | Calls to tasks that stopped minutes ago | Service Connect, or explicit DNS cache TTL configuration in the client runtime |
 | `DescribeTasks` on the request path for discovery | Couples data-plane availability to the control plane; hits API throttling under load | Discover through the local proxy or DNS, never per request |
 | Tasks in a single AZ despite three subnets configured | An AZ event takes the whole service down | Verify actual distribution on a dashboard; use `spread` on `attribute:ecs.availability-zone` for EC2 |
@@ -1137,89 +1054,23 @@ Two target groups and a listener that shifts traffic between them, with pre-traf
 
 --- -->
 
-<!-- ## AWS Certification Tips
-
-### Exam tips
-
-Scenarios in this area contain exactly one discriminating constraint. Find it first, then eliminate.
-
-- "Minimum operational overhead", "no container experience", "small team" points to **ECS on Fargate**.
-- "GPU", "privileged", "host daemon", "DaemonSet", "local NVMe" eliminates **Fargate** entirely.
-- "Steady, predictable, high utilisation" plus "lowest cost" points to **EC2 capacity with Savings Plans**; "spiky" or "unpredictable" plus "lowest cost" points to **Fargate**.
-- "Tasks stuck in `PROVISIONING`" points to **capacity provider managed scaling** not configured, or **subnet IP exhaustion**.
-- "Must survive Spot reclamation" points to a **capacity provider strategy with a non-zero `base`** on the On-Demand provider.
-- "Service-to-service, no extra hop, retries and metrics" points to **ECS Service Connect**.
-- "Across VPCs or accounts, or mixed compute types" points to **Amazon VPC Lattice**.
-- "Per-consumer API keys, usage plans, request validation" points to **API Gateway**; "high-volume L7 routing at lowest per-request cost" points to **ALB**.
-- "Static IP", "UDP", "extreme connection counts", "preserve source IP" points to **NLB**.
-- "502 errors during deployment" points to **deregistration delay**, `SIGTERM` handling, and `stopTimeout`.
-- "Compromised container must not obtain other workloads' credentials" points to **Fargate**, or IMDSv2 with hop limit 1 on EC2.
-- "One task per instance for a monitoring agent" points to the **`DAEMON` scheduling strategy**, which implies EC2 capacity. -->
-
-### Frequently confused pairs
-
-| Pair | The distinguishing fact |
-|---|---|
-| **ECS cluster vs EKS cluster** | ECS clusters are free with no version; EKS clusters are charged hourly and must be upgraded |
-| **Launch type vs capacity provider** | Launch type is a single choice; a capacity provider strategy allows weighted mixes with a guaranteed base |
-| **`base` vs `weight`** | `base` is an absolute count satisfied first; `weight` distributes only the remainder |
-| **Service auto scaling vs capacity provider managed scaling** | The first changes task count; the second changes instance count. Both are needed on EC2; only the first exists on Fargate |
-| **Managed scaling vs managed termination protection vs managed draining** | Scaling adds and removes instances; termination protection stops scale-in killing busy instances; draining relocates tasks before an instance goes away |
-| **`awsvpc` vs `bridge`** | `awsvpc` gives each task its own ENI, IP, and security groups; `bridge` shares the instance's, and enables dynamic port mapping |
-| **Target type `ip` vs `instance`** | `ip` registers the task's own address and is required with `awsvpc`; `instance` registers the host and a port |
-| **Container `healthCheck` vs target group health check** | The first runs inside the container and informs ECS; the second runs over the network and controls traffic |
-| **`healthCheckGracePeriodSeconds` vs `startPeriod`** | The grace period tells the *service* to ignore load-balancer health; `startPeriod` tells the *agent* to ignore container health-check failures |
-| **Deregistration delay vs `stopTimeout`** | The first is how long the load balancer drains a target; the second is how long ECS waits between `SIGTERM` and `SIGKILL` |
-| **Service Connect vs Cloud Map** | Service Connect adds a managed proxy with load balancing, retries, and metrics; Cloud Map provides DNS records only |
-| **Service Connect vs an internal ALB** | Service Connect adds no network hop and no hourly charge; an internal ALB adds both but crosses VPC and account boundaries |
-| **App Mesh vs VPC Lattice** | App Mesh is a deprecating sidecar mesh; VPC Lattice is sidecar-free AWS-native connectivity across boundaries |
-| **`REPLICA` vs `DAEMON`** | `REPLICA` maintains a desired count; `DAEMON` runs one task per eligible container instance, is EC2-only, and is unsupported with blue/green |
-| **ALB vs NLB vs API Gateway** | Layer 7 content routing; layer 4 throughput and static IPs; API management with keys and usage plans |
-| **Task role vs execution role vs instance role** | Application identity; pre-start identity for pull, logs, and secrets; the EC2 host's identity |
-
-### Memory aids
-
-- **"Clusters are free on ECS, charged on EKS."** This asymmetry drives topology.
-- **"Two scaling layers on EC2, one on Fargate."** The stuck-`PROVISIONING` failure in one sentence.
-- **"`base` first, `weight` for the rest."**
-- **"`awsvpc` means `ip` targets."** And each task costs one subnet address.
-- **"Deregister, drain, `SIGTERM`, `SIGKILL`."** The shutdown order, and where each setting applies.
-- **"Service Connect for inside, ALB for outside, Lattice for across."**
-- **"Events, then desired-versus-running, then `stoppedReason`, then target health, then logs."** The diagnostic order.
-- **"Fargate for the fleeting, EC2 for the enduring."**
-
-!!! danger "Common certification traps"
-
-    - Believing ECS charges for clusters, or that EKS does not.
-    - Configuring service auto scaling on EC2 capacity and forgetting capacity provider managed scaling.
-    - Assuming Fargate is always cheaper, or always more expensive.
-    - Believing Fargate solves subnet IP exhaustion — every Fargate task still consumes an address.
-    - Expecting `DAEMON` scheduling or DaemonSets on Fargate.
-    - Pairing target type `instance` with `awsvpc` network mode.
-    - Choosing App Mesh for new work rather than Service Connect or VPC Lattice.
-    - Believing Service Connect requires an internal load balancer.
-    - Treating `base` as a percentage or `weight` as an absolute count.
-    - Setting target capacity to 100 per cent and then being surprised that scale-out is slow.
-    - Granting application permissions to the task execution role.
-    - Omitting an `iam:PassRole` restriction from a deployment policy, leaving a privilege-escalation path.
-
----
-
 ## Summary
 
-First, **the cluster is a boundary, not a machine, and on ECS it is free** — which changes the shape of good designs. There is no control plane to operate, no version to upgrade, and no hourly charge, so isolation between teams and environments can be obtained by creating another cluster rather than by engineering multi-tenancy inside a shared one. The boundaries worth drawing are the ones that answer who may deploy here, what should fail together, and what should be observed together. The failure mode at both extremes is real: one cluster for everything gives every team a shared blast radius, and one cluster per service turns every cross-cutting change into N changes with no estate-wide view.
+First, **the cluster is a boundary, not a machine, and on ECS it is free**  which changes the shape of good designs. There is no control plane to operate, no version to upgrade, and no hourly charge, so isolation between teams and environments can be obtained by creating another cluster rather than by engineering multi-tenancy inside a shared one. The boundaries worth drawing are the ones that answer who may deploy here, what should fail together, and what should be observed together. The failure mode at both extremes is real: one cluster for everything gives every team a shared blast radius, and one cluster per service turns every cross-cutting change into N changes with no estate-wide view.
 
-Second, **capacity is a separate decision from workload, and capacity providers are what make that separation real**. A task definition describes what to run; a capacity provider strategy describes where, in what proportion, and with what guaranteed floor. The `base` is a reliability decision — the number of tasks that must survive a total Spot reclamation — and the `weight` is an economic one. On EC2 capacity there are two scaling layers and both must be configured, which is the source of the most common production failure in this chapter; on Fargate the second layer does not exist, which is one of the strongest practical arguments for it.
+Second, **capacity is a separate decision from workload, and capacity providers are what make that separation real**. A task definition describes what to run; a capacity provider strategy describes where, in what proportion, and with what guaranteed floor. The `base` is a reliability decision  the number of tasks that must survive a total Spot reclamation  and the `weight` is an economic one. On EC2 capacity there are two scaling layers and both must be configured, which is the source of the most common production failure in this chapter; on Fargate the second layer does not exist, which is one of the strongest practical arguments for it.
 
-Third, **the EC2-versus-Fargate decision is a measurement, not a preference, and the same organisation will correctly reach opposite answers for different workloads**. Fargate wins on spiky utilisation, on small estates of many small services, on per-task microVM isolation, and above all on the operational cost it removes — the AMI patching, the fleet scaling, the bin packing, the instance metadata hazard, and the second scaling layer. EC2 wins on sustained high utilisation with commitments, on hardware Fargate does not offer, on warm-cache start latency, and on `DAEMON` workloads. The asymmetry worth remembering is that Fargate's cost appears on an invoice where it can be seen, and EC2's cost partly appears as engineering time where it cannot.
+Third, **the EC2-versus-Fargate decision is a measurement, not a preference, and the same organisation will correctly reach opposite answers for different workloads**. Fargate wins on spiky utilisation, on small estates of many small services, on per-task microVM isolation, and above all on the operational cost it removes  the AMI patching, the fleet scaling, the bin packing, the instance metadata hazard, and the second scaling layer. EC2 wins on sustained high utilisation with commitments, on hardware Fargate does not offer, on warm-cache start latency, and on `DAEMON` workloads. The asymmetry worth remembering is that Fargate's cost appears on an invoice where it can be seen, and EC2's cost partly appears as engineering time where it cannot.
 
-Fourth, **the network is where a container architecture succeeds or fails, and it fails under change rather than under load**. Every `awsvpc` task consumes a subnet IP address, so subnet sizing bounds the estate and cannot be corrected later. Security-group references rather than CIDRs express service-to-service permission as identity. VPC endpoints let a task start, log, and fetch secrets without any route to the internet, which is simultaneously a security improvement, a cost reduction, and a latency improvement. And the settings that make a deployment invisible — deregistration delay, `SIGTERM` handling, `stopTimeout`, health-check grace period — are four separate values that must agree, none of whose defaults suit a real workload.
+Fourth, **the network is where a container architecture succeeds or fails, and it fails under change rather than under load**. Every `awsvpc` task consumes a subnet IP address, so subnet sizing bounds the estate and cannot be corrected later. Security-group references rather than CIDRs express service-to-service permission as identity. VPC endpoints let a task start, log, and fetch secrets without any route to the internet, which is simultaneously a security improvement, a cost reduction, and a latency improvement. And the settings that make a deployment invisible  deregistration delay, `SIGTERM` handling, `stopTimeout`, health-check grace period  are four separate values that must agree, none of whose defaults suit a real workload.
 
 Fifth, **east-west connectivity should not go through a load balancer when it does not have to**. Service Connect places the routing decision in a proxy inside the task: no network hop, no hourly charge, no control-plane call on the request path, connection pooling, outlier ejection, and per-caller telemetry that answers "which client is causing this server's errors" without any application instrumentation. Cloud Map DNS remains correct for non-HTTP protocols but inherits DNS caching semantics, which is a genuine failure mode during deployments. VPC Lattice is the answer when the call crosses a VPC, an account, or a compute type. And the more important question than any of these is whether the call needs to be synchronous at all, because availability multiplies down a synchronous chain and latency adds up it.
 
 Sixth, **the platform names its own failures, and the diagnostic order is a skill**. Service events, then desired versus running, then `stoppedReason` and `exitCode`, then target health with its reason string, then application logs. Almost every failure in this chapter is identified in the first three steps, and the habit of reading them before hypothesising is more transferable than any individual fact in the chapter. The corollary is that Container Insights and ECS Exec should be enabled before an incident rather than during one, because an investigation that requires a configuration change first has already lost the time that mattered.
 
-Seventh, and connecting back to 1.3.2, **ECS is a deliberate trade of extensibility for simplicity, and that trade is a legitimate architectural choice rather than a compromise**. There is no ecosystem, no admission control, no operator pattern, and no portability. In exchange there is nothing to upgrade, nothing to install, no platform team implied, and no cluster charge. For a team whose workloads are AWS-resident and whose scarce resource is engineering attention, that is frequently the better trade — and being able to say so plainly, in a room that expects to hear Kubernetes, is a substantial part of what an architect is for.
+Seventh, and connecting back to [Chapter 1.7](../unit1/topic7.md), **ECS is a deliberate trade of extensibility for simplicity, and that trade is a legitimate architectural choice rather than a compromise**. There is no ecosystem, no admission control, no operator pattern, and no portability. In exchange there is nothing to upgrade, nothing to install, no platform team implied, and no cluster charge. For a team whose workloads are AWS-resident and whose scarce resource is engineering attention, that is frequently the better trade  and being able to say so plainly, in a room that expects to hear Kubernetes, is a substantial part of what an architect is for.
 
 ---
 
+!!! question "Practice and interview questions"
+    Questions for this topic are kept separately: [Practice questions](../Questions/unit2.md#22-amazon-ecs) · [Interview questions](../interviewquestions/unit2.md#22-amazon-ecs).
