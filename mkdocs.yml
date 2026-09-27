@@ -175,11 +175,11 @@ nav:
       - 2.2 Amazon ECS: unit2/topic2.md
       - 2.3 Container Orchestration with Amazon ECS: unit2/topic3.md
 
-#   - Unit 3:
-#       - Overview: unit3/overview.md
-#       - 3.1 Amazon EKS Architecture: unit3/topic1.md
-#       - 3.2 Deploying Applications on Amazon EKS: unit3/topic2.md
-#       - 3.3 Amazon EKS Advanced Concepts: unit3/topic3.md
+  - Unit 3:
+      - Overview: unit3/overview.md
+      - 3.1 Amazon EKS Architecture: unit3/topic1.md
+      - 3.2 Deploying Applications on Amazon EKS: unit3/topic2.md
+      - 3.3 Amazon EKS Advanced Concepts: unit3/topic3.md
 
 #   - Unit 4:
 #       - Overview: unit4/overview.md
@@ -240,23 +240,23 @@ nav:
 #   # - Sample Answers:
 #   #     - Unit 2: Answers/unit2.md
 
-#   - Lab:
-#       - Lab Overview: Lab/overview.md
-#       - Lab 01 - IAM: Lab/Lab-01-IAM.md
-#       - Lab 02 - VPC: Lab/Lab-02-VPC.md
-#       - Lab 03 - EC2: Lab/Lab-03-EC2.md
-#       - Lab 04 - ECS: Lab/Lab-04-ECS.md
-#       - Lab 05 - ALB: Lab/Lab-05-ALB.md
-#       - Lab 06 - Auto Scaling: Lab/Lab-06-autoscaling.md
-#       - Lab 07 - EKS: Lab/Lab-07-EKS.md
-#       - Lab 08 - EKS Scaling: Lab/Lab-08-EKS-scaling.md
-#       - Lab 09 - Security: Lab/Lab-09-security.md
-#       - Lab 10 - Lambda: Lab/Lab-10-lambda.md
-#       - Lab 11 - CI/CD Pipeline: Lab/Lab-11-pipeline.md
-#       - Lab 12 - ECS Pipeline Deploy: Lab/Lab-12-ECSpipeline.md
-#       - Lab 13 - Monitoring: Lab/Lab-13-monitoring.md
-#       - Checkpoint 1: Lab/Lab-14-checkpoint.md
+  - Lab:
+      - Lab Overview: Lab/overview.md
+      - Lab 01 - IAM: Lab/Lab-01-IAM.md
+      - Lab 02 - VPC: Lab/Lab-02-VPC.md
+      - Lab 03 - EC2: Lab/Lab-03-EC2.md
+      - Lab 04 - ECS: Lab/Lab-04-ECS.md
+      - Lab 05 - ALB: Lab/Lab-05-ALB.md
+      - Lab 06 - Auto Scaling: Lab/Lab-06-autoscaling.md
+      - Lab 07 - EKS: Lab/Lab-07-EKS.md
+      - Lab 08 - EKS Scaling: Lab/Lab-08-EKS-scaling.md
+      - Lab 09 - Security: Lab/Lab-09-security.md
+      - Lab 10 - Lambda: Lab/Lab-10-lambda.md
+      - Lab 11 - CI/CD Pipeline: Lab/Lab-11-pipeline.md
+      - Lab 12 - ECS Pipeline Deploy: Lab/Lab-12-ECSpipeline.md
+      - Lab 13 - Monitoring: Lab/Lab-13-monitoring.md
+      - Checkpoint 1: Lab/Lab-14-checkpoint.md
 
 # #   - Solutions: Solutions.md
 
-#   - Simulation: https://main.dcaowu8w5ohp0.amplifyapp.com
+  - Simulation: https://main.dcaowu8w5ohp0.amplifyapp.com
