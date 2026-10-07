@@ -180,6 +180,9 @@ nav:
       - 3.1 Amazon EKS Architecture: unit3/topic1.md
       - 3.2 Deploying Applications on Amazon EKS: unit3/topic2.md
       - 3.3 Amazon EKS Advanced Concepts: unit3/topic3.md
+      - 3.3 Basics: unit3/t1s.md
+      - 3.3 basics Concepts: unit3/t2s.md
+      - 3.3 Advanced Concepts: unit3/t3s.md
 
 #   - Unit 4:
 #       - Overview: unit4/overview.md
@@ -259,4 +262,4 @@ nav:
 
 # #   - Solutions: Solutions.md
 
-  - Simulation: https://main.dcaowu8w5ohp0.amplifyapp.com
+  - Simulation: https://main.d35uam9e2t7o65.amplifyapp.com/
