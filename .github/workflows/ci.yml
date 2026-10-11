@@ -29,6 +29,16 @@ jobs:
       - name: Build MkDocs site
         run: mkdocs build
 
+      # Renders each unit topic page to site/pdf/ for the "Download PDF" button.
+      # If this step fails the site still deploys; the button then falls back
+      # to the browser's print dialog.
+      - name: Generate topic PDFs
+        continue-on-error: true
+        run: |
+          pip install playwright
+          playwright install --with-deps chromium
+          python utils/build_pdfs.py --site site
+
       - name: Upload built site as artifact
         uses: actions/upload-pages-artifact@v3
         with:

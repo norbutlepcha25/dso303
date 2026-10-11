@@ -42,7 +42,7 @@
 
 1. A team routes all internal service-to-service traffic through API Gateway for consistency and observability. Give four concrete reasons this is wrong, and describe what you would offer instead that satisfies both of their stated motivations.
 2. Explain why DNS-based service discovery is inadequate for a service whose tasks are replaced many times per hour. Describe the failure precisely, name two AWS mechanisms that avoid it, and explain what each does that DNS does not.
-3. AWS App Mesh reaches end of support on 30 September 2026. For each of the following uses, name the successor and justify it: in-ECS discovery and load balancing; weighted canary routing; mTLS between services; cross-account service calls; header-based routing with fault injection.
+3. AWS App Mesh reached end of support on 30 September 2026. For each of the following uses, name the successor and justify it: in-ECS discovery and load balancing; weighted canary routing; mTLS between services; cross-account service calls; header-based routing with fault injection.
 4. A Lambda authorizer has increased an API's p99 latency from 120 ms to 900 ms. Explain the mechanism, describe how you would confirm it from CloudWatch metrics alone, and give three distinct remediations.
 5. Compare Amazon VPC Lattice, AWS PrivateLink and VPC peering as mechanisms for connecting services across accounts. State the situation in which each is correct, and explain specifically why overlapping CIDR ranges eliminate two of the three.
 

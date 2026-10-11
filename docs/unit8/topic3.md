@@ -850,7 +850,7 @@ sequenceDiagram
     S->>C: Certificate chain, CertificateVerify signature, Finished
     C->>C: Validate chain to trusted root, hostname, validity dates
     C->>S: Finished
-    Note over C,S: TLS 1.3 completes in one round trip; application data is encrypted with symmetric session keys
+    Note over C,S: TLS 1.3 completes in one round trip, and application data is encrypted with symmetric session keys
     C->>S: Encrypted HTTP request
     S->>C: Encrypted HTTP response
 ```

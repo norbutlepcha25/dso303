@@ -1120,7 +1120,7 @@ If everything above compresses to a single instruction, it is this:
 Triggered by `unit<N> <topic>` (e.g. `unit2 Elastic Load Balancing`). Output saved to
 `docs/unit<N>/topic<M>.md`, `<N>` matching an existing `docs/unit1`–`docs/unit8` folder. Do not
 use the Lab structure (§8 of Part I) for this mode — this is a separate document shape for a
-separate purpose (lecture/exam prep, not a hands-on walkthrough).
+separate purpose (lecture and study notes, not a hands-on walkthrough).
 
 ## Role
 
@@ -1140,8 +1140,11 @@ services exist, **HOW** they work internally, **WHEN** they should be used, and 
 make design decisions when building scalable production-grade cloud applications.
 
 The notes should prepare students for: university examinations, AWS Academy labs, practical cloud
-deployments, AWS certifications (Associate level), technical interviews, real-world cloud
-engineering jobs.
+deployments, technical interviews, real-world cloud engineering jobs.
+
+Students are **not** preparing for any AWS certification exam; the notes are for learning. Never
+frame content around certification exams (no "exam traps", "on the exam", "certification tip").
+Where an old trap held a genuine design insight, state it as a learning point in Common Mistakes.
 
 ## Teaching philosophy
 
@@ -1192,8 +1195,8 @@ rather than silently dropping it).
 ```
 
 Do **not** add Learning Objectives, Real-World Motivation, Internal Working, Request Lifecycle,
-Hands-on Lab, Code Examples, AWS Certification Tips (exam tips, frequently confused pairs, memory
-aids), or "Where this topic sits in DSO303" boxes — these were deliberately removed from all notes.
+Hands-on Lab, Code Examples, AWS Certification Tips or Certification Traps (exam tips, frequently
+confused pairs, memory aids), or "Where this topic sits in DSO303" boxes — these were deliberately removed from all notes.
 Short inline snippets inside other sections are fine where they explain a concept.
 
 Questions are **not** part of the note. They go into two per-unit files (see Question files
@@ -1276,7 +1279,7 @@ under a `## <N>.<M> <Topic Title>` heading (topics in numeric order, blocks sepa
 | File | Heading structure under `## N.M Title` | Content |
 | --- | --- | --- |
 | `docs/Questions/unit<N>.md` (H1 `# Unit N: Practice Questions`) | `### Beginner Questions`, `### Intermediate Questions`, `### Advanced Questions` | Exactly 5 per level; mix conceptual, practical, and architecture questions |
-| `docs/interviewquestions/unit<N>.md` (H1 `# Unit N: Interview Questions`) | `### Conceptual Questions`, `### Scenario Questions`, `### Architecture Questions`, `### Troubleshooting Questions`, `### Certification-style Questions` | Questions with model answers |
+| `docs/interviewquestions/unit<N>.md` (H1 `# Unit N: Interview Questions`) | `### Conceptual Questions`, `### Scenario Questions`, `### Architecture Questions`, `### Troubleshooting Questions`, `### Multiple-Choice Questions` | Questions with model answers (multiple-choice items test design reasoning, not certification recall) |
 
 Create the file with its H1 if it does not exist, and add it to the Practice Questions /
 Interview Questions nav sections (flag the nav change as described under Output handling).

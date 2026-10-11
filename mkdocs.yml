@@ -59,6 +59,7 @@ extra_css:
   - stylesheets/color.css
   - https://unpkg.com/katex@0/dist/katex.min.css
   - stylesheets/aws-icons.css
+  - stylesheets/print.css
 
 copyright: |
   &copy; 2026 <a href="https://github.com/cslivenote" target="_blank" rel="noopener">Norbu Tshering Lepcha</a>
@@ -122,6 +123,7 @@ extra_javascript:
   - https://unpkg.com/katex@0/dist/contrib/auto-render.min.js
   - javascripts/filter.js
   - javascripts/preview.js
+  - javascripts/pdf-download.js
 
 plugins:
   - search
@@ -256,6 +258,8 @@ nav:
       - Lab 12 - ECS Pipeline Deploy: Lab/Lab-12-ECSpipeline.md
       - Lab 13 - Monitoring: Lab/Lab-13-monitoring.md
       - Checkpoint 1: Lab/Lab-14-checkpoint.md
+
+  - Class Progress: progress.md
 
 # #   - Solutions: Solutions.md
 
