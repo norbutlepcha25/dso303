@@ -293,8 +293,8 @@ A ==confused deputy== is a more-privileged entity tricked into acting on behalf 
 |----------|--------------------|-----------------|---------------------|---------|
 | EC2 instance | Role via instance profile | `ec2.amazonaws.com` | Instance Metadata Service (IMDSv2 required as best practice) | [1.3](../unit1/topic3.md) |
 | ECS task (EC2 or Fargate) | ==Task role== for application calls; ==task execution role== for the ECS agent to pull images, fetch secrets and write logs | `ecs-tasks.amazonaws.com` | Container credential endpoint (`AWS_CONTAINER_CREDENTIALS_RELATIVE_URI`) | [2.2](../unit2/topic2.md#security-considerations), [2.3](../unit2/topic3.md) |
-| EKS pod, IRSA | Role per Kubernetes service account through the cluster's OIDC provider | `Federated` OIDC provider; `sts:AssumeRoleWithWebIdentity` | Projected service account token file and `AWS_ROLE_ARN` | [3.1](../unit3/topic1.md#pod-identity-why-the-node-role-is-not-enough) |
-| EKS pod, Pod Identity | Role associated with a service account through an EKS Pod Identity association | `pods.eks.amazonaws.com`; `sts:AssumeRole` and `sts:TagSession` | Pod Identity Agent on each node | [3.1](../unit3/topic1.md#pod-identity-why-the-node-role-is-not-enough) |
+| EKS pod, IRSA | Role per Kubernetes service account through the cluster's OIDC provider | `Federated` OIDC provider; `sts:AssumeRoleWithWebIdentity` | Projected service account token file and `AWS_ROLE_ARN` | [3.1](../unit3/topic1.md#iam-for-workloads-pod-identity) |
+| EKS pod, Pod Identity | Role associated with a service account through an EKS Pod Identity association | `pods.eks.amazonaws.com`; `sts:AssumeRole` and `sts:TagSession` | Pod Identity Agent on each node | [3.1](../unit3/topic1.md#iam-for-workloads-pod-identity) |
 | EKS nodes | Node IAM role through an instance profile | `ec2.amazonaws.com` | IMDS | [3.1](../unit3/topic1.md) |
 | Lambda function | Execution role | `lambda.amazonaws.com` | Environment variables injected into the execution environment | [1.3](../unit1/topic3.md) |
 | CodeBuild, CodePipeline | Service roles | `codebuild.amazonaws.com`, `codepipeline.amazonaws.com` | Managed by the service | [5.1](../unit5/topic1.md) |
@@ -306,7 +306,7 @@ A ==confused deputy== is a more-privileged entity tricked into acting on behalf 
 
 #### IRSA versus EKS Pod Identity
 
-From the IAM perspective, the difference lies in the trust relationship. IRSA trusts the cluster's OIDC provider through `sts:AssumeRoleWithWebIdentity`, with a `sub` condition naming the namespace and service account, so the trust policy must list every cluster's issuer. EKS Pod Identity trusts the service principal `pods.eks.amazonaws.com` (`sts:AssumeRole` and `sts:TagSession`), so one trust policy works across clusters, and it adds session tags (cluster, namespace, service account) usable for ABAC. See [3.1 Amazon EKS Architecture](../unit3/topic1.md#pod-identity-why-the-node-role-is-not-enough) for the full comparison and when to use each.
+From the IAM perspective, the difference lies in the trust relationship. IRSA trusts the cluster's OIDC provider through `sts:AssumeRoleWithWebIdentity`, with a `sub` condition naming the namespace and service account, so the trust policy must list every cluster's issuer. EKS Pod Identity trusts the service principal `pods.eks.amazonaws.com` (`sts:AssumeRole` and `sts:TagSession`), so one trust policy works across clusters, and it adds session tags (cluster, namespace, service account) usable for ABAC. See [3.1 Amazon EKS Architecture](../unit3/topic1.md#iam-for-workloads-pod-identity) for the full comparison and when to use each.
 
 #### Federation
 
@@ -559,7 +559,7 @@ Policy size and attachment quotas are listed under Service Limits in [Part 8.1.2
 | Service | Integration | Why |
 |---------|-------------|-----|
 | Amazon ECS | Task role and task execution role | Per-task credentials without keys ([Chapter 2.2](../unit2/topic2.md#security-considerations)) |
-| Amazon EKS | IRSA and Pod Identity (access entries are covered under [Part 8.1.2](#iam-policies-and-permissions)) | Per-pod credentials ([Chapter 3.1](../unit3/topic1.md#pod-identity-why-the-node-role-is-not-enough)) |
+| Amazon EKS | IRSA and Pod Identity (access entries are covered under [Part 8.1.2](#iam-policies-and-permissions)) | Per-pod credentials ([Chapter 3.1](../unit3/topic1.md#iam-for-workloads-pod-identity)) |
 | AWS Lambda | Execution role | Function permissions ([Chapter 1.3](../unit1/topic3.md)); the invoke-side resource-based policy is covered in [Part 8.1.2](#iam-policies-and-permissions) |
 | CodeBuild, CodePipeline, GitHub Actions | Service roles and OIDC federation | Keyless deployments (Chapters [5.1](../unit5/topic1.md) and [5.2](../unit5/topic2.md)) |
 | CloudFormation, CDK, Terraform | Service roles and deployment roles | Pipelines deploy with a scoped role, not a person's credentials ([Chapter 5.3](../unit5/topic3.md)) |
@@ -1045,7 +1045,7 @@ Enable Access Analyzer unused access at the organisation level once, rather than
 | AWS KMS | Key policies, grants and `kms:ViaService` conditions ([Section 8.3](topic3.md)) |
 | Amazon ECR | Repository policies for cross-account image pulls by ECS and EKS |
 | Amazon API Gateway | IAM authorization with SigV4 and resource policies restricting callers and VPC endpoints ([Chapter 1.7](../unit1/topic7.md), [Chapter 4.2](../unit4/topic2.md)) |
-| Amazon EKS | Access entries and access policies mapping IAM principals to Kubernetes permissions ([Chapter 3.1](../unit3/topic1.md#eks-identity-integration)) |
+| Amazon EKS | Access entries and access policies mapping IAM principals to Kubernetes permissions ([Chapter 3.1](../unit3/topic1.md#eks-security-and-iam-integration)) |
 | AWS CloudFormation | Service roles and `iam:PassRole`; stack policies; policies defined as code |
 | AWS Security Hub and EventBridge | Receive Access Analyzer findings for aggregation and automated remediation (Unit VII) |
 

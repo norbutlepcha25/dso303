@@ -701,7 +701,7 @@ Each workload gets its own IAM role with only the actions it needs on only the q
 | Lambda event source mapping (execution role) | `sqs:ReceiveMessage`, `sqs:DeleteMessage`, `sqs:GetQueueAttributes` |
 | Operator redriving a DLQ | `sqs:StartMessageMoveTask`, `sqs:ListMessageMoveTasks`, `sqs:CancelMessageMoveTask`, plus receive/delete on the DLQ and send on the destination |
 
-On ECS, attach these permissions to the ==task role== (not the task execution role, which is for pulling images and writing logs). On EKS, use ==EKS Pod Identity== or ==IRSA== so that each service account receives its own role ([Chapter 3.1](../unit3/topic1.md#core-concepts-eks-security-and-iam-integration)). In the AWS Academy Learner Lab you are limited to the pre-created `LabRole`, which is broader than production least privilege; note this in lab reports.
+On ECS, attach these permissions to the ==task role== (not the task execution role, which is for pulling images and writing logs). On EKS, use ==EKS Pod Identity== or ==IRSA== so that each service account receives its own role ([Chapter 3.1](../unit3/topic1.md#eks-security-and-iam-integration)). In the AWS Academy Learner Lab you are limited to the pre-created `LabRole`, which is broader than production least privilege; note this in lab reports.
 
 #### Queue policies
 
@@ -3378,7 +3378,7 @@ Separate roles for producers and consumers, scoped to specific stream ARNs.
 | KCL consumer | Read actions above plus DynamoDB CRUD on its lease tables and `cloudwatch:PutMetricData` |
 | Firehose role | Source read, destination write, `kms:Decrypt`/`GenerateDataKey`, `glue:GetTable*` for conversion, `lambda:InvokeFunction` for transforms |
 
-Workload identities follow earlier units: ECS task roles ([Chapter 2.2](../unit2/topic2.md)), EKS Pod Identity or IRSA ([Chapter 3.1](../unit3/topic1.md#core-concepts-eks-security-and-iam-integration)), Lambda execution roles ([Chapter 1.3](../unit1/topic3.md)). In AWS Academy Learner Lab environments these are all replaced by the pre-created `LabRole`, which is broader than a production role; students should still write the least-privilege policy as a design exercise.
+Workload identities follow earlier units: ECS task roles ([Chapter 2.2](../unit2/topic2.md)), EKS Pod Identity or IRSA ([Chapter 3.1](../unit3/topic1.md#eks-security-and-iam-integration)), Lambda execution roles ([Chapter 1.3](../unit1/topic3.md)). In AWS Academy Learner Lab environments these are all replaced by the pre-created `LabRole`, which is broader than a production role; students should still write the least-privilege policy as a design exercise.
 
 #### Encryption
 

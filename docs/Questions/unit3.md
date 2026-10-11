@@ -26,6 +26,21 @@
 4. Critique this proposed platform standard: "All clusters will use public-only endpoints with `0.0.0.0/0` allow-listed for pipeline convenience, the `aws-auth` ConfigMap for access management because it is version-controlled in Git, `t3.medium` nodes for cost, the node instance role for all AWS access to avoid per-service IAM overhead, and Kubernetes version upgrades performed only when a CVE requires it." Identify at least seven specific defects, propose a corrected standard, and state which parts of the original intent are legitimate and how you would satisfy them.
 5. An EKS cluster serving a payments platform must meet a 99.99 per cent availability target. Evaluate honestly what a single well-designed EKS cluster can and cannot deliver against that target. Identify every single point of failure that remains after multi-AZ node distribution, `topologySpreadConstraints`, and PodDisruptionBudgets are in place, and describe what a multi-cluster architecture would add, what it would cost, and how you would decide whether the addition is justified.
 
+### Exam-Style Questions
+
+1.  Explain the difference between the EKS control plane and data plane.
+2.  Why does EKS use multiple Availability Zones for its control plane?
+3.  Explain how EKS integrates with an Amazon VPC.
+4.  Compare an EKS managed node group with Fargate.
+5.  Explain the difference between IAM authentication and Kubernetes
+    authorization.
+6.  A Pod must access an S3 bucket. What identity mechanism should be
+    considered, and why?
+7.  Design an EKS architecture for a highly available web application.
+8.  Explain why distributing three Pods across three nodes in one
+    Availability Zone does not provide the same resilience as
+    distributing them across three Availability Zones.
+
 ---
 
 ## 3.2 Deploying Applications on Amazon EKS
@@ -54,6 +69,20 @@
 4. A cluster upgrade completed successfully. Three days later, an unrelated deployment fails with `no matches for kind "HorizontalPodAutoscaler" in version "autoscaling/v2beta2"`, and the team cannot understand why an upgrade three days ago broke something today. Explain the mechanism in full, explain why the failure was delayed, describe every check that would have caught it beforehand, and explain what makes this class of failure particularly serious on EKS specifically.
 5. Argue both sides of the following claim, then give your own position with justification: "For an organisation running fewer than twenty services on AWS, adopting GitOps, Helm, Kustomize, a policy engine, a secrets operator, and a progressive delivery controller costs more in operational complexity than it returns in safety, and a well-written CI pipeline running `kubectl apply` is the correct engineering choice." Address the credential argument, the drift argument, the team-size argument, and what specific threshold would change your answer.
 
+### Exam-Style Questions
+
+1.  Distinguish between `kubectl` and `eksctl`.
+2.  Explain the relationship between a Deployment, ReplicaSet, and Pod.
+3.  Explain why a Kubernetes Service is required for many applications.
+4.  Compare Kubernetes manifests and Helm charts.
+5.  Design an EKS deployment for a stateless web application backed by
+    RDS.
+6.  Explain why container images should be versioned and controlled
+    independently of Kubernetes Deployment definitions.
+7.  A team wants to run a database in EKS. Discuss the architectural
+    considerations and an alternative AWS managed-service design.
+8.  Explain how ECR fits into an EKS application delivery architecture.
+
 ---
 
 ## 3.3 Amazon EKS Advanced Concepts
@@ -81,3 +110,19 @@
 3. Argue both sides of the following claim, then give your own position: "AWS Controllers for Kubernetes should be the default way developers provision AWS resources, because a single declarative workflow for an application and its dependencies is worth more than the lifecycle independence that Terraform provides." Address garbage collection, blast radius, the controller's permissions, coverage maturity, and what specific class of resource would change your answer.
 4. Critique this proposed platform standard: "All workloads will run on AWS Fargate to eliminate node management; add-ons will be installed once from the latest available manifests and left alone since they rarely change; PodDisruptionBudgets will use `minAvailable` equal to the replica count for maximum availability; node groups, where they exist, will use a single large instance type for simplicity; and any operator a team finds useful may be installed by that team." Identify at least seven specific defects, propose a corrected standard, and state which parts of the original intent are legitimate and how you would satisfy them.
 5. A cluster experiences a complete outage in which no workload can be deployed, although all existing Pods continue serving traffic. The trigger was a routine node scale-in during a quiet period. Reconstruct the most likely mechanism in full, identify every design defect that must have been present, and specify the changes  with configuration specifics  that would have reduced this from a cluster-wide outage to a non-event.
+
+### Exam-Style Questions
+
+1.  Compare EKS Fargate with managed node groups.
+2.  Explain the role of a Fargate profile.
+3.  A workload requires GPU acceleration and node-level customization.
+    Which compute model is more appropriate and why?
+4.  A company wants to reduce EC2 node-management responsibilities for
+    small services. Which EKS compute model should it consider?
+5.  Explain why Fargate does not eliminate the Kubernetes control plane.
+6.  Discuss how workload density affects the Fargate versus
+    managed-node-group decision.
+7.  Design a mixed EKS architecture for general-purpose APIs and
+    specialized compute workloads.
+8.  Explain the resilience implications of placing all managed nodes in
+    one Availability Zone.

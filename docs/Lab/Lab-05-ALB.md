@@ -1,13 +1,8 @@
 # Lab 05 - Putting the ECS Service Behind an Application Load Balancer
 
-*Practical 2 - giving the USMS enrolment service a front door, and assessing what you have built*
-
----
-
 ## 1. Lab Overview
 
-Lab 04 left you with a service that works and that nothing can reach.
-
+Lab 04 left you with a service that works and that nothing can reach. 
 `usms-enrolment-svc` runs two Fargate tasks in private subnets. Each task has its own elastic network
 interface, its own private address, and a security group that admits the web tier. And every one of
 those addresses is temporary: a task that stops takes its address with it, and a task that starts

@@ -2,796 +2,456 @@
 
 ## Definition
 
-A **cloud-native design pattern** is a reusable, named solution to a recurring architectural problem, expressed in a way that assumes the application runs on elastic, distributed, API-driven cloud infrastructure rather than on fixed on-premises servers.
+A **cloud-native design pattern** is a reusable solution to a recurring architectural problem. It assumes the application runs on elastic, distributed, API-driven cloud infrastructure, not on fixed on-premises servers.
 
-Cloud-native applications are designed _for_ the cloud, not merely _moved to_ the cloud. The Cloud Native Computing Foundation (CNCF) characterises cloud-native systems as loosely coupled, resilient, manageable, observable, and combined with robust automation, allowing engineers to make high-impact changes frequently and predictably.
+Cloud-native applications are designed _for_ the cloud, not merely _moved to_ it. The Cloud Native Computing Foundation (CNCF) describes cloud-native systems as loosely coupled, resilient, manageable and observable, combined with robust automation so that engineers can make high-impact changes frequently and predictably.
 
-The four patterns in this lecture are the structural pillars of cloud-native design:
+Four patterns form the structural pillars of cloud-native design:
 
-| Pattern           | One-Sentence Definition                                                                                                                      |
-| ----------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Serverless**    | Run code without provisioning or managing servers; the cloud provider allocates compute on demand and bills per use.                         |
-| **Microservices** | Decompose an application into small, independently deployable services, each owning its data and communicating over well-defined interfaces. |
-| **Event-Driven**  | Components communicate by producing and consuming events asynchronously, decoupling producers from consumers in time and topology.           |
-| **API-First**     | Design and agree on the API contract before writing implementation code, treating the API as the primary product interface.                  |
+| Pattern | One-sentence definition | Question it answers |
+|---|---|---|
+| **Serverless** | Run code without provisioning or managing servers; the provider allocates compute on demand and bills per use | How is compute provisioned and billed? |
+| **Microservices** | Split an application into small, independently deployable services, each owning its data | How is the system decomposed? |
+| **Event-Driven** | Components communicate by producing and consuming events asynchronously | How do parts communicate without coupling? |
+| **API-First** | Design and agree the API contract before writing implementation code | How is integration governed? |
 
 !!! info "Patterns, not products"
-
-     A pattern is a way of thinking; a service is a tool. You can build microservices badly on EKS and you can build a well-factored serverless system that violates every microservices principle. Examinations and interviews test whether you understand the _pattern_, not whether you can name the service.
+    A pattern is a way of thinking; a service is a tool. You can build microservices badly on EKS, and you can build a serverless system that breaks every microservices principle. Examinations and interviews test whether you understand the _pattern_, not whether you can name the service.
 
 ## Why These Patterns Exist
 
-### The problem with the traditional approach
+### The problem with the traditional monolith
 
-The traditional enterprise application was a **monolith** deployed on long-lived servers:
+The traditional enterprise application was a **monolith** on long-lived servers:
 
-- All features compiled into one deployable artifact (a WAR file, a single binary, one large codebase).
-- One relational database shared by every feature.
-- Scaling meant buying a bigger server (vertical scaling) or cloning the entire application even if only one feature was under load.
-- A single bug could crash the entire application; a single deployment risked every feature.
-- Release cycles were measured in weeks or months because every team had to coordinate around one artifact.
-- Capacity was provisioned for _peak_ load, so servers sat idle most of the time  paid for 24/7, used at perhaps 15–20% average utilisation.
+- All features in one deployable artifact and one shared relational database.
+- Scaling meant a bigger server, or cloning the whole application even if only one feature was busy.
+- One bug could crash everything; one deployment risked every feature.
+- Releases took weeks or months because every team coordinated around one artifact.
+- Capacity was bought for _peak_ load, so servers sat mostly idle but were paid for 24/7.
 
 ### Why the cloud demanded new patterns
 
-Cloud infrastructure changed three economic and technical assumptions:
+Cloud infrastructure changed three assumptions:
 
-1. **Compute became elastic and metered.** If you can acquire capacity in seconds and pay per second, provisioning for peak is wasteful. Serverless takes this to its logical conclusion: pay per invocation.
-2. **Failure became normal, not exceptional.** In a fleet of thousands of commodity machines across Availability Zones, individual failures happen constantly. Architectures must isolate failure (microservices, bulkheads) and absorb it asynchronously (event-driven) rather than assume reliable hardware.
-3. **Software delivery velocity became a competitive weapon.** Organisations that deploy hundreds of times per day outlearn those that deploy quarterly. Independent deployability (microservices) and stable contracts (API-first) make high-frequency deployment safe.
+1. **Compute became elastic and metered.** Provisioning for peak is wasteful when capacity arrives in seconds and is billed per second. Serverless takes this to its conclusion: pay per invocation.
+2. **Failure became normal.** In a fleet of thousands of machines across Availability Zones, something is always failing. Architectures must isolate failure (microservices) and absorb it asynchronously (event-driven).
+3. **Delivery speed became a competitive advantage.** Independent deployability (microservices) and stable contracts (API-first) make frequent deployment safe.
 
-### Traditional vs cloud-native comparison
+| Dimension | Traditional monolith | Cloud-native |
+|---|---|---|
+| Deployment unit | One large artifact | Many small services or functions |
+| Scaling | Vertical, whole application | Horizontal, per component, automatic |
+| Failure blast radius | Entire application | One service or function |
+| Data ownership | One shared database | Database per service |
+| Communication | In-process method calls | Network calls: APIs and events |
+| Capacity model | Provision for peak | Elastic, pay per use |
+| Release cadence | Weeks to months | Minutes to hours |
+| Team structure | Layered (UI team, DB team) | Cross-functional, service-aligned |
 
-| Dimension            | Traditional Monolith        | Cloud-Native                         |
-| -------------------- | --------------------------- | ------------------------------------ |
-| Deployment unit      | One large artifact          | Many small services / functions      |
-| Scaling              | Vertical, whole-application | Horizontal, per-component, automatic |
-| Failure blast radius | Entire application          | Single service or function           |
-| Data ownership       | One shared database         | Database per service                 |
-| Communication        | In-process method calls     | Network calls: APIs and events       |
-| Capacity model       | Provision for peak          | Elastic, pay-per-use                 |
-| Release cadence      | Weeks to months             | Minutes to hours                     |
-| Team structure       | Layered (UI team, DB team)  | Cross-functional, service-aligned    |
+<figure markdown="span">
+    ![Evolution from monolith to cloud-native architecture](../img/U1/architectureEvolution.png){width="80%"}
+    <figcaption>Evolution of software architecture stages</figcaption>
+    <p align='right' style="font-size:0.8em"><i>Image Source: AI Generated (Google Gemini)</i></p>
+</figure>
 
 !!! note "Conway's Law"
-
-     Organisations design systems that mirror their communication structures. Microservices are as much an _organisational_ pattern as a technical one: small autonomous teams own small autonomous services. Amazon's "two-pizza team" rule is the organisational twin of the microservices pattern. 
+    Organisations design systems that mirror their communication structures. Microservices are as much an _organisational_ pattern as a technical one: small autonomous teams own small autonomous services. Amazon's "two-pizza team" rule is the organisational twin of the microservices pattern.
 
 ## Core Concepts
 
 ### Coupling and cohesion
 
-These two words underlie all four patterns.
+These two ideas underlie all four patterns.
 
-- **Coupling** is the degree to which components depend on one another. Cloud-native design minimises coupling in three dimensions:
-  - **Technology coupling**  services should not care what language or database other services use.
-  - **Temporal coupling**  a producer should not need the consumer to be available _right now_ (event-driven breaks temporal coupling).
-  - **Location/topology coupling**  a producer should not need to know _who_ or _how many_ consumers exist.
-- **Cohesion** is the degree to which the responsibilities inside one component belong together. A well-designed microservice has high cohesion: it does one business capability completely.
+- **Coupling** is how much components depend on each other. Cloud-native design reduces three kinds:
+    - **Technology coupling**: a service should not care what language or database another service uses.
+    - **Temporal coupling**: a producer should not need the consumer to be available _right now_. Event-driven design removes this.
+    - **Location coupling**: a producer should not need to know _who_ or _how many_ consumers exist.
+- **Cohesion** is how well the responsibilities inside one component belong together. A good microservice has high cohesion: it does one business capability completely.
+
+!!! tip "One rule to remember"
+    Aim for **low coupling between components** and **high cohesion within them**. Every pattern below is a way of achieving that.
 
 ### Serverless  core concepts
 
-- **Function as a Service (FaaS):** Code packaged as functions triggered by events; AWS Lambda is the canonical FaaS.
-- **Serverless is broader than FaaS:** managed services with no capacity management  S3, DynamoDB on-demand, SQS, EventBridge, Fargate, Aurora Serverless, Step Functions  are all "serverless" in the sense that you never see a server.
-- **Scale-to-zero:** When there is no traffic, there is no cost (for the compute layer). This is the defining economic property.
-- **Ephemeral execution environments:** Lambda functions run in short-lived, stateless MicroVMs; state must live in external stores (DynamoDB, S3, ElastiCache).
-- **Cold start:** The latency of initialising a new execution environment when no warm one is available.
-- **Concurrency model:** Lambda scales by running one request per environment and adding environments, not by adding threads to a shared server.
-
-### How a serverless (Lambda) invocation works internally
-
-Lambda separates a **control plane** (CreateFunction, UpdateFunctionCode, configuration APIs) from a **data plane** (Invoke) engineered for massive horizontal scale. An invocation is routed either to a warm execution environment (**warm start**, typically single-digit milliseconds of overhead) or, if none is free, to a newly launched Firecracker MicroVM (**cold start**), which must download the code, start the runtime, and run initialisation code _outside the handler_ before the handler executes. CPU is allocated **proportionally to memory** (1,769 MB ≈ 1 vCPU), and each environment processes **one request at a time**, so concurrency equals the number of active environments. See [1.3 AWS Compute Services](../unit1/topic3.md#aws-lambda) for the function architecture and configuration options.
+- **Function as a Service (FaaS):** code packaged as functions triggered by events. AWS Lambda is the canonical FaaS.
+- **Serverless is broader than FaaS:** S3, DynamoDB on-demand, SQS, EventBridge, Fargate, Aurora Serverless and Step Functions are also serverless, because you never manage capacity.
+- **Scale-to-zero:** no traffic means no compute cost. This is the defining economic property.
+- **Stateless, short-lived environments:** state must live in external stores such as DynamoDB, S3 or ElastiCache.
+- **Cold start:** the extra latency of creating a new execution environment when no warm one is free. It is the price of scale-to-zero.
+- **Concurrency model:** Lambda handles one request per environment and scales by adding environments, not threads.
 
 <figure markdown="span">
-    ![3layerglobalinfra](../img/U1/LambdaInvocation.png){width="80%"}
-    <figcaption>Lambda Invocation Example</figcaption>
-    <p align='right' style="font-size:0.8em"><i>Image Source: AI Generaed (Google Gemini)</i></p>
+    ![Lambda invocation routed to a warm or a newly created execution environment](../img/U1/LambdaInvocation.png){width="80%"}
+    <figcaption>Lambda invocation: warm start versus cold start</figcaption>
+    <p align='right' style="font-size:0.8em"><i>Image Source: AI Generated (Google Gemini)</i></p>
 </figure>
 
-!!! tip "Why cold starts happen and how to reason about them"
-    Cold starts are the price of scale-to-zero. They are influenced by package size, runtime choice (interpreted runtimes such as Python start faster than JVM without SnapStart), VPC attachment (largely solved since Hyperplane ENIs), and initialisation code. Provisioned Concurrency pre-initialises environments for latency-critical paths.
+How Lambda works internally (execution environments, memory and CPU, concurrency, Provisioned Concurrency and SnapStart) is covered in [1.3 AWS Compute Services](topic3.md#aws-lambda).
 
 ### Microservices  core concepts
 
-- **Bounded context (from Domain-Driven Design):** Each service maps to one business subdomain with its own vocabulary and model  Orders, Inventory, Payments.
-- **Independent deployability:** The single most important test. If deploying service A requires coordinating with service B's team, you have a distributed monolith.
-- **Database per service:** Each service owns its data store and exposes it only via its API. Shared databases recreate coupling at the data layer.
-- **Smart endpoints, dumb pipes:** Business logic lives in services; the network (ALB, SQS) merely transports messages, unlike heavyweight enterprise service buses.
-- **Service discovery:** Services find each other via DNS (AWS Cloud Map), load balancers, or a service mesh rather than hard-coded addresses.
-- **Decentralised governance:** Teams choose their own stacks (polyglot persistence, polyglot programming) within organisational guardrails.
+- **Bounded context** (from Domain-Driven Design): each service maps to one business subdomain with its own vocabulary, such as Orders, Inventory or Payments.
+- **Independent deployability:** the single most important test. If deploying service A needs service B's team, you have a distributed monolith.
+- **Database per service:** each service owns its data and exposes it only through its API or events.
+- **Smart endpoints, dumb pipes:** business logic lives in services; the network (ALB, SQS) only transports messages.
+- **Service discovery:** services find each other through DNS (AWS Cloud Map), load balancers or a service mesh, not hard-coded addresses.
+- **Decentralised governance:** teams choose their own languages and databases within organisational guardrails.
 
-These principles are surveyed here; decomposition strategies, granularity, inter-service communication, and data ownership are treated in depth in [4.1 Microservices Design Principles](../unit4/topic1.md).
+On AWS a containerised microservice is built into an image (ECR), scheduled by ECS or EKS across Availability Zones, registered behind a load balancer or in Cloud Map, and scaled on metrics. See [2.2 Amazon ECS](../unit2/topic2.md), [2.3](../unit2/topic3.md) and [3.1 Amazon EKS Architecture](../unit3/topic1.md) for how the orchestrators do this, and [4.1 Microservices Design Principles](../unit4/topic1.md) for decomposition, granularity and data ownership in depth.
 
-### How microservices work internally on AWS
-
-A containerised microservice on ECS or EKS involves:
-
-1. **Build:** CI pipeline builds a Docker image and pushes it to **Amazon ECR**.
-2. **Schedule:** The orchestrator's control plane (ECS control plane, or the EKS-managed Kubernetes control plane) decides _where_ to run task/pod replicas across Availability Zones, respecting CPU/memory requests and placement constraints.
-3. **Run:** The data plane executes containers  on EC2 instances you manage, or on **Fargate**, where AWS provisions an isolated MicroVM per task (serverless containers).
-4. **Register:** Tasks register with a target group (ALB) or Cloud Map for service discovery; health checks gate traffic.
-5. **Communicate:** Service-to-service calls flow through the VPC network, optionally through a service mesh sidecar/proxy layer for mTLS, retries, and traffic shaping.
-6. **Scale:** Metrics (CPU, request count per target, queue depth) drive horizontal scaling of task/pod counts; Cluster Autoscaler or Karpenter scales the underlying nodes on EKS.
-
-See [2.2 Amazon ECS](../unit2/topic2.md) and [3.1 Amazon EKS Architecture](../unit3/topic1.md) for how each orchestrator performs these steps.
+!!! warning "The distributed monolith"
+    The most common and most damaging failure mode: services are split physically but stay logically coupled. They share a database, must be released together, and call each other synchronously in long chains. This brings every cost of microservices and none of the benefits. Diagnostic question: _can this service be deployed to production right now without coordinating with any other team?_ If not, it is not a microservice.
 
 ### Event-driven  core concepts
 
-- **Event:** An immutable record that _something happened_  `OrderPlaced`, `PaymentCaptured`. Events describe the past; they are facts, not requests.
-- **Command vs event:** A command (`ChargeCard`) asks one specific recipient to do something and implies coupling; an event announces a fact to whoever cares.
-- **Producer / consumer:** Producers emit events with no knowledge of consumers; consumers subscribe with no knowledge of producers.
-- **Event router / broker:** The intermediary  EventBridge (rule-based routing), SNS (pub/sub fan-out), SQS (queue buffering), Kinesis (ordered streaming).
-- **Choreography vs orchestration:**
-  - _Choreography:_ services react to each other's events with no central coordinator  flexible, but the overall flow is implicit.
-  - _Orchestration:_ a central coordinator (Step Functions) explicitly directs the workflow  visible, auditable, but a central dependency.
-- **Delivery semantics:** At-least-once delivery is the practical default; consumers must therefore be **idempotent** (safe to process the same event twice).
-- **Eventual consistency:** Because consumers process events after the fact, different services' views of the world converge over time rather than instantly.
+- **Event:** an immutable record that _something happened_, such as `OrderPlaced` or `PaymentCaptured`. Events are facts about the past, not requests.
+- **Command versus event:** a command (`ChargeCard`) asks one specific recipient to act and implies coupling; an event announces a fact to whoever cares.
+- **Producer and consumer:** producers emit events without knowing the consumers; consumers subscribe without knowing the producers.
+- **Event router or broker:** the intermediary, for example EventBridge, SNS, SQS or Kinesis.
+- **Choreography versus orchestration:**
+    - _Choreography:_ services react to each other's events with no central coordinator. Flexible, but the overall flow is implicit.
+    - _Orchestration:_ a central coordinator (Step Functions) directs the workflow. Visible and auditable, but a central dependency.
+- **Delivery semantics:** at-least-once delivery is the practical default, so consumers must be **idempotent** (safe to process the same event twice).
+- **Eventual consistency:** consumers process events after the fact, so services' views of the data converge over time rather than instantly.
 
-### How event-driven systems work internally
-
-Each broker implements a different messaging model, and that model, not the brand name, is what the pattern depends on:
+Each broker implements a different messaging model. The model, not the brand name, is what the pattern depends on:
 
 | Broker | Model | What happens to a message after it is read |
-| --- | --- | --- |
-| **SQS** | Point-to-point queue; consumers poll | Hidden while being processed, deleted on success, retried if not; repeated failures move to a dead-letter queue |
-| **SNS** | Pub/sub topic; the service pushes | A copy is pushed to every subscription; fan-out to several SQS queues gives each consumer its own buffer |
+|---|---|---|
+| **SQS** | Point-to-point queue; consumers poll | Hidden while processed, deleted on success, retried if not; repeated failures go to a dead-letter queue |
+| **SNS** | Pub/sub topic; the service pushes | A copy goes to every subscription |
 | **EventBridge** | Event bus; rules match on event content | Delivered to the targets of every matching rule; can be archived and replayed |
-| **Kinesis Data Streams** | Ordered, partitioned log | Stays in the stream for its retention period; each consumer tracks its own position, so records can be replayed |
-
-The service mechanics (visibility timeout, FIFO ordering and throughput, DLQ redrive, subscription filters, shards and partition keys, rules, archives and Pipes) are covered in [6.3 Messaging and Event Streaming](../unit6/topic3.md): see [Message Queues with Amazon SQS](../unit6/topic3.md#message-queues-with-amazon-sqs), [Pub/Sub Messaging with Amazon SNS](../unit6/topic3.md#pubsub-messaging-with-amazon-sns), [Stream Processing with Amazon Kinesis](../unit6/topic3.md#stream-processing-with-amazon-kinesis) and [Event Routing with Amazon EventBridge](../unit6/topic3.md#event-routing-with-amazon-eventbridge).
+| **Kinesis Data Streams** | Ordered, partitioned log | Kept for the retention period; each consumer tracks its own position and can replay |
 
 <figure markdown="span">
-    ![3layerglobalinfra](../img/U1/EventDriven.png){width="80%"}
-    <figcaption>EvenDriven  Example</figcaption>
-    <p align='right' style="font-size:0.8em"><i>Image Source: AI Generaed (Google Gemini)</i></p>
+    ![Producers publishing events through a broker to independent consumers](../img/U1/EventDriven.png){width="80%"}
+    <figcaption>Event-driven architecture example</figcaption>
+    <p align='right' style="font-size:0.8em"><i>Image Source: AI Generated (Google Gemini)</i></p>
 </figure>
 
+Service mechanics (visibility timeout, FIFO, DLQ redrive, filters, shards, rules, archives and Pipes) are covered in [6.3 Messaging and Event Streaming](../unit6/topic3.md): see [SQS](../unit6/topic3.md#message-queues-with-amazon-sqs), [SNS](../unit6/topic3.md#pubsub-messaging-with-amazon-sns), [Kinesis](../unit6/topic3.md#stream-processing-with-amazon-kinesis) and [EventBridge](../unit6/topic3.md#event-routing-with-amazon-eventbridge).
+
 !!! warning "At-least-once means duplicates will happen"
-    SQS standard queues, SNS, and EventBridge all deliver at-least-once. Network retries and visibility-timeout expiry produce duplicates in production. Consumers must be idempotent  for example, by recording processed event IDs in DynamoDB with a conditional write. See [4.3 Resilience in AWS Microservices](../unit4/topic3.md#idempotency) for idempotency in depth.
+    SQS standard queues, SNS and EventBridge all deliver at least once. Retries and timeouts produce duplicates in production. Make consumers idempotent, for example by recording processed event IDs in DynamoDB with a conditional write. See [4.3 Idempotency](../unit4/topic3.md#idempotency).
 
 ### API-first  core concepts
 
-- **Contract-first design:** The API specification (OpenAPI for REST, GraphQL schema, AsyncAPI or EventBridge schemas for events) is authored, reviewed, and agreed _before_ implementation.
-- **API as product:** APIs have consumers, documentation, versioning, SLAs, and lifecycle management  they are products, not by-products.
-- **Consumer-driven design:** The contract is shaped by what consumers need, not by what the internal data model happens to look like.
-- **Versioning and backward compatibility:** Contracts evolve additively; breaking changes require new versions and deprecation timelines.
-- **Mocking and parallel development:** Once the contract exists, frontend and backend teams build in parallel against mock servers generated from the specification.
-- **Governance:** Style guides, linting (e.g., Spectral), and review boards keep hundreds of APIs consistent.
+- **Contract-first design:** the specification (OpenAPI for REST, a GraphQL schema, AsyncAPI or EventBridge schemas for events) is written, reviewed and agreed _before_ implementation.
+- **API as product:** APIs have consumers, documentation, versioning, SLAs and a lifecycle. They are products, not by-products.
+- **Consumer-driven design:** the contract is shaped by what consumers need, not by the internal data model.
+- **Versioning and backward compatibility:** contracts evolve additively; breaking changes need a new version and a deprecation timeline.
+- **Parallel development:** once the contract exists, frontend and backend teams build at the same time against mock servers.
+- **Governance:** style guides, linting (for example Spectral) and reviews keep many APIs consistent.
 
-### How API-first works in practice
+The API-first workflow in practice:
 
-1. Architects and consumers co-author an **OpenAPI 3.x specification** (paths, schemas, status codes, auth).
-2. The spec is reviewed like code (pull requests, linting against a style guide).
-3. Mock servers are generated; frontend teams integrate immediately.
-4. The spec is **imported into API Gateway**, which becomes the enforcing runtime: request validation against JSON Schema, authentication (Cognito, IAM, Lambda authorizers), throttling, usage plans, and stage-based versioning.
-5. Server stubs and typed client SDKs are generated from the same spec, keeping implementation and contract synchronised.
-6. Contract tests in CI verify the implementation never drifts from the published contract.
+1. Architects and consumers co-author an **OpenAPI 3.x specification** (paths, schemas, status codes, authentication).
+2. The specification is reviewed like code, through pull requests and linting.
+3. Mock servers are generated so consumers can integrate immediately.
+4. The specification is **imported into API Gateway**, which enforces it at runtime: request validation, authentication, throttling and versioning.
+5. Server stubs and client SDKs are generated from the same specification.
+6. Contract tests in CI verify the implementation never drifts from the contract.
+
+API Gateway itself (API types, limits, authorizers, stages) is covered in [1.6 AWS Network Services](topic6.md#amazon-api-gateway) and in depth in [4.2 API Management and Service Mesh](../unit4/topic2.md).
 
 ### How the four patterns interlock
 
-<figure markdown="span">
-    ![3layerglobalinfra](../img/U1/interconnection.png){width="80%"}
-    <figcaption>Modern Application Architecture Pattern</figcaption>
-    <p align='right' style="font-size:0.8em"><i>Image Source: AI Generaed (Google Gemini)</i></p>
-</figure>
+API-first defines _what_ services promise. Microservices define _how the system is decomposed_. Event-driven defines _how parts communicate without coupling_. Serverless defines _how compute is provisioned and billed_. Real systems combine all four.
 
-API-first defines _what_ services promise; microservices define _how the system is decomposed_; event-driven defines _how parts communicate without coupling_; serverless defines _how compute is provisioned and billed_. Real systems combine all four.
+<figure markdown="span">
+    ![API gateway, microservices, event bus and serverless compute working together](../img/U1/interconnection.png){width="80%"}
+    <figcaption>How the four patterns combine in a modern application</figcaption>
+    <p align='right' style="font-size:0.8em"><i>Image Source: AI Generated (Google Gemini)</i></p>
+</figure>
 
 ## Architecture Components
 
-The following components appear across all four patterns. Understanding each component's _responsibility_ matters more than memorising features.
+Each pattern is implemented by a small set of AWS services. Know the _role_ each one plays; the service details live in the linked topics.
 
-| Component                                  | Responsibility in Cloud-Native Architecture                                                                                                             |
-| ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Client**                                 | Browser, mobile app, or machine consumer; initiates requests against published API contracts.                                                           |
-| **Route 53**                               | DNS resolution and routing policies (latency, failover, weighted)  the global entry point.                                                             |
-| **CloudFront**                             | Edge caching and TLS termination close to users; fronts API Gateway/ALB to cut latency.                                                                 |
-| **API Gateway**                            | The API-first enforcement point: contract validation, authN/authZ, throttling, versioning, and routing to Lambda, HTTP backends, or other AWS services. |
-| **ALB (Application Load Balancer)**        | Layer-7 routing (path/host based) to microservice target groups; health checks; commonly fronts ECS/EKS services.                                       |
-| **NLB (Network Load Balancer)**            | Layer-4, ultra-low-latency TCP/UDP load balancing; static IPs; used for non-HTTP protocols and PrivateLink.                                             |
-| **VPC / Subnets**                          | Network isolation boundary; public subnets for ingress, private subnets for services and data stores.                                                   |
-| **Security Groups**                        | Stateful, instance/ENI-level virtual firewalls  the micro-segmentation tool between microservices.                                                     |
-| **Lambda**                                 | Serverless compute: event-triggered, stateless functions; the unit of serverless deployment.                                                            |
-| **ECS / Fargate**                          | AWS-native container orchestration; Fargate removes node management (serverless containers).                                                            |
-| **EKS**                                    | Managed Kubernetes control plane for teams standardising on the Kubernetes ecosystem.                                                                   |
-| **Docker / ECR**                           | Container packaging and the private image registry feeding ECS/EKS deployments.                                                                         |
-| **DynamoDB**                               | Serverless NoSQL key-value store; single-digit-millisecond reads; the default microservice/serverless database.                                         |
-| **RDS / Aurora**                           | Managed relational databases where transactions and SQL are required; Aurora Serverless v2 for elastic capacity.                                        |
-| **SQS**                                    | Durable point-to-point queue: buffering, load levelling, retry, DLQ.                                                                                    |
-| **SNS**                                    | Pub/sub topic: one-to-many push fan-out.                                                                                                                |
-| **EventBridge**                            | Content-based event router with rules, schema registry, archive/replay; the backbone of event-driven integration.                                       |
-| **Step Functions**                         | Serverless workflow orchestration: explicit state machines with retries, error handling, and human-visible execution history.                           |
-| **IAM**                                    | Identity and least-privilege authorisation for every service-to-service call.                                                                           |
-| **Cognito**                                | End-user identity (sign-up/sign-in, OAuth2/OIDC tokens) consumed by API Gateway authorizers.                                                            |
-| **CloudWatch**                             | Metrics, logs, alarms, dashboards  the observability substrate.                                                                                        |
-| **X-Ray**                                  | Distributed tracing across API Gateway, Lambda, and microservices.                                                                                      |
-| **CloudFormation / Terraform / SAM / CDK** | Infrastructure as Code: the automation pillar that makes all patterns repeatable.                                                                       |
+| Pattern | Core AWS services | Role | Details |
+|---|---|---|---|
+| **Serverless** | Lambda, Fargate, DynamoDB on-demand, Aurora Serverless, Step Functions | Compute and data with no capacity management | [1.3](topic3.md#aws-lambda), [2.3](../unit2/topic3.md), [6.2](../unit6/topic2.md) |
+| **Microservices** | ECS, EKS, Fargate, ECR, ALB, Cloud Map | Run, publish and discover independent services | [2.2](../unit2/topic2.md), [3.1](../unit3/topic1.md), [4.1](../unit4/topic1.md) |
+| **Event-driven** | EventBridge, SNS, SQS, Kinesis, DynamoDB Streams | Route, fan out, buffer and stream events | [6.3](../unit6/topic3.md) |
+| **API-first** | API Gateway, Cognito, CloudFront | Enforce the contract, authenticate callers, cache at the edge | [1.6](topic6.md#amazon-api-gateway), [4.2](../unit4/topic2.md) |
+| **Cross-cutting** | IAM, CloudWatch, X-Ray, CloudFormation / SAM / CDK | Identity, observability, automation | [8.1](../unit8/topic1.md), [7.1](../unit7/topic1.md), [Unit 5](../unit5/overview.md) |
 
----
-
-## AWS Service Deep Dive
-
-This topic spans several services; the deep dive focuses on the four services that most directly embody each pattern.
-
-### AWS Lambda (serverless compute)
-
-| Attribute                 | Details                                                                                                                                                                                            |
-| ------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Purpose**               | Run code in response to events without managing servers.                                                                                                                                           |
-| **Architecture**          | Firecracker MicroVMs on a multi-tenant worker fleet; frontend/placement services route invocations; poller fleets consume streams/queues.                                                          |
-| **Key features**          | 20+ runtimes and container image support (up to 10 GB images), layers, versions and aliases, destinations, Function URLs, SnapStart (JVM/.NET/Python), response streaming.                         |
-| **Limitations**           | 15-minute maximum execution; 128 MB–10,240 MB memory; 512 MB–10 GB ephemeral `/tmp`; 6 MB synchronous payload (20 MB with streaming responses in supported configurations); stateless.             |
-| **Pricing**               | Per request + GB-second of duration; Provisioned Concurrency billed while enabled; free tier of 1M requests/month.                                                                                 |
-| **Performance**           | Warm invocations add single-digit ms; CPU scales with memory; cold starts range from tens of ms (Python/Node) to seconds (large JVM apps without SnapStart).                                       |
-| **Scaling**               | Each function scales up to the account/Region concurrency pool (default 1,000, raisable); burst scaling of 1,000 new environments per 10 seconds per function.                                     |
-| **Availability**          | Regional service automatically spread across multiple AZs  multi-AZ HA with zero configuration.                                                                                                   |
-| **Security**              | Execution role (IAM) per function; resource-based policies control who may invoke; optional VPC attachment; environment variables encrypted with KMS.                                              |
-| **Common configurations** | Memory tuning (use AWS Lambda Power Tuning), reserved concurrency to protect downstream databases, DLQ/destinations for async failures, SQS event source with batch size and `maximumConcurrency`. |
-
-### Amazon API Gateway (API-first)
-
-API Gateway is the runtime that enforces an API-first contract: an **OpenAPI** specification can be imported to create the API and exported again for SDK generation and documentation, and the gateway then applies request validation, authorizers (Cognito, IAM, Lambda, JWT), throttling and usage plans, stage variables, and canary releases in front of Lambda, HTTP backends, VPC Link targets, or direct AWS service integrations. It comes in three types  **REST API** (full features: API keys, usage plans, request validation, caching), **HTTP API** (cheaper, lower latency, JWT auth, a subset of features), and **WebSocket API** (bidirectional).
-
-See [1.6 AWS Network Services](../unit1/topic6.md#amazon-api-gateway) for the API type comparison, limits, and its place in the network request path, and [4.2 API Management and Service Mesh](../unit4/topic2.md#amazon-api-gateway) for the full deep dive.
-
-### Amazon EventBridge (event-driven)
-
-EventBridge is the serverless event bus that embodies the event-driven pattern: producers publish events describing facts, and **rules** match on event content and route matching events to targets, so producers never know who consumes them. The default bus carries AWS service events, custom buses carry application events and partner buses carry SaaS events; archive and replay, a schema registry, Pipes and Scheduler complete the service. Delivery is at-least-once without ordering, which is why consumers must be idempotent.
-
-See [6.3 Event Routing with Amazon EventBridge](../unit6/topic3.md#event-routing-with-amazon-eventbridge) for the full treatment: limits, pricing, retries and DLQs, cross-account routing and the comparison with SQS, SNS and Kinesis.
-
-### Amazon ECS with AWS Fargate (microservices runtime)
-
-| Attribute        | Details                                                                                                                                                                                        |
-| ---------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Purpose**      | Orchestrate containerised microservices; Fargate provides serverless container execution.                                                                                                      |
-| **Architecture** | Control plane (AWS-managed) schedules **tasks** (from task definitions) into **services** that maintain desired count behind ALB target groups; Fargate runs each task in an isolated MicroVM. |
-| **Key features** | Blue/green deployments via CodeDeploy, circuit-breaker rollback, Service Connect / Cloud Map discovery, capacity providers (Fargate, Fargate Spot, EC2), task-level IAM roles.                 |
-| **Limitations**  | Fargate task sizes up to 16 vCPU / 120 GB; no GPU on classic Fargate; no privileged containers; less ecosystem flexibility than Kubernetes.                                                    |
-| **Pricing**      | Fargate: per vCPU-second and GB-second; EC2 launch type: you pay for instances; Fargate Spot up to ~70% discount for interruption-tolerant tasks.                                              |
-| **Scaling**      | Service Auto Scaling on CloudWatch metrics (CPU, memory, ALB request count per target, custom/queue-depth metrics).                                                                            |
-| **Availability** | Spread tasks across AZs via the service scheduler; ALB health checks replace failed tasks automatically.                                                                                       |
-| **Security**     | Task execution role (pull image, write logs) vs task role (application permissions); security groups per task with `awsvpc` networking; images scanned in ECR.                                 |
-
-!!! note "ECS vs EKS decision"
-    ECS is simpler, deeply AWS-integrated, and has no control-plane fee; EKS provides Kubernetes portability and its ecosystem (Helm, operators, service meshes) at the cost of a per-cluster hourly fee and greater operational complexity. Choose EKS when the organisation is committed to Kubernetes skills or multi-cloud portability; otherwise ECS/Fargate is the pragmatic default for AWS-native microservices.
-
-See [2.2 Amazon ECS](../unit2/topic2.md) for the full treatment of clusters, tasks, services, launch types, and task roles.
-
----
+!!! note "ECS or EKS for microservices?"
+    ECS is simpler and deeply AWS-integrated; EKS adds Kubernetes portability and its ecosystem at the cost of more operational complexity. ECS on Fargate is the pragmatic default for AWS-native microservices. The full comparison is in [3.1](../unit3/topic1.md).
 
 ## Important AWS Terminology
 
-| Term                              | Meaning                                                                                                                                  |
-| --------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
-| **Cloud-native**                  | Applications designed to exploit elastic, managed, distributed cloud infrastructure  loosely coupled, resilient, observable, automated. |
-| **FaaS**                          | Function as a Service; event-triggered, provider-managed code execution (Lambda).                                                        |
-| **Cold start**                    | Latency of creating and initialising a new Lambda execution environment.                                                                 |
-| **Execution environment**         | The Firecracker MicroVM plus runtime in which a Lambda invocation runs; handles one request at a time.                                   |
-| **Concurrency (Lambda)**          | Number of simultaneous execution environments; reserved concurrency caps it, provisioned concurrency pre-warms it.                       |
-| **Bounded context**               | A DDD term: the boundary within which a domain model applies; the natural seam for a microservice.                                       |
-| **Distributed monolith**          | Anti-pattern: services that are physically separate but must be deployed or changed together.                                            |
-| **Database per service**          | Each microservice exclusively owns its data store; others access data only via its API or events.                                        |
-| **Event**                         | Immutable record of a fact that occurred; past tense (`OrderPlaced`).                                                                    |
-| **Command**                       | A directed request for a specific action (`ChargeCard`); implies one handler.                                                            |
-| **Choreography**                  | Event-driven coordination without a central controller.                                                                                  |
-| **Orchestration**                 | Central workflow coordination (Step Functions) with explicit state.                                                                      |
-| **Fan-out**                       | One event delivered to many consumers (SNS→multiple SQS).                                                                                |
-| **Dead-letter queue (DLQ)**       | Queue receiving messages that repeatedly failed processing, isolating poison messages.                                                   |
-| **Visibility timeout**            | Period during which a received SQS message is hidden from other consumers pending deletion.                                              |
-| **Idempotency**                   | Property that processing the same message/request multiple times yields the same result.                                                 |
-| **Eventual consistency**          | Distributed replicas converge over time; reads may briefly see stale data.                                                               |
-| **At-least-once delivery**        | Broker guarantees delivery but may duplicate; the consumer handles duplicates.                                                           |
-| **OpenAPI**                       | Standard, machine-readable specification format for REST API contracts.                                                                  |
-| **Contract testing**              | Automated verification that a service implementation conforms to its published API contract.                                             |
-| **Throttling**                    | Rejecting excess requests (HTTP 429) to protect backends; configured per stage/client in API Gateway.                                    |
-| **Sidecar / service mesh**        | Proxy deployed beside each service instance handling mTLS, retries, and traffic policy (e.g., Envoy).                                    |
-| **Saga**                          | Pattern managing a distributed transaction as a sequence of local transactions with compensating actions.                                |
-| **Backpressure / load levelling** | Using a queue to smooth bursts so consumers process at a sustainable rate.                                                               |
-
----
+| Term | Meaning |
+|---|---|
+| **Cloud-native** | Designed to exploit elastic, managed, distributed infrastructure: loosely coupled, resilient, observable, automated |
+| **FaaS** | Function as a Service; event-triggered, provider-managed code execution (Lambda) |
+| **Cold start** | Latency of creating and initialising a new Lambda execution environment |
+| **Bounded context** | DDD term: the boundary within which one domain model applies; the natural seam for a microservice |
+| **Distributed monolith** | Services that are physically separate but must be deployed or changed together |
+| **Database per service** | Each service exclusively owns its data; others reach it only via its API or events |
+| **Event / Command** | An event is a past-tense fact (`OrderPlaced`); a command is a directed request (`ChargeCard`) |
+| **Choreography / Orchestration** | Coordination by reacting to events / coordination by a central workflow (Step Functions) |
+| **Fan-out / Fan-in** | One event to many consumers / many results aggregated into one |
+| **Dead-letter queue (DLQ)** | Queue that receives messages that repeatedly failed, isolating poison messages |
+| **Idempotency** | Processing the same message twice gives the same result as processing it once |
+| **Eventual consistency** | Copies of data converge over time; reads may briefly be stale |
+| **At-least-once delivery** | The broker guarantees delivery but may duplicate |
+| **OpenAPI** | Standard machine-readable format for REST API contracts |
+| **Contract testing** | Automated check that an implementation matches its published contract |
+| **Saga** | A distributed transaction run as local transactions with compensating actions |
+| **Load levelling** | Using a queue to smooth bursts so consumers work at a sustainable rate |
 
 ## Configuration Options
 
-### Serverless configuration decisions (Lambda)
+Most configuration belongs to individual services and is covered in their own topics. The decisions below are the ones that change the _pattern_:
 
-| Setting                  | Options                                                                          | Architectural Implication                                                                                           |
-| ------------------------ | -------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
-| **Memory size**          | 128 MB – 10,240 MB                                                               | CPU scales with memory; more memory often _reduces_ cost by finishing faster. Tune empirically.                     |
-| **Packaging**            | ZIP archive (250 MB unzipped) or container image (10 GB)                         | Container images suit large ML dependencies and unify CI with container workflows.                                  |
-| **Concurrency**          | Unreserved (shared pool), Reserved (cap), Provisioned (pre-warmed)               | Reserved protects downstream RDS from connection storms; Provisioned removes cold starts for latency-critical APIs. |
-| **Networking**           | No VPC (default) or VPC-attached                                                 | VPC attachment is required to reach private RDS/ElastiCache; needs NAT Gateway or VPC endpoints for AWS API access. |
-| **Invocation model**     | Synchronous, Asynchronous, Event source mapping (poll-based)                     | Determines retry semantics: async retries twice then DLQ; poll-based retries per queue configuration.               |
-| **Event source mapping** | Batch size, batch window, `maximumConcurrency`, filter criteria, bisect on error | Filtering at the source avoids paying for invocations that would immediately discard the event.                     |
-| **Architecture**         | x86_64 or arm64 (Graviton2)                                                      | Graviton typically offers ~20% better price-performance.                                                            |
+| Pattern | Decision | Options | Architectural implication |
+|---|---|---|---|
+| Serverless | Concurrency | Unreserved, reserved, provisioned | Reserved concurrency protects a small database; provisioned removes cold starts on latency-critical paths |
+| Serverless | Invocation model | Synchronous, asynchronous, poll-based (event source mapping) | Decides who retries and where failures go |
+| Microservices | Compute | Fargate, Fargate Spot, EC2 | Fargate for simplicity; EC2 for GPUs or dense steady load; Spot for interruptible workers |
+| Microservices | Deployment type | Rolling, blue/green, canary | Blue/green gives instant rollback; canary limits the blast radius |
+| Microservices | Scaling signal | CPU, request count per target, queue depth | Request count or queue depth usually tracks real demand better than CPU |
+| Event-driven | Ordering | Standard or FIFO | FIFO gives ordering and deduplication at bounded throughput |
+| Event-driven | Failure handling | DLQ and retry count on every queue, subscription and rule target | Poison messages are isolated instead of retried forever or lost |
+| Event-driven | Visibility timeout | Longer than worst-case processing time | Too short and the same message is processed twice at once |
+| API-first | Authorisation | Cognito, IAM, Lambda authorizer, JWT | Cognito for end users; IAM for service-to-service |
+| API-first | Versioning | Path (`/v1`), header or stage | Path versioning is explicit and cache-friendly; never break an existing version |
 
-### Microservices runtime configuration
-
-| Setting                             | Options                                                        | Architectural Implication                                                                                                           |
-| ----------------------------------- | -------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
-| **Launch type / capacity provider** | Fargate, Fargate Spot, EC2                                     | Fargate for operational simplicity; EC2 for GPU, custom AMIs, or high steady-state density; Spot for interruption-tolerant workers. |
-| **Network mode (ECS)**              | `awsvpc`, `bridge`, `host`                                     | `awsvpc` gives each task its own ENI and security group  required for Fargate and for per-service micro-segmentation.              |
-| **Deployment type**                 | Rolling update, Blue/Green (CodeDeploy), Canary                | Blue/green enables instant rollback; canary limits blast radius of a bad release.                                                   |
-| **Service discovery**               | ALB target groups, ECS Service Connect, Cloud Map DNS          | Internal service-to-service traffic usually avoids the ALB hop for latency and cost.                                                |
-| **Scaling policy**                  | Target tracking, step scaling, scheduled                       | Target tracking on _request count per target_ or _queue depth_ is usually superior to CPU for request-driven services.              |
-| **EKS node provisioning**           | Managed node groups, self-managed, Fargate profiles, Karpenter | Karpenter provisions right-sized nodes just-in-time, improving bin-packing and cost.                                                |
-
-### Event-driven configuration
-
-The configuration decisions that shape an event-driven design are few, and each has a pattern-level consequence:
-
-- **Standard versus FIFO queues and topics:** ordering and deduplication per message group, at the cost of bounded throughput.
-- **Visibility timeout:** must exceed the consumer's worst-case processing time, otherwise the same message is processed twice concurrently.
-- **Dead-letter queues and `maxReceiveCount`:** configure a DLQ on every queue, subscription and rule target, so poison messages are isolated rather than retried forever or silently lost.
-- **Retention:** how long a backlog survives a consumer outage.
-- **Kinesis shard count or on-demand mode:** ordering is per shard, and shard count sets throughput and consumer parallelism.
-
-Every setting, with its limits and defaults, is covered in [6.3 Messaging and Event Streaming](../unit6/topic3.md): see the Configuration Options of [SQS](../unit6/topic3.md#message-queues-with-amazon-sqs), [SNS](../unit6/topic3.md#pubsub-messaging-with-amazon-sns), [Kinesis](../unit6/topic3.md#stream-processing-with-amazon-kinesis) and [EventBridge](../unit6/topic3.md#event-routing-with-amazon-eventbridge).
-
-### API-first configuration
-
-The settings below are the ones specific to governing an API contract. The choice of API type is covered in [1.6 AWS Network Services](../unit1/topic6.md#amazon-api-gateway), endpoint type and caching in [1.6 API Gateway Configuration](../unit1/topic6.md#api-gateway-configuration), and every API Gateway setting in [4.2 API Management and Service Mesh](../unit4/topic2.md#api-gateway-configuration).
-
-| Setting                 | Options                                               | Architectural Implication                                                                                                         |
-| ----------------------- | ----------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
-| **Authorisation**       | IAM, Cognito user pools, Lambda authorizer, JWT, mTLS | Cognito for end users; IAM for service-to-service; Lambda authorizers for custom/legacy token schemes.                            |
-| **Throttling**          | Account, stage, method, and usage-plan level          | Per-client usage plans prevent one tenant from exhausting shared capacity.                                                        |
-| **Versioning strategy** | Path (`/v1`), header, or stage-based                  | Path versioning is explicit and cache-friendly; never break an existing version.                                                  |
-
----
+Lambda settings: [1.3](topic3.md#aws-lambda). ECS settings: [2.2](../unit2/topic2.md). Messaging settings: [6.3](../unit6/topic3.md). API Gateway settings: [4.2](../unit4/topic2.md#api-gateway-configuration).
 
 ## Design Considerations
 
-| Quality                    | Serverless                                                         | Microservices                                                        | Event-Driven                                                        | API-First                                                                     |
-| -------------------------- | ------------------------------------------------------------------ | -------------------------------------------------------------------- | ------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
-| **Scalability**            | Automatic, per-invocation, to thousands of concurrent environments | Per-service horizontal scaling; scale the hot service only           | Broker absorbs bursts; consumers scale independently                | Gateway throttling protects backends and enables graceful degradation         |
-| **Availability**           | Multi-AZ by default, no configuration                              | Requires multi-AZ task placement and health checks                   | Broker is multi-AZ and durable; buffers consumer outages            | Managed gateway is multi-AZ; contracts enable failover to alternate backends  |
-| **Reliability**            | Built-in retries; must design for idempotency                      | Failure isolated per service; requires circuit breakers and timeouts | Retries + DLQ give at-least-once durability                         | Validation rejects malformed input before it reaches services                 |
-| **Durability**             | Compute is ephemeral  state must be externalised                  | Persist to DynamoDB/RDS/S3, never to container disk                  | Messages replicated across AZs; EventBridge archive enables replay  | Contracts version data schemas, protecting stored payloads                    |
-| **Latency**                | Cold starts on the tail; warm path is fast                         | Predictable warm containers; extra network hop per call              | Adds broker latency but removes it from the user path               | Extra hop through the gateway (single-digit ms) plus optional caching benefit |
-| **Cost**                   | Zero when idle; can exceed containers at sustained high volume     | Pay for running capacity, idle included                              | Per-message cost, trivially small; saves compute by smoothing peaks | Per-request gateway cost; caching reduces backend spend                       |
-| **Performance**            | CPU tied to memory; concurrency model avoids thread contention     | Full control over runtime tuning and connection pooling              | Throughput-oriented rather than latency-oriented                    | Request validation and caching offload work from services                     |
-| **Maintainability**        | Small functions are easy to read, hard to navigate at scale        | Small codebases per team; clear ownership                            | Loose coupling eases change; flows become implicit                  | Contract is the durable, documented source of truth                           |
-| **Operational complexity** | Lowest infrastructure burden; highest observability burden         | Highest: orchestration, networking, deployment pipelines per service | Debugging distributed async flows is genuinely hard                 | Governance overhead: style guides, versioning, deprecation                    |
+| Quality | Serverless | Microservices | Event-driven | API-first |
+|---|---|---|---|---|
+| **Scalability** | Automatic, per invocation | Scale only the busy service | Broker absorbs bursts; consumers scale independently | Throttling protects backends |
+| **Availability** | Multi-AZ by default | Needs multi-AZ placement and health checks | Durable broker buffers consumer outages | Managed gateway is multi-AZ |
+| **Reliability** | Built-in retries; needs idempotency | Failure isolated per service; needs timeouts and circuit breakers | Retries plus DLQ give durable delivery | Validation rejects bad input early |
+| **Latency** | Cold starts on the tail | Extra network hop per call | Adds broker delay but removes work from the user path | One extra hop; caching can offset it |
+| **Cost** | Zero when idle; can exceed containers at constant high volume | Pay for running capacity, idle included | Small per-message cost; smooths peaks | Per-request gateway cost |
+| **Operational complexity** | Lowest infrastructure burden, highest observability burden | Highest: pipelines, networking and on-call per service | Async flows are hard to debug | Governance overhead |
 
-!!! warning "The complexity conservation principle"
-    These patterns do not remove complexity; they _relocate_ it. Complexity moves out of the codebase and into the network, the deployment pipeline, and the observability stack. A team without CI/CD maturity and distributed tracing will find microservices slower and less reliable than the monolith they replaced.
+!!! warning "Complexity is relocated, not removed"
+    These patterns move complexity out of the codebase and into the network, the deployment pipeline and the observability stack. A team without CI/CD maturity and distributed tracing will find microservices slower and less reliable than the monolith they replaced.
 
 ### When to choose which pattern
 
-| Scenario                                                          | Recommended Approach                                | Reasoning                                                                                                    |
-| ----------------------------------------------------------------- | --------------------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
-| New product, small team, unclear domain boundaries                | Modular monolith on Fargate, API-first from day one | Avoid distributed complexity before you understand the domain; keep clean module seams for later extraction. |
-| Spiky, unpredictable traffic (marketing campaigns, tax season)    | Serverless (Lambda + DynamoDB on-demand)            | Scale-to-zero economics and automatic burst scaling.                                                         |
-| Sustained high throughput, steady load, long-running processes    | Containers on ECS/EKS with Savings Plans or Spot    | Predictable cost per unit of compute beats per-invocation pricing at scale.                                  |
-| Many downstream systems reacting to the same business fact        | Event-driven with EventBridge fan-out               | Adding a consumer requires no change to the producer.                                                        |
-| Multi-step business process needing auditability and compensation | Step Functions orchestration (Saga)                 | Explicit state, visible execution history, built-in retries and compensations.                               |
-| Public or partner-facing integration                              | API-first with API Gateway                          | Contract stability, throttling, authentication, and monetisation via usage plans.                            |
-| Strict sub-10 ms latency at high, constant RPS                    | Containers with warm connection pools, possibly NLB | Avoids cold starts and gateway overhead.                                                                     |
-| Legacy migration with limited cloud skills                        | Rehost, then strangle incrementally                 | The Strangler Fig pattern reduces risk versus a big-bang rewrite.                                            |
+| Scenario | Recommended approach | Reasoning |
+|---|---|---|
+| New product, small team, unclear domain boundaries | Modular monolith on Fargate, API-first from day one | Avoid distributed complexity until the domain is understood |
+| Spiky, unpredictable traffic | Serverless (Lambda + DynamoDB on-demand) | Scale-to-zero and automatic burst scaling |
+| Sustained high throughput, long-running processes | Containers on ECS/EKS with Savings Plans or Spot | Steady compute is cheaper than per-invocation pricing at scale |
+| Many systems react to the same business fact | Event-driven fan-out with EventBridge or SNS | Adding a consumer needs no producer change |
+| Multi-step process needing auditability and compensation | Step Functions orchestration (saga) | Explicit state, visible history, built-in retries |
+| Public or partner-facing integration | API-first with API Gateway | Stable contract, throttling, authentication |
+| Strict low latency at high, constant load | Containers with warm connection pools | Avoids cold starts and gateway overhead |
+| Legacy migration with limited cloud skills | Rehost, then strangle incrementally | Strangler fig reduces risk versus a big-bang rewrite |
 
----
+<figure markdown="span">
+    ![Decision flow for selecting serverless, containers, events or APIs](../img/U1/patternselection.png){width="80%"}
+    <figcaption>Pattern selection flow</figcaption>
+    <p align='right' style="font-size:0.8em"><i>Image Source: AI Generated (Google Gemini)</i></p>
+</figure>
 
 ## AWS Best Practices
 
-Mapped to the six pillars of the **AWS Well-Architected Framework**, plus the **Serverless Application Lens**.
+Pattern-level practices, grouped by Well-Architected pillar:
 
-### Operational Excellence
-
-- Define all infrastructure as code (SAM, CDK, CloudFormation, or Terraform); no console-created production resources.
-- Deploy small changes frequently through automated pipelines with automated rollback (CodeDeploy canary, ECS deployment circuit breaker).
-- Instrument structured JSON logging with correlation IDs propagated across every service hop.
-- Run game days: deliberately fail a service, an AZ, or a consumer and verify the system degrades as designed.
-- Maintain runbooks per service and per alarm; alarms without runbooks generate noise, not action.
-
-### Security
-
-- One IAM role per function, per task, per service  never a shared "application role".
-- Enforce least privilege with resource-level ARNs and condition keys; avoid `"Resource": "*"`.
-- Authenticate at the edge (Cognito/OIDC at API Gateway) _and_ authorise between services (IAM SigV4, mTLS in the mesh)  do not rely on the network perimeter alone.
-- Encrypt everywhere: TLS in transit, KMS at rest for DynamoDB, S3, SQS, EventBridge; Secrets Manager for credentials with automatic rotation.
-- Place compute in private subnets; expose only load balancers and gateways publicly; use VPC endpoints to keep AWS API traffic off the internet.
-- Validate all input at the gateway against JSON Schema; attach AWS WAF for injection and bot protection.
-
-### Reliability
-
-- Design every consumer to be idempotent; assume duplicate delivery.
-- Configure DLQs on every asynchronous target and alarm on DLQ depth greater than zero.
-- Apply timeouts, retries with exponential backoff and jitter, and circuit breakers on every synchronous call.
-- Isolate resources with the bulkhead pattern: reserved concurrency per function, separate queues per consumer, separate connection pools.
-- Spread tasks and data across at least three Availability Zones; test AZ failure.
-- Prefer static stability: the system should keep serving during a dependency's control-plane outage rather than needing to change state to survive.
-
-### Performance Efficiency
-
-- Choose the right compute for the workload profile: Lambda for bursty and event-driven, Fargate for steady request/response, EC2/EKS for specialised or GPU workloads.
-- Tune Lambda memory using AWS Lambda Power Tuning rather than defaulting to 128 MB.
-- Cache aggressively at every layer: CloudFront for static and cacheable API responses, API Gateway cache, ElastiCache/DAX for hot data.
-- Initialise SDK clients and database connections _outside_ the Lambda handler to reuse them across invocations.
-- Use event filtering (Lambda event source filters, EventBridge patterns) so compute is only invoked for relevant events.
-- Adopt Graviton (arm64) where the runtime supports it.
-
-### Cost Optimization
-
-- Right-size continuously: Lambda memory, Fargate task CPU/memory, and container requests/limits.
-- Use Fargate Spot and EC2 Spot for fault-tolerant, interruptible work; Compute Savings Plans for steady baseline load.
-- Batch messages (SQS batch size, Kinesis batching) to reduce invocation counts.
-- Prefer HTTP APIs over REST APIs when advanced features are unnecessary  a substantial per-request saving.
-- Use DynamoDB on-demand for unpredictable traffic and provisioned with auto scaling for predictable traffic.
-- Apply S3 lifecycle policies and log retention limits; CloudWatch Logs with infinite retention is a common silent cost.
-- Tag every resource by service, team, and environment to enable cost allocation and accountability.
-
-### Sustainability
-
-- Scale-to-zero architectures consume no energy when idle  serverless is the sustainability-optimal choice for intermittent workloads.
-- Improved bin-packing (Fargate right-sizing, Karpenter consolidation) reduces the physical footprint per unit of work.
-- Move infrequently accessed data to cooler storage classes; delete data that has no retention requirement.
-- Graviton processors deliver more work per watt.
-
----
+| Pillar | Practice |
+|---|---|
+| **Operational Excellence** | Everything as code (SAM, CDK, CloudFormation, Terraform); small, frequent deployments with automatic rollback; correlation IDs on every hop |
+| **Security** | One IAM role per function, task or service; authenticate at the edge _and_ authorise between services |
+| **Reliability** | Idempotent consumers; a DLQ with an alarm on every async target; timeouts, backoff with jitter and circuit breakers on every sync call |
+| **Performance Efficiency** | Match compute to the workload profile; filter events before they invoke compute; cache at the edge and gateway |
+| **Cost Optimization** | Right-size continuously; Savings Plans for steady baseline, Spot for interruptible work, serverless for spiky load |
+| **Sustainability** | Scale-to-zero uses no compute when idle; good bin-packing reduces physical footprint |
 
 ## Security Considerations
 
-```mermaid
-flowchart TD
-    subgraph Edge
-        WAF[AWS WAF] --> CFD[CloudFront]
-        CFD --> GW[API Gateway<br/>Cognito authorizer + schema validation]
-    end
-    subgraph Private VPC
-        GW --> LMB[Lambda<br/>execution role]
-        GW --> VL[VPC Link] --> ALBI[Internal ALB] --> SVC[ECS Tasks<br/>task role + SG]
-        LMB --> DDB[(DynamoDB<br/>KMS encrypted)]
-        SVC --> RDS[(RDS in private subnet<br/>Secrets Manager rotation)]
-        SVC --> VPE[VPC Endpoints] --> S3[(S3)]
-    end
-    LMB -.IAM SigV4.-> EB[(EventBridge)]
-    CT[CloudTrail] -.audits all API calls.-> Edge
-```
+Security services are covered in Unit 8 ([8.1 IAM](../unit8/topic1.md), [8.2 Network Security](../unit8/topic2.md), [8.3 Encryption and Secrets](../unit8/topic3.md)). What changes with these patterns is the **number of trust boundaries**: every function, service, queue and bus is now an identity and an attack surface.
 
-- **IAM and least privilege.** Every Lambda function has its own execution role; every ECS task has its own task role, distinct from the task _execution_ role used only to pull images and write logs. Scope policies to specific resource ARNs and use condition keys (`aws:SourceArn`, `aws:PrincipalOrgID`) to prevent the confused-deputy problem.
-- **Service-to-service authorisation.** In event-driven systems, control who may `PutEvents` on a bus and which targets a rule may invoke. Resource policies on SQS queues, SNS topics, and Lambda functions restrict cross-account access explicitly.
-- **Encryption.** TLS 1.2+ in transit everywhere, including internal service calls. KMS customer-managed keys where key rotation policy, cross-account grants, or auditability are required; AWS-managed keys otherwise.
-- **Secrets.** Never place credentials in environment variables in plaintext or in container images. Use Secrets Manager (automatic rotation) or SSM Parameter Store SecureString, fetched at initialisation and cached.
-- **Security groups vs NACLs.** Security groups are stateful and are the primary micro-segmentation tool between microservices (allow the Orders service SG to reach the Orders database SG on 5432 only). NACLs are stateless, subnet-level, and used for coarse deny rules such as blocking known-bad CIDRs. See [1.6 AWS Network Services](../unit1/topic6.md#security-groups-versus-network-acls) for the full comparison.
-- **Public vs private resources.** Only ALBs, NLBs, CloudFront, and API Gateway should be internet-facing. Compute and data live in private subnets. Private APIs and PrivateLink keep partner integrations off the public internet entirely.
-- **Logging and audit.** CloudTrail records every control-plane API call (who created that queue, who changed that IAM policy) and is the foundation of forensic investigation. Enable it organisation-wide with log file validation and a separate, restricted logging account.
-- **Compliance.** The shared responsibility model applies: AWS secures the cloud, you secure what you build in it. Serverless narrows _your_ share (no OS patching) but never eliminates application-layer responsibility for authorisation, input validation, and data handling.
+- **Least privilege per component.** A separate role per Lambda function and per ECS task, scoped to specific resource ARNs.
+- **Edge and internal authorisation.** Validate tokens and schemas at API Gateway, then authorise service-to-service calls with IAM or mTLS. Do not trust the network perimeter alone.
+- **Private by default.** Only load balancers, CloudFront and API Gateway face the internet; compute and data stay in private subnets.
+- **Secrets outside code.** Use Secrets Manager or Parameter Store, never plaintext in images or environment variables.
 
 !!! danger "Common security failure in event-driven systems"
-    Teams often authenticate rigorously at the API edge and then treat the internal event bus as trusted. Any component that can publish to the bus can then trigger privileged downstream actions. Authorise _publishing_ and _consuming_ explicitly, validate event payloads against registered schemas, and never let an event carry an unverified `userId` that downstream services trust implicitly.
+    Teams authenticate carefully at the API edge, then treat the internal event bus as trusted. Any component that can publish to the bus can then trigger privileged downstream actions. Authorise _publishing_ and _consuming_ explicitly, validate events against schemas, and never let an event carry an unverified `userId` that downstream services trust.
 
----
+## Operating It: Performance, Cost and Monitoring
 
-## Performance Optimization
+### Performance
 
-- **Caching.** CloudFront for static assets and cacheable GET responses; API Gateway stage cache keyed on path and selected headers; DAX in front of DynamoDB for microsecond reads; ElastiCache (Redis) for session and computed data. Every cache layer removes both latency and cost.
-- **Auto scaling.** Prefer demand-proportional signals: ALB `RequestCountPerTarget` for web tiers, `ApproximateNumberOfMessagesVisible` (or backlog per task) for queue workers, and Application Auto Scaling target tracking rather than manual step policies.
-- **Load balancing.** ALB for HTTP with path/host routing and least-outstanding-requests; NLB for extreme throughput and non-HTTP protocols; cross-zone load balancing enabled to avoid hot AZs.
-- **Parallelism.** Fan out with SNS/EventBridge so independent work happens concurrently; use Step Functions `Map` state (including distributed map for very large datasets) for parallel batch processing; increase Kinesis shards or SQS consumer concurrency to raise throughput.
-- **Connection reuse.** In Lambda, create clients and pool connections in the initialisation phase. For relational databases behind Lambda, use **RDS Proxy** to prevent connection exhaustion when concurrency spikes.
-- **Storage optimisation.** Design DynamoDB partition keys for even distribution to avoid hot partitions; use single-table design where access patterns justify it; use S3 Transfer Acceleration or multipart uploads for large objects; choose the appropriate storage class per access pattern.
-- **Payload discipline.** Keep events small; use the **claim-check pattern**  store the large payload in S3 and put only the pointer in the event  to stay within 256 KB message limits and reduce transfer cost.
-- **Monitoring for performance.** Track p50, p90, and p99 latency, not averages. Tail latency is where cold starts, GC pauses, and retries reveal themselves.
+- **Cache** at every layer: CloudFront, the API Gateway cache, DAX or ElastiCache for hot data.
+- **Scale on demand signals**: request count per target for web tiers, queue backlog for workers.
+- **Reuse connections**: create SDK clients outside the Lambda handler; use RDS Proxy when Lambda talks to a relational database.
+- **Keep events small**: use the claim-check pattern (payload in S3, pointer in the event).
+- **Measure p99, not averages**: cold starts and retries hide in tail latency.
 
----
-
-## Cost Optimization
-
-| Lever                                 | How It Applies to These Patterns                                                                                                                 |
-| ------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
-| **Pay-as-you-go**                     | Lambda, API Gateway, SQS, SNS, EventBridge, DynamoDB on-demand, and Fargate all bill per unit of work or per second  no idle capacity charges.  |
-| **Reserved capacity / Savings Plans** | Compute Savings Plans cover Lambda, Fargate, and EC2 with 1- or 3-year commitments; apply to the steady baseline, leave the peak on-demand.      |
-| **Spot**                              | Fargate Spot and EC2 Spot for queue consumers, batch jobs, and CI runners  workloads that tolerate a two-minute interruption notice.            |
-| **Storage classes**                   | S3 Intelligent-Tiering for unpredictable access; Glacier tiers for archives; EBS gp3 over gp2 for cheaper baseline IOPS.                         |
-| **Lifecycle policies**                | Expire S3 objects, transition logs, and set CloudWatch Logs retention (commonly 30–90 days) instead of the default "never expire".               |
-| **Rightsizing**                       | Lambda Power Tuning for memory; Compute Optimizer for EC2/Fargate/Lambda recommendations; remove over-provisioned container CPU/memory requests. |
-| **Architectural levers**              | Filter events before invoking compute; batch SQS/Kinesis records; choose HTTP API over REST API; use ARM/Graviton; cache to avoid recomputation. |
-| **Cost Explorer**                     | Analyse spend by tag, service, and account; identify month-over-month anomalies; forecast.                                                       |
-| **AWS Budgets & Anomaly Detection**   | Alert before overspend rather than after the invoice.                                                                                            |
-| **Trusted Advisor**                   | Flags idle load balancers, unattached EIPs, underutilised instances, and missing Savings Plan coverage.                                          |
+### Cost
 
 !!! tip "The serverless cost crossover"
-    Lambda is dramatically cheaper than containers at low and bursty volume, and can become more expensive at very high, constant volume. Model the crossover with real numbers rather than dogma: estimate requests per month, average duration, and memory, then compare against an equivalently sized Fargate service with Savings Plans. Include _engineering time saved_  operational cost is a real cost.
+    Lambda is much cheaper than containers at low and bursty volume, and can become more expensive at very high, constant volume. Model the crossover with real numbers (requests per month, duration, memory) against an equivalent Fargate service with Savings Plans, and include engineering time saved.
 
----
+Other pattern-level levers: filter events before invoking compute, batch SQS and Kinesis records, prefer HTTP APIs over REST APIs when advanced features are not needed, set CloudWatch Logs retention, and tag every resource by service and team.
 
-## Monitoring and Observability
+### Monitoring
 
-Distributed systems fail in ways that are invisible from any single component. Observability is not optional in cloud-native architecture; it is a first-class design requirement.
+Distributed systems fail in ways no single component can see. Observability is a design requirement, covered in depth in [7.1](../unit7/topic1.md).
 
-| Tool                                     | Role                                                                                                                                                                                                                 |
-| ---------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **CloudWatch Metrics**                   | Time-series data: Lambda `Invocations`, `Errors`, `Throttles`, `Duration`, `ConcurrentExecutions`; SQS `ApproximateAgeOfOldestMessage`; ALB `TargetResponseTime`, `HTTPCode_Target_5XX`; ECS CPU/memory utilisation. |
-| **CloudWatch Logs & Logs Insights**      | Centralised structured logs; query across services with a SQL-like language; use metric filters to turn log patterns into alarms.                                                                                    |
-| **CloudWatch Alarms**                    | Threshold and anomaly-detection alarms feeding SNS, on-call paging, or automated remediation.                                                                                                                        |
-| **CloudWatch Dashboards**                | Per-service and per-journey views combining metrics, logs, and alarms.                                                                                                                                               |
-| **AWS X-Ray**                            | Distributed tracing: a single trace shows the API Gateway hop, the Lambda cold start, the DynamoDB call, and the downstream service, with timing for each segment.                                                   |
-| **CloudTrail**                           | Control-plane audit: who changed configuration, when, and from where.                                                                                                                                                |
-| **AWS Distro for OpenTelemetry (ADOT)**  | Vendor-neutral instrumentation for traces and metrics across ECS, EKS, and Lambda.                                                                                                                                   |
-| **Container Insights / Lambda Insights** | Deeper runtime metrics for containers and functions.                                                                                                                                                                 |
-| **EventBridge Archive & Replay**         | Operational recovery tool: replay historical events after fixing a consumer bug.                                                                                                                                     |
-
-### The three pillars applied
-
-- **Metrics** answer _is something wrong?_  Alarm on business-meaningful signals (orders per minute dropping), not only infrastructure signals.
-- **Logs** answer _what exactly happened?_  Emit structured JSON with `correlationId`, `service`, `version`, and `eventId` on every line.
-- **Traces** answer _where is the time going, and which hop failed?_  Essential once a request crosses three or more services.
+- **Metrics** answer _is something wrong?_ Alarm on business signals (orders per minute) as well as infrastructure.
+- **Logs** answer _what happened?_ Emit structured JSON with a `correlationId` on every line.
+- **Traces** (X-Ray) answer _which hop is slow or failing?_ Essential once a request crosses three or more services.
 
 !!! warning "The asynchronous debugging problem"
-    In event-driven systems the user-facing request succeeds while the real work fails silently in a consumer twenty seconds later. Without DLQ alarms, correlation IDs, and tracing, this failure is invisible until a customer complains. Instrument asynchronous paths _more_ heavily than synchronous ones, and always alarm on `ApproximateAgeOfOldestMessage` and DLQ depth.
-
-### Key alarms every cloud-native system should have
-
-| Alarm                                            | Why                                                     |
-| ------------------------------------------------ | ------------------------------------------------------- |
-| Lambda `Errors` > 0 (per function, sustained)    | Functional failure.                                     |
-| Lambda `Throttles` > 0                           | Concurrency limit reached; requests are being rejected. |
-| SQS DLQ `ApproximateNumberOfMessagesVisible` > 0 | Messages permanently failed processing.                 |
-| SQS `ApproximateAgeOfOldestMessage` > SLA        | Consumers cannot keep up; backlog growing.              |
-| ALB `HTTPCode_ELB_5XX` / `UnHealthyHostCount`    | Service instances failing health checks.                |
-| API Gateway `4XXError` spike                     | Contract violation, auth failure, or client bug.        |
-| API Gateway `Latency` p99 breach                 | Backend degradation.                                    |
-| EventBridge `FailedInvocations`                  | Rule target could not be invoked.                       |
-
----
+    In event-driven systems the user request succeeds while the real work fails silently in a consumer seconds later. Always alarm on DLQ depth greater than zero and on `ApproximateAgeOfOldestMessage`, Lambda `Errors` and `Throttles`, and EventBridge `FailedInvocations`.
 
 ## Integration with Other AWS Services
 
-| Service                                                  | Why It Integrates With These Patterns                                                                                          |
-| -------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
-| **API Gateway → Lambda**                                 | The canonical serverless API-first pairing: contract enforcement at the gateway, business logic in functions.                  |
-| **Lambda → DynamoDB**                                    | Both scale horizontally and serverlessly; DynamoDB Streams turn table changes into events, closing the loop into event-driven. |
-| **S3 → Lambda**                                          | Object-created events trigger processing pipelines (image resizing, ETL) with no polling.                                      |
-| **EventBridge → Step Functions**                         | Events start orchestrated workflows that need retries, branching, and compensation.                                            |
-| **SNS → SQS → Lambda**                                   | The classic durable fan-out: SNS distributes, SQS buffers and retries per consumer, Lambda processes.                          |
-| **DynamoDB Streams / Kinesis → Lambda**                  | Change-data-capture for materialised views, CQRS read models, and audit trails.                                                |
-| **ECS/EKS → ALB → API Gateway (VPC Link)**               | Containerised microservices published through a governed API front door.                                                       |
-| **Cognito → API Gateway**                                | Managed user identity issuing JWTs validated at the edge.                                                                      |
-| **Secrets Manager / Parameter Store → Lambda & ECS**     | Runtime credential injection with rotation.                                                                                    |
-| **CodePipeline / CodeBuild / CodeDeploy → ECS & Lambda** | CI/CD for independent service deployment, canary releases, and automatic rollback.                                             |
-| **ECR → ECS/EKS/Lambda**                                 | Single image registry serving both container orchestrators and container-packaged functions.                                   |
-| **X-Ray / CloudWatch → everything**                      | Cross-cutting observability spanning synchronous and asynchronous hops.                                                        |
-| **AWS Cloud Map / Service Connect**                      | Service discovery for dynamic microservice endpoints.                                                                          |
-| **Step Functions → Lambda, ECS, SNS, SQS, DynamoDB**     | Direct SDK integrations remove "glue" Lambdas entirely, reducing cost and failure modes.                                       |
+The service pairings that recur across these patterns:
 
----
+| Integration | Why it matters |
+|---|---|
+| **API Gateway → Lambda** | The canonical serverless API-first pairing |
+| **SNS → SQS → Lambda** | Durable fan-out: SNS distributes, SQS buffers and retries per consumer |
+| **S3 → Lambda** | Object events trigger processing pipelines with no polling |
+| **DynamoDB Streams → Lambda** | Table changes become events: read models, audit trails, outbox |
+| **EventBridge → Step Functions** | Events start orchestrated workflows with retries and compensation |
+| **ECS/EKS → ALB → API Gateway (VPC Link)** | Container microservices behind a governed API front door |
+| **Cognito → API Gateway** | Managed user identity validated at the edge |
+| **CodePipeline → ECS and Lambda** | Independent deployment per service ([Unit 5](../unit5/overview.md)) |
 
 ## Common Architecture Patterns
 
 ### Serverless web application
 
+Static content from S3 through CloudFront; dynamic requests through API Gateway to Lambda and DynamoDB.
+
 <figure markdown="span">
-    ![3layerglobalinfra](../img/U1/Statisitedelivery.png){width="80%"}
-    <figcaption>Example : AWS Serverless Archiecture with static Site Delivery and Secure API</figcaption>
-    <p align='right' style="font-size:0.8em"><i>Image Source: AI Generaed (Google Gemini)</i></p>
+    ![Serverless web application with CloudFront, S3, API Gateway, Lambda and DynamoDB](../img/U1/Statisitedelivery.png){width="80%"}
+    <figcaption>Serverless architecture with static site delivery and a secure API</figcaption>
+    <p align='right' style="font-size:0.8em"><i>Image Source: AI Generated (Google Gemini)</i></p>
 </figure>
 
 ### Microservices with an API gateway
 
-Each service is independently deployable, owns its data, and is reachable only through the gateway or an internal ALB.
+Each service is independently deployable, owns its data, and is reachable only through the gateway or an internal load balancer.
 
 <figure markdown="span">
-    ![3layerglobalinfra](../img/U1/APIArchitcture.png){width="80%"}
-    <figcaption>Example: Serverless Microservice Architecture with Event Driven Integrations</figcaption>
-    <p align='right' style="font-size:0.8em"><i>Image Source: AI Generaed (Google Gemini)</i></p>
+    ![Microservices behind API Gateway with event-driven integration](../img/U1/APIArchitcture.png){width="80%"}
+    <figcaption>Serverless microservice architecture with event-driven integrations</figcaption>
+    <p align='right' style="font-size:0.8em"><i>Image Source: AI Generated (Google Gemini)</i></p>
 </figure>
 
-### Event-driven fan-out (Pub/Sub)
+### Event-driven fan-out (pub/sub)
 
-One producer, many independent consumers, each with its own queue, retry policy, and DLQ  adding a consumer never modifies the producer. SNS topics and EventBridge rules both implement it, usually with an SQS queue per consumer; see the fan-out pattern in [6.3 Pub/Sub Messaging with Amazon SNS](../unit6/topic3.md#pubsub-messaging-with-amazon-sns).
+One producer, many independent consumers, each with its own queue, retry policy and DLQ. Adding a consumer never changes the producer. See the fan-out pattern in [6.3](../unit6/topic3.md#pubsub-messaging-with-amazon-sns).
 
-### CQRS with event sourcing
+### CQRS
 
-Commands write to a normalised store; DynamoDB Streams project changes into read-optimised views (OpenSearch, a denormalised table, or a cache). Reads and writes then scale independently. See [4.1 Microservices Design Principles](../unit4/topic1.md#cqrs-and-event-sourcing) for the full treatment.
+Commands write to one store; change streams project the data into read-optimised views. Reads and writes then scale independently. See [4.1](../unit4/topic1.md#cqrs-and-event-sourcing).
 
 <figure markdown="span">
-    ![3layerglobalinfra](../img/U1/cqrs.png){width="80%"}
-    <figcaption>Example: Event Source Read Model Architecture(CQRS)</figcaption>
-    <p align='right' style="font-size:0.8em"><i>Image Source: AI Generaed (Google Gemini)</i></p>
+    ![Commands written to a store and projected into a read model](../img/U1/cqrs.png){width="80%"}
+    <figcaption>Event-sourced read model architecture (CQRS)</figcaption>
+    <p align='right' style="font-size:0.8em"><i>Image Source: AI Generated (Google Gemini)</i></p>
 </figure>
 
 ### Saga (distributed transaction)
 
-There are no ACID transactions across microservices. A saga executes a sequence of local transactions, each with a **compensating action** if a later step fails.
+There are no ACID transactions across microservices. A saga runs a sequence of local transactions, each with a **compensating action** if a later step fails. Step Functions implements orchestrated sagas with `Catch` blocks that call compensation states. See [4.3](../unit4/topic3.md#saga-with-compensating-transactions).
 
 <figure markdown="span">
-    ![3layerglobalinfra](../img/U1/MicroserviceArchitecure.png){width="80%"}
-    <figcaption>Example: Order Processing State Diagram</figcaption>
-    <p align='right' style="font-size:0.8em"><i>Image Source: AI Generaed (Google Gemini)</i></p>
+    ![Order processing saga with compensating steps](../img/U1/MicroserviceArchitecure.png){width="80%"}
+    <figcaption>Order processing saga state diagram</figcaption>
+    <p align='right' style="font-size:0.8em"><i>Image Source: AI Generated (Google Gemini)</i></p>
 </figure>
 
-Step Functions implements orchestrated sagas natively with `Catch` blocks invoking compensation states. See [4.3 Resilience in AWS Microservices](../unit4/topic3.md#saga-with-compensating-transactions) for how a saga unwinds and a complete state machine.
+### Resilience patterns (survey)
 
-### Resilience patterns
+Depth is in [4.3 Resilience in AWS Microservices](../unit4/topic3.md#timeout-retry-with-backoff-and-jitter-circuit-breaker-bulkhead).
 
-The table below is a survey. See [4.3 Resilience in AWS Microservices](../unit4/topic3.md#timeout-retry-with-backoff-and-jitter-circuit-breaker-bulkhead) for timeouts, retries, circuit breakers, and bulkheads in depth, and [4.3 Idempotency](../unit4/topic3.md#idempotency) for idempotent consumers.
+| Pattern | Purpose | AWS implementation |
+|---|---|---|
+| **Circuit breaker** | Stop calling a failing dependency; fail fast | Application libraries; ECS deployment circuit breaker for rollbacks |
+| **Retry with backoff and jitter** | Recover from transient faults without retry storms | AWS SDK retry modes; SQS redrive; Step Functions `Retry` |
+| **Bulkhead** | Contain failure to one compartment | Reserved concurrency per function; separate queues and pools per consumer |
+| **Queue-based load levelling** | Protect a slow downstream from bursts | SQS between producer and consumer |
+| **Claim check** | Keep large payloads out of messages | Store in S3, pass the key in the event |
+| **Strangler fig** | Replace a monolith incrementally | Route selected paths at API Gateway or ALB to new services |
+| **Idempotent consumer** | Tolerate duplicate delivery | Conditional write on an idempotency key in DynamoDB |
+| **Outbox** | Keep the database write and the event in agreement | Write the event in the same transaction, publish from the change stream |
 
-| Pattern                           | Purpose                                                         | AWS Implementation                                                                              |
-| --------------------------------- | --------------------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
-| **Circuit breaker**               | Stop calling a failing dependency; fail fast and recover        | Application libraries; App Mesh outlier detection; ECS deployment circuit breaker for rollbacks |
-| **Retry with backoff and jitter** | Recover from transient faults without synchronised retry storms | AWS SDK adaptive retry mode; SQS redrive; Step Functions `Retry`                                |
-| **Bulkhead**                      | Contain failure to one compartment                              | Reserved concurrency per Lambda; separate queues, connection pools, and clusters per consumer   |
-| **Queue-based load levelling**    | Protect a slow downstream from bursts                           | SQS between producer and consumer, with `maximumConcurrency` on the event source mapping        |
-| **Claim check**                   | Move large payloads out of messages                             | Store in S3, pass the key in the event                                                          |
-| **Strangler fig**                 | Incrementally replace a monolith                                | Route selected paths at API Gateway/ALB to new services while the monolith serves the rest      |
-| **Idempotent consumer**           | Tolerate duplicate delivery                                     | Conditional writes on an idempotency key in DynamoDB; Powertools idempotency utility            |
-| **Outbox**                        | Guarantee the database write and the event publication agree    | Write the event to the same table transactionally, then publish from DynamoDB Streams           |
+### Reference architecture
 
-!!! note "Fan-out versus fan-in"
-    _Fan-out_ distributes one event to many consumers (SNS/EventBridge). _Fan-in_ aggregates many results into one (Step Functions `Map` with a final aggregation state, or a Kinesis aggregator). Both appear frequently in certification scenarios about parallel processing.
-
----
+<figure markdown="span">
+    ![Highly available microservice platform across multiple Availability Zones](../img/U1/HAmicroservice.png){width="80%"}
+    <figcaption>High availability microservice architecture</figcaption>
+    <p align='right' style="font-size:0.8em"><i>Image Source: AI Generated (Google Gemini)</i></p>
+</figure>
 
 ## Industry Use Cases
 
-| Sector / Company Type               | Pattern Combination              | Application                                                                                                                                         |
-| ----------------------------------- | -------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Media streaming (Netflix-style)** | Microservices + event-driven     | Independent playback, recommendation, billing, and licensing services; viewing events stream to analytics and personalisation engines.              |
-| **Ride-hailing (Uber-style)**       | Event-driven + microservices     | Trip lifecycle events (requested, matched, started, completed) drive pricing, ETA, driver payouts, and fraud detection concurrently.                |
-| **E-commerce (Amazon-style)**       | All four                         | API-first storefront APIs, microservices per domain, serverless for bursty flows (flash sales, image processing), events for order fulfilment.      |
-| **Music streaming (Spotify-style)** | Microservices + event-driven     | Playback and skip events feed real-time recommendation models and royalty accounting.                                                               |
-| **Financial services**              | Event-driven + saga + serverless | Immutable event ledgers for audit; sagas for cross-account transfers with compensation; Lambda for fraud scoring bursts.                            |
-| **Healthcare**                      | API-first + microservices        | Standardised interoperability APIs (e.g., FHIR) with strict contracts; PHI encrypted with KMS; per-service access boundaries for compliance.        |
-| **Government digital services**     | API-first + serverless           | Published contracts allow departments and third parties to integrate; serverless absorbs deadline-driven spikes (tax filing, benefit applications). |
-| **IoT and smart cities**            | Event-driven + serverless        | Millions of device telemetry events routed via IoT Core to Kinesis, Lambda, and time-series stores.                                                 |
-| **SaaS multi-tenant platforms**     | API-first + microservices        | Usage plans and per-tenant throttling in API Gateway; tenant isolation at the IAM and data layers.                                                  |
-| **Gaming**                          | Serverless + event-driven        | Leaderboards on DynamoDB, matchmaking events, and serverless backends that scale with unpredictable player counts.                                  |
-| **Logistics and supply chain**      | Event-driven + saga              | Shipment state changes propagate to tracking, customs, billing, and customer notification systems.                                                  |
+| Sector | Pattern combination | Application |
+|---|---|---|
+| **Media streaming** | Microservices + event-driven | Separate playback, recommendation and billing services; viewing events feed personalisation |
+| **Ride-hailing** | Event-driven + microservices | Trip events drive pricing, ETA, payouts and fraud detection concurrently |
+| **E-commerce** | All four | API-first storefront, a service per domain, serverless for flash sales, events for fulfilment |
+| **Financial services** | Event-driven + saga | Event ledgers for audit; sagas for transfers with compensation |
+| **Government services** | API-first + serverless | Published contracts for integration; serverless absorbs deadline spikes |
+| **IoT** | Event-driven + serverless | Device telemetry routed through streams to functions and time-series stores |
 
-## Advantages
+## Advantages and Limitations
 
-**Serverless**
-
-- No server provisioning, patching, or capacity planning  operational burden shifts to AWS.
-- Automatic, fine-grained scaling from zero to thousands of concurrent executions.
-- True pay-per-use: idle costs nothing, making experimentation and low-traffic services economically viable.
-- Multi-AZ high availability with no configuration.
-- Faster time to market: a function plus an event source is a complete production deployment.
-
-**Microservices**
-
-- Independent deployability enables high release frequency without cross-team coordination.
-- Failure isolation: one service degrading does not take down the system.
-- Independent, targeted scaling of the components that are actually under load.
-- Technology heterogeneity: the right language and datastore per problem.
-- Clear ownership boundaries aligned to small autonomous teams.
-- Easier comprehension: a new engineer can understand one service in days rather than a monolith in months.
-
-**Event-driven**
-
-- Extreme loose coupling: new consumers are added without touching producers.
-- Natural resilience: brokers buffer during downstream outages instead of cascading failures.
-- Load levelling: queues absorb bursts that would otherwise overwhelm databases.
-- Real-time responsiveness across the enterprise.
-- Auditability and replay: an event log is both an audit trail and a recovery mechanism.
-
-**API-first**
-
-- Parallel development against a mocked contract compresses delivery timelines.
-- Stable contracts prevent integration breakage and allow internal refactoring without consumer impact.
-- Reusability: one well-designed API serves web, mobile, partners, and internal systems.
-- Automatic, accurate documentation and generated SDKs.
-- A governance point for security, throttling, monetisation, and analytics.
-
-## Limitations
-
-**Serverless**
-
-- Cold-start latency on the tail; problematic for strict low-latency SLAs without Provisioned Concurrency.
-- Hard execution limits: 15 minutes, payload sizes, memory ceiling  unsuitable for long-running or very heavy jobs.
-- Stateless by design; state externalisation adds latency and cost.
-- Relational database connection pressure requires RDS Proxy or a rethink toward DynamoDB.
-- Cost can exceed containers at sustained high throughput.
-- Vendor lock-in is highest here; portability requires deliberate abstraction.
-- Local testing and debugging are harder than with containers.
-
-**Microservices**
-
-- Distributed systems complexity: partial failure, network latency, retries, and clock skew become application concerns.
-- Operational overhead multiplies: pipelines, dashboards, alarms, and on-call rotations per service.
-- No cross-service ACID transactions; sagas and eventual consistency add design and testing burden.
-- Data duplication across services and the challenge of keeping projections consistent.
-- End-to-end testing is significantly harder than for a monolith.
-- Premature decomposition with wrong boundaries is expensive to correct.
-
-**Event-driven**
-
-- Debugging and tracing asynchronous flows is genuinely difficult without disciplined observability.
-- Eventual consistency confuses users and stakeholders ("I placed the order but it does not appear yet").
-- Duplicate and out-of-order delivery must be handled explicitly in every consumer.
-- The overall business process is implicit and undocumented under pure choreography.
-- Event schema evolution requires versioning discipline; a careless change breaks unknown consumers.
-- Poison messages can stall processing without correct DLQ configuration.
-
-**API-first**
-
-- Upfront design effort delays the first line of implementation code.
-- Governance overhead: style guides, review boards, versioning, and deprecation processes.
-- Contracts can ossify: a poorly designed public API is extremely expensive to change.
-- Risk of designing contracts around internal data models rather than consumer needs.
-- Version proliferation if deprecation is not enforced.
-
-!!! warning "The distributed monolith"
-    The most common and most damaging failure mode: services are split physically but remain logically coupled  they share a database, must be released together, and call each other synchronously in long chains. This delivers every cost of microservices and none of the benefits. The diagnostic question is simple: _can this service be deployed to production, right now, without coordinating with any other team?_ If not, it is not a microservice.
-
----
+| Pattern | Advantages | Limitations |
+|---|---|---|
+| **Serverless** | No servers to manage; scales from zero automatically; idle costs nothing; multi-AZ by default; fast time to market | Cold starts; hard execution limits (15-minute maximum); stateless; database connection pressure; can cost more at constant high volume; highest lock-in; harder local testing |
+| **Microservices** | Independent deployment; failure isolation; targeted scaling; right tool per service; clear team ownership | Distributed-systems complexity; operational overhead per service; no cross-service ACID transactions; harder end-to-end testing; wrong boundaries are expensive to fix |
+| **Event-driven** | Extreme loose coupling; brokers buffer outages; load levelling; replay and audit trail | Hard to debug; eventual consistency confuses users; duplicates and ordering must be handled; implicit flow under choreography; schema changes can break unknown consumers |
+| **API-first** | Parallel development; stable contracts allow internal refactoring; reuse across clients; generated docs and SDKs; a single governance point | Upfront design effort; governance overhead; a bad public API is hard to change; version proliferation without enforced deprecation |
 
 ## Common Mistakes
 
-### Beginner mistakes
+### Beginner Mistakes
 
-- Treating "cloud-native" as "running on EC2 in AWS"  lift-and-shift is not cloud-native.
-- Starting with microservices before the domain boundaries are understood, producing services that constantly need to change together.
-- Building a "Lambda monolith" with a single function containing a large `if/else` router over every route, then justifying it as serverless.
-- Assuming Lambda is stateless-but-fresh: relying on `/tmp` or global variables persisting (or _not_ persisting) between invocations.
-- Placing SDK client creation and connection setup _inside_ the handler, paying initialisation cost on every invocation.
-- Forgetting that SQS requires explicit message deletion; assuming receiving is consuming.
-- Ignoring idempotency and being surprised by duplicate charges or duplicate emails.
-- Using CPU utilisation to scale a queue worker instead of queue depth.
-- Hard-coding endpoints and secrets instead of using Cloud Map, Parameter Store, or Secrets Manager.
-- Building through the console with no Infrastructure as Code, then being unable to recreate the environment.
+| Mistake | Why it is wrong | Do instead |
+|---|---|---|
+| Treating lift-and-shift as cloud-native | Running on EC2 changes the host, not the design | Apply the patterns where they solve a real problem |
+| Starting with microservices before boundaries are clear | Services keep changing together | Modular monolith first, extract later |
+| One Lambda with a giant `if/else` router | A monolith in a function | One function per responsibility |
+| Creating SDK clients inside the handler | Initialisation cost on every call | Initialise outside the handler |
+| Ignoring idempotency | Duplicate charges and emails | Idempotency keys on every consumer |
+| Scaling queue workers on CPU | CPU does not reflect backlog | Scale on queue depth |
+| Building in the console with no IaC | Environment cannot be recreated | SAM, CDK, CloudFormation or Terraform |
 
-### Production mistakes
+### Production Mistakes
 
-- No DLQ, or a DLQ with no alarm  silent, permanent data loss.
-- Visibility timeout shorter than processing time, causing the same message to be processed repeatedly and concurrently.
-- Unbounded Lambda concurrency in front of a small RDS instance, exhausting the connection pool during a traffic spike.
-- Synchronous call chains four or five services deep: latency compounds and any single failure fails the whole request.
-- Retries without exponential backoff and jitter, converting a brief blip into a self-inflicted denial of service.
-- Missing correlation IDs, making incident investigation across services nearly impossible.
-- Shared database across "microservices", so a schema change requires a coordinated multi-team release.
-- Breaking API changes shipped without a new version, silently breaking mobile clients that cannot be force-upgraded.
-- CloudWatch Logs retention left at "never expire", producing a large and entirely avoidable bill.
-- Over-permissive IAM roles copied between services because narrowing them "takes too long".
-- No load testing of the asynchronous path; the API scales but consumers fall permanently behind.
-
----
-
-## Architecture Diagrams
-
-### Pattern selection decision flow
-
-<figure markdown="span">
-    ![3layerglobalinfra](../img/U1/patternselection.png){width="80%"}
-    <figcaption>Patttern Selection Flow</figcaption>
-    <p align='right' style="font-size:0.8em"><i>Image Source: AI Generaed (Google Gemini)</i></p>
-</figure>
-
-### Monolith to cloud-native evolution
-
-<figure markdown="span">
-    ![3layerglobalinfra](../img/U1/architectureEvolution.png){width="80%"}
-    <figcaption>Evolution of Software Architecture Stages</figcaption>
-    <p align='right' style="font-size:0.8em"><i>Image Source: AI Generaed (Google Gemini)</i></p>
-</figure>
-
-### End-to-end platform reference architecture
-
-<figure markdown="span">
-    ![3layerglobalinfra](../img/U1/HAmicroservice.png){width="80%"}
-    <figcaption>High Avialability Microservice Architecture</figcaption>
-    <p align='right' style="font-size:0.8em"><i>Image Source: AI Generaed (Google Gemini)</i></p>
-</figure>
-
-### Order journey from the user's perspective
-<figure markdown="span">
-    ![3layerglobalinfra](../img/U1/Customerorder.png){width="80%"}
-    <figcaption>User Prespective of Customer order journey</figcaption>
-    <p align='right' style="font-size:0.8em"><i>Image Source: AI Generaed (Google Gemini)</i></p>
-</figure>
+| Mistake | Consequence | Remedy |
+|---|---|---|
+| No DLQ, or a DLQ with no alarm | Silent, permanent data loss | DLQ plus alarm on depth greater than zero |
+| Unbounded Lambda concurrency in front of a small RDS | Connection pool exhausted in a spike | Reserved concurrency, RDS Proxy |
+| Synchronous call chains several services deep | Latency compounds; one failure fails all | Asynchronous events, timeouts, circuit breakers |
+| Retries without backoff and jitter | A blip becomes a self-inflicted outage | Exponential backoff with jitter |
+| Shared database across services | Schema change needs a multi-team release | Database per service |
+| Breaking API change without a new version | Mobile clients break | Additive changes; version and deprecate |
+| No correlation IDs | Incidents across services cannot be traced | Propagate a correlation ID on every hop |
 
 ## Summary
 
-- Cloud-native design patterns exist because cloud infrastructure changed three fundamental assumptions: capacity became elastic and metered, failure became routine rather than exceptional, and delivery speed became a competitive advantage. The four patterns in this topic each address one consequence of that shift.
+Cloud-native patterns exist because the cloud changed three assumptions: capacity became elastic and metered, failure became routine, and delivery speed became a competitive advantage. Each pattern answers one consequence of that shift, and real systems combine all four.
 
-- **Serverless** answers _how compute should be provisioned_: on demand, per invocation, scaling to zero, with the provider absorbing operational responsibility. It is optimal for bursty, event-driven, and intermittent workloads, and it trades cold-start latency, execution limits, and portability for radically lower operational burden.
+| Area | Key lesson |
+|---|---|
+| **Coupling and cohesion** | Low coupling between components, high cohesion within them. Event-driven removes temporal and location coupling |
+| **Serverless** | Compute on demand, scale to zero, pay per use. Best for bursty work; trades cold starts, limits and portability for low operational burden |
+| **Microservices** | Independently deployable services aligned to bounded contexts and teams. Fails badly with premature boundaries or a shared database |
+| **Event-driven** | Immutable facts routed by a broker so producers never know consumers. Demands idempotency, DLQs and correlation IDs |
+| **API-first** | Agree the contract before code; enforce it at the gateway; evolve it additively |
+| **Choosing** | Patterns relocate complexity rather than remove it. Start simple, add distribution only where it solves a real problem |
 
-- **Microservices** answers _how the system should be decomposed_: into independently deployable, independently scalable services aligned to bounded contexts and to team ownership. It delivers failure isolation and delivery velocity at the cost of distributed systems complexity  and it fails badly when boundaries are drawn prematurely or when services share a database.
-
-- **Event-driven** answers _how components should communicate_: asynchronously, through immutable facts routed by a broker, so producers know nothing of consumers. It is the primary mechanism for loose coupling, load levelling, and resilience, and it demands idempotency, correlation IDs, DLQs, and disciplined observability in return.
-
-- **API-first** answers _how integration should be governed_: by designing and agreeing the contract before implementation, treating the API as a durable product with versioning, documentation, and enforcement at the gateway.
+**Next:** [Unit 2](../unit2/overview.md) puts the microservices and serverless patterns into practice with containers, Amazon ECR and Amazon ECS.
 
 !!! question "Practice and interview questions"
     Questions for this topic are kept separately: [Practice questions](../Questions/unit1.md#17-cloud-native-design-patterns) · [Interview questions](../interviewquestions/unit1.md#17-cloud-native-design-patterns).

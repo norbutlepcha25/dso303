@@ -2541,7 +2541,7 @@ One cross-cutting trap applies to every command-based check: the container image
 
 #### Amazon EKS: probes, readiness gates and ALB target health
 
-[Chapter 3.2](../unit3/topic2.md#requests-limits-and-probes-the-four-fields-that-decide-behaviour) covered the configuration of startup, readiness and liveness probes. On EKS with the AWS Load Balancer Controller in IP target mode, there are ==two independent health systems== for a pod: the kubelet's probes and the ALB's target health checks. A gap between them causes dropped requests during rollouts: Kubernetes may consider a new pod ready (readiness probe passed) and terminate an old pod before the ALB has registered the new pod's IP and marked it healthy.
+[Chapter 3.2](../unit3/topic2.md#using-kubernetes-manifests-and-helm-charts) covered the configuration of startup, readiness and liveness probes. On EKS with the AWS Load Balancer Controller in IP target mode, there are ==two independent health systems== for a pod: the kubelet's probes and the ALB's target health checks. A gap between them causes dropped requests during rollouts: Kubernetes may consider a new pod ready (readiness probe passed) and terminate an old pod before the ALB has registered the new pod's IP and marked it healthy.
 
 ==Pod readiness gates== close that gap. When enabled for a namespace (label `elbv2.k8s.aws/pod-readiness-gate-inject: enabled`), the controller adds a readiness condition to each pod that becomes true only when the pod's IP is ==healthy in the ALB target group==. The Deployment rollout therefore waits for real load balancer health before proceeding.
 

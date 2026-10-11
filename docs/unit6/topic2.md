@@ -568,7 +568,7 @@ sequenceDiagram
 | Authorisation | Remains in the database: IAM only authenticates; `GRANT` statements still control what the user can do |
 
 !!! note "Why IAM authentication suits Kubernetes and Lambda"
-    With EKS Pod Identity or IRSA ([Chapter 3.1](../unit3/topic1.md#core-concepts-eks-security-and-iam-integration)), each Kubernetes service account maps to an IAM role. With IAM database authentication, that role maps to a database user. The result is a chain of identity from pod to SQL grant ==with no secret stored anywhere==, which is exactly the property security teams want in multi-tenant clusters.
+    With EKS Pod Identity or IRSA ([Chapter 3.1](../unit3/topic1.md#eks-security-and-iam-integration)), each Kubernetes service account maps to an IAM role. With IAM database authentication, that role maps to a database user. The result is a chain of identity from pod to SQL grant ==with no secret stored anywhere==, which is exactly the property security teams want in multi-tenant clusters.
 
 #### RDS Data API
 

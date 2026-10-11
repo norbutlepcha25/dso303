@@ -1,9 +1,5 @@
 # Lab 06 - Implementing Auto Scaling for an ECS-Based Application
 
-*Practical 3 - handing the enrolment service's capacity to Application Auto Scaling, and proving that
-something other than you moved it*
-
----
 
 ## 1. Lab Overview
 

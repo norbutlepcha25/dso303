@@ -1,8 +1,15 @@
 # Unit 3: Kubernetes on AWS with Amazon EKS
 
 !!! success "Learning Outcome"
+    -   **LO1:** Explain cloud-native architectures and AWS implementation,
+        including IaaS, PaaS, and FaaS trade-offs.
+    -   **LO2:** Design and implement containerized applications using
+        Amazon ECS and Amazon EKS.
+    -   **LO8:** Implement monitoring, logging, and observability using
+        CloudWatch, X-Ray, CloudTrail, and related services.
+    -   **LO9:** Implement AWS security measures including IAM, network
+        security, and data protection.
 
-    Design and implement containerized applications using Amazon Elastic Container Service (ECS) and Elastic Kubernetes Service (EKS), demonstrating proficiency in container orchestration and management on AWS.
 
 ## Topics
 
