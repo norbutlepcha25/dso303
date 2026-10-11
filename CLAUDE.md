@@ -7,9 +7,12 @@ sends — do not mix the two instruction sets.
 | --- | --- | --- | --- |
 | Bare topic, or explicit "lab" / "LAB" (e.g. `VPC`, `lab: EKS scaling`) | **Lab generation** | Part I (§1–20 below) | `docs/Lab/lab-NN-<topic>.md` |
 | `unit<N> <topic>` or `Unit N: <topic>` (e.g. `unit2 Load Balancing`) | **Unit notes generation** | Part II below | `docs/unit<N>/topic<M>.md` + question files |
+| "lesson plan", "workshop plan", or a teaching plan to convert | **Lesson plan** (teacher-only) | `lesson-templates/README.md` | `docs/teach-5t27uuv8/unit<N>-<topic>-<format>.md` + row in that folder's `index.md` |
 
-If it's ambiguous which mode applies, ask rather than guess — the two output structures are
-incompatible (lab has Steps/Checkpoints/exercises; notes have the section list in Part II).
+If it's ambiguous which mode applies, ask rather than guess — the output structures are
+incompatible (lab has Steps/Checkpoints/exercises; notes have the section list in Part II; lesson
+plans use timed `## Title { data-minutes="N" }` segments). Lesson plans live in a public repo:
+never include quiz answers, credentials or student data in them.
 
 ---
 

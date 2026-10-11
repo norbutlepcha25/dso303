@@ -10,6 +10,9 @@ use_directory_urls: false
 
 theme:
   name: material
+  # Template overrides: overrides/main.html adds noindex + the lesson runner
+  # to teacher pages only.
+  custom_dir: overrides
   features:
     - navigation.tabs
     - navigation.sections
@@ -124,6 +127,14 @@ extra_javascript:
   - javascripts/filter.js
   - javascripts/preview.js
   - javascripts/pdf-download.js
+
+# Teacher area: docs/teach-5t27uuv8/ is unlisted (not in nav, excluded from
+# search and the sitemap, noindex). See hooks/teacher_pages.py.
+hooks:
+  - hooks/teacher_pages.py
+
+not_in_nav: |
+  /teach-5t27uuv8/
 
 plugins:
   - search

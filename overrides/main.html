@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+
+{#- Teacher pages (docs/teach-*/, flagged by hooks/teacher_pages.py) are kept
+    out of search engines and get the lesson runner. Student pages are
+    unaffected and never load these files. -#}
+
+{% block extrahead %}
+  {{ super() }}
+  {% if page and page.meta and page.meta.teacher %}
+    <meta name="robots" content="noindex, nofollow">
+    <meta name="dso303-page" content="lesson">
+    <link rel="stylesheet" href="{{ 'stylesheets/lesson.css' | url }}">
+  {% endif %}
+{% endblock %}
+
+{% block scripts %}
+  {{ super() }}
+  {% if page and page.meta and page.meta.teacher %}
+    <script src="{{ 'javascripts/lesson-runner.js' | url }}"></script>
+  {% endif %}
+{% endblock %}
