@@ -12,7 +12,10 @@ Lesson plans for running DSO303 sessions. This area is unlisted: it is not in th
 
 | Unit | Lesson | Duration | Format |
 |---|---|---|---|
-| 3 | [From Containers to Amazon EKS](unit3-eks-workshop.md) | 180 min | Workshop with hands-on `kubectl` |
+| 3 | [3.1 Amazon EKS Architecture](unit3-topic1-lecture.md) | 120 min | Lecture with console and CLI |
+| 3 | [3.2 Deploying Applications on Amazon EKS](unit3-topic2-lecture.md) | 120 min | Lecture with console and CLI |
+| 3 | [3.3 Amazon EKS Advanced Concepts](unit3-topic3-lecture.md) | 120 min | Lecture with console and CLI |
+| 3 | [Shared EKS cluster for class](unit3-shared-eks-cluster.md) | Setup | Create before each Unit 3 lecture, delete after |
 
 ## Running a lesson
 

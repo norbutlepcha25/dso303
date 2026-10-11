@@ -39,7 +39,7 @@ Read alongside:
 | `CLAUDE.md` Part I §5 | The Floci environment contract for CLI work (scripts, `course.env`, forbidden commands) |
 | `lesson-templates/README.md` | Lesson-plan format: timed segments, block types, notes links, checks |
 | `docs/unit3/topic1.md` | Style reference for refined notes |
-| `docs/teach-5t27uuv8/unit3-eks-workshop.md` | Worked example of a lesson plan |
+| `docs/teach-5t27uuv8/unit3-topic1-lecture.md` | Worked example of a lesson plan |
 | `private/classlegend-quiz-template.md` | ClassLegend quiz import format (local only, never committed) |
 
 ---
@@ -101,7 +101,7 @@ If `docs/teach-5t27uuv8/unit<N>-topic<M>-lecture.md` already exists, skip it. If
 
 ### Quiz banks (Phase 3)
 
-If `private/quizzes/unit<N>-topic<M>.questions.md` already exists, skip it. If it has fewer than 70 questions or fewer than 23 `EASY`, tell the user and offer to top it up, appending new questions with new ids and never rewriting existing ones.
+If `private/quizzes/unit<N>-topic<M>.questions.md` already exists, skip it. If it has fewer than 115 questions or fewer than 38 `EASY`, tell the user and offer to top it up, appending new questions with new ids and never rewriting existing ones.
 
 ### Nothing left to do
 
@@ -254,17 +254,17 @@ difficulty: EASY | MEDIUM | HARD
 | Distractors | Exactly two spare wrong options, `e)` and `f)`, plausible and clearly wrong to someone who understood the lesson |
 | Explanation | Private teacher note (students never see it): why the answer is right and why the most likely wrong pick is wrong |
 
-### 3.2 Content: a bank of at least 70 questions per topic
+### 3.2 Content: a bank of at least 115 questions per topic
 
-1. **At least 70 questions per topic.** The file is a question bank; in class you run as many as fit the 30-minute quiz segment.
+1. **At least 115 questions per topic.** Sized so each of the 23 students can get different questions (5 each). If the class size changes, scale to at least 5 questions per student.
 2. **Every question comes from that topic's lesson:** its concept segments, analogies, hands-on console and CLI steps, and the matching sections of the refined notes it links to. Nothing from other topics, no general AWS trivia.
-3. **Difficulty mix** for a 70-question bank (scale up proportionally for larger banks):
+3. **Difficulty mix** for a 115-question bank (about one third easy; scale proportionally for larger banks):
 
     | Difficulty | Count | Rule |
     |---|---:|---|
-    | `EASY` | **at least 23** | Hard minimum, never fewer |
-    | `MEDIUM` | about 30 | |
-    | `HARD` | about 17 | |
+    | `EASY` | **at least 38** | Hard minimum, never fewer |
+    | `MEDIUM` | about 49 | |
+    | `HARD` | about 28 | |
 
 4. **Question mix:** about
    - 35% concept: what it is, why it exists, when to use it
@@ -281,7 +281,7 @@ difficulty: EASY | MEDIUM | HARD
 - Front matter present and first in the file.
 - Every question has `type`, `difficulty`, four options with exactly one `[x]`, two distractors and an explanation.
 - Ids unique; no bracketed guidance text left over.
-- At least 70 questions, of which at least 23 are `EASY`; medium and hard counts roughly match 3.2; every question traceable to a lesson segment.
+- At least 115 questions, of which at least 38 are `EASY`; medium and hard counts roughly match 3.2; every question traceable to a lesson segment.
 
 ---
 
