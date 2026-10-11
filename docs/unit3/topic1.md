@@ -1,3 +1,4 @@
+<!-- teachprep:refined 2026-10-11 -->
 # 3.1 Amazon EKS Architecture
 
 ## Definition

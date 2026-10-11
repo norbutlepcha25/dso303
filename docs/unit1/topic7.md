@@ -1,3 +1,4 @@
+<!-- teachprep:refined 2026-10-11 -->
 # Cloud-Native Design Patterns: Serverless, Microservices, Event-Driven, API-First
 
 ## Definition

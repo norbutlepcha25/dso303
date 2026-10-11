@@ -1,3 +1,4 @@
+<!-- teachprep:refined 2026-10-11 -->
 # Compute Services on AWS  EC2, ECS, EKS, Lambda and Fargate
 
 ## Definition

@@ -1,3 +1,4 @@
+<!-- teachprep:refined 2026-10-11 -->
 # Implementing Resilience in AWS Microservices
 
 ---

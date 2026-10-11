@@ -7,7 +7,7 @@ sends — do not mix the two instruction sets.
 | --- | --- | --- | --- |
 | Bare topic, or explicit "lab" / "LAB" (e.g. `VPC`, `lab: EKS scaling`) | **Lab generation** | Part I (§1–20 below) | `docs/Lab/lab-NN-<topic>.md` |
 | `unit<N> <topic>` or `Unit N: <topic>` (e.g. `unit2 Load Balancing`) | **Unit notes generation** | Part II below | `docs/unit<N>/topic<M>.md` + question files |
-| `teachprep unit<N>` (optionally `teachprep unit<N> topic<M>`) | **Unit refinement + 2-hour lecture lessons + quizzes** | `lesson-templates/teachprep-workflow.md` (follow it top to bottom) | Refined `docs/unit<N>/topic<M>.md`, `docs/teach-5t27uuv8/unit<N>-topic<M>-lecture.md`, local-only `private/quizzes/unit<N>-topic<M>.questions.md` |
+| `teachprep unit<N>` (keywords: `topic<M>`, `lesson topic<M>`, `notes`, `lessons-only`, `refresh`; see the workflow's command table) | **Unit refinement + 2-hour lecture lessons + quizzes** | `lesson-templates/teachprep-workflow.md` (follow it top to bottom) | Refined `docs/unit<N>/topic<M>.md`, `docs/teach-5t27uuv8/unit<N>-topic<M>-lecture.md`, local-only `private/quizzes/unit<N>-topic<M>.questions.md` |
 | "lesson plan", "workshop plan", or a teaching plan to convert | **Lesson plan** (teacher-only) | `lesson-templates/README.md` | `docs/teach-5t27uuv8/unit<N>-<topic>-<format>.md` + row in that folder's `index.md` |
 
 If it's ambiguous which mode applies, ask rather than guess — the output structures are

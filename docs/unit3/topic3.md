@@ -1,3 +1,4 @@
+<!-- teachprep:refined 2026-10-11 -->
 # 3.3 Amazon EKS Advanced Concepts
 
 ## Definition

@@ -1,3 +1,4 @@
+<!-- teachprep:refined 2026-10-11 -->
 # AWS Cloud overview: Global Infrastructure, Regions and Availability Zones, Edge Locations and CloudFront
 
 ## Definition

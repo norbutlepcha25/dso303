@@ -1,3 +1,4 @@
+<!-- teachprep:refined 2026-10-11 -->
 # API Management and Service Mesh on AWS
 
 [4.1](topic1.md) decomposed the system into services; this topic explains how traffic reaches those services from outside, and how the services find and talk to one another.

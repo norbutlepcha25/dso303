@@ -1,3 +1,4 @@
+<!-- teachprep:refined 2026-10-11 -->
 # 3.2 Deploying Applications on Amazon EKS
 
 ## Definition

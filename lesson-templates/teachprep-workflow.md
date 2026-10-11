@@ -1,9 +1,31 @@
 # teachprep: Refine a Unit and Build Its Lecture Lessons
 
-**Trigger:** `teachprep unit<N>` (for example `teachprep unit5`).
-Optional single topic: `teachprep unit<N> topic<M>` (for example `teachprep unit5 topic2`).
+**Trigger:** `teachprep unit<N>` plus optional keywords that choose what to do.
 
-When a user types the trigger, any AI agent working in this repository follows this file from top to bottom. It produces, for the unit:
+| You type | Notes refined (Phase 1) | Lesson + quiz bank (Phases 2–3) |
+|---|---|---|
+| `teachprep unit5` | All topics | All topics |
+| `teachprep unit5 lesson topic1` | All topics | Topic 1 only |
+| `teachprep unit5 lesson topic1 topic3` | All topics | Topics 1 and 3 |
+| `teachprep unit5 topic1` | Topic 1 only | Topic 1 only |
+| `teachprep unit5 notes` | All topics | None |
+| `teachprep unit5 notes topic2` | Topic 2 only | None |
+| `teachprep unit5 lessons-only` | None | All topics |
+| `teachprep unit5 lessons-only topic1` | None | Topic 1 only |
+| add `refresh` to any of the above | Redo even if already done | Redo even if already done |
+
+Rules for reading the command:
+
+- **`lesson`** limits only the lesson plans and quiz banks to the listed topics; the notes still cover the whole unit.
+- **`topic<M>` without `lesson` or `notes`** limits everything to those topics.
+- **`notes`** means notes only: no lessons, no quizzes.
+- **`lessons-only`** means no note refinement. If a topic's notes are not refined yet, warn the user, since the lesson will link to unrefined notes, and ask whether to continue.
+- **A quiz bank is always made together with its lesson,** never separately.
+- **Plain English is fine** (for example "teachprep unit 5, format the whole unit but only make a lesson for topic 1"). Map it onto the table, state your reading back to the user and ask if it is ambiguous.
+
+**Already-done work is skipped.** Notes that are already refined are not trimmed again, and existing lesson plans and quiz banks are not overwritten (see "Skip what is already done" below). `refresh` overrides this.
+
+When a user types the trigger, any AI agent working in this repository follows this file from top to bottom. Within the scope the command selects, it produces:
 
 1. **Refined notes:** every topic trimmed, de-duplicated, sequential, student friendly and up to date.
 2. **One 2-hour lecture lesson plan per topic** in the teaching area.
@@ -38,13 +60,58 @@ Read alongside:
 4. **Back up** every file you will change to a scratch location outside the repository.
 5. Check `private/classlegend-quiz-template.md` exists. If it does not, finish Phases 1–2, skip Phase 3, and ask the user for the template.
 6. Check `.gitignore` contains `private/`. If not, add it before writing any quiz file.
-7. **Ask the user before starting** if anything is unclear: missing topics, a topic that belongs in another unit, a service you cannot verify, or a hands-on task that may cost money.
+7. **Work out what is already done** (next section) and tell the user the plan per topic before starting, for example "5.1 notes already refined, lesson only; 5.2 full run".
+8. **Ask the user before starting** if anything is unclear: missing topics, a topic that belongs in another unit, a service you cannot verify, or a hands-on task that may cost money.
+
+---
+
+## Skip what is already done
+
+Decide per topic, before Phase 1. Unless the user typed `refresh`, never redo finished work.
+
+### Notes (Phase 1)
+
+A topic's notes are **already refined** if either test passes:
+
+1. **Marker:** the file contains `<!-- teachprep:refined YYYY-MM-DD -->` (first line, or straight after any front matter).
+2. **Style check**, for files without the marker. All of these must be true:
+   - it has a `**Next:**` line, or ends the unit with a closing summary line;
+   - it has no "Certification Traps", "exam tip" or "on the exam" content;
+   - performance, cost and monitoring are merged into one `## Operating It` section;
+   - the Summary contains a key-lesson table;
+   - questions are not inline (only the closing `!!! question` box links to them).
+
+   If it passes, add the marker (today's date) and treat the topic as refined.
+
+For a refined topic:
+
+- **Skip Phase 1** for it. Do not trim, restructure or rewrite it again.
+- Still allowed: fixing a broken link or anchor the lesson needs, or correcting a fact that is now clearly wrong. Report any such small fix.
+- If it fails the style check only partly, list what is missing and **ask** whether to refine it. Do not decide alone.
+
+After finishing Phase 1 on a topic, add the marker as the file's first line (after front matter if present):
+
+```markdown
+<!-- teachprep:refined 2026-10-11 -->
+```
+
+### Lesson plans (Phase 2)
+
+If `docs/teach-5t27uuv8/unit<N>-topic<M>-lecture.md` already exists, skip it. If the notes changed since it was written, check its "Notes:" links still resolve and fix only those.
+
+### Quiz banks (Phase 3)
+
+If `private/quizzes/unit<N>-topic<M>.questions.md` already exists, skip it. If it has fewer than 70 questions or fewer than 23 `EASY`, tell the user and offer to top it up, appending new questions with new ids and never rewriting existing ones.
+
+### Nothing left to do
+
+If every requested topic is already done in all three phases, say so and stop. Do not regenerate anything.
 
 ---
 
 ## Phase 1: Refine the notes
 
-Apply to every `docs/unit<N>/topic<M>.md` in the unit. Use parallel sub-agents, one per topic, if available, all with the same brief.
+Apply to every `docs/unit<N>/topic<M>.md` in the unit **that is not already refined** (see "Skip what is already done"). Use parallel sub-agents, one per topic, if available, all with the same brief.
 
 ### 1.1 Content rules
 
@@ -237,7 +304,8 @@ difficulty: EASY | MEDIUM | HARD
 
 Tell the user:
 
-- per topic: old and new line counts for the notes, and what moved where;
+- per topic: what was done and what was skipped as already done;
+- for refined notes: old and new line counts, and what moved where;
 - the lesson files created and the quiz files written (paths only, never quiz content);
 - facts you verified or removed as unverifiable;
 - anything that needs their decision.
