@@ -9,6 +9,7 @@ How to write, add and run DSO303 lesson plans in the teaching area. Every future
 | **Local preview** | `mkdocs serve`, then `http://127.0.0.1:8000/dso303/teach-5t27uuv8/` |
 | **Lesson files** | `docs/teach-5t27uuv8/` |
 | **Template** | `lesson-templates/lesson-plan.md` |
+| **Full unit workflow** | `teachprep unit<N>`: see `lesson-templates/teachprep-workflow.md` |
 | **First worked example** | `docs/teach-5t27uuv8/unit3-eks-workshop.md` |
 
 ---
