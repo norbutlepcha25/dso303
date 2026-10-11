@@ -129,7 +129,7 @@ A typical segment reads top to bottom as: notes links, then what to present, the
 | **prompt** | `!!! prompt "Title"` | Blue | What you present or ask the class: scenarios, discussion questions, tasks, analogies |
 | **teacher** | `!!! teacher "Title"` | Purple | Your own notes: what to stress, timing reminders, transitions, fallbacks |
 | **answer** | `???+ answer "Title"` | Green | Expected answers to class questions. `???+` starts open; use `???` to start collapsed |
-| **quiz** | `!!! quiz "Title"` | Orange | A ClassLegend quiz cue: which quiz and the topics it covers. **No answers** |
+| **quiz** | `!!! quiz "Title"` | Orange | A ClassLegend quiz cue: which quiz and the topics it covers. **No answers.** An "Open ClassLegend dashboard" button is added automatically; quiz links change every time, so never paste them here |
 
 Standard blocks work too: `!!! warning`, `!!! tip`, `!!! note`, `!!! danger`. Ordinary Markdown (tables, lists, code blocks, Mermaid diagrams, images) works as in the notes.
 
@@ -236,6 +236,6 @@ When starting from a plan written elsewhere (for example a Word or Markdown docu
 | `overrides/main.html` | Adds the noindex tag and loads the lesson stylesheet and script on flagged pages only |
 | `docs/javascripts/lesson-runner.js` | Control bar, timeline, schedule table, time labels, Focus mode, saved state, clickable checklists |
 | `docs/stylesheets/lesson.css` | Block colours, control bar, Focus mode |
-| `mkdocs.yml` | `custom_dir: overrides`, `hooks:` and `not_in_nav:` entries |
+| `mkdocs.yml` | `custom_dir: overrides`, `hooks:` and `not_in_nav:` entries; `extra.classlegend_url` is the dashboard the quiz button opens (change it there to update every lesson) |
 
 **Changing the folder name** (if the link is ever shared): rename the folder, then update `TEACHER_DIR` in `hooks/teacher_pages.py`, `not_in_nav` in `mkdocs.yml`, and the paths in this guide and the template.

@@ -69,6 +69,9 @@ copyright: |
 
 extra:
   generator: false
+  # Teacher pages: every `!!! quiz` block gets an "Open ClassLegend dashboard"
+  # button pointing here (docs/javascripts/lesson-runner.js).
+  classlegend_url: https://classlegend.vercel.app/
   # NOTE: harmless, but redundant  - site_url already supplies the /dso303 path,
   # and MkDocs computes base_url per page. The macros plugin also exposes this
   # as a page variable literally named `base_url`, so `{{ base_url }}` in a page

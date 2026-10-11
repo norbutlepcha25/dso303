@@ -9,6 +9,9 @@
   {% if page and page.meta and page.meta.teacher %}
     <meta name="robots" content="noindex, nofollow">
     <meta name="dso303-page" content="lesson">
+    {% if config.extra.classlegend_url %}
+      <meta name="dso303-classlegend" content="{{ config.extra.classlegend_url }}">
+    {% endif %}
     <link rel="stylesheet" href="{{ 'stylesheets/lesson.css' | url }}">
   {% endif %}
 {% endblock %}

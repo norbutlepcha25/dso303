@@ -47,6 +47,7 @@
   }
 
   enhanceChecklists();
+  addQuizButtons();
 
   var headings = Array.prototype.slice.call(article.querySelectorAll('h2[data-minutes]'));
   if (!headings.length) return; // e.g. the lesson index page
@@ -302,6 +303,28 @@
   render();
   setInterval(render, 500);
   setInterval(function () { if (state.running) save(STORE, state); }, 5000);
+
+  /* ---------- ClassLegend button on quiz blocks ---------- */
+
+  // The URL comes from `extra.classlegend_url` in mkdocs.yml, so changing it
+  // there updates every lesson.
+  function addQuizButtons() {
+    var meta = document.querySelector('meta[name="dso303-classlegend"]');
+    var url = meta && meta.getAttribute('content');
+    if (!url) return;
+    article.querySelectorAll('.admonition.quiz, details.quiz').forEach(function (block) {
+      if (block.querySelector('.lr-quiz-link')) return;
+      var p = document.createElement('p');
+      var a = document.createElement('a');
+      a.className = 'md-button md-button--primary lr-quiz-link';
+      a.href = url;
+      a.target = '_blank';
+      a.rel = 'noopener';
+      a.textContent = 'Open ClassLegend dashboard';
+      p.appendChild(a);
+      block.appendChild(p);
+    });
+  }
 
   /* ---------- Checklists ---------- */
 
