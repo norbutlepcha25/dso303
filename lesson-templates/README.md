@@ -5,6 +5,7 @@ How to write, add and run DSO303 lesson plans in the teaching area. Every future
 | | |
 |---|---|
 | **Teaching area (bookmark)** | `https://norbutlepcha25.github.io/dso303/teach-5t27uuv8/` |
+| **Quick access** | Type `teach` on any page of the site (outside the search box) |
 | **Local preview** | `mkdocs serve`, then `http://127.0.0.1:8000/dso303/teach-5t27uuv8/` |
 | **Lesson files** | `docs/teach-5t27uuv8/` |
 | **Template** | `lesson-templates/lesson-plan.md` |
@@ -235,7 +236,8 @@ When starting from a plan written elsewhere (for example a Word or Markdown docu
 | `hooks/teacher_pages.py` | Flags every page in the teaching folder: search exclusion, noindex, no sidebars; strips them from the sitemap. Holds the folder name in `TEACHER_DIR` |
 | `overrides/main.html` | Adds the noindex tag and loads the lesson stylesheet and script on flagged pages only |
 | `docs/javascripts/lesson-runner.js` | Control bar, timeline, schedule table, time labels, Focus mode, saved state, clickable checklists |
-| `docs/stylesheets/lesson.css` | Block colours, control bar, Focus mode |
+| `docs/stylesheets/lesson.css` | Block colours, control bar, reading width, Focus mode |
+| `docs/javascripts/teacher-shortcut.js` | The `teach` keyboard shortcut (loaded site-wide; holds the folder name in `TARGET`) |
 | `mkdocs.yml` | `custom_dir: overrides`, `hooks:` and `not_in_nav:` entries; `extra.classlegend_url` is the dashboard the quiz button opens (change it there to update every lesson) |
 
-**Changing the folder name** (if the link is ever shared): rename the folder, then update `TEACHER_DIR` in `hooks/teacher_pages.py`, `not_in_nav` in `mkdocs.yml`, and the paths in this guide and the template.
+**Changing the folder name** (if the link is ever shared): rename the folder, then update `TEACHER_DIR` in `hooks/teacher_pages.py`, `TARGET` in `docs/javascripts/teacher-shortcut.js`, `not_in_nav` in `mkdocs.yml`, and the paths in this guide and the template.

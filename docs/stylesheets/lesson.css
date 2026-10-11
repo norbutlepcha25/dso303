@@ -153,6 +153,16 @@
 .md-typeset .lr-seg-time { margin-top: -0.6em; font-size: 0.75em; opacity: 0.7; font-variant-numeric: tabular-nums; }
 .md-typeset .lr-total { font-size: 0.8em; opacity: 0.75; }
 
+/* ---------- Reading width ----------
+   Teacher pages hide both sidebars; without a cap the text would run the
+   full screen width. Keep one centred column of comfortable length
+   (color.css sets a 22px root, so 42rem is roughly 920px). */
+
+.md-content {
+  max-width: 42rem;
+  margin-inline: auto;
+}
+
 /* ---------- Focus mode: hide site menus, keep all lesson content ---------- */
 
 .lesson-focus .md-header,
@@ -163,9 +173,7 @@
 }
 
 .lesson-focus .lesson-runner { top: 0; }
-.lesson-focus .md-grid { max-width: 72rem; }
 .lesson-focus .md-main__inner { margin-top: 0; }
-.lesson-focus .md-content__inner { margin: 0 2vw; }
 
 @media print {
   .lesson-runner,

@@ -2,6 +2,9 @@
 
 Lesson plans for running DSO303 sessions. This area is unlisted: it is not in the site navigation, search or sitemap, and search engines are asked not to index it. Bookmark this page.
 
+!!! tip "Quick access from any page"
+    On any page of the DSO303 site, type `teach` (not inside the search box) and you are taken here. There is no visible link, so students are not pointed to it.
+
 !!! warning "Unlisted, not secret"
     The Markdown source of these pages is in the public repository. Keep quiz answers and anything sensitive in ClassLegend, not here.
 

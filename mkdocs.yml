@@ -130,6 +130,7 @@ extra_javascript:
   - javascripts/filter.js
   - javascripts/preview.js
   - javascripts/pdf-download.js
+  - javascripts/teacher-shortcut.js
 
 # Teacher area: docs/teach-5t27uuv8/ is unlisted (not in nav, excluded from
 # search and the sitemap, noindex). See hooks/teacher_pages.py.
