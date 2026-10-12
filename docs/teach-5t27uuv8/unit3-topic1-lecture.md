@@ -12,6 +12,8 @@
 !!! teacher "Purpose"
     Students know Kubernetes. They do not yet know what changes when Kubernetes runs **on AWS**. This lecture is about the seams: where AWS's half of the cluster ends and yours begins, how Pods get VPC addresses, how traffic and DNS reach them, and how IAM and Kubernetes RBAC split the job of deciding who may do what. Keep Kubernetes revision to the five minutes in the Hook.
 
+    The [Lab 07 walkthrough](#lab-07-walkthrough-teacher-reference) at the end of this page explains all 24 Lab 07 steps against today's concepts; use it when students do the lab.
+
 **Learning outcomes.** By the end, students should be able to:
 
 1. Draw the EKS control-plane / data-plane boundary and say who owns, runs and pays for each side.
@@ -625,3 +627,519 @@ yes
 | `kubectl auth can-i <verb> <resource>` | Check authorisation |
 | `kubectl delete namespace u3t1` | Clean up today's practice objects |
 | `./scripts/setup/floci-down.sh` | Pause Floci; state kept |
+
+## Lab 07 walkthrough (teacher reference)
+
+Not timed and not part of the 120 minutes. Use it to explain [Lab 07: Deploying a Microservices Application on Amazon EKS](../Lab/Lab-07-EKS.md){ target="_blank" } as a practical class: what each of the 24 steps does, why, and what happens behind the scenes. It connects today's concepts (control plane and data plane, VPC networking, cluster and Pod identity) to the hands-on lab. Students run the full commands from the lab page; the snippets here are simplified for explanation.
+
+!!! teacher "The one idea to land"
+    Four layers, each with its own job: **AWS infrastructure** (VPC, subnets, IAM roles, security groups), **Kubernetes infrastructure** (control plane, worker nodes, kubelet), **application orchestration** (namespaces, Deployments, ReplicaSets, Pods) and **application communication** (Services, CoreDNS, gateway, HTTP). Once students can say which layer owns an operation, the 24 steps read as one sequence rather than a pile of commands.
+
+### What students build
+
+USMS gets three microservices on Kubernetes:
+
+- **Gateway:** receives requests and forwards them to the right service.
+- **Enrolment service:** handles enrolment requests.
+- **Results service:** handles results requests.
+
+```mermaid
+flowchart TB
+    Client[Student / Client<br/>HTTP request] --> Gateway
+    subgraph Cluster[Kubernetes Cluster · namespace usms]
+        Gateway[Gateway · 1 Pod]
+        Gateway -->|/enrolment/| Enrolment[Enrolment Service · ClusterIP]
+        Gateway -->|/results/| Results[Results Service · ClusterIP]
+        Enrolment --> E1[Pod]
+        Enrolment --> E2[Pod]
+        Results --> R1[Pod]
+        Results --> R2[Pod]
+    end
+```
+
+The finished namespace has **five application Pods**: one gateway, two enrolment, two results. They find each other by Kubernetes DNS names, never by Pod IPs, and stay internal to the cluster in this lab.
+
+| Concept | Simple meaning |
+|---|---|
+| Cluster | The whole Kubernetes environment |
+| Node | A machine that runs application Pods |
+| Pod | The smallest deployable unit; one or more containers |
+| Deployment | Keeps the required number of Pods running |
+| Service | A stable network address for a set of Pods |
+
+If the enrolment Deployment says `replicas: 2` and one Pod fails, its ReplicaSet creates a replacement.
+
+### Part A: preparing the environment (Steps 1-5)
+
+#### Step 1 - Start Floci and verify everything
+
+[Lab 07 Step 1](../Lab/Lab-07-EKS.md#step-1-start-the-environment-and-confirm-the-ground-you-are-standing-on){ .notes-link target="_blank" }
+
+**Purpose:** confirm the course environment works before building anything on it. Floci emulates supported AWS APIs locally; nothing is created in a real AWS account.
+
+```bash
+cd ~/aws-floci-course
+./scripts/setup/floci-up.sh
+source configs/course.env
+source configs/lab-01.env
+source configs/lab-02.env
+source configs/lab-03.env
+source configs/lab-04.env
+./scripts/utilities/whoami.sh
+./scripts/utilities/floci-storage-check.sh
+./scripts/utilities/verify-lab-02.sh | tail -2
+```
+
+`source` reads a file and loads its variables into the current terminal, so `echo "$USMS_VPC_ID"` works without typing IDs by hand. Students should see the local account, endpoint `http://localhost:4566`, `FAIL=0` for Lab 02, and **four subnets** (two public, two private, across two AZs). Why: worker nodes go into the private subnets.
+
+#### Step 2 - Check whether this Floci build supports EKS
+
+[Lab 07 Step 2](../Lab/Lab-07-EKS.md#step-2-probe-what-your-build-actually-supports-and-record-the-answer){ .notes-link target="_blank" }
+
+Not every Floci build supports every EKS operation, so students create and run a probe script (full code in the lab). Its key test is `aws eks list-clusters`.
+
+| Path | Meaning | What to do |
+|---|---|---|
+| A | Floci's EKS API is available | Follow the main EKS instructions |
+| B | EKS API unavailable, but k3d works | Create Kubernetes directly with k3d |
+| C | Neither is available | Prepare and validate manifests without a running cluster |
+
+```bash
+chmod +x scripts/utilities/eks-support-probe.sh
+./scripts/utilities/eks-support-probe.sh
+```
+
+The result decides the route in Step 8. Teaching point: `list-clusters` succeeding proves the API answers, not that cluster creation will work.
+
+#### Step 3 - Control plane versus data plane
+
+[Lab 07 Step 3](../Lab/Lab-07-EKS.md#step-3-understand-the-control-plane-data-plane-split-before-you-create-either){ .notes-link target="_blank" }
+
+| Control plane: makes decisions | Data plane: runs applications |
+|---|---|
+| API server | Worker nodes |
+| Scheduler | kubelet |
+| Controllers | Container runtime |
+| etcd | Application Pods |
+
+Analogy: the control plane is the university administration (decides where classes run, monitors them); the data plane is the classrooms. In real EKS, AWS runs the control plane; who runs the workers depends on managed nodes, Fargate or another option. Floci reproduces this with local Kubernetes containers. This is the [boundary segment](#the-boundary-and-the-network) from today.
+
+#### Step 4 - Two IAM trust policies
+
+[Lab 07 Step 4](../Lab/Lab-07-EKS.md#step-4-write-the-two-trust-policies){ .notes-link target="_blank" }
+
+A trust policy answers one question: **who may assume this role?** Students write `policies/trust-eks-cluster.json` and `policies/trust-eks-node.json`.
+
+| Role | Trusted service | Why |
+|---|---|---|
+| Cluster role | `eks.amazonaws.com` | EKS manages AWS resources for the cluster |
+| Node role | `ec2.amazonaws.com` | EC2 worker nodes need AWS permissions |
+
+```json
+"Principal": {
+  "Service": "eks.amazonaws.com"
+}
+```
+
+The lab validates both files with Python. Remember: a trust policy says **who**, not **what**.
+
+#### Step 5 - Two IAM permissions policies
+
+[Lab 07 Step 5](../Lab/Lab-07-EKS.md#step-5-write-the-two-permissions-policies){ .notes-link target="_blank" }
+
+Now the question is **what may the role do?** The cluster policy covers cluster networking and load-balancing resources; the node policy covers pulling images from ECR, managing interfaces for Pod networking, and writing logs.
+
+```json
+{
+  "Effect": "Allow",
+  "Action": [
+    "ecr:GetAuthorizationToken",
+    "ecr:BatchGetImage"
+  ],
+  "Resource": "*"
+}
+```
+
+These custom policies stand in for the AWS managed policies used in production. Floci stores them without necessarily enforcing them. **Trust policy names the principal; permissions policy authorises actions.**
+
+### Part B: creating the EKS infrastructure (Steps 6-11)
+
+#### Step 6 - Cluster IAM role and security group
+
+[Lab 07 Step 6](../Lab/Lab-07-EKS.md#step-6-create-the-cluster-role-and-the-cluster-security-group){ .notes-link target="_blank" }
+
+```bash
+EKS_CLUSTER_ROLE=usms-eks-cluster-role
+
+aws iam create-role \
+  --role-name "$EKS_CLUSTER_ROLE" \
+  --assume-role-policy-document file://policies/trust-eks-cluster.json
+```
+
+`file://` loads the Step 4 trust policy. The lab then attaches `USMSEKSClusterPolicy` and creates `usms-eks-cluster-sg` in the Lab 02 VPC, allowing TCP 443 to the cluster endpoint from the VPC CIDR. Two different problems: the **IAM role** controls which AWS resources the control plane may touch; the **security group** controls which network traffic may reach it.
+
+#### Step 7 - Node IAM role
+
+[Lab 07 Step 7](../Lab/Lab-07-EKS.md#step-7-create-the-node-role-and-attach-lab-1s-policy-to-it){ .notes-link target="_blank" }
+
+`usms-eks-node-role` gets `USMSEKSNodePolicy` and `USMSStudentDataReadWrite` (reused from Lab 01), because nodes pull images from ECR and support the VPC CNI.
+
+```bash
+aws iam list-attached-role-policies \
+  --role-name usms-eks-node-role \
+  --query 'AttachedPolicies[].PolicyName' \
+  --output text
+```
+
+Security point (from today's identity segment): Pods may reach the node's credentials through instance metadata unless that is restricted. In real EKS, give application Pods narrowly scoped credentials with EKS Pod Identity or IRSA, never the node role.
+
+#### Step 8 - Create the cluster
+
+[Lab 07 Step 8](../Lab/Lab-07-EKS.md#step-8-create-the-cluster){ .notes-link target="_blank" }
+
+The request lives in a JSON file (name, Kubernetes version, IAM role, VPC configuration). Path A:
+
+```bash
+aws eks create-cluster \
+  --cli-input-json file://templates/lab-07-create-cluster.json \
+  --query 'cluster.{Name:name,Status:status,Version:version,Arn:arn}' \
+  --output table
+```
+
+| Part | Meaning |
+|---|---|
+| `aws eks create-cluster` | Request a new EKS cluster |
+| `--cli-input-json` | Read the configuration from a file |
+| `--query` | Select fields from the response |
+| `--output table` | Show them as a table |
+
+The file's `_lb_ports_` tag is a **Floci-only** mechanism that reserves local ports for Lab 08's load balancers; it is not real EKS configuration. Path B runs `k3d cluster create` instead. The step ends by unsetting the `sts assume-role` credentials so later commands run as the normal identity.
+
+#### Step 9 - Wait for the cluster
+
+[Lab 07 Step 9](../Lab/Lab-07-EKS.md#step-9-wait-for-the-cluster-and-read-what-it-tells-you){ .notes-link target="_blank" }
+
+`create-cluster` returns while the cluster is `CREATING`; it becomes `ACTIVE` only when provisioning succeeds. A successful request is not ready infrastructure.
+
+```bash
+aws eks describe-cluster \
+  --name usms-eks-cluster \
+  --query 'cluster.status' \
+  --output text
+```
+
+Proceed only at `ACTIVE`.
+
+#### Step 10 - Managed node group
+
+[Lab 07 Step 10](../Lab/Lab-07-EKS.md#step-10-create-the-managed-node-group){ .notes-link target="_blank" }
+
+The control plane exists; now the Pods need machines.
+
+| Minimum | Desired | Maximum |
+|---:|---:|---:|
+| 2 | 2 | 4 |
+
+Nodes go into Lab 02's two private subnets: workers do not need public IPs; traffic reaches them through load balancers. Teaching point: **scaling nodes adds capacity; scaling Pod replicas adds copies of the application.** Lab 08 does both.
+
+#### Step 11 - Point `kubectl` at the cluster
+
+[Lab 07 Step 11](../Lab/Lab-07-EKS.md#step-11-point-kubectl-at-the-cluster){ .notes-link target="_blank" }
+
+Until now, `aws eks ...` talked to Floci's AWS-compatible endpoint. From here, `kubectl` talks to the Kubernetes API server.
+
+```bash
+aws eks update-kubeconfig --name usms-eks-cluster --alias usms-eks
+kubectl cluster-info
+kubectl get nodes
+```
+
+```text
+NAME                    STATUS
+usms-eks-cluster-srv0   Ready
+usms-eks-cluster-ag0    Ready
+usms-eks-cluster-ag1    Ready
+```
+
+> Example output: one server node (the local control plane) and two agents (workers). Counts vary by Floci build.
+
+```mermaid
+flowchart LR
+    AWSCLI[AWS CLI<br/>aws eks ...] --> Floci[Floci API<br/>port 4566]
+    Kubectl[kubectl<br/>kubectl get ...] --> K8s[Kubernetes API server]
+    Floci -. creates / manages .-> K8s
+```
+
+`aws` manages AWS-facing resources; `kubectl` manages what is inside Kubernetes. This is today's Hands-on B.
+
+### Part C: deploying the application (Steps 12-16)
+
+#### Step 12 - Namespace
+
+[Lab 07 Step 12](../Lab/Lab-07-EKS.md#step-12-create-the-namespace-and-make-it-the-default-for-your-context){ .notes-link target="_blank" }
+
+```yaml
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: usms
+```
+
+```bash
+kubectl apply -f manifests/lab-07/00-namespace.yaml
+kubectl config set-context --current --namespace=usms
+```
+
+Now `kubectl get pods` looks in `usms` by default. A namespace groups and scopes resources (like a department); it does **not** isolate network traffic on its own.
+
+#### Step 13 - Enrolment microservice
+
+[Lab 07 Step 13](../Lab/Lab-07-EKS.md#step-13-deploy-the-first-microservice-usms-enrolment){ .notes-link target="_blank" }
+
+Three objects together: a ConfigMap (Nginx configuration), a Deployment (two Pods) and a Service (stable address).
+
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: usms-enrolment
+  namespace: usms
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: usms-enrolment
+  template:
+    metadata:
+      labels:
+        app: usms-enrolment
+    spec:
+      containers:
+        - name: enrolment
+          image: nginx:1.27-alpine
+          ports:
+            - containerPort: 80
+```
+
+| Field | Meaning |
+|---|---|
+| `kind: Deployment` | Kubernetes manages this application |
+| `replicas: 2` | Keep two Pods running |
+| `image` | Container image to run |
+| `containerPort: 80` | The app listens on 80 |
+| `selector.matchLabels` | Which Pods this Deployment owns |
+
+The full manifest adds a **readiness probe** (ready for traffic?), a **liveness probe** (healthy enough to keep running?) and **requests/limits** (`50m` CPU = 0.05 of a core).
+
+```bash
+kubectl get deployments,pods,services -n usms
+```
+
+Two enrolment Pods `Running` and ready, plus an internal Service.
+
+#### Step 14 - Results microservice
+
+[Lab 07 Step 14](../Lab/Lab-07-EKS.md#step-14-deploy-the-second-microservice-usms-results){ .notes-link target="_blank" }
+
+Same pattern for `usms-results`. Key principle: two Pods, but the gateway needs only the Service name `usms-results.usms.svc.cluster.local`; Service networking forwards to ready Pods.
+
+#### Step 15 - Gateway
+
+[Lab 07 Step 15](../Lab/Lab-07-EKS.md#step-15-deploy-the-gateway-and-meet-cluster-dns){ .notes-link target="_blank" }
+
+The gateway is Nginx as a reverse proxy: it accepts a request, picks the backend, forwards it.
+
+```nginx
+location /enrolment/ {
+    proxy_pass http://usms-enrolment.usms.svc.cluster.local/;
+}
+
+location /results/ {
+    proxy_pass http://usms-results.usms.svc.cluster.local/;
+}
+```
+
+No Pod IPs anywhere: a recreated Pod gets a new IP, but the Service DNS name stays. That is Kubernetes service discovery (today's traffic segment: Service + CoreDNS + `kube-proxy`).
+
+#### Step 16 - Prove service discovery
+
+[Lab 07 Step 16](../Lab/Lab-07-EKS.md#step-16-prove-service-discovery-from-inside-the-cluster){ .notes-link target="_blank" }
+
+```bash
+kubectl run usms-debug --rm -it --restart=Never --image=busybox:1.36 -- \
+  nslookup usms-enrolment.usms.svc.cluster.local
+```
+
+| Option | Purpose |
+|---|---|
+| `--rm` | Delete the Pod when it exits |
+| `-it` | Interactive terminal |
+| `--restart=Never` | A bare Pod, not a Deployment |
+| `--image=busybox:1.36` | Small debugging image |
+| `nslookup` | Resolve the Service name |
+
+Then HTTP through the gateway (`/enrolment/`, `/results/`), repeated so more than one backend Pod answers (for example 7 and 5 out of 12; the split need not be even). Lesson: **the gateway depends on a Service name, not on any one Pod.**
+
+### Part D: configuration, updates and troubleshooting (Steps 17-19)
+
+#### Step 17 - ConfigMaps and Secrets
+
+[Lab 07 Step 17](../Lab/Lab-07-EKS.md#step-17-configmaps-and-secrets-and-an-honest-account-of-what-a-secret-is){ .notes-link target="_blank" }
+
+| ConfigMap | Secret |
+|---|---|
+| Non-sensitive configuration | Sensitive configuration |
+| Versions, URLs | Passwords, tokens |
+| Plain strings | Base64-encoded values |
+| Not for confidential data | Needs RBAC and encryption at rest |
+
+```bash
+kubectl create secret generic usms-enrolment-secret \
+  --namespace usms \
+  --from-literal=ENROLMENT_API_TOKEN='floci-dummy-token-not-a-real-secret'
+```
+
+The lab decodes the value back. **Base64 is encoding, not encryption**: anyone allowed to `get` the Secret can read it. Protect with RBAC, encryption at rest (on by default in EKS) and an external store such as Secrets Manager.
+
+#### Step 18 - Rolling update and rollback
+
+[Lab 07 Step 18](../Lab/Lab-07-EKS.md#step-18-roll-out-a-change-then-roll-it-back){ .notes-link target="_blank" }
+
+```mermaid
+flowchart TB
+    A[Before: v1.0 + v1.0] --> B[Updating: old and new Pods overlap]
+    B --> C[After: v1.1 + v1.1]
+```
+
+The ConfigMap version changes from `1.0.0` to `1.1.0`. Changing a ConfigMap does **not** restart Pods that read it as environment variables, so:
+
+```bash
+kubectl rollout restart deployment/usms-enrolment
+kubectl rollout status deployment/usms-enrolment
+kubectl rollout undo deployment/usms-enrolment
+```
+
+Subtle point: `rollout undo` does not revert the ConfigMap; restore it separately. That is why teams version configuration with the application. (3.2 builds on this.)
+
+#### Step 19 - Break Pods deliberately
+
+[Lab 07 Step 19](../Lab/Lab-07-EKS.md#step-19-break-a-pod-deliberately-and-diagnose-it){ .notes-link target="_blank" }
+
+| Failure | Meaning | First command |
+|---|---|---|
+| `ImagePullBackOff` | The image cannot be pulled | `kubectl describe pod` |
+| `Pending` | The Pod cannot be scheduled (for example, not enough resources) | `kubectl describe pod` |
+| `CrashLoopBackOff` | The container starts and crashes repeatedly | `kubectl logs --previous` |
+
+```bash
+kubectl get pods -n usms
+kubectl describe pod <pod-name> -n usms        # read Events at the bottom
+kubectl logs <pod-name> -n usms
+kubectl logs <pod-name> -n usms --previous     # the crashed container
+```
+
+Restore each Deployment and delete test Pods as the lab instructs.
+
+### Part E: comparison, security and persistence (Steps 20-24)
+
+#### Step 20 - ECS versus EKS
+
+[Lab 07 Step 20](../Lab/Lab-07-EKS.md#step-20-write-down-the-ecs-comparison-while-both-are-in-front-of-you){ .notes-link target="_blank" }
+
+| Area | Amazon ECS | Amazon EKS / Kubernetes |
+|---|---|---|
+| Container specification | Task definition | Pod spec |
+| Keep replicas running | ECS service | Deployment |
+| Unit of execution | Task | Pod |
+| Service discovery | Cloud Map / Service Connect | Services and DNS |
+| Rolling updates | ECS deployments | Deployment rollout |
+| CLI | AWS CLI | `kubectl` |
+| Portability | AWS-specific | Portable manifests |
+
+ECS has fewer orchestration concepts and tight AWS integration; EKS fits when you need the Kubernetes API, its ecosystem or portability. Neither is universally better (today's hook mapping).
+
+#### Step 21 - IRSA and Pod permissions
+
+[Lab 07 Step 21](../Lab/Lab-07-EKS.md#step-21-irsa-the-right-way-to-give-a-pod-aws-permissions-and-why-it-stops-here){ .notes-link target="_blank" }
+
+Back to Step 7: if only enrolment needs to write student data to S3, results should not get the same rights. IRSA workflow:
+
+1. EKS provides an OIDC issuer.
+2. IAM trusts that OIDC provider.
+3. A role is restricted to one Kubernetes ServiceAccount.
+4. A Pod runs under that ServiceAccount.
+5. The Pod gets temporary credentials for that role.
+
+```bash
+kubectl create serviceaccount usms-enrolment-sa -n usms
+```
+
+A ServiceAccount alone grants no AWS permissions. The lab checks whether Floci supports the OIDC integration and, if not, records the limitation rather than pretending. In production, **EKS Pod Identity** is the simpler option on EC2 nodes; IRSA is needed on Fargate.
+
+#### Step 22 - Survive a restart
+
+[Lab 07 Step 22](../Lab/Lab-07-EKS.md#step-22-prove-that-all-of-this-survives-a-restart){ .notes-link target="_blank" }
+
+Create, perturb, read back:
+
+```bash
+./scripts/setup/floci-down.sh
+./scripts/setup/floci-up.sh
+kubectl get namespaces
+kubectl get deployments -n usms
+kubectl get pods -n usms
+```
+
+```text
+NAME              READY
+usms-enrolment    2/2
+usms-results      2/2
+usms-gateway      1/1
+```
+
+Persistence relies on Floci's hybrid storage mode. Never `docker compose down -v`.
+
+#### Step 23 - `configs/lab-07.env`
+
+[Lab 07 Step 23](../Lab/Lab-07-EKS.md#step-23-write-configslab-07env){ .notes-link target="_blank" }
+
+Shell variables die with the terminal, so the lab writes IDs and names (never credentials) for Lab 08:
+
+```bash
+export USMS_EKS_CLUSTER=usms-eks-cluster
+export USMS_EKS_NODEGROUP=usms-eks-nodes
+export USMS_EKS_NAMESPACE=usms
+```
+
+#### Step 24 - Commit
+
+[Lab 07 Step 24](../Lab/Lab-07-EKS.md#step-24-commit-your-work){ .notes-link target="_blank" }
+
+```bash
+git status --short
+git commit -m "Lab 07: EKS cluster and microservices"
+```
+
+Check first that no `outputs/` file, kubeconfig or credential is staged.
+
+### Expected end state
+
+| Item | Target |
+|---|---|
+| Cluster | `ACTIVE` |
+| Worker nodes | 2 desired |
+| Namespace | `usms` |
+| Enrolment | 2/2 ready |
+| Results | 2/2 ready |
+| Gateway | 1/1 ready |
+| Service discovery | Working |
+
+```bash
+kubectl get nodes
+kubectl get all -n usms
+kubectl get configmaps,secrets -n usms
+kubectl get events -n usms --sort-by=.lastTimestamp
+./scripts/utilities/verify-lab-07.sh
+```
+
+`kubectl get all` does not include ConfigMaps or Secrets, hence the separate check. Do **not** run the Lab 07 cleanup script: Lab 08 reuses this cluster.

@@ -974,7 +974,7 @@ All four subnets go in the cluster config (two AZs, and public subnets for Lab 0
 ```bash
 CREDS=$(aws sts assume-role \
   --role-arn "arn:aws:iam::${ACCOUNT_ID}:role/usms-developer-role" \
-  --role-session-name lab05a-eks-build \
+  --role-session-name lab07-eks-build \
   --query 'Credentials.[AccessKeyId,SecretAccessKey,SessionToken]' --output text)
 
 export AWS_ACCESS_KEY_ID=$(echo "$CREDS" | cut -f1)
@@ -1298,7 +1298,7 @@ metadata:
   labels:
     project: usms
     tier: app
-    lab: "05a"
+    lab: "07"
 EOF
 
 kubectl apply -f manifests/lab-07/00-namespace.yaml
@@ -1311,7 +1311,7 @@ kubectl config set-context --current --namespace=usms
 kubectl config view --minify --output 'jsonpath={..namespace}'; echo
 ```
 
-Every manifest has `apiVersion`, `kind`, `metadata` and `spec`. You write `spec`; a controller acts on it and fills in `status`. Label values beginning with a digit (`"05a"`) are quoted so YAML never reads them as numbers.
+Every manifest has `apiVersion`, `kind`, `metadata` and `spec`. You write `spec`; a controller acts on it and fills in `status`. Label values beginning with a digit (`"07"`) are quoted so YAML never reads them as numbers.
 
 **Expected result**
 
