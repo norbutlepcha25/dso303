@@ -125,11 +125,12 @@ Because nothing is reused (no warm capacity, no image cache), **Fargate Pods sta
 | No `hostNetwork` / `hostPort` | No customer host network to join |
 | No GPUs | Capacity is standard AWS compute, not a chosen instance type |
 | No EBS volumes | EBS attaches to an instance; use **EFS** instead |
+| No Arm (Graviton) or Windows Pods | Fargate on EKS runs Linux Pods on AWS-chosen capacity; Arm is not offered |
 | No EKS Pod Identity | Its agent is a DaemonSet; use **IRSA** ([3.1](topic1.md#iam-for-workloads-pod-identity)) |
 | Load balancer targets must use IP mode | There is no instance to register |
 | Slower Pod start | New micro-VM plus uncached image pull |
 
-**Billing.** Per second (one-minute minimum) for the **vCPU and memory the Pod requests**, rounded up to the nearest supported size. Fargate adds about 256 MB per Pod for Kubernetes components. Sizes range from 0.25 vCPU / 0.5 GB to 16 vCPU / 120 GB. Each Pod gets 20 GiB ephemeral storage by default.
+**Billing.** Per second (one-minute minimum) for the **vCPU and memory the Pod requests**, rounded up to the nearest supported size. Fargate first adds 256 MB to the memory request for its Kubernetes components (`kubelet`, `kube-proxy`, `containerd`), so a request of exactly 1 vCPU / 8 GB becomes 2 vCPU / 9 GB. Sizes range from 0.25 vCPU / 0.5 GB to 16 vCPU / 120 GB. Each Pod gets 20 GiB ephemeral storage by default, expandable to 175 GiB. The `CapacityProvisioned` annotation on the Pod (`kubectl describe pod`) shows the size actually billed.
 
 | Requested (all containers) | Allocated and billed |
 |---|---|
@@ -142,8 +143,8 @@ Because nothing is reused (no warm capacity, no image cache), **Fargate Pods sta
 
 **Other Fargate details:**
 
-- **Pod execution role:** used by AWS to register the Pod and pull images. Application containers cannot use it; give them IRSA.
-- **Storage:** ephemeral storage dies with the Pod. Persistent or shared storage = EFS CSI driver.
+- **Pod execution role:** used by AWS to register the Pod as a node, pull images and, if logging is configured, ship logs. Application containers cannot use it (Fargate Pods have no instance metadata service either); give them IRSA.
+- **Storage:** ephemeral storage dies with the Pod. Persistent or shared storage = Amazon EFS, which Fargate mounts without a separate driver install; volumes must be statically provisioned (no dynamic provisioning).
 - **Logging:** no node for a logging DaemonSet, so use the built-in Fluent Bit router, configured with a ConfigMap in the `aws-observability` namespace.
 
 ### EKS managed node groups
@@ -167,9 +168,9 @@ flowchart TB
 | Choose and track an AMI | AWS-published EKS-optimized AMIs per Kubernetes version |
 | Bootstrap scripts | Automatic |
 | Let nodes join the cluster | Access entry for the node role created automatically |
-| Replace unhealthy nodes | Health monitoring and automatic replacement |
+| Replace unhealthy nodes | The Auto Scaling group replaces failed instances; optional **node auto repair** also replaces nodes Kubernetes reports unhealthy (more conditions with the node monitoring agent add-on) |
 | Upgrade safely | Rolling replacement with cordon and drain |
-| Spot interruptions | Nodes drained when AWS signals reclamation |
+| Spot interruptions | Capacity Rebalancing: EKS launches a replacement when a Spot node is at risk, then cordons and drains the old one (best effort) |
 
 **AMI families.**
 
@@ -177,8 +178,11 @@ flowchart TB
 |---|---|
 | **Amazon Linux 2023** | General-purpose default |
 | **Bottlerocket** | Minimal container OS: read-only root, no shell; smaller attack surface, faster boot, harder to customise |
-| **GPU AMIs** | Include drivers for machine learning |
+| **Accelerated AMIs** | AL2023 or Bottlerocket variants with NVIDIA (GPU) or Neuron drivers for machine learning |
 | **Windows** | Windows containers |
+
+!!! note "Amazon Linux 2 is legacy"
+    EKS stopped publishing Amazon Linux 2 node AMIs on 26 November 2025; Kubernetes 1.32 was the last version with them. Older material that shows `AL2_x86_64` is out of date: use AL2023 or Bottlerocket.
 
 **How node updates work.** Nodes are **replaced, not upgraded in place**:
 
@@ -187,12 +191,14 @@ flowchart TB
 3. **Drain** it: evict its Pods so their controllers recreate them elsewhere, respecting each workload's **PodDisruptionBudget (PDB)**.
 4. Terminate the old node and repeat.
 
-`updateConfig` sets how many nodes are replaced at once (`maxUnavailable` count or `maxUnavailablePercentage`). Small = safer; large = faster.
+`updateConfig` sets how many nodes are replaced at once (`maxUnavailable` count or `maxUnavailablePercentage`; default one node, at most 100). Small = safer; large = faster. That is the **default** update strategy (new before old, so capacity never drops). A **minimal** strategy terminates old nodes before launching new ones, for when extra capacity is unaffordable, such as scarce GPU instances.
+
+EKS publishes patched EKS-optimized AMIs, but **you start the node group update**; it does not happen on its own.
 
 !!! danger "A PodDisruptionBudget can block an upgrade"
-    A PDB limits how many Pods of an app may be evicted at once, keeping it available during drains. But if it allows **zero** disruptions (for example `minAvailable: 3` with three replicas), the drain never completes and the update times out. Keep `minAvailable` below the replica count or use `maxUnavailable: 1`. Check `kubectl get pdb -A` and the `ALLOWED DISRUPTIONS` column before upgrading. The force option ignores PDBs: an emergency escape, not a fix.
+    A PDB limits how many Pods of an app may be evicted at once, keeping it available during drains. But if it allows **zero** disruptions (for example `minAvailable: 3` with three replicas), the drain cannot finish: after 15 minutes the update fails with a `PodEvictionFailure` error. Keep `minAvailable` below the replica count or use `maxUnavailable: 1`. Check `kubectl get pdb -A` and the `ALLOWED DISRUPTIONS` column before upgrading. The force option ignores PDBs: an emergency escape, not a fix.
 
-**Spot capacity.** `SPOT` capacity type uses spare EC2 capacity at a large discount, but AWS can reclaim it with a **two-minute warning**. Managed node groups drain the affected node automatically. To use Spot well:
+**Spot capacity.** `SPOT` capacity type uses spare EC2 capacity at a large discount, but AWS can reclaim it with a **two-minute warning**. Managed node groups enable Capacity Rebalancing, so EKS tries to launch a replacement and drain the at-risk node early; this is best effort, and Pods may still be cut off. To use Spot well:
 
 - specify **several compatible instance types**, so one reclaimed pool does not remove the group;
 - run only interruption-tolerant work (batch, CI, stateless workers);
@@ -203,12 +209,12 @@ flowchart TB
 **Names to know.**
 
 - **Karpenter:** open-source autoscaler that launches right-sized EC2 instances directly for pending Pods, instead of scaling a fixed group.
-- **EKS Auto Mode:** AWS runs the whole data plane for an extra fee.
+- **EKS Auto Mode:** AWS runs the nodes for you (Karpenter-based scaling, Bottlerocket-based images, nodes replaced at least every 21 days) and builds in Pod networking, DNS, block storage and load balancing, so those are no longer add-ons you manage. Billed as a management fee per instance on top of EC2. The class shared cluster uses custom configuration (Auto Mode off) so that node groups and add-ons stay visible.
 - **Launch template:** customises disk size, security groups and instance metadata (for example IMDSv2 hop limit 1, see [3.1](topic1.md#iam-for-workloads-pod-identity)). A **custom AMI** in it means EKS no longer updates that image for you.
 
 ### EKS add-ons
 
-**What it is.** An AWS-managed install of a cluster component with a name, version, optional configuration, and optionally its own IAM role. No extra charge beyond resources used.
+**What it is.** An AWS-managed install of a cluster component with a name, version, optional configuration, and optionally its own IAM role. AWS add-ons carry no extra charge beyond the resources used (some AWS Marketplace add-ons are paid). A cluster created in the console gets the VPC CNI, CoreDNS and `kube-proxy` by default.
 
 The core networking add-ons were explained in [3.1](topic1.md#eks-networking-and-vpc-integration). Here the focus is **what breaks without each one**:
 
@@ -220,14 +226,14 @@ The core networking add-ons were explained in [3.1](topic1.md#eks-networking-and
 | **Amazon EBS CSI driver** | Creates and attaches EBS volumes for PVCs | PVCs stay `Pending`; stateful apps never start |
 | **EKS Pod Identity Agent** | Per-Pod IAM credentials | Pods cannot get their AWS permissions |
 
-Other add-ons: the **EFS CSI driver** (shared storage; the persistent option for Fargate) and the **CloudWatch Observability agent** (Container Insights).
+Other add-ons: the **EFS CSI driver** (shared storage), the **CloudWatch Observability agent** (Container Insights) and the **node monitoring agent** (extra node health signals used by node auto repair).
 
 !!! danger "CoreDNS failures look like everything failing"
-    DNS problems rarely say "DNS is down". Run CoreDNS with at least two replicas across nodes and zones, and monitor its errors and latency.
+    DNS problems rarely say "DNS is down". EKS starts CoreDNS with two replicas; keep at least two, spread across nodes and zones, and monitor its errors and latency.
 
-**Add-ons and upgrades.** Add-ons must match the control plane version. Update them as the middle step of every upgrade: control plane → add-ons → nodes ([3.2](topic2.md#creating-and-managing-eks-clusters)). Pin versions in IaC.
+**Add-ons and upgrades.** Each add-on version is compatible with particular Kubernetes versions, and EKS does **not** upgrade add-ons when you upgrade the control plane. So every upgrade includes a deliberate add-on step after the control plane: move each add-on to a version compatible with the new control plane and with the nodes (the VPC CNI and Pod Identity Agent move one minor version at a time). AWS's guides differ on whether add-ons or nodes come next; the firm rule is control plane first. The cluster-level procedure, including rollback within 7 days, is owned by [3.2](topic2.md#creating-and-managing-eks-clusters). Pin add-on versions in IaC.
 
-**Give add-ons their own IAM role.** The EBS CSI driver creates volumes; the VPC CNI manages ENIs. Putting these permissions on the node role hands them to every Pod on the node.
+**Give add-ons their own IAM role.** The EBS CSI driver creates volumes; the VPC CNI manages ENIs. Putting these permissions on the node role hands them to every Pod on the node. (The Pod Identity Agent is the exception: it needs no role of its own.)
 
 **Operators, briefly.** An **operator** is a custom resource type plus a controller that keeps the real world matching it. The AWS Load Balancer Controller (Ingress → ALB) is a familiar example.
 
@@ -278,7 +284,8 @@ Three groups: **compute** (Fargate, node groups: where Pods run), **platform com
 | **Launch template** | Customises node disks, security groups, metadata options |
 | **Cordon / drain** | Stop new Pods on a node / evict its Pods |
 | **PodDisruptionBudget (PDB)** | Limits voluntary evictions for a workload |
-| **`updateConfig`** | How many nodes are replaced at once |
+| **`updateConfig`** | How many nodes are replaced at once, and the update strategy |
+| **Node auto repair** | Optional replacement of nodes reported unhealthy |
 | **Capacity type** | On-Demand, Spot or Capacity Blocks |
 | **Spot interruption notice** | Two-minute warning before Spot reclamation |
 | **Karpenter** | Autoscaler launching right-sized nodes for pending Pods |
@@ -294,10 +301,10 @@ Three groups: **compute** (Fargate, node groups: where Pods run), **platform com
 |---|---|---|
 | **Selectors** | Namespace + optional labels | Namespace-only, on stable namespaces |
 | **Subnets** | Private only | Several AZs |
-| **Pod execution role** | IAM role | Image pull and registration only |
+| **Pod execution role** | IAM role | Registration, image pull and log shipping only |
 | **Workload identity** | IRSA | Pod Identity not supported |
 | **Resource requests** | vCPU, memory | Accurate: rounded up and billed |
-| **Persistent storage** | EFS | EBS not supported |
+| **Persistent storage** | EFS (static provisioning) | EBS not supported |
 | **Logging** | Fluent Bit ConfigMap | Configure at cluster build |
 
 ### Managed node groups
@@ -310,7 +317,8 @@ Three groups: **compute** (Fargate, node groups: where Pods run), **platform com
 | **Scaling** | `minSize`, `maxSize`, `desiredSize` | Min covers baseline; max caps cost |
 | **Subnets** | One or more | Two, preferably three, AZs |
 | **Labels and taints** | Any | Labels guide placement; taints reserve nodes |
-| **`updateConfig`** | Count or percentage | Small for small groups; about 25% for large |
+| **`updateConfig`** | Count or percentage; default or minimal strategy | Small for small groups; about 25% for large; default strategy unless capacity is scarce |
+| **Node auto repair** | On or off | On, ideally with the node monitoring agent |
 | **Launch template** | Optional | Disk size, security groups, IMDS settings |
 
 ### Add-ons
@@ -418,7 +426,7 @@ flowchart TB
 | Spot above On-Demand base | Big discount | Must tolerate rescheduling; use several types |
 | Fargate for bursty work | No idle nodes | Costlier for steady work |
 | Accurate requests | Fewer nodes / smaller Fargate bill | Too low hurts performance |
-| Graviton (ARM) | Better price-performance | Needs ARM images |
+| Graviton (ARM) nodes | Better price-performance | Needs ARM images; not available on Fargate |
 | Scale batch groups to zero | No idle cost | Only for work that really stops |
 
 !!! tip "Fargate is not always cheaper"
@@ -478,9 +486,9 @@ flowchart TB
 
 | Mistake | Consequence | Remedy |
 |---|---|---|
-| PDB allowing zero disruptions | Node upgrades stall and time out | Allow at least one; check before upgrades |
+| PDB allowing zero disruptions | Node upgrades fail with `PodEvictionFailure` | Allow at least one; check before upgrades |
 | Routinely forcing node updates | PDBs give no protection | Fix the budgets instead |
-| Add-ons skipped during upgrades | Networking or DNS failures | Update between control plane and nodes |
+| Add-ons skipped during upgrades | Networking or DNS failures | Update them as an explicit step of every upgrade, after the control plane |
 | CoreDNS with one replica | Cluster-wide mysterious timeouts | 2+ replicas across zones |
 | Add-ons using the node role | Every Pod gains their permissions | Own role per add-on |
 | All Spot, no On-Demand base | One capacity event removes the workload | On-Demand base + diverse Spot |

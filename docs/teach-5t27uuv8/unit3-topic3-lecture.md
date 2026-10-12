@@ -20,7 +20,7 @@
 4. Describe what a managed node group automates: EKS-optimized AMIs (including Bottlerocket), the Auto Scaling group, and rolling replacement with cordon and drain under `updateConfig`.
 5. Diagnose why a PodDisruptionBudget with zero allowed disruptions blocks a node group upgrade, and fix it.
 6. Design Spot capacity safely: several instance types above an On-Demand base, across Availability Zones.
-7. Name what breaks without each core add-on (VPC CNI, CoreDNS, `kube-proxy`, EBS CSI driver, Pod Identity Agent), and state the upgrade order and IAM practice for add-ons.
+7. Name what breaks without each core add-on (VPC CNI, CoreDNS, `kube-proxy`, EBS CSI driver, Pod Identity Agent), and state the upgrade rule (control plane first; add-ons are not upgraded automatically) and IAM practice for add-ons.
 8. Choose Fargate or a managed node group for a given workload and justify it.
 
 **Teacher preparation checklist**
@@ -60,14 +60,14 @@
 
 1. In EKS, who runs the control plane, and who chooses the data plane?
 2. Which component gives each Pod an IP address from the VPC?
-3. What is the order of a cluster upgrade?
+3. Which part of a cluster is always upgraded first?
 4. What does the scheduler use a container's resource **request** for?
 5. Name the two ways to give a Pod its own AWS permissions.
 
 ???+ answer "Expected answers"
     1. AWS runs the control plane; you choose and pay for the data plane.
     2. The Amazon VPC CNI.
-    3. Control plane, then add-ons, then nodes.
+    3. The control plane. Nodes may lag it but never lead it; add-ons are then moved to compatible versions.
     4. To decide which node has room for the Pod (requests are reserved capacity).
     5. IRSA (IAM roles for service accounts) and EKS Pod Identity.
 
@@ -143,7 +143,7 @@ Moving right: fewer servers to manage, less low-level control, more workload con
 | Load balancer targets in **IP mode** | There is no instance to register | IP target type |
 | Slower Pod start | New micro-VM plus an uncached image pull | Nodes with headroom for fast scale-out |
 
-**Billing.** Per second (one-minute minimum) for the vCPU and memory the Pod **requests**, rounded up to the nearest supported size. Fargate adds about 256 MB per Pod for Kubernetes components. Sizes run from 0.25 vCPU / 0.5 GB to 16 vCPU / 120 GB.
+**Billing.** Per second (one-minute minimum) for the vCPU and memory the Pod **requests**, rounded up to the nearest supported size. Fargate first adds 256 MB to the memory request for its own Kubernetes components, then rounds. Sizes run from 0.25 vCPU / 0.5 GB to 16 vCPU / 120 GB. Fargate on EKS also offers no Arm (Graviton) or Windows Pods.
 
 Two more details: the **Pod execution role** is used by AWS to register the Pod and pull images, and the application cannot use it (give the app IRSA). Logs go through the built-in **Fluent Bit** router, configured with a ConfigMap in the `aws-observability` namespace, because there is no node for a logging DaemonSet.
 
@@ -153,7 +153,7 @@ Two more details: the **Pod execution role** is used by AWS to register the Pod 
 
 ???+ answer "Check"
     1. On an EC2 node as normal. Labels within a selector are ANDed, so the namespace match alone is not enough. (If no node group exists, it stays `Pending`.)
-    2. 0.5 vCPU and 2 GB. On Fargate, the rounded-up request **is** the bill; on EC2 nodes an oversized request mostly affects how many Pods fit.
+    2. 0.5 vCPU and 2 GB (1.5 GB plus the 256 MB overhead is 1.75 GB, which rounds up to 2 GB). On Fargate, the rounded-up request **is** the bill; on EC2 nodes an oversized request mostly affects how many Pods fit.
 
 ### Managed node groups (5 minutes)
 
@@ -163,11 +163,13 @@ A managed node group is **still EC2**, in your account, billed as normal EC2, wi
 |---|---|
 | Choose and track an AMI | AWS-published **EKS-optimized AMIs** per Kubernetes version |
 | Bootstrap scripts, joining the cluster | Automatic, including the node role's access entry |
-| Replace unhealthy nodes | Health monitoring and automatic replacement |
-| Upgrade safely | Rolling replacement with cordon and drain (Concept B) |
-| Spot interruptions | Nodes drained when AWS signals reclamation |
+| Replace unhealthy nodes | The Auto Scaling group replaces failed instances; optional **node auto repair** replaces nodes Kubernetes reports unhealthy |
+| Upgrade safely | Rolling replacement with cordon and drain; the **update configuration** (maximum unavailable) sets how many nodes at once (Concept B) |
+| Spot interruptions | Capacity Rebalancing: EKS launches a replacement and drains an at-risk Spot node early (best effort) |
 
-**AMI families:** Amazon Linux 2023 (general default), **Bottlerocket** (minimal container OS: read-only root, no shell, smaller attack surface, faster boot, harder to customise), GPU AMIs, Windows. A **custom AMI** in a launch template means EKS no longer updates that image for you.
+**AMI families:** Amazon Linux 2023 (general default), **Bottlerocket** (minimal container OS: read-only root, no shell, smaller attack surface, faster boot, harder to customise), accelerated (NVIDIA or Neuron) variants of both, Windows. Amazon Linux 2 node AMIs stopped in November 2025, so treat any `AL2_x86_64` example as legacy. A **custom AMI** in a launch template means EKS no longer updates that image for you.
+
+**Add-ons (revision from 3.1).** The VPC CNI, CoreDNS and `kube-proxy` run on these nodes as versioned **EKS add-ons**. Hands-on A reads their versions; Concept B covers what breaks without each.
 
 **Capacity type.** On-Demand or **Spot** (spare capacity at a large discount, reclaimable with a **two-minute warning**). Safe Spot means: **several compatible instance types**, only interruption-tolerant work, and an **On-Demand group that can carry essential traffic alone**, with Spot above it. Span groups across **Availability Zones**, but remember a multi-AZ node group alone is not high availability: the app also needs replicas spread across zones.
 
@@ -185,7 +187,7 @@ A managed node group is **still EC2**, in your account, billed as normal EC2, wi
     The node group `dso303-u3-nodes` was created with desired 2, minimum 1, maximum 2. If one of its EC2 instances were terminated by hand right now, what would happen within a few minutes, and which AWS object would make it happen?
 
 ???+ answer "Expected response"
-    A replacement instance launches and joins the cluster. The **Auto Scaling group** that EKS created holds the desired count at 2; EKS health monitoring and the EKS-optimized AMI's bootstrap make the new instance a `Ready` node. (We do not test this: nobody changes the shared cluster.)
+    A replacement instance launches and joins the cluster. The **Auto Scaling group** that EKS created holds the desired count at 2; the EKS-optimized AMI's bootstrap and the node role's access entry make the new instance a `Ready` node. (We do not test this: nobody changes the shared cluster.)
 
 !!! teacher "Which access case?"
     **Same account:** students follow along in their own browser (read-only access entry from the shared page, Step 8). **Own accounts / Learner Lab:** students cannot see `dso303-u3-shared`. They follow your screen for Steps 1 to 3, and do Steps 4 and 5 in their own account **only if they already have a cluster there**; otherwise you lead those steps on screen too. Console labels below may differ slightly from your console version; describe what you see.
@@ -198,7 +200,8 @@ A managed node group is **still EC2**, in your account, billed as normal EC2, wi
 | Instance type(s) | `t3.medium` | Chosen by you; a managed node group does not pick sizes |
 | Capacity type | On-Demand | Spot would be cheaper but reclaimable |
 | Scaling configuration | Desired 2, minimum 1, maximum 2 | The limits the Auto Scaling group enforces |
-| Update configuration | Maximum unavailable, as a number or a percentage | How many nodes are replaced at once in an upgrade |
+| Node group update configuration | Maximum unavailable, as a number or a percentage | How many nodes are replaced at once in an upgrade |
+| Node auto repair | Enabled or disabled | Whether EKS replaces nodes that Kubernetes reports unhealthy |
 | Subnets | Two or more, in different AZs | Multi-AZ node capacity |
 
 *Why question:* the update configuration says "maximum unavailable". Unavailable from whose point of view, and what would a large value trade away?
@@ -213,18 +216,18 @@ A managed node group is **still EC2**, in your account, billed as normal EC2, wi
 ???+ answer "Expected response"
     EKS owns and operates it. The node group is the source of truth; editing the Auto Scaling group behind EKS's back creates drift between what EKS believes and what exists.
 
-**Step 3: Node health and the Add-ons tab.** Back on the node group, open the **Nodes** list: two nodes, both `Ready`. Then open the cluster's **Add-ons** tab and read each add-on's **version** and **status**: Amazon VPC CNI, CoreDNS, `kube-proxy`, EKS Pod Identity Agent. Point out whether any shows that a newer version is available.
+**Step 3: Node health and the Add-ons tab.** Back on the node group, open the **Nodes** list: two nodes, both `Ready`. Then open the cluster's **Add-ons** tab and read each add-on's **version** and **status**: Amazon VPC CNI, CoreDNS and `kube-proxy` (installed by default), plus any others that were pre-selected when the cluster was created, such as the EKS Pod Identity Agent. Point out whether any shows that a newer version is available.
 
 *Why question:* the console says an update is available for CoreDNS. Why not click update the moment you see it, and when in a cluster upgrade would you normally update it?
 
 ???+ answer "Expected response"
-    Add-on versions must match the control plane version, and teams pin them in IaC so changes are deliberate and reviewed. The normal place is the middle step of an upgrade: control plane, then add-ons, then nodes. (Full explanation in Concept B.)
+    Add-on versions must match the control plane version, and teams pin them in IaC so changes are deliberate and reviewed. Because a control plane upgrade does not update add-ons, updating them is a planned step of every upgrade, after the control plane and compatible with both control plane and nodes. (Full explanation in Concept B.)
 
-**Step 4: Walk the Add Fargate profile wizard (do not create).** **Compute** tab, then **Add Fargate profile**.
+**Step 4: Walk the Add Fargate profile wizard (do not create).** **Compute** tab, **Fargate profiles** section, then **Add Fargate profile**.
 
-1. **Configure:** name (use `dso303-u3t3-<initials>-ci` if you are in your own account), **Pod execution role**, **subnets**. Show the subnet list: the default VPC has only public subnets.
-2. **Pod selection:** add a selector with namespace `ci` and a label `runner` = `true`; add a second selector with namespace `preview-*`.
-3. Stop at **Review**. Read the summary aloud, then **Cancel**.
+1. **Configure Fargate profile:** name (use `dso303-u3t3-<initials>-ci` if you are in your own account), **Pod execution role** (the list shows only roles that trust `eks-fargate-pods.amazonaws.com`; if your account uses the console's role manager, a **Customize** option appears instead), **Subnets**. Show the subnet list: the default VPC has only public subnets.
+2. **Configure Pod selection:** add a selector with namespace `ci` and a label `runner` = `true`; add a second selector with namespace `preview-*`.
+3. Stop at **Review and create**. Read the summary aloud, then **Cancel**.
 
 *Why question:* the shared cluster runs in the default VPC. Why would creating this profile fail (or why does the wizard offer no suitable subnets), and what would the network need?
 
@@ -234,12 +237,12 @@ A managed node group is **still EC2**, in your account, billed as normal EC2, wi
 !!! teacher "If no Pod execution role is listed"
     The wizard cannot pass its first page. Say why: the role is used by AWS to register the Pod and pull images, so it must exist first. Show the selector YAML from the notes' [EKS Fargate profiles](../unit3/topic3.md#eks-fargate-profiles){ .notes-link target="_blank" } section instead.
 
-**Step 5: Walk the Add node group wizard (do not create).** **Compute** tab, then **Add node group**.
+**Step 5: Walk the Add node group wizard (do not create).** **Compute** tab, **Node groups** section, then **Add node group**.
 
-1. Name and node IAM role (look, do not change).
-2. Compute and scaling page: set **Capacity type** to **Spot** and add **several instance types** of a similar size (for example `t3.medium` and `t3a.medium`). Show the scaling fields and the update configuration (maximum unavailable).
-3. Networking page: subnets across AZs.
-4. Stop at **Review**, then **Cancel**.
+1. **Configure node group:** name and **Node IAM role** (look, do not change); note the optional launch template, Kubernetes labels and taints.
+2. **Set compute and scaling configuration:** set **Capacity type** to **Spot** and add **several instance types** of a similar size (for example `t3.medium` and `t3a.medium`). Show the AMI type list (AL2023, Bottlerocket, accelerated, Windows), the scaling fields, **Node group update configuration** (maximum unavailable) and the **Enable node auto repair** checkbox.
+3. **Specify networking:** subnets across AZs.
+4. Stop at **Review and create**, then **Cancel**.
 
 *Why question:* why add several instance types for a Spot group, but not necessarily for an On-Demand group?
 
@@ -262,6 +265,7 @@ A managed node group is **still EC2**, in your account, billed as normal EC2, wi
 
 [3.3 EKS managed node groups](../unit3/topic3.md#eks-managed-node-groups){ .notes-link target="_blank" }
 [3.3 EKS add-ons](../unit3/topic3.md#eks-add-ons){ .notes-link target="_blank" }
+[3.2 Cluster upgrade procedure](../unit3/topic2.md#creating-and-managing-eks-clusters){ .notes-link target="_blank" }
 [3.3 Fargate versus managed node groups](../unit3/topic3.md#fargate-versus-managed-node-groups){ .notes-link target="_blank" }
 [3.3 Decision framework](../unit3/topic3.md#decision-framework){ .notes-link target="_blank" }
 [3.3 Production mistakes](../unit3/topic3.md#production-mistakes){ .notes-link target="_blank" }
@@ -276,8 +280,11 @@ Nodes are **replaced, not upgraded in place**:
 3. Drain it                  -> evict its Pods; controllers recreate them elsewhere,
                                 respecting each workload's PodDisruptionBudget
 4. Terminate the old node, repeat
-   (updateConfig: how many nodes at once, as maxUnavailable or maxUnavailablePercentage)
+   (updateConfig: how many nodes at once, as maxUnavailable or maxUnavailablePercentage;
+    default 1 node)
 ```
+
+That is the **default** update strategy: new nodes before old ones are removed, so capacity never drops. A **minimal** strategy removes old nodes first, for when spare capacity (for example GPUs) is unaffordable. Either way, EKS publishes patched AMIs but **you start the update**.
 
 Students met PDBs in [Lab 08 Step 12](../Lab/Lab-08-EKS-scaling.md#step-12-a-poddisruptionbudget-and-what-it-does-not-protect-against): a PDB limits **voluntary evictions**, and a drain is voluntary. Today's twist is what that does to an upgrade.
 
@@ -285,7 +292,7 @@ Students met PDBs in [Lab 08 Step 12](../Lab/Lab-08-EKS-scaling.md#step-12-a-pod
     The enrolment API runs **3 replicas** with a PDB of `minAvailable: 3`. The team starts a managed node group upgrade on Friday afternoon. What happens?
 
 ???+ answer "Expected response"
-    The PDB allows **zero** disruptions. The drain asks to evict an enrolment Pod and is refused, again and again, so the old node never empties and the update eventually **times out**. The upgrade is blocked by the team's own safety rule. Fix: keep `minAvailable` below the replica count, or use `maxUnavailable: 1`; check `kubectl get pdb -A` and the `ALLOWED DISRUPTIONS` column before upgrading. The force option ignores PDBs: an emergency escape, not a fix, and using it routinely means PDBs protect nothing.
+    The PDB allows **zero** disruptions. The drain asks to evict an enrolment Pod and is refused, again and again, so the old node never empties; after 15 minutes the update **fails with a `PodEvictionFailure` error**. The upgrade is blocked by the team's own safety rule. Fix: keep `minAvailable` below the replica count, or use `maxUnavailable: 1`; check `kubectl get pdb -A` and the `ALLOWED DISRUPTIONS` column before upgrading. The force option ignores PDBs: an emergency escape, not a fix, and using it routinely means PDBs protect nothing.
 
 !!! prompt "Analogy: the fire-drill rule"
     A PDB is like a rule that a ward must always keep a minimum number of nurses on the floor. During a building evacuation drill (a drain), nurses leave one by one only while the minimum still holds. If the rule says "all three nurses must stay", the drill can never finish.
@@ -307,7 +314,7 @@ Add-ons are **data plane software**: they run as Pods and must match the control
 
 Three rules:
 
-1. **Upgrade order:** control plane, then add-ons, then nodes. Skipping the middle step gives networking or DNS failures.
+1. **Upgrade order:** control plane first (the cluster-level steps are in [3.2](../unit3/topic2.md#creating-and-managing-eks-clusters)). EKS add-ons are not upgraded automatically: move each to a version compatible with the new control plane, or networking and DNS fail. AWS's guides list add-ons and nodes in different orders; both are acceptable.
 2. **Pin versions in IaC** so updates are deliberate.
 3. **Give each add-on its own IAM role** (IRSA or Pod Identity). The EBS CSI driver creates volumes and the VPC CNI manages network interfaces; putting those permissions on the node role hands them to **every Pod on the node**.
 
@@ -463,7 +470,7 @@ metrics-server-54fd9b65b-klmno            1/1     Running   usms-eks-cluster-ag1
 
     On real EKS, `aws eks list-addons` returns entries such as `vpc-cni`, `coredns`, `kube-proxy` and `eks-pod-identity-agent`, each with a version you pin, and `aws eks describe-addon` reports its health. The shared cluster's Add-ons tab showed exactly that.
 
-    Take away the jobs: something must give Pods IPs, resolve Service names and route Service IPs. On EKS those are versioned add-ons you update between the control plane and the nodes.
+    Take away the jobs: something must give Pods IPs, resolve Service names and route Service IPs. On EKS those are versioned add-ons you update deliberately after every control plane upgrade.
 
 *Why question:* CoreDNS runs on Floci even though the add-on list is empty. What does that tell you about the difference between "the component exists" and "it is an EKS add-on"?
 
@@ -574,7 +581,7 @@ portal-7c9d8f6b5d-r4mvn   1/1     Running   usms-eks-cluster-ag0
     A managed node group upgrade cordons the node hosting two `portal` Pods and starts draining it. Describe exactly what happens to the drain, the upgrade and the `portal` Pods.
 
 ???+ answer "Expected response"
-    The drain asks the eviction API to remove a `portal` Pod; the PDB refuses (`ALLOWED DISRUPTIONS: 0`). The drain retries, the old node never empties, and the node group update eventually times out. The `portal` Pods keep running; it is the upgrade that is stuck.
+    The drain asks the eviction API to remove a `portal` Pod; the PDB refuses (`ALLOWED DISRUPTIONS: 0`). The drain retries, the old node never empties, and after 15 minutes the node group update fails with `PodEvictionFailure`. The `portal` Pods keep running; it is the upgrade that is stuck.
 
 Optional proof, if time allows (it touches only namespace `u3t3`): ask the eviction API, the same API a drain uses, to evict one `portal` Pod.
 
@@ -671,7 +678,9 @@ If you ran the optional eviction, run the same `kubectl create --raw` command ag
 | Managed node groups | Still EC2. EKS handles AMIs, the Auto Scaling group, replacement and rolling cordon-and-drain updates |
 | PDBs | Protect availability during drains, but zero slack blocks upgrades |
 | Spot | Several instance types, tolerant workloads, On-Demand base, multiple AZs |
-| Add-ons | Pin versions, own IAM roles, update between control plane and nodes |
+| Add-ons | Pin versions, own IAM roles; not upgraded automatically, so update them after every control plane upgrade |
+
+**Left as reading** in the notes, not taught today: Karpenter and EKS Auto Mode, operators, launch templates and IMDS settings, node hardening, and the cost and monitoring tables in [Operating it](../unit3/topic3.md#operating-it-performance-cost-and-monitoring){ .notes-link target="_blank" }.
 
 **Clean-up (6 minutes).**
 
@@ -707,7 +716,7 @@ Expected: the namespace is `Terminating` and then `NotFound`; the `usms` Deploym
 ## Quiz { data-minutes="30" }
 
 !!! quiz "ClassLegend quiz: 3.3 Amazon EKS Advanced Concepts"
-    Bank of 117 questions in `private/quizzes/unit3-topic3.questions.md` covering the compute-management spectrum, Fargate profiles and selectors, Fargate limitations and billing, managed node groups and AMIs, rolling upgrades with cordon, drain and `updateConfig`, PodDisruptionBudgets, Spot and multi-AZ design, EKS add-ons, choosing Fargate or node groups per workload, and the console and Floci CLI steps from this lesson. Run as many as fit about 25 minutes, then spend 5 minutes reviewing the most-missed questions.
+    Bank of 122 questions in `private/quizzes/unit3-topic3.questions.md` covering the compute-management spectrum, Fargate profiles and selectors, Fargate limitations and billing, managed node groups, AMIs and node auto repair, rolling upgrades with cordon, drain, `updateConfig` and update strategies, PodDisruptionBudgets, Spot and multi-AZ design, EKS add-ons, choosing Fargate or node groups per workload, and the console and Floci CLI steps from this lesson. Run as many as fit about 25 minutes, then spend 5 minutes reviewing the most-missed questions.
 
 ---
 

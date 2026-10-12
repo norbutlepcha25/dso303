@@ -17,7 +17,7 @@ One small Amazon EKS cluster, created by the teacher before each Unit 3 lecture 
 
 ## Before class: create the cluster
 
-**Step 1: Open EKS.** Console, then **Elastic Kubernetes Service**, then **Create cluster**. Choose **Custom configuration** (not Quick configuration with EKS Auto Mode), so the cluster shows managed node groups and add-ons the way the notes describe them.
+**Step 1: Open EKS.** Console, then **Elastic Kubernetes Service**, then **Create cluster**. Choose **Custom configuration** (not Quick configuration), then switch **Use EKS Auto Mode** off, so the cluster shows managed node groups and add-ons the way the notes describe them.
 
 **Step 2: Configure the cluster.**
 
@@ -34,7 +34,7 @@ One small Amazon EKS cluster, created by the teacher before each Unit 3 lecture 
 
 **Step 4: Observability.** Leave defaults. Control plane logging off keeps cost down for a teaching cluster.
 
-**Step 5: Add-ons.** Keep the defaults: Amazon VPC CNI, CoreDNS, `kube-proxy`, EKS Pod Identity Agent. Default versions are fine.
+**Step 5: Add-ons.** Keep the defaults (Amazon VPC CNI, CoreDNS, `kube-proxy`) and also tick **EKS Pod Identity Agent**, which 3.1 uses to show workload identity. Default versions are fine.
 
 **Step 6: Review and create.** Wait until the status is **Active** (about 10–15 minutes).
 

@@ -54,6 +54,15 @@ Kubernetes is **declarative**: you say *what* should be true ("three replicas of
 
 **Decisions at creation.** Kubernetes version, Region, VPC and subnets (at least two AZs), endpoint access, authentication mode, compute model, IAM roles, add-ons, and logging. Most were explained in [3.1 Configuration Options](topic1.md#configuration-options).
 
+**Quick or custom configuration.** The console's **Create cluster** page offers two paths:
+
+| Console option | What it does | When to use it |
+|---|---|---|
+| **Quick configuration (with EKS Auto Mode)** | Asks for a name, version, roles and VPC, then creates an **Auto Mode** cluster: AWS launches and manages the nodes, networking, storage and load balancing ([3.1 compute models](topic1.md#worker-nodes-data-plane-options)) | You want a working cluster with the fewest decisions |
+| **Custom configuration** | Every setting is shown. The **Use EKS Auto Mode** switch is on by default; turn it off to build the cluster from managed node groups and add-ons yourself | You need control, or (as in this course) you want to see each building block |
+
+This course uses **Custom configuration with Auto Mode switched off**, so the node group and add-ons below are visible and can be inspected. The `eksctl` equivalent of Auto Mode is `eksctl create cluster --name <name> --enable-auto-mode`, or `autoModeConfig: enabled: true` in a `ClusterConfig` file.
+
 <figure markdown="span">
     ![Creating a cluster](../img/U3/t2/creatingcluster.png){width="80%"}
     <figcaption>Creating a cluster</figcaption>
@@ -61,7 +70,7 @@ Kubernetes is **declarative**: you say *what* should be true ("three replicas of
 </figure>
 
 !!! warning "`CreateCluster` makes the control plane only"
-    A brand-new cluster has an API server and **no nodes**. Only the identity that created it can log in until more access entries are added.
+    Without Auto Mode, a brand-new cluster has an API server and **no nodes**. By default only the identity that created it (bootstrap cluster administrator access) can log in until more access entries are added. With Auto Mode, AWS takes over most of stages 4 to 6 below (Pod networking, DNS, nodes and load balancing) and launches nodes when Pods need them.
 
 **Build order, and what breaks if a stage is missing:**
 
@@ -81,13 +90,16 @@ Subnets for load balancers need discovery tags: `kubernetes.io/role/elb` (public
 
 **Cluster lifecycle.** Create → configure → deploy workloads → monitor → upgrade → maintain nodes → manage access → scale → delete.
 
-**Upgrading, at a high level.** Versions are supported for a limited time ([3.1](topic1.md#the-eks-control-plane)), so upgrades are recurring. They go **one minor version at a time** in this order, because nodes may run behind the control plane but never ahead of it:
+**Upgrading, at a high level.** Versions are supported for a limited time ([3.1](topic1.md#the-eks-control-plane)), so upgrades are recurring. They go **one minor version at a time**, and the **control plane always goes first**, because nodes may run behind the control plane (up to three minor versions) but never ahead of it. AWS's upgrade best-practices guide uses this order:
 
-1. **Control plane** (for example 1.30 → 1.31).
-2. **Add-ons** (VPC CNI, CoreDNS, `kube-proxy`) to versions matching the new control plane.
-3. **Nodes**, replaced with new ones via a rolling update (cordon, drain, PodDisruptionBudgets, see [3.3](topic3.md#eks-managed-node-groups)).
+1. **Control plane** (for example 1.36 → 1.37). In the console this is the cluster's **Upgrade now** action.
+2. **Add-ons** (VPC CNI, CoreDNS, `kube-proxy`) to versions compatible with the new control plane. A control plane upgrade does not upgrade them for you.
+3. **Nodes**, replaced with new ones via a rolling update (cordon, drain, PodDisruptionBudgets, see [3.3](topic3.md#eks-managed-node-groups)). Managed node groups are not upgraded automatically; Auto Mode nodes are.
 
-Before upgrading, check manifests for APIs removed in the target version, and rehearse in non-production first. Upgrades cannot be rolled back.
+The EKS User Guide lists nodes before add-ons; either is acceptable as long as the control plane is first and every add-on version is compatible with both. Before upgrading, check the console's **Upgrade insights** tab and your manifests for APIs removed in the target version, and rehearse in non-production first.
+
+!!! note "Treat an upgrade as a one-way door"
+    Since July 2026, EKS can roll a control plane back to the **previous** minor version, but only **within 7 days** of the upgrade, and you must first roll back any managed node groups you already upgraded (and any incompatible add-ons) yourself. It is a safety net for a bad week, not a substitute for testing.
 
 ### Deploying applications using kubectl and eksctl
 
@@ -104,7 +116,7 @@ Before upgrading, check manifests for APIs removed in the target version, and re
 
 **`eksctl`** generates CloudFormation stacks for the cluster, VPC and node groups, and creates IAM roles, add-ons and access in the correct order.
 
-For anything beyond a lab, put the definition in a `ClusterConfig` YAML file (`eksctl create cluster -f cluster.yaml`) so it is reviewable in Git. Production teams usually use their standard IaC tool instead ([5.3](../unit5/topic3.md)).
+For anything beyond a lab, put the definition in a `ClusterConfig` YAML file (`eksctl create cluster -f cluster.yaml`) so it is reviewable in Git. `eksctl upgrade cluster` performs the control plane step of an upgrade. Production teams usually use their standard IaC tool instead ([5.3](../unit5/topic3.md)).
 
 **Connecting `kubectl` to the cluster:**
 
@@ -117,18 +129,20 @@ kubectl get nodes                 # nodes should show STATUS Ready
 This writes a **context** into `~/.kube/config`: the endpoint, its certificate, and a command (`aws eks get-token`) that fetches a short-lived token before each request. No password is stored; your cluster identity is whichever AWS identity is active.
 
 !!! danger "Check the context before every change"
-    `kubectl` acts on the current context. The costliest Kubernetes mistakes are commands run against the wrong cluster. Give production contexts clearly different names.
+    `kubectl` acts on the current context. The costliest Kubernetes mistakes are commands run against the wrong cluster. A context can also set a **default namespace**, and a command without `-n` acts there. Give production contexts clearly different names.
 
 **Essential `kubectl` commands:**
 
 | Command | Purpose |
 |---|---|
+| `kubectl config get-contexts` / `use-context <name>` | List contexts (current one starred) / switch context |
 | `kubectl apply -f deployment.yaml` | Create or update objects from a file |
 | `kubectl get pods -o wide` | List Pods with node and IP |
 | `kubectl get deploy,svc` | List Deployments and Services |
 | `kubectl describe pod <name>` | Detailed state and **events**: the most useful diagnostic |
 | `kubectl logs <pod> --previous` | Output of the crashed container |
 | `kubectl rollout status deployment/<name>` | Wait until a rollout really finishes |
+| `kubectl rollout history deployment/<name>` | List revisions (an undo re-uses an old ReplicaSet as a new revision number) |
 | `kubectl rollout undo deployment/<name>` | Return to the previous revision |
 | `kubectl exec -it <pod> -- sh` | Shell inside a running container |
 | `kubectl port-forward svc/<name> 8080:80` | Reach an internal Service from your machine |
@@ -293,7 +307,7 @@ helm rollback portal 2
 helm template portal ./student-portal-chart -f values-prod.yaml
 ```
 
-Most third-party software (monitoring stacks, the AWS Load Balancer Controller) is installed with Helm.
+Most third-party software (monitoring stacks, the AWS Load Balancer Controller) is installed with Helm. These commands are unchanged in **Helm 4**, the current major version; it renamed a few flags (for example `--atomic` is now `--rollback-on-failure`) and uses server-side apply for new installs.
 
 !!! warning "Common Helm pitfalls"
     Quote number-like values (`tag: "1.10"`), because unquoted `1.10` becomes `1.1`. Use committed values files instead of `--set`, which leaves no record. Run `helm template` before upgrading to catch errors early.
@@ -443,7 +457,7 @@ Useful alarms: a Deployment that stops progressing, sustained Pod restarts, risi
 | Mistake | Consequence | Remedy |
 |---|---|---|
 | Pipeline with cluster-admin credentials | One compromised build controls the cluster | Scope pipeline access tightly |
-| Upgrading without checking removed APIs | Workloads break after a one-way upgrade | Scan manifests; upgrade non-production first |
+| Upgrading without checking removed APIs | Workloads break; rollback is only possible for 7 days and only one version back | Check Upgrade insights and manifests; upgrade non-production first |
 | Mixing `eksctl` and Terraform on one cluster | Conflicting state, hidden stacks | One provisioning tool per cluster |
 | `--set` in automation | Real config hidden in a pipeline script | Committed values files |
 | Assuming a stalled rollout recovers | Stays failed | `rollout status` + `rollout undo` in the pipeline |
@@ -468,7 +482,7 @@ Deploying on EKS is a layered process:
 | Requests schedule, memory limits kill, CPU limits throttle | A few fields decide behaviour |
 | Readiness controls traffic; liveness controls restarts | Wrong probe design causes outages |
 | Kubernetes does not roll back for you | Always check `rollout status`; be ready to undo |
-| Upgrade order: control plane → add-ons → nodes | Nodes never run ahead of the control plane |
+| Upgrade the control plane first, then add-ons and nodes | Nodes never run ahead of the control plane |
 
 **Next:** this topic treated "the nodes" as a given. [3.3](topic3.md) looks at the data plane options in depth: Fargate profiles, managed node groups and add-ons.
 

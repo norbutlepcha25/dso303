@@ -132,13 +132,13 @@ If you studied ECS in Unit 2, this mapping is the quickest way in:
 
 Key facts:
 
-- **Availability.** Components are spread ==across multiple Availability Zones== and replaced automatically when unhealthy.
-- **Pricing.** A flat fee ==per cluster per hour== (indicatively USD 0.10 per hour in standard support, about USD 0.60 in extended support), regardless of cluster size.
-- **Scaling.** AWS scales the control plane with load; there is no setting.
-- **Limits.** No direct `etcd` access. Upgrades go one minor version at a time and are effectively one-way. The VPC, control plane subnets and IP family are fixed at creation.
+- **Availability.** Components are spread **across multiple Availability Zones** and replaced automatically when unhealthy.
+- **Pricing.** A flat fee **per cluster per hour** (USD 0.10 per hour in standard support, USD 0.60 in extended support at the time of writing), regardless of how many nodes or Pods the cluster runs.
+- **Scaling.** By default AWS monitors and scales the control plane with load; there is no setting. Very large clusters can instead buy a fixed, larger capacity tier (**Provisioned Control Plane**, extra hourly fee); this module uses the default.
+- **Limits.** No direct `etcd` access. Upgrades go one minor version at a time; a rollback to the previous minor version is possible only within 7 days of an in-place upgrade, so treat upgrades as one-way in practice. The VPC and IP family are fixed at creation; control plane subnets can be swapped later only within the original Availability Zones.
 
 !!! warning "Upgrades are a yearly obligation"
-    Each Kubernetes version gets about 14 months of **standard support**, then about 12 months of **extended support** at roughly six times the control plane price. Plan an annual upgrade (process covered in [3.2](topic2.md#creating-and-managing-eks-clusters)).
+    Each Kubernetes version gets 14 months of **standard support**, then 12 months of **extended support** at six times the control plane price. The cluster's **upgrade policy** (console: *Support type*) decides what happens at the end of standard support: `EXTENDED` (the default) moves the cluster into paid extended support; `STANDARD` has AWS auto-upgrade the control plane instead. After extended support ends, the control plane is upgraded automatically; nodes and add-ons are not. Plan an annual upgrade (process covered in [3.2](topic2.md#creating-and-managing-eks-clusters)).
 
 #### Worker nodes: data plane options
 
@@ -216,7 +216,7 @@ Pods are replaced often, so their IPs change. Other Pods reach them through a **
 |---|---|---|
 | `ClusterIP` | Internal virtual IP | Default; service-to-service traffic |
 | `NodePort` | A port on every node | Rarely used directly |
-| `LoadBalancer` | An AWS load balancer (NLB) | Expose one Service externally |
+| `LoadBalancer` | An NLB, when the AWS Load Balancer Controller (or Auto Mode) handles it; the legacy in-tree controller creates a Classic Load Balancer | Expose one Service externally |
 | **Ingress** (not a Service type) | An ALB | HTTP routing for many Services behind one load balancer |
 
 #### The AWS Load Balancer Controller
@@ -293,11 +293,11 @@ A Pod that writes to S3 needs AWS credentials. Three options:
 Both IRSA and Pod Identity give **temporary, auto-rotated credentials**, so no access key is stored in the container. Apply **least privilege**: each workload gets only what it needs.
 
 !!! danger "Block Pods from the node role"
-    Even with Pod Identity, a Pod can reach the node's role through the instance metadata service (IMDS). Require **IMDSv2 with a hop limit of 1** on nodes. You need both settings together.
+    Even with Pod Identity, a Pod can reach the node's role through the instance metadata service (IMDS). Require **IMDSv2 with a hop limit of 1** on nodes (set it in the node group's launch template: nodes built by `eksctl` or the EKS CloudFormation templates default to a hop limit of 2). You need per-Pod identity and the hop limit together. Pods with `hostNetwork: true` can always reach IMDS.
 
 #### Secrets
 
-Kubernetes Secrets are **base64-encoded, not encrypted**. Enable **envelope encryption with AWS KMS** for `etcd`, and use **AWS Secrets Manager** (with the Secrets Store CSI Driver) for credentials that rotate. Never delete the KMS key: every Secret would become unreadable.
+A Kubernetes Secret is **base64-encoded, not encrypted**, in the API: anyone allowed to read the Secret sees the value, so restrict `get` on Secrets with RBAC. At rest, EKS (Kubernetes 1.28 and later) **envelope-encrypts all Kubernetes API data in `etcd` by default** with an AWS-owned KMS key; you can supply your own **customer managed KMS key** for control and audit. Use **AWS Secrets Manager** (with the Secrets Store CSI Driver) for credentials that rotate. If you use your own key, never delete or disable it: the API server can no longer decrypt cluster data and the cluster becomes unrecoverable.
 
 ## Architecture Components
 
@@ -315,7 +315,7 @@ Kubernetes Secrets are **base64-encoded, not encrypted**. Enable **envelope encr
 | **AWS Load Balancer Controller** | Creates ALBs for Ingress and NLBs for Services |
 | **Access entries** | Map IAM principals to Kubernetes permissions |
 | **Pod Identity Agent / OIDC provider** | Enable per-Pod IAM roles |
-| **AWS KMS** | Envelope encryption of Secrets |
+| **AWS KMS** | Envelope encryption of Kubernetes API data, including Secrets |
 | **CloudWatch Logs and CloudTrail** | Control plane logs and audit of EKS API calls |
 
 Think of these in three groups:
@@ -337,7 +337,8 @@ Think of these in three groups:
 | **`kubelet`** | Node agent that registers the node and runs Pods |
 | **`kube-proxy`** | Implements Service virtual IPs on each node |
 | **Reconciliation** | Continuous loop making actual state match desired state |
-| **Standard / extended support** | About 14 months at base price / about 12 more months at a higher price |
+| **Standard / extended support** | 14 months at base price / 12 more months at a higher price |
+| **Upgrade policy** | `EXTENDED` (default) or `STANDARD`: whether a cluster enters extended support or is auto-upgraded |
 | **Amazon VPC CNI** | Network plugin giving Pods real VPC IPs |
 | **ENI** | Elastic network interface; Pod IPs are secondary addresses on it |
 | **ClusterIP** | Internal virtual address of a Service |
@@ -350,7 +351,7 @@ Think of these in three groups:
 | **IRSA** | IAM Roles for Service Accounts, using OIDC federation |
 | **EKS Pod Identity** | Newer per-Pod IAM mechanism using an agent add-on |
 | **IMDSv2 hop limit** | Setting of 1 stops containers reaching the node's metadata service |
-| **Envelope encryption** | KMS-backed encryption of Kubernetes Secrets |
+| **Envelope encryption** | KMS-backed encryption of Kubernetes API data in `etcd`; on by default (AWS-owned key) for 1.28 and later |
 | **NetworkPolicy** | Kubernetes rules controlling Pod-to-Pod traffic |
 
 ## Configuration Options
@@ -358,9 +359,10 @@ Think of these in three groups:
 | Setting | Options | Recommendation |
 |---|---|---|
 | **Kubernetes version** | Supported minor versions | Stay in standard support |
+| **Upgrade policy (Support type)** | Extended (default), Standard | Standard if you want no extended-support charges and accept auto-upgrades |
 | **Endpoint access** | Public, public and private, private | Public and private with a CIDR allow-list |
-| **Authentication mode** | `CONFIG_MAP`, `API_AND_CONFIG_MAP`, `API` | `API` (access entries) for new clusters |
-| **Secrets encryption** | None or a KMS key | Enable; protect the key from deletion |
+| **Authentication mode** | `CONFIG_MAP`, `API_AND_CONFIG_MAP`, `API` | `API` (access entries) for new clusters; the `aws-auth` ConfigMap is deprecated |
+| **Secrets encryption** | AWS-owned key (default) or your own KMS key | Own key where audit or key control is required; protect it from deletion |
 | **Control plane logging** | `api`, `audit`, `authenticator`, `controllerManager`, `scheduler` | At least `audit` and `authenticator` |
 | **IP family** | IPv4 or IPv6 | IPv4 unless there is a strong reason |
 | **Subnets** | At least two AZs | Three private subnets, sized for Pod count |
@@ -371,7 +373,7 @@ Think of these in three groups:
 Node group settings (capacity type, labels, taints) are covered in [3.3](topic3.md#configuration-options).
 
 !!! warning "Some settings can never change"
-    The IP family, VPC and control plane subnets are fixed at creation. Changing them means building a new cluster and migrating.
+    The IP family and VPC are fixed at creation, and replacement control plane subnets must stay in the original Availability Zones. Changing these means building a new cluster and migrating.
 
 ## Design Considerations
 
@@ -412,7 +414,7 @@ flowchart TD
 | Pillar | Practice |
 |---|---|
 | **Operational Excellence** | Define clusters and add-ons as code ([5.3](../unit5/topic3.md)); enable control plane logging before you need it |
-| **Security** | Access entries with least privilege; one IAM role per workload; IMDSv2 hop limit 1; private nodes; KMS for Secrets |
+| **Security** | Access entries with least privilege; one IAM role per workload; IMDSv2 hop limit 1; private nodes; RBAC on Secrets |
 | **Reliability** | Three AZs; at least two replicas of important services; health probes and PDBs (see [3.2](topic2.md)) |
 | **Performance Efficiency** | IP-mode targets; instance types that fit workload and Pod density |
 | **Cost Optimization** | Stay in standard support; avoid many small clusters; share one ALB via Ingress |
@@ -498,7 +500,7 @@ The diagram shows three flows:
 
 - **Kubernetes is big.** EKS does not shrink the concept count; first production deployment takes longer than on ECS.
 - **"Managed" covers half the cluster.** You still keep nodes, add-ons and controllers current.
-- **Upgrades never stop.** Roughly yearly, one minor version at a time, one-way.
+- **Upgrades never stop.** Roughly yearly, one minor version at a time, with only a 7-day rollback window.
 - **IP planning is a hard limit.** Out of subnet IPs means no new Pods.
 - **Per-cluster fee** pushes towards shared clusters and shared blast radius.
 - **The control-plane-to-VPC path can break.** Security group changes can stop webhooks, `kubectl logs` and `kubectl exec`.
@@ -526,7 +528,7 @@ The diagram shows three flows:
 | Falling into extended support | Several times the control plane price | Annual upgrade rehearsed in non-production |
 | Private-only endpoint with no access path | Engineers and CI/CD locked out | VPN, bastion or in-VPC runners first |
 | Not monitoring free IPs | Scale-out fails without warning | Alarm on free subnet addresses |
-| Deleting the Secrets KMS key | All Secrets unreadable | Protect the key from deletion |
+| Deleting the cluster's customer managed KMS key | Cluster data unreadable; cluster unrecoverable | Protect the key from deletion and disablement |
 
 ## Summary
 

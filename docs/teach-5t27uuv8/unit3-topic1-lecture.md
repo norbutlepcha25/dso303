@@ -51,6 +51,8 @@
 
 [3.1 Definition](../unit3/topic1.md#definition){ .notes-link target="_blank" }
 [3.1 Why a managed Kubernetes service](../unit3/topic1.md#why-a-managed-kubernetes-service){ .notes-link target="_blank" }
+[3.1 EKS or ECS?](../unit3/topic1.md#eks-or-ecs){ .notes-link target="_blank" }
+[3.1 Kubernetes objects compared with ECS](../unit3/topic1.md#kubernetes-objects-compared-with-ecs){ .notes-link target="_blank" }
 
 !!! prompt "Three tickets, one morning"
     USMS moved the student portal from ECS to Amazon EKS last month. On results day, three tickets arrive within an hour:
@@ -74,6 +76,7 @@
 4. Which component stores all cluster state, and which is the only component that talks to it?
 5. What does the `kubelet` do?
 6. What is reconciliation?
+7. In Unit 2's ECS terms, what is a Pod, and which two Kubernetes objects together do the job of one ECS service?
 
 ???+ answer "Expected answers"
     1. A node is compute capacity; a Pod is the smallest workload unit, scheduled **onto** a node.
@@ -82,6 +85,7 @@
     4. `etcd` stores state; only `kube-apiserver` talks to it.
     5. The node agent: registers the node and starts the Pod's containers through the runtime (`containerd`).
     6. The continuous loop that compares desired state with actual state and corrects the difference.
+    7. A Pod is roughly an ECS task; a Deployment (keep N replicas running) plus a Service (stable address) replace one ECS service. Close with one sentence from the notes: choose EKS for the Kubernetes ecosystem and portability; if neither matters, ECS reaches the same outcome with fewer concepts.
 
 !!! teacher "Transition"
     "You know how Kubernetes works. Today is about what AWS does to it: where the cluster is split in half, and what that split costs you."
@@ -148,7 +152,7 @@ Many CNI plugins give Pods addresses from an overlay network. The **Amazon VPC C
 | Public and private | Allow-listed internet plus the VPC; nodes stay internal | Common production choice |
 | Private only | Only from inside the VPC or a connected network | Regulated environments |
 
-A typical layout puts nodes and Pods in **private subnets**, internet-facing load balancers in **public subnets**, with NAT gateways and VPC endpoints for outbound access. EKS requires subnets in **at least two AZs**. The goal is not "many nodes" but **surviving the loss of a whole AZ**, so spread nodes and replicas across zones (and remember cross-AZ traffic is billed). The VPC, control plane subnets and IP family are **fixed at creation**.
+A typical layout puts nodes and Pods in **private subnets**, internet-facing load balancers in **public subnets**, with NAT gateways and VPC endpoints for outbound access. EKS requires subnets in **at least two AZs**. The goal is not "many nodes" but **surviving the loss of a whole AZ**, so spread nodes and replicas across zones (and remember cross-AZ traffic is billed). The VPC and IP family are **fixed at creation** (control plane subnets can later be swapped only within the same AZs).
 
 !!! prompt "What would break if..."
     ...the USMS platform team switched the endpoint to **private only** on Friday afternoon, and the CI/CD pipeline runs on a hosted runner on the internet?
@@ -183,7 +187,7 @@ A typical layout puts nodes and Pods in **private subnets**, internet-facing loa
 
 > Why does the cluster need a security group of its own when the control plane is not in our VPC? (Answer: it governs traffic between the control plane's cross-account ENIs and the nodes.)
 
-**Step 3: Add-ons.** Find **Amazon VPC CNI**, **CoreDNS**, **kube-proxy** and **Amazon EKS Pod Identity Agent**, each with a version.
+**Step 3: Add-ons.** Find **Amazon VPC CNI**, **CoreDNS** and **kube-proxy** (installed by default) and **Amazon EKS Pod Identity Agent** (selected when the shared cluster was created), each with a version. The console may list further add-ons it pre-selected; note them, but these four are today's focus.
 
 > These run on our nodes, not in AWS's account. Why are they listed in the EKS console at all? (Answer: they are data-plane components that EKS can manage as add-ons, but you are responsible for keeping them current.)
 
@@ -197,22 +201,25 @@ A typical layout puts nodes and Pods in **private subnets**, internet-facing loa
 
 > Why are the Pod IPs in the same range as the node IPs? (Answer: the VPC CNI assigns each Pod a secondary IP from the node's subnet. On an overlay network they would come from a separate Pod CIDR.)
 
-**Step 7: The Create cluster wizard (do not create).** In your own console: **Elastic Kubernetes Service**, **Create cluster**, choose **Custom configuration**. Click **Next** through each page and, for each field, name the concept it controls. Stop on the **Review and create** page.
+**Step 7: The Create cluster wizard (do not create).** In your own console: **Elastic Kubernetes Service**, **Create cluster** (in some consoles **Add cluster**, then **Create**). Under **Configuration options** choose **Custom configuration**, then switch **Use EKS Auto Mode** off, so the wizard shows the classic settings the notes describe. Click **Next** through each page and, for each field, name the concept it controls. Stop on the **Review and create** page.
 
-| Wizard field (labels may vary slightly) | Concept it controls |
+| Wizard page and field (labels may vary slightly) | Concept it controls |
 |---|---|
-| Name, Kubernetes version | The version starts the yearly upgrade clock: about 14 months standard support, then about 12 months extended at a higher price |
-| Cluster IAM role | The role EKS uses to manage ENIs, load balancers and logs for you (Learner Lab: `LabRole`) |
-| Cluster access: bootstrap admin, authentication mode | Who is admin on day one; access entries (`EKS API`) versus the legacy ConfigMap |
-| Secrets encryption | KMS envelope encryption of Secrets in `etcd` |
-| VPC, subnets, security groups | Where the cross-account ENIs and nodes go; at least two AZs; fixed at creation |
-| IP family | IPv4 or IPv6; fixed at creation |
-| Cluster endpoint access | Public, public and private, or private |
-| Observability (control plane logging) | `api`, `audit`, `authenticator`, `controllerManager`, `scheduler` logs |
-| Add-ons | VPC CNI, CoreDNS, `kube-proxy`, Pod Identity Agent |
+| Configure cluster: Name, Kubernetes version | The version starts the upgrade clock: 14 months standard support, then 12 months extended at a higher price |
+| Configure cluster: Support type (upgrade policy) | Extended support (default, extra hourly charge) or Standard support (AWS auto-upgrades at the end of standard support) |
+| Configure cluster: Cluster IAM role | The role EKS uses to manage ENIs, load balancers and logs for you (Learner Lab: `LabRole`) |
+| Configure cluster: Cluster access (bootstrap cluster administrator access, cluster authentication mode) | Who is admin on day one; access entries (`EKS API`) versus the deprecated `aws-auth` ConfigMap |
+| Configure cluster: Secrets encryption | Optional customer managed KMS key; without it, EKS still envelope-encrypts `etcd` data with an AWS-owned key |
+| Specify networking: VPC, Subnets, Security groups | Where the cross-account ENIs go; at least two AZs; the VPC is fixed at creation |
+| Specify networking: cluster IP address family | IPv4 or IPv6; fixed at creation |
+| Specify networking: Cluster endpoint access | Public, public and private, or private |
+| Configure observability: Control plane logging | `api`, `audit`, `authenticator`, `controllerManager`, `scheduler` logs (all off by default) |
+| Select add-ons | VPC CNI, CoreDNS and `kube-proxy` by default; Pod Identity Agent and others optional |
+
+Leave any other fields (for example ARC zonal shift, Service IP range, control plane egress, Prometheus metrics) at their defaults; they are beyond this lecture.
 
 !!! warning "Stop at Review"
-    Do **not** click **Create**. Do **not** click any "Create recommended role" button: it creates a real IAM role. If the Cluster IAM role list is empty and **Next** is disabled, follow the remaining pages on the teacher's screen. Leaving the wizard creates nothing.
+    Do **not** click **Create**. Do **not** click any "Create recommended role" button (or **Customize** where the console offers to create the role for you): it creates a real IAM role. If the Cluster IAM role list is empty and **Next** is disabled, follow the remaining pages on the teacher's screen. Leaving the wizard creates nothing.
 
 !!! teacher "If anything did get created"
     If a student created any resource by accident, it must be tagged `Course=DSO303`, `Session=u3t1`, named with the prefix `dso303-u3t1-<initials>`, and deleted in Recap and clean-up.
@@ -247,7 +254,7 @@ A typical layout puts nodes and Pods in **private subnets**, internet-facing loa
 |---|---|---|
 | `ClusterIP` | Internal virtual IP | Default; service-to-service |
 | `NodePort` | A port on every node | Rarely used directly |
-| `LoadBalancer` | An AWS load balancer (NLB) | Expose one Service |
+| `LoadBalancer` | An NLB (with the AWS Load Balancer Controller or Auto Mode) | Expose one Service |
 | Ingress (not a Service type) | An ALB | HTTP routing for many Services behind one load balancer |
 
 The **AWS Load Balancer Controller**, which you install, turns an Ingress into an ALB and an annotated Service into an NLB.
@@ -296,7 +303,7 @@ Both IRSA and Pod Identity give temporary, auto-rotated credentials: no access k
 ???+ answer "Back to ticket 3"
     The `notifications` Pod is using the node's instance role, which someone gave S3 permissions for another workload. Fix: a ServiceAccount associated with a narrowly scoped role through Pod Identity, the S3 permission removed from the node role, and IMDSv2 hop limit 1 so the Pod cannot fall back to the node role.
 
-**Secrets, in one breath.** Kubernetes Secrets are base64-encoded, **not encrypted**. Enable KMS envelope encryption for `etcd`, use Secrets Manager for rotating credentials, and never delete the KMS key: every Secret becomes unreadable.
+**Secrets, in one breath.** A Kubernetes Secret is base64-encoded, **not encrypted**, to anyone allowed to read it, so restrict who can `get` Secrets. At rest, EKS (1.28 and later) envelope-encrypts all `etcd` data with KMS by default; you may bring your own KMS key, and must then never delete it, or the cluster's data becomes unreadable. Use Secrets Manager for rotating credentials.
 
 !!! teacher "Transition"
     "Now the same cluster from the terminal. Your Lab 07 cluster runs on Floci, and part of today's job is spotting where it is a real EKS cluster and where it is only pretending."
@@ -532,6 +539,8 @@ yes
 [3.1 Summary](../unit3/topic1.md#summary){ .notes-link target="_blank" }
 [3.1 Common Mistakes](../unit3/topic1.md#common-mistakes){ .notes-link target="_blank" }
 [3.1 Operating It: Performance, Cost and Monitoring](../unit3/topic1.md#operating-it-performance-cost-and-monitoring){ .notes-link target="_blank" }
+[3.1 Design Considerations](../unit3/topic1.md#design-considerations){ .notes-link target="_blank" }
+[3.1 Security Considerations](../unit3/topic1.md#security-considerations){ .notes-link target="_blank" }
 
 **Key lessons (5 minutes).** Return to the three tickets and ask students to close each one.
 
@@ -542,7 +551,13 @@ yes
 | Traffic | Service + CoreDNS + `kube-proxy`; the Load Balancer Controller creates ALBs and NLBs | |
 | Cluster access | IAM authenticates, the access entry maps, the access policy or RBAC authorises. `Unauthorized` versus `Forbidden` | 2 |
 | Workload identity | Pod Identity on EC2 nodes, IRSA on Fargate, plus IMDSv2 hop limit 1. Never the node role | 3 |
-| Operations | Upgrade yearly, one minor version at a time, or pay for extended support | |
+| Operations | Upgrade yearly, one minor version at a time, or pay for extended support (the default upgrade policy) | |
+
+!!! teacher "Set as reading"
+    Not taught live and not in the quiz (the quiz tests only what was taught in class), but useful before 3.2: **Design Considerations** (the decision flowchart and the two scenarios), **Security Considerations** (admission control, NetworkPolicies versus security groups, supply chain, audit), **AWS Best Practices** and **Integration with Other AWS Services**. Tell students to read them before 3.2.
+
+!!! teacher "Bridge to 3.2"
+    "Today we saw how the cluster is built: who runs what, how Pods get addresses, how people and Pods get permissions. Next lecture we put an application on it: create a cluster with `eksctl`, deploy with manifests and Helm, and roll a release forward and back without downtime."
 
 !!! danger "Read before running any delete command"
     **What will be deleted:** namespace `u3t1` and everything in it (the `portal` Deployment, its Pods and Service).
@@ -577,7 +592,7 @@ yes
 ## Quiz { data-minutes="30" }
 
 !!! quiz "ClassLegend quiz: 3.1 Amazon EKS Architecture"
-    Bank of 118 questions in `private/quizzes/unit3-topic1.questions.md` covering the control-plane / data-plane boundary, cross-account ENIs and the cluster security group, data plane options, the Amazon VPC CNI and IP exhaustion, Services, CoreDNS and `kube-proxy`, the AWS Load Balancer Controller (IP versus instance mode), endpoint access modes, subnets and Availability Zones, IAM authentication versus RBAC authorisation with access entries, EKS Pod Identity versus IRSA and the IMDS hop limit, Secrets, upgrades and support windows, the console tour and wizard, and the Floci CLI comparison. Run as many as fit about 25 minutes, then spend 5 minutes reviewing the most-missed questions.
+    Bank of 121 questions in `private/quizzes/unit3-topic1.questions.md` covering the control-plane / data-plane boundary, cross-account ENIs and the cluster security group, data plane options, the Amazon VPC CNI and IP exhaustion, Services, CoreDNS and `kube-proxy`, the AWS Load Balancer Controller (IP versus instance mode), endpoint access modes, subnets and Availability Zones, IAM authentication versus RBAC authorisation with access entries, EKS Pod Identity versus IRSA and the IMDS hop limit, Secrets, upgrades, support windows and the upgrade policy, the console tour and wizard, and the Floci CLI comparison. Run as many as fit about 25 minutes, then spend 5 minutes reviewing the most-missed questions.
 
 ---
 

@@ -130,6 +130,8 @@
 ???+ answer "Expected response"
     Not broken: **stage 5, the node group, is missing**. `CreateCluster` makes the control plane only. With no nodes, the scheduler has nowhere to place Pods, CoreDNS included. They start as soon as a node group joins. Telling "nowhere to run" from "broken" is a core skill.
 
+**Quick or custom?** The console's **Create cluster** page offers **Quick configuration (with EKS Auto Mode)**, where AWS takes over most of stages 4 to 6 (Pod networking, DNS, nodes and load balancing) and launches nodes on demand, and **Custom configuration**, where the **Use EKS Auto Mode** switch is on by default. Our shared cluster uses Custom configuration with Auto Mode switched **off**, so every stage above is visible on the tabs you will open next. (`eksctl` equivalent: `--enable-auto-mode`.)
+
 ### Which tool does which job
 
 | Tool | Side | Job |
@@ -144,18 +146,20 @@
 
 ### Upgrades: the order matters
 
-Kubernetes versions are supported for a limited time, so upgrades recur. They go **one minor version at a time**, and they cannot be rolled back:
+Kubernetes versions are supported for a limited time, so upgrades recur. They go **one minor version at a time**, control plane first. This is the order in AWS's upgrade best-practices guide:
 
 ```text
-1. Control plane     e.g. 1.30 -> 1.31
-2. Add-ons           VPC CNI, CoreDNS, kube-proxy to versions matching the new control plane
+1. Control plane     e.g. 1.36 -> 1.37 (console: Upgrade now)
+2. Add-ons           VPC CNI, CoreDNS, kube-proxy to versions compatible with the new control plane
 3. Nodes             replaced by new ones in a rolling update (cordon, drain, PodDisruptionBudgets)
 ```
+
+The EKS User Guide lists nodes before add-ons; both work as long as the control plane is first and versions stay compatible.
 
 **Ask the class:** why can nodes never go first?
 
 ???+ answer "Expected response"
-    Nodes may run **behind** the control plane but never **ahead** of it. Upgrading the control plane first keeps that true at every moment. Before starting, check manifests for APIs removed in the target version and rehearse in non-production, because there is no undo.
+    Nodes may run **behind** the control plane (up to three minor versions) but never **ahead** of it. Upgrading the control plane first keeps that true at every moment. Before starting, check the **Upgrade insights** tab and your manifests for APIs removed in the target version, and rehearse in non-production. Since July 2026 EKS can roll the control plane back one version, but only within 7 days and only after rolling back any nodes already upgraded, so treat an upgrade as a one-way door.
 
 !!! teacher "Transition"
     "You will see every one of these stages on a real cluster now: the node group, the access entries, the add-on versions and the workloads."
@@ -230,12 +234,12 @@ Kubernetes versions are supported for a limited time, so upgrades recur. They go
 **Why did that happen?** In an upgrade from one minor version to the next, when do these versions change: before the control plane, between the control plane and the nodes, or after the nodes?
 
 ???+ answer "Expected response"
-    **Between** the control plane and the nodes. Add-ons must match the new control plane, and nodes come last because they must never run ahead of the control plane.
+    **After the control plane, never before.** In AWS's best-practices order they come between the control plane and the nodes; the User Guide lists nodes first. Either works, because what matters is that the control plane leads and every add-on version is compatible with it. A control plane upgrade never updates add-ons for you.
 
-**Step 6 (optional, teacher only): look, do not confirm.** Open the **Add node group** wizard from Compute, or the cluster's upgrade action (labelled along the lines of **Upgrade version** or **Upgrade now**). Show the fields, then **Cancel**.
+**Step 6 (optional, teacher only): look, do not confirm.** Open the **Add node group** wizard from Compute, or the cluster's **Upgrade now** action. Show the fields, then **Cancel**.
 
 !!! danger "Do not confirm either wizard"
-    A new node group starts billable EC2 instances; a control plane upgrade cannot be rolled back. Show the screens, then cancel.
+    A new node group starts billable EC2 instances. A control plane upgrade can be rolled back only within 7 days, and only after rolling back any nodes already upgraded. Show the screens, then cancel.
 
 **Success criteria**
 
@@ -688,7 +692,13 @@ file and cluster agree
 | Requests schedule, memory limits kill, CPU limits throttle | The `portal` Pods with no requests in the console |
 | Readiness controls traffic; liveness controls restarts, and never checks the database | The shop-sign analogy |
 | `apply` means stored, not running; Kubernetes does not roll back for you | `ProgressDeadlineExceeded`, then `rollout undo` |
-| Upgrade order: control plane, then add-ons, then nodes | Add-ons tab |
+| Upgrade the control plane first, then add-ons and nodes | Add-ons tab |
+
+!!! teacher "Left as reading"
+    Point students to these notes sections, which the lecture did not cover in depth: GitOps and CI/CD delivery ([Why This Service or Concept Exists](../unit3/topic2.md#why-this-service-or-concept-exists)), the `Recreate` strategy, replica counts and Secrets handling ([Configuration Options](../unit3/topic2.md#configuration-options)), and rollout monitoring and alarms ([Operating It](../unit3/topic2.md#operating-it-performance-cost-and-monitoring)).
+
+!!! teacher "Bridge to 3.3"
+    "Today we shipped and rolled back releases without asking what the Pods run on. Next lecture looks underneath: Fargate versus managed node groups, which workload belongs where, and how add-ons, node drains and PodDisruptionBudgets keep an upgrade from taking the portal down."
 
 !!! warning "Some Kubernetes objects create AWS resources"
     On EKS, a `LoadBalancer` Service or an Ingress creates a load balancer, and a PersistentVolumeClaim can create an EBS volume. These can outlive the Kubernetes objects and even the cluster, and keep billing. Delete Services, Ingresses and PVCs **before** deleting a cluster, then check the console. Today we used `ClusterIP` only.
@@ -734,7 +744,7 @@ Leave Floci running, or pause it with `./scripts/setup/floci-down.sh` if you are
 ## Quiz { data-minutes="30" }
 
 !!! quiz "ClassLegend quiz: 3.2 Deploying Applications on Amazon EKS"
-    Bank of 118 questions in `private/quizzes/unit3-topic2.questions.md` covering provisioning, packaging and delivery; cluster build order and its failure symptoms; `eksctl` vs `kubectl` vs Helm; kubeconfig contexts and namespaces; the shared-cluster console walk-through (ReplicaSets, Pod events, access entries, requests, add-on versions); manifests, labels and image tags; requests and limits; readiness, liveness and startup probes; rolling updates, `rollout status`, `ProgressDeadlineExceeded` and `rollout undo`; Helm and Kustomize; upgrade order; and cleaning up AWS resources. Run as many as fit about 25 minutes, then spend 5 minutes reviewing the most-missed questions.
+    Bank of 122 questions in `private/quizzes/unit3-topic2.questions.md` covering provisioning, packaging and delivery; cluster build order and its failure symptoms; Quick vs Custom configuration and EKS Auto Mode; `eksctl` vs `kubectl` vs Helm; kubeconfig contexts and namespaces; the shared-cluster console walk-through (ReplicaSets, Pod events, access entries, requests, add-on versions); manifests, labels and image tags; requests and limits; readiness, liveness and startup probes; rolling updates, `rollout status`, `ProgressDeadlineExceeded` and `rollout undo`; Helm and Kustomize; upgrade order, version skew, upgrade insights and version rollback; and cleaning up AWS resources. Run as many as fit about 25 minutes, then spend 5 minutes reviewing the most-missed questions.
 
 ---
 
