@@ -1,169 +1,65 @@
 # Lab 08 - EKS Scaling and Service Exposure
 
-*Practical 4 - making the cluster grow, and letting the world in*
+## 1. Objectives
 
-!!! info "Numbering - the same note as Lab 07"
-    Your module descriptor numbers this practical **3**; the course delivers it as **Practical 4**,
-    in two documents. This is the second. Laboratory numbering follows the dependency graph:
+- Scale a Deployment by hand, by manifest and with an `autoscaling/v2` HorizontalPodAutoscaler, and map the HPA to Lab 6's Application Auto Scaling.
+- Change the managed node group's scaling configuration from the AWS side, and explain why that is a separate control loop.
+- Use requests, QoS classes, a `nodeSelector` and PodDisruptionBudgets, and say what each does and does not protect.
+- Climb the exposure ladder: `port-forward`, `NodePort`, `LoadBalancer`, `Ingress`, and compare Ingress with Lab 5's ALB.
+- Prove the scaling and exposure configuration survives a restart, and save it to `configs/lab-08.env`.
 
-    ```text
-    Practical 2  ->  Lab 04, Lab 05, Lab 06   (ECS, ALB, service auto scaling)
-    Practical 4  ->  Lab 07, Lab 08            (EKS)   <- descriptor Practical 3
-    then         ->  Lab 09 (security), Lab 10 (Lambda), Lab 11-12 (CI/CD), Lab 13 (monitoring)
-    ```
-
----
-
-## 1. Lab Overview
-
-Lab 07 left the USMS application in a deliberately awkward state. Three microservices, all healthy,
-all discoverable by DNS - and completely unreachable from outside the cluster. Nothing you built has
-an external address. If a student opened the portal right now, nothing would answer.
-
-That was not an oversight. Proving service discovery *from inside* first, before adding a front door,
-is what stops the front door from hiding a broken back end.
-
-This laboratory answers the two questions Lab 07 left open, and they turn out to be one question
-asked twice:
-
-```text
-HOW DOES IT GROW?          replicas -> HorizontalPodAutoscaler -> node group -> cluster autoscaler
-HOW DOES ANYONE REACH IT?  ClusterIP -> port-forward -> NodePort -> LoadBalancer -> Ingress
-```
-
-Both are **ladders**, and in both cases each rung is built on the one below it and adds exactly one
-thing. A NodePort Service is still a ClusterIP Service with a port bolted on. A LoadBalancer Service
-is still a NodePort Service with something in front of it. An HPA does not replace `replicas`; it
-writes to the same field you set by hand in Step 4. Students who see the ladders find the whole
-subject small; students who learn five unrelated recipes find it enormous.
-
-**The single most important idea in this lab** - and the one Section 15 asks about twice - is that
-**scaling is one integer**. Lab 06 established that: Application Auto Scaling's entire job was to
-write `desiredCount`. Kubernetes is the same, with `replicas`. What differs between the platforms is
-not the mechanism but *where the thing writing the integer lives*:
-
-```text
-Lab 06   Application Auto Scaling   an AWS service   OUTSIDE your workload   writes desiredCount
-Lab 08   HorizontalPodAutoscaler    a controller     INSIDE your cluster     writes replicas
-```
-
-That difference has consequences for blast radius, for what you can debug, and for what happens when
-the control plane you do not own has a bad afternoon. Step 17 makes you write them down.
-
-**Time:** roughly 4 hours, including the exercises.
-
-**Where this sits in the course**
-
-```text
-Lab 04  ECS + Fargate ....... cluster, task definition, service
-Lab 05  ECS + ALB ........... load balancer, target group, listener
-Lab 06  Service Auto Scaling  target tracking, step, scheduled
-Lab 07  EKS ................. cluster, node group, three microservices, service discovery
-Lab 08  EKS scaling and exposure   THIS LAB
-Lab 10   S3 .................. the bucket that three IAM policies already name
-Lab 07   Lambda .............. functions triggered from that bucket
-```
-
-!!! warning "Two things from Lab 07 must be true before you start"
-    **`usms-enrolment` must declare a CPU request.** Lab 07 Step 13 set `50m`. The HPA computes
-    utilisation as a percentage *of the request*. With no request, utilisation is undefined, the HPA
-    reports `<unknown>` forever, and no amount of load generation will make it scale. Step 1 checks
-    this first.
-
-    **The cluster must carry the `_lb_ports_` tag.** Lab 07 Step 8 set it to `8081,8082`. Without
-    it, Step 15 has no host port to publish on and the remedy is to recreate the cluster.
-
-    Both are checked in Step 1, and both are five-minute fixes today.
+!!! info "Concepts used in this lab"
+    Read these first if a term is new: [control plane and data plane](../unit3/topic1.md#control-plane-and-data-plane) ·
+    [Service types and kube-proxy](../unit3/topic1.md#services-coredns-and-kube-proxy) ·
+    [AWS Load Balancer Controller](../unit3/topic1.md#the-aws-load-balancer-controller) ·
+    [requests and limits](../unit3/topic2.md#requests-and-limits) ·
+    [probes](../unit3/topic2.md#probes) ·
+    [managed node groups, drains, PDBs and Karpenter](../unit3/topic3.md#eks-managed-node-groups) ·
+    [Application Auto Scaling on ECS](../unit2/topic3.md#application-auto-scaling-on-ecs) ·
+    [the two scaling layers](../unit2/topic3.md#the-two-scaling-layers-revisited) ·
+    [Kubernetes HorizontalPodAutoscaler](https://kubernetes.io/docs/tasks/run-application/horizontal-pod-autoscale/)
 
 ---
 
-## 2. Learning Objectives
+## 2. Prerequisites
 
-By the end of this laboratory you will be able to:
+- Lab 7 complete: `configs/lab-07.env` populated and `verify-lab-07.sh` at `FAIL=0` (support Path A) or `FAIL=3` (Path B).
+- Labs 5 and 6 complete; Steps 15 to 17 compare against them.
+- `usms-enrolment` declares a CPU request (Lab 7 Step 13 set `50m`) and the cluster carries the `_lb_ports_=8081,8082` tag (Lab 7 Step 8). Step 1 checks both.
+- Tools as in Lab 7: `kubectl` (everything), AWS CLI v2 (Step 10 only); `watch` and `curl` are optional.
 
-1. **Name** the four independent dimensions along which a Kubernetes workload can scale, and say
-   which object controls each.
-2. **Scale** a Deployment imperatively and declaratively, and explain the configuration drift that
-   results from mixing the two.
-3. **Explain** how a HorizontalPodAutoscaler computes utilisation, and why a missing resource request
-   makes it inert.
-4. **Deploy** an `autoscaling/v2` HPA with an explicit `behavior` block, and map every field in it to
-   its Lab 06 equivalent.
-5. **Generate** load against a service and **observe** an autoscaler responding - or diagnose,
-   honestly and specifically, why it did not.
-6. **Change** a managed node group's scaling configuration from the AWS CLI, and say why that is a
-   different operation from scaling a Deployment.
-7. **Distinguish** the Cluster Autoscaler and Karpenter from the HorizontalPodAutoscaler, in one
-   sentence each.
-8. **Write** a PodDisruptionBudget and say what it does and does not protect against.
-9. **Expose** a Service four different ways - `port-forward`, `NodePort`, `LoadBalancer`, `Ingress` -
-   and choose correctly between them for a given requirement.
-10. **Compare** Kubernetes Ingress with the Application Load Balancer of Lab 05, in both directions,
-    naming what the AWS Load Balancer Controller does to close the gap.
-11. **Prove** that scaling configuration and exposure configuration survive a restart of the emulator.
-
----
-
-## 3. Prerequisites
-
-### 3.1 Completed laboratories
-
-- **Lab 07**, complete, with `configs/lab-07.env` populated and `verify-lab-07.sh` passing -
-  `FAIL=0` on support Path A, `FAIL=3` on Path B.
-- **Lab 05 and 06**, for the comparisons in Steps 15, 16 and 17. Nothing from them is consumed
-  directly; everything from them is referenced.
-- **Lab 02**, whose public subnets are what a real EKS LoadBalancer Service would use.
-
-### 3.2 Tools
-
-The same set as Lab 07. Nothing new is required, though two optional things help:
-
-| Tool | Needed for | Check |
-| --- | --- | --- |
-| `kubectl` | Everything | `kubectl version --client` |
-| AWS CLI v2 | Step 10 only | `aws --version` |
-| `watch` (optional) | Watching numbers move; `kubectl get -w` is the alternative | `which watch` |
-| `curl` (optional) | Step 15's host-side check; `wget` inside a pod is the alternative | `curl --version` |
-
-### 3.3 Knowledge assumed
-
-Everything in Lab 07, and specifically: the `spec` and `status` controller loop from its Step 12;
-the difference between a Deployment and a Service; and why `kubectl get endpoints` is the first
-command to run when a Service returns nothing.
-
-From Lab 06: target tracking, cooldown, and the idea that an autoscaler owns a field you then stop
-editing by hand.
-
-### 3.4 Support paths, carried forward
-
-Lab 07 Step 2 recorded a support path in `notes/lab-07-notes.md`. It still applies:
+Your Lab 7 support path still applies:
 
 | Path | This lab |
 | --- | --- |
 | **A** | Everything. Step 10 is the only step that needs the `eks` API |
 | **B** | Everything except Step 10. The Kubernetes half - which is most of this lab - is unaffected |
-| **C** | Section 8.5's paper path. This lab is harder to do on paper than Lab 07, because its subject is watching numbers move |
+| **C** | The Path C paper route at the end of Section 7 |
+
+```bash
+kubectl version --client
+aws --version
+```
+
+If Step 1 finds the CPU request missing, fix it there before going further; the HPA cannot work without it.
 
 ---
 
-## 4. Connection to Previous Labs
+## 3. What This Lab Reuses
 
-### 4.1 Current Environment
+From Lab 7:
+
+- `usms-enrolment` CPU request `50m`: the HPA's denominator (Step 8).
+- `_lb_ports_=8081,8082` cluster tag: host ports for the LoadBalancer Service (Step 15).
+- Node group labels `workload=usms`: the `nodeSelector` (Step 11).
+- `usms-gateway` Service: the whole exposure ladder is climbed on it (Steps 13 to 16).
+
+From Labs 5 and 6:
+
+- `usms-enrolment-tg` with target type `ip`: the Ingress comparison (Step 16).
+- Lab 6's scalable target: the HPA comparison (Steps 8 and 17).
 
 ```text
-Created in previous labs:
-- Lab 01: usms-developer-role; USMSStudentDataReadWrite, now on three roles
-- Lab 02: usms-vpc; public-a/-b and private-a/-b; igw, nat, route tables, s3 endpoint
-- Lab 03: usms-web-01, usms-db-01, usms-web-golden
-- Lab 04: usms-ecs-cluster, usms-enrolment-svc, /usms/ecs/enrolment
-- Lab 05: usms-enrolment-alb, usms-enrolment-tg, listener HTTP:80, rule prio 10
-- Lab 06: scalable target min 2 max 10; CPU and request-count target tracking;
-           one step policy; two scheduled actions
-- Lab 07: usms-eks-cluster (tag _lb_ports_=8081,8082), usms-eks-nodes (min 2/max 4/desired 2),
-           usms-eks-cluster-role, usms-eks-node-role, usms-eks-cluster-sg
-- Lab 07: namespace usms - gateway, enrolment, results; 4 ConfigMaps; 1 Secret;
-           usms-enrolment declaring requests cpu=50m mem=32Mi
-
 Created in this lab:
 - usms-loadgen                 Deployment, 3 replicas - the load source, deleted at the end
 - usms-enrolment-hpa           HorizontalPodAutoscaler, autoscaling/v2, min 2 max 8, CPU 50%
@@ -180,31 +76,11 @@ Required for future labs:
   the CloudFormation lab re-declares Practical 2 and Practical 4 as one template
 ```
 
-### 4.2 What this lab genuinely reuses
-
-| From | Used in | Consequence if it is missing |
-| --- | --- | --- |
-| Lab 07 `usms-enrolment` CPU request `50m` | Step 8, the HPA's denominator | The HPA reports `<unknown>` and never scales. This is the single most common HPA failure |
-| Lab 07 `_lb_ports_=8081,8082` | Step 15 | No host port is published; the LoadBalancer Service is unreachable from your machine |
-| Lab 07 node group labels `workload=usms` | Step 11's `nodeSelector` | Pods stay `Pending` with `didn't match node selector` |
-| Lab 07 `usms-gateway` Service | Steps 13 to 16 | The whole exposure ladder is climbed on this one object |
-| Lab 05 `usms-enrolment-tg` target type `ip` | Step 16's comparison | You lose the connection that makes Ingress on EKS make sense |
-| Lab 06's scalable target | Steps 8 and 17 | You lose the comparison this lab is built around |
-
-**The sentence to say out loud, at Step 16.** Lab 05 created an ALB with a target group of type
-`ip`, and the ECS service registered task addresses into it. On real EKS, the AWS Load Balancer
-Controller reads an Ingress object and creates *exactly that same ALB*, with *exactly that same
-target type*, registering pod addresses instead of task addresses. The Kubernetes object is portable;
-the ALB underneath it is the one you already built by hand four weeks ago. Recognising that is the
-moment Practical 2 and Practical 4 stop being two separate topics.
-
 ---
 
-## 5. What We Are Building
+## 4. What We Are Building
 
-Two ladders, climbed one rung at a time, plus one AWS-side operation.
-
-**The scaling ladder**
+Lab 7's three microservices are healthy but unreachable from outside the cluster and fixed in size. This lab climbs two ladders, each rung adding one thing to the rung below. Scaling is always one integer (`replicas` here, `desiredCount` in Lab 6); what changes is who writes it.
 
 ```text
 Step 4   kubectl scale                 you write the integer
@@ -214,8 +90,6 @@ Step 10  update-nodegroup-config       you write a DIFFERENT integer, on the AWS
 Step 11  Cluster Autoscaler/Karpenter  a controller writes that one too   (conceptual)
 ```
 
-**The exposure ladder**
-
 ```text
 Step 13  ClusterIP + port-forward   reachable by you, over the API server, for debugging only
 Step 14  NodePort                   reachable on a fixed high port on every node
@@ -223,16 +97,11 @@ Step 15  LoadBalancer               reachable on one address; on AWS, a real NLB
 Step 16  Ingress                    ONE address for MANY services, routed by path
 ```
 
-And in between, three things that are not on either ladder but that a production system needs:
-resource requests and QoS classes (Step 6), the metrics pipeline (Step 7), and a PodDisruptionBudget
-(Step 12).
-
-What you will **not** build: a second cluster, a second application, or anything that replaces Lab
-07's work. Every object in this lab either modifies something Lab 07 created or sits in front of it.
+Steps 6, 7 and 12 add resource requests and QoS classes, the metrics pipeline and a PodDisruptionBudget. Nothing from Lab 7 is replaced.
 
 ---
 
-## 6. Architecture
+## 5. Architecture
 
 ```text
                                      YOUR MACHINE
@@ -272,7 +141,7 @@ What you will **not** build: a second cluster, a second application, or anything
   |     target  cpu 50% of the 50m request set in Lab 07                             |
   |                                                                                   |
   |   Deployment usms-loadgen  3 replicas  (Step 9)   busybox, wget in a loop         |
-  |     the load source. Deleted in Section 16                                        |
+  |     the load source. Deleted in Section 15                                        |
   |                                                                                   |
   |   PodDisruptionBudget usms-gateway-pdb  minAvailable 1   (Step 12)                |
   |                                                                                   |
@@ -292,7 +161,7 @@ the Cluster Autoscaler or Karpenter, and Step 11 explains why this lab does not 
 
 ---
 
-## 7. Directory Structure
+## 6. Directory Structure
 
 This lab adds the following. It creates no new folder - Lab 07's `manifests/` is the home for all of
 it.
@@ -302,7 +171,7 @@ aws-floci-course/
 ├── labs/
 │   └── lab-08-eks-scaling/
 │       ├── README.md                          # this document
-│       └── exercises.md                       # Section 13
+│       └── exercises.md                       # Section 12
 ├── manifests/
 │   └── lab-08/
 │       ├── 10-hpa-enrolment.yaml
@@ -315,7 +184,7 @@ aws-floci-course/
 │   └── lab-08.env                            # NEW
 ├── scripts/
 │   ├── utilities/
-│   │   ├── verify-lab-08.sh                  # NEW - Section 9
+│   │   ├── verify-lab-08.sh                  # NEW - Section 8
 │   │   └── hpa-watch.sh                       # NEW - Step 9
 │   └── cleanup/
 │       └── lab-08-cleanup.sh                 # NEW - end of course only
@@ -343,41 +212,24 @@ manifests/lab-07  manifests/lab-08
 ```
 
 ---
-## 8. Step-by-Step Implementation
 
-!!! info "Where to run every command in this lab"
-    Unless a step says otherwise, run everything from the repository root:
+## 7. Step-by-Step Implementation
 
-    ```text
-    aws-floci-course/
-    ```
-
-    Lab 07 set your `kubectl` context's default namespace to `usms`, so `-n usms` is omitted below.
-    If a command reports `No resources found in default namespace`, that setting did not survive -
-    re-run:
+!!! info "Run every command from `aws-floci-course/`"
+    Unless a step says otherwise. Lab 7 set your `kubectl` context's default namespace to `usms`, so `-n usms` is omitted below. If a command reports `No resources found in default namespace`, re-run:
 
     ```bash
     kubectl config set-context --current --namespace=usms
     ```
 
-    Shell variables still die with the terminal. Step 19 writes this lab's to `configs/lab-08.env`.
-
----
+!!! tip "Shell variables die with the terminal"
+    Step 19 writes this lab's values to `configs/lab-08.env`.
 
 ### Step 1 - Start the environment, and check the two things Lab 07 had to leave behind
 
-**Purpose**
+Two Lab 7 values decide whether this lab can work at all: the CPU request (Step 8's denominator) and the `_lb_ports_` tag (Step 15's host ports).
 
-Two values from Lab 07 determine whether this lab can be done at all. Checking them takes ninety
-seconds and saves an hour of load generation against an autoscaler that was never going to move.
-
-**Run from**
-
-```text
-aws-floci-course/
-```
-
-**Command - part 1, start and source**
+**Part 1 - start and source**
 
 ```bash
 cd ~/aws-floci-course
@@ -394,7 +246,7 @@ kubectl config current-context
 kubectl config set-context --current --namespace=usms
 ```
 
-**Command - part 2, the two checks that matter**
+**Part 2 - the two checks that matter**
 
 ```bash
 echo "--- 1. does usms-enrolment declare a CPU request? ---"
@@ -417,10 +269,9 @@ from configs/lab-07.env : 8081,8082
 8081,8082
 ```
 
-**What to look for, and what to do if it is wrong:**
+If a check is wrong:
 
-- **An empty or absent `cpu` request.** Fix it now; Step 8 depends on it and no later step can work
-  around it:
+- **No `cpu` request.** Fix it now; no later step can work around it:
 
     ```bash
     kubectl set resources deployment/usms-enrolment \
@@ -428,16 +279,10 @@ from configs/lab-07.env : 8081,8082
     kubectl rollout status deployment/usms-enrolment --timeout=120s
     ```
 
-    Then fix `manifests/lab-07/20-enrolment.yaml` too, so the repository and the cluster agree. A
-    cluster that is right and a repository that is wrong is worse than both being wrong, because it
-    is invisible until the next `kubectl apply`.
+    Then fix `manifests/lab-07/20-enrolment.yaml` too, so the repository and the cluster agree.
 
-- **`None` for the tag on Path A.** Try `aws eks tag-resource` as Lab 07 Step 9 showed. If that
-  fails, Step 15 will be a Conceptual step for you rather than an observable one. Record that in
-  `notes/lab-08-notes.md` now, so your report is accurate rather than apologetic.
-
-- **`eks API unavailable` on Path B.** Expected. Steps 10 and 15's AWS half are unavailable to you;
-  everything else in this lab works.
+- **`None` for the tag on Path A.** Try `aws eks tag-resource` as Lab 7 Step 9 showed. If that fails, Step 15 becomes Conceptual for you; record that in `notes/lab-08-notes.md` now.
+- **`eks API unavailable` on Path B.** Expected. Steps 10 and 15's AWS half are unavailable; everything else works.
 
 **Verify**
 
@@ -446,27 +291,13 @@ from configs/lab-07.env : 8081,8082
 kubectl get deploy,svc,cm,secret
 ```
 
-**What to look for:** `FAIL=0` (Path A) or `FAIL=3` (Path B); three Deployments reading `2`, `2` and
-`1`; three ClusterIP Services with no external address; four ConfigMaps; one Secret.
+`FAIL=0` (Path A) or `FAIL=3` (Path B); three Deployments at `2`, `2` and `1`; three ClusterIP Services with no external address; four ConfigMaps; one Secret.
 
 ---
 
 ### Step 2 - Read your own baseline before you change anything
 
-**Purpose**
-
-Lab 07 Exercise 5 asked you to record a CPU baseline. This step reads it back and captures a fresh
-"before" snapshot, so that every number in the rest of this lab has something to be compared against.
-An autoscaler that "seems to be working" is not a result; a replica count that went from 2 to 5 and
-back is.
-
-**Run from**
-
-```text
-aws-floci-course/
-```
-
-**Command**
+Every later number needs something to compare against. This reads back Lab 7 Exercise 5 and captures a fresh "before" snapshot.
 
 ```bash
 mkdir -p notes outputs
@@ -489,14 +320,7 @@ echo "--- fresh baseline ---"
 } | tee outputs/lab-08-baseline.txt
 ```
 
-**What the command does**
-
-Four snapshots, all read-only, all in one file. The `custom-columns` forms are chosen so the output is
-narrow enough to `diff` against later - Step 18 does exactly that.
-
-`.status.loadBalancer.ingress[0].ip` will be empty for every Service right now. That is the point of
-recording it: after Step 15 it will not be, and an empty column that later fills in is much more
-convincing evidence than a column that was always there.
+The narrow `custom-columns` output can be diffed later (Step 18). The empty `EXTERNAL` column is recorded on purpose: after Step 15 it fills in.
 
 **Expected result**
 
@@ -524,10 +348,7 @@ usms-eks-cluster-ag0    Ready    8     8039720Ki
 
 > Example output - every address, capacity and node name will differ.
 
-**What to look for:** three Deployments at their Lab 07 counts, every Service `ClusterIP` with
-`<none>` external, and at least one node `Ready`. Note the node CPU capacity: on a local cluster the
-nodes report your whole machine's cores, which is why Step 9's load generation has to be pointed at
-the *pod's* request rather than at the node's capacity.
+Three Deployments at their Lab 7 counts, every Service `ClusterIP` with `<none>` external, at least one node `Ready`. Local nodes report your whole machine's cores, so Step 9 targets the pod's request, not node capacity.
 
 **Checkpoint 1**
 
@@ -544,16 +365,7 @@ Baseline recorded in outputs/lab-08-baseline.txt
 
 ### Step 3 - The four dimensions of scaling, and which object owns each
 
-**Purpose**
-
-Before you move any number, know which of four independent things you are moving. Students who
-cannot name the four spend the rest of the lab surprised.
-
-**Run from**
-
-Nothing to run. Read, then answer the question at the end.
-
-**Concept - the four dimensions**
+Nothing to run. Know which of four independent things you are moving before you move any of them.
 
 ```text
 1. HORIZONTAL, workload      more PODS of the same size
@@ -578,21 +390,11 @@ Nothing to run. Read, then answer the question at the end.
    limit: not changeable in place. This is the one that requires planning
 ```
 
-Three consequences, all of which you will meet:
+- **Dimension 1 without dimension 3 gives `Pending` pods.** The HPA adds replicas; if the nodes are full, that is all it does.
+- **Dimension 2 is the HPA's denominator.** Step 6 covers this coupling.
+- **Dimension 4 cannot be done in place:** create a second node group, cordon and drain the first, delete it.
 
-- **Dimension 1 without dimension 3 gives you `Pending` pods.** The HPA adds replicas; if the nodes
-  are full, that is all it does. Step 9's troubleshooting note covers this, and it is the commonest
-  production surprise on EKS.
-- **Dimension 2 is the HPA's denominator.** The `requests` you set for dimension 2 is what dimension
-  1's autoscaler divides by. They are not independent, and Step 6 is about exactly that coupling.
-- **Dimension 4 cannot be done in place.** A node group's instance types are fixed at creation. The
-  procedure is: create a second node group, cordon and drain the first, delete it. Knowing that
-  before you size a node group is worth more than any command in this lab.
-
-**Compare with Practical 2.** ECS on Fargate has dimension 1 (`desiredCount`) and dimension 2 (the
-task definition's `cpu` and `memory`), and **does not have dimensions 3 and 4 at all** - there are no
-nodes. That is the entire difference in operational burden between the two platforms, in one
-sentence, and it is the honest answer to "why would anyone choose Fargate?".
+ECS on Fargate has dimensions 1 and 2 only; there are no nodes. That is the operational difference between the two platforms.
 
 ✏️ **Your turn**
 
@@ -604,33 +406,22 @@ order, and what you would check between each.*
 Expected result:
 A short ordered plan. There is no single right answer, but a plan that reaches
 for dimension 4 first, or that never mentions dimension 3 at all, is wrong.
-Section 15 Question 2 asks a harder version of this.
+Section 14 Question 2 asks a harder version of this.
 ```
 
 ---
 
 ### Step 4 - Scale by hand, and watch what moves
 
-**Purpose**
+The simplest rung. Everything the HPA does in Step 8, it does by performing this operation.
 
-The simplest rung of the ladder, and the one that makes every later rung legible. Everything the HPA
-does in Step 8, it does by performing this operation.
-
-**Run from**
-
-```text
-aws-floci-course/
-```
-
-**Command - part 1, open a watcher in a second terminal**
+**Part 1 - open a watcher in a second terminal**
 
 ```bash
 kubectl get pods -w -l app=usms-enrolment
 ```
 
-Leave that running. In your first terminal:
-
-**Command - part 2, scale up**
+**Part 2 - scale up** (in your first terminal)
 
 ```bash
 kubectl scale deployment/usms-enrolment --replicas=5
@@ -640,23 +431,8 @@ kubectl get deploy usms-enrolment
 kubectl get endpoints usms-enrolment
 ```
 
-**What the command does**
-
-```text
-kubectl
- └── scale                      the SUBCOMMAND
-      └── deployment/usms-enrolment   the OBJECT, in type/name form
-           └── --replicas=5           the new value of spec.replicas
-```
-
-`kubectl scale` writes exactly one field. It does not create a new ReplicaSet, because the pod
-template did not change - the *existing* ReplicaSet is scaled up. That is the difference between
-scaling and a rolling update, and it is why scaling is fast and a rollout is not.
-
-Watch the second terminal while this runs. Three new pods appear in `Pending`, move to
-`ContainerCreating`, then `Running`, then `1/1` ready. The endpoint list grows only as each pod
-becomes **ready** - the readiness probe from Lab 07 Step 13 is what gates that, and a pod that is
-`Running` but not ready receives no traffic.
+- `kubectl scale` writes only `spec.replicas`. The pod template is unchanged, so the existing ReplicaSet is scaled; no rollout happens.
+- Endpoints grow only as each pod becomes **ready** (Lab 7 Step 13's readiness probe), not when it starts.
 
 **Expected result**
 
@@ -670,7 +446,7 @@ usms-enrolment   10.42.1.8:80,10.42.1.11:80,10.42.2.5:80 + 2 more...            
 
 > Example output - addresses differ, and `kubectl` abbreviates long endpoint lists.
 
-**Command - part 3, confirm the traffic really spreads across five**
+**Part 3 - confirm the traffic really spreads across five**
 
 ```bash
 kubectl run usms-debug --rm -it --restart=Never --image=busybox:1.36 -- sh -c '
@@ -680,12 +456,9 @@ kubectl run usms-debug --rm -it --restart=Never --image=busybox:1.36 -- sh -c '
 ' | grep -o '"pod":"[^"]*"' | sort | uniq -c | sort -rn
 ```
 
-**What to look for:** ideally five distinct pod names. Four or five is a pass. **The gateway was not
-restarted, reconfigured or even informed** - it still holds one ClusterIP, exactly as it did in Lab
-07 Step 16, and the spreading happens beneath it. That is the payoff for the architecture, and it is
-worth pausing on before you move to the next command.
+Four or five distinct pod names is a pass. The gateway was not restarted or reconfigured; it still holds one ClusterIP.
 
-**Command - part 4, scale back down**
+**Part 4 - scale back down**
 
 ```bash
 kubectl scale deployment/usms-enrolment --replicas=2
@@ -693,29 +466,15 @@ kubectl rollout status deployment/usms-enrolment --timeout=120s
 kubectl get endpoints usms-enrolment
 ```
 
-Watch the second terminal: pods go to `Terminating` and disappear. They are removed from the endpoint
-list **first**, then sent `SIGTERM`, then given `terminationGracePeriodSeconds` (30 by default) before
-`SIGKILL`. That ordering is what makes scale-in safe for requests already in flight, and it is the
-Kubernetes equivalent of the ALB's deregistration delay that Lab 05 set to 30 seconds.
-
-Stop the watcher in your second terminal with ++ctrl+c++.
+Pods leave the endpoint list **first**, then get `SIGTERM` and 30 seconds' grace before `SIGKILL`: the Kubernetes equivalent of Lab 5's 30-second deregistration delay. Stop the watcher with ++ctrl+c++.
 
 ---
 
 ### Step 5 - Scale declaratively, and meet configuration drift
 
-**Purpose**
+Step 4 changed the cluster but not the repository. This step shows the cost, and is why the rest of the lab uses manifests rather than `kubectl patch`.
 
-Step 4 changed the cluster. Your repository does not know. This step shows what that costs and how to
-avoid it - and it is the reason the rest of this lab uses manifests rather than `kubectl patch`.
-
-**Run from**
-
-```text
-aws-floci-course/
-```
-
-**Command - part 1, create the drift deliberately**
+**Part 1 - create the drift deliberately**
 
 ```bash
 kubectl scale deployment/usms-enrolment --replicas=6
@@ -732,10 +491,9 @@ grep -n 'replicas:' manifests/lab-07/20-enrolment.yaml
 
 > Example output - the line number will differ.
 
-The cluster says 6. The repository says 2. Neither is wrong; they simply disagree, and nothing
-anywhere will tell you.
+The cluster says 6, the repository says 2, and nothing tells you.
 
-**Command - part 2, watch `apply` silently undo your scaling**
+**Part 2 - watch `apply` silently undo your scaling**
 
 ```bash
 kubectl apply -f manifests/lab-07/20-enrolment.yaml
@@ -749,21 +507,14 @@ kubectl get deploy usms-enrolment -o jsonpath='{.spec.replicas}'; echo
 2
 ```
 
-Six pods became two, because `apply` did what you asked: make the cluster match the file. In a
-laboratory that is a shrug. In production, at 09:00 on results-release day, someone applying an
-unrelated change to that file takes your capacity away and the change looks innocent in review.
-
 !!! warning "This is the single most common way a Kubernetes deployment causes an outage"
-    It is not a bug and there is no flag that fixes it. There are three real answers:
+    Someone applies an unrelated change to the file and your capacity disappears. Three answers:
 
-    - **Never scale by hand.** Change `replicas:` in the file, commit it, apply it. Slower, auditable,
-      and boring - which is the goal.
-    - **Let the HPA own the field.** Step 8 does this, and Step 8 also removes `replicas:` from the
-      manifest's meaning, which is subtle enough to have its own paragraph there.
-    - **Use `kubectl diff` before every `apply`.** It shows exactly what would change, and it takes
-      two seconds.
+    - **Never scale by hand.** Change `replicas:` in the file, commit it, apply it.
+    - **Let the HPA own the field.** Step 8 does this.
+    - **Use `kubectl diff` before every `apply`.**
 
-**Command - part 3, the habit that prevents it**
+**Part 3 - the habit that prevents it**
 
 ```bash
 sed -i.bak 's/^  replicas: 2$/  replicas: 3/' manifests/lab-07/20-enrolment.yaml
@@ -774,14 +525,9 @@ kubectl apply -f manifests/lab-07/20-enrolment.yaml
 kubectl get deploy usms-enrolment -o jsonpath='{.spec.replicas}'; echo
 ```
 
-**What the command does**
+`kubectl diff` exits **1** when there is a difference. That is not an error; `|| true` stops it killing a `set -e` shell.
 
-`kubectl diff` renders what the cluster would look like after the apply and diffs it against what is
-there now. It exits **1** when there is a difference, which is correct behaviour and not an error -
-hence the `|| true`, which stops it killing a shell that has `set -e` active. In a pipeline, that
-exit code is exactly what you want: it tells you whether a change is a no-op.
-
-**Command - part 4, restore the baseline**
+**Part 4 - restore the baseline**
 
 ```bash
 sed -i.bak 's/^  replicas: 3$/  replicas: 2/' manifests/lab-07/20-enrolment.yaml
@@ -791,7 +537,7 @@ rm -f manifests/lab-07/*.bak
 kubectl get deploy
 ```
 
-**What to look for:** `usms-enrolment` back at `2/2`, and no `.bak` files left behind.
+`usms-enrolment` back at `2/2`, and no `.bak` files left behind.
 
 **Checkpoint 2**
 
@@ -809,12 +555,7 @@ Scaling, by hand and by file
 
 ### Step 6 - Requests, limits and QoS classes: the coupling nobody explains
 
-**Purpose**
-
-Step 8's autoscaler divides by the number you set here. Step 12's disruption behaviour depends on the
-class this step assigns. Ten minutes now removes most of the confusion in the rest of the lab.
-
-**Concept first - requests and limits are different promises**
+Step 8's autoscaler divides by the request set here, and Step 12's disruption behaviour depends on the QoS class. See [requests and limits](../unit3/topic2.md#requests-and-limits).
 
 ```text
 requests   what the SCHEDULER reserves. A node with 1000m allocatable can hold
@@ -824,30 +565,15 @@ limits     what the KUBELET enforces at runtime
              MEMORY over limit -> OOMKilled. The container is killed and restarted
 ```
 
-That asymmetry is the thing to remember. CPU is compressible, so exceeding a CPU limit costs you
-latency. Memory is not, so exceeding a memory limit costs you the process. It is why a memory limit
-should be set generously or not at all, and a CPU limit should be set thoughtfully.
-
-**Concept - the three QoS classes, which Kubernetes assigns and you do not**
-
 | Class | When | What it means under pressure |
 | --- | --- | --- |
 | `Guaranteed` | every container has requests **equal to** limits, for both CPU and memory | Evicted last |
 | `Burstable` | requests are set, and are less than limits | Evicted after `BestEffort` |
 | `BestEffort` | nothing set at all | **Evicted first**, and invisible to the HPA |
 
-Lab 07's containers request `50m`/`32Mi` and limit `200m`/`128Mi`, so all three microservices are
-`Burstable`. That is the right choice for this workload - it can use spare capacity when it exists -
-and it is also why an HPA can work at all: `BestEffort` pods have no request to compute a percentage
-of.
+Lab 7's containers request `50m`/`32Mi` and limit `200m`/`128Mi`, so all three are `Burstable`. `BestEffort` pods have no request, so an HPA cannot compute a percentage for them.
 
-**Run from**
-
-```text
-aws-floci-course/
-```
-
-**Command - part 1, read the classes off the cluster**
+**Part 1 - read the classes off the cluster**
 
 ```bash
 kubectl get pods -o custom-columns=\
@@ -865,7 +591,7 @@ usms-results-84cd7f6b59-h4xkz     Burstable   50m      200m
 usms-results-84cd7f6b59-r9wln     Burstable   50m      200m
 ```
 
-**Command - part 2, see the scheduler's arithmetic**
+**Part 2 - see the scheduler's arithmetic**
 
 ```bash
 NODE=$(kubectl get pods -l app=usms-enrolment -o jsonpath='{.items[0].spec.nodeName}')
@@ -873,13 +599,9 @@ echo "inspecting node: $NODE"
 kubectl describe node "$NODE" | sed -n '/Allocated resources/,/Events/p'
 ```
 
-**What to look for:** a table of `Requests` and `Limits` with percentages. The percentages are of
-**allocatable**, not of capacity - a node reserves some CPU and memory for the kubelet and the system,
-and that reservation is why a 2-core node cannot run 2 cores' worth of pods. On a real EKS node the
-gap is several hundred millicores and a gigabyte or more; budgeting for it is the difference between
-a node group that fits and one that does not.
+The percentages are of **allocatable**, not capacity: a node reserves CPU and memory for the kubelet and system.
 
-**Command - part 3, prove the denominator arithmetic before you rely on it**
+**Part 3 - prove the denominator arithmetic before you rely on it**
 
 ```bash
 REQ=$(kubectl get deploy usms-enrolment \
@@ -889,9 +611,7 @@ echo "HPA target 50% : this means 50% of $REQ per pod, i.e. 25m average across a
 echo "NOT 50% of a node, and NOT 50% of the limit"
 ```
 
-That is worth typing out because getting it wrong produces an HPA that looks broken. If the target
-were a percentage of the *node*, a `50m` pod on an 8-core node could never reach it. It is a
-percentage of the request, so a pod using `30m` is at 60% and the HPA scales out.
+The target is a percentage of the request, so a pod using `30m` of a `50m` request is at 60% and the HPA scales out.
 
 ✏️ **Your turn**
 
@@ -906,49 +626,18 @@ Note that it was REPLACED, not adjusted. Say why in your notes - it is dimension
 from Step 3, and it is the reason VerticalPodAutoscaler is used far less than HPA.
 ```
 
-Hint: `kubectl set resources` takes both `--requests` and `--limits`, and the table above says
-exactly what relationship between them produces each class.
+Hint: `kubectl set resources` takes both `--requests` and `--limits`; the QoS table says which relationship gives each class.
 
 ---
+
 ### Step 7 - The metrics pipeline, and why it is an add-on
 
-**Purpose**
+The HPA reads a metric from `metrics.k8s.io`, which is not part of core Kubernetes and may not be installed. Find out which situation you are in first.
 
-The HPA in Step 8 reads a metric. That metric comes from an API that is **not part of core
-Kubernetes** and may not be installed. This step establishes which situation you are in before you
-build something that depends on it.
+!!! info "The metrics pipeline in brief"
+    kubelets expose per-container CPU and memory; metrics-server scrapes them and registers the `metrics.k8s.io` API; `kubectl top` and the HPA both read that API. So **if `kubectl top` works, the HPA has data**. It gives CPU and memory only; scaling on requests or queue depth (as Lab 6 did) needs a separate adapter (Section 11).
 
-**Concept first - the chain, and where it can break**
-
-```text
-kubelet on each node
-  |  exposes a /metrics/resource endpoint with per-container CPU and memory
-  v
-metrics-server                    a Deployment, usually in namespace kube-system
-  |  scrapes every kubelet, keeps a short in-memory window (about 15 minutes)
-  |  registers itself as an APIService for metrics.k8s.io/v1beta1
-  v
-the Kubernetes API server         now serves /apis/metrics.k8s.io/v1beta1/...
-  |
-  +--> kubectl top pods           what YOU read
-  +--> HorizontalPodAutoscaler    what the CONTROLLER reads
-```
-
-Two things follow. First, `kubectl top` and the HPA read **the same source**, so if `kubectl top`
-works the HPA has data, and if it does not the HPA will report `<unknown>`. That makes `kubectl top`
-the single diagnostic for "is my HPA going to work?". Second, this pipeline gives you CPU and memory
-and **nothing else**. Scaling on requests per second, queue depth or any application metric needs a
-second pipeline - Prometheus with an adapter, or on EKS the CloudWatch adapter. Lab 06 scaled on
-`ALBRequestCountPerTarget` and on a custom `EnrolmentQueueDepth` metric; doing the equivalent here is
-a considerably larger undertaking, and Section 12 says so plainly.
-
-**Run from**
-
-```text
-aws-floci-course/
-```
-
-**Command - part 1, is the API registered?**
+**Part 1 - is the API registered?**
 
 ```bash
 kubectl get apiservices | grep metrics || echo "no metrics APIService registered"
@@ -966,9 +655,9 @@ metrics-server           1/1     1            1       3h
 metrics API: AVAILABLE
 ```
 
-> Example output. `metrics API: NOT AVAILABLE` is a perfectly common outcome and part 2 deals with it.
+> Example output. `metrics API: NOT AVAILABLE` is common; Part 2 deals with it.
 
-**Command - part 2, only if part 1 said NOT AVAILABLE**
+**Part 2 - only if Part 1 said NOT AVAILABLE**
 
 ```bash
 kubectl apply -f https://github.com/kubernetes-sigs/metrics-server/releases/latest/download/components.yaml
@@ -976,9 +665,7 @@ kubectl apply -f https://github.com/kubernetes-sigs/metrics-server/releases/late
 kubectl -n kube-system rollout status deployment/metrics-server --timeout=120s
 ```
 
-If the pod starts but never becomes ready, and `kubectl -n kube-system logs deploy/metrics-server`
-mentions certificates or `x509`, the cause is that metrics-server validates each kubelet's serving
-certificate and local clusters issue self-signed ones. The local-only fix:
+If the pod never becomes ready and its logs mention `x509`, local kubelets have self-signed certificates. The local-only fix:
 
 ```bash
 kubectl -n kube-system patch deployment metrics-server --type=json \
@@ -988,21 +675,11 @@ kubectl -n kube-system rollout status deployment/metrics-server --timeout=120s
 ```
 
 !!! warning "`--kubelet-insecure-tls` is a laboratory-only flag"
-    It tells metrics-server to skip verification of the kubelet's certificate. On a real cluster
-    that is a genuine weakness - anything that can impersonate a kubelet can feed you invented
-    metrics, and an autoscaler that believes invented metrics is a denial-of-service tool.
+    It skips verification of the kubelet's certificate, so anything impersonating a kubelet can feed the autoscaler invented metrics. Real EKS never needs it. Record in your notes that you used it.
 
-    On real EKS you never need it: the kubelets have certificates signed by the cluster CA. If you
-    ever find yourself reaching for this flag on a managed cluster, something else is wrong.
+**Part 3 - if the cluster has no network access**
 
-    Record in your notes that you used it and why.
-
-**Command - part 3, if you have no network access from the cluster**
-
-`kubectl apply -f https://...` needs the nodes to reach GitHub. If they cannot, you cannot install
-metrics-server, and Step 8's HPA will exist but never compute. That is a legitimate outcome. Record
-it, and use the **fallback path** flagged in Step 9: drive the replica count by hand and read the
-HPA's own explanation of why it is not acting.
+The `apply` above needs the nodes to reach GitHub. If they cannot, the HPA will exist but never compute; record it and use Step 9's fallback.
 
 ```bash
 echo "metrics API unavailable - Step 9 will use the manual fallback" >> notes/lab-08-notes.md
@@ -1030,22 +707,15 @@ usms-gateway-5c6d7f8a91-tt4mv     1m           3Mi
 > Example output - your numbers will differ, and immediately after installing metrics-server you may
 > get `metrics not available yet` for 30 to 60 seconds. Wait and re-run before concluding anything.
 
-**What to look for:** a `CPU(cores)` value for each pod, of the order of `1m` at idle. That is 2% of
-the `50m` request - comfortably below the 50% target Step 8 sets, which is what you want a baseline
-to look like. Write the idle figure down; Step 9 compares against it.
+Each pod at roughly `1m` idle, 2% of the `50m` request. Write the idle figure down for Step 9.
 
 ---
 
 ### Step 8 - Create the HorizontalPodAutoscaler
 
-**Purpose**
+The object the scaling half of the lab is for, and the closest match to Lab 6.
 
-This is the object the whole scaling half of the lab is for. It is also the object with the closest
-correspondence to something you built in Lab 06, and the comparison is worth more than the object.
-
-**Concept first - what an HPA actually computes**
-
-Every 15 seconds, by default, the HPA controller:
+Every 15 seconds the HPA controller:
 
 ```text
 1. reads the current metric for every ready pod of the target Deployment
@@ -1056,20 +726,14 @@ Every 15 seconds, by default, the HPA controller:
 6. writes the result to the Deployment's spec.replicas -- and does nothing else
 ```
 
-Step 3 of that list is the whole algorithm and it is worth working an example. Two pods, each using
-`40m`, request `50m`, target 50%:
+Worked example: two pods at `40m`, request `50m`, target 50%:
 
 ```text
 currentUtilisation = 40 / 50            = 80%
 desiredReplicas    = ceil(2 * 80 / 50)  = ceil(3.2) = 4
 ```
 
-Four replicas. Each should then average `20m`, which is 40% - under target, so no further scale-out.
-The arithmetic is deliberately conservative in the other direction too: scaling *in* is gated by a
-stabilisation window, because the cost of scaling in too eagerly is an outage and the cost of scaling
-in too slowly is a small bill.
-
-**The correspondence with Lab 06, field by field**
+Field by field against Lab 6:
 
 | Lab 06, Application Auto Scaling | Here | Note |
 | --- | --- | --- |
@@ -1081,16 +745,7 @@ in too slowly is a small bill.
 | Two CloudWatch alarms created for you | No alarms. The controller polls | **The biggest structural difference** |
 | Lives in an AWS service | Lives in your cluster's controller manager | Blast radius, and Step 17 |
 
-That third row hides a real trap. `ECSServiceAverageCPUUtilization` is CPU used as a percentage of
-**the task's reserved CPU**. The HPA's `averageUtilization` is CPU used as a percentage of **the
-container's request**. Those are analogous but not identical, and a target of 50 does not necessarily
-mean the same load on both platforms.
-
-**Run from**
-
-```text
-aws-floci-course/
-```
+Note the third row: ECS measures CPU against the task's reserved CPU, the HPA against the container's request. A target of 50 does not mean the same load on both.
 
 **Command - write the manifest**
 
@@ -1142,14 +797,8 @@ EOF
 kubectl apply -f manifests/lab-08/10-hpa-enrolment.yaml
 ```
 
-**What the command does**
-
-`apiVersion: autoscaling/v2` - not `v1`. Version 1 supports exactly one metric, CPU, and no
-`behavior` block at all. Every HPA you write from now on should be `v2`; `v1` exists for
-compatibility and you will still see it in old blog posts.
-
-Read `behavior` carefully, because it is the part that distinguishes a considered autoscaler from a
-default one:
+- `autoscaling/v2`, not `v1`: `v1` supports CPU only and has no `behavior` block.
+- `behavior` encodes "instant out, slow in", the same doctrine as Lab 6's `ScaleInCooldown: 300`:
 
 ```text
 scaleUp.stabilizationWindowSeconds: 0
@@ -1172,16 +821,7 @@ scaleDown.policies + selectPolicy: Min
     Scale in slowly. The cost of being wrong is asymmetric.
 ```
 
-That asymmetry - instant out, slow in - is the single most transferable idea about autoscaling, and
-it is exactly the policy Lab 06 expressed with `ScaleInCooldown: 300` and a shorter scale-out
-cooldown. Same doctrine, different syntax.
-
-`minReplicas: 2` matters for a second reason: **the HPA now owns `spec.replicas`.** If it finds the
-Deployment below 2, it raises it immediately. And from this moment, `kubectl scale` on
-`usms-enrolment` is a temporary suggestion that the controller will overwrite within 15 seconds.
-Step 5's drift problem has changed shape rather than gone away - the `replicas:` line in
-`manifests/lab-07/20-enrolment.yaml` is now only an *initial* value, and re-applying that file no
-longer determines the replica count for more than a few seconds.
+- From now on **the HPA owns `spec.replicas`**. `kubectl scale` is overwritten within 15 seconds, and `replicas:` in `manifests/lab-07/20-enrolment.yaml` is only an initial value.
 
 **Expected result**
 
@@ -1207,38 +847,19 @@ usms-enrolment-hpa   Deployment/usms-enrolment   cpu: 2%/50%   2         8      
 
 > Example output - the current percentage will differ.
 
-**What to look for**, and this is the decisive moment of the whole lab:
+- **`TARGETS` like `2%/50%`**: metrics work, and Step 9 will show it moving.
+- **`TARGETS` of `<unknown>/50%`**: `describe` names the cause. `failed to get cpu utilization` means Step 7's pipeline is down; `missing request for cpu` means go back to Step 1.
+- **`REPLICAS` reading 2.**
 
-- **`TARGETS` showing a percentage, such as `2%/50%`.** The metrics pipeline works, the HPA has data,
-  and Step 9 will show it moving.
-- **`TARGETS` showing `<unknown>/50%`.** The HPA cannot compute. Two causes, and `describe` names
-  which:
-    - `failed to get cpu utilization: unable to get metrics` - Step 7's pipeline is not working.
-    - `missing request for cpu` - the CPU request is absent. Step 1 checked this; go back to it.
-- **`REPLICAS` reading 2.** If the Deployment was left at some other number, the HPA has already
-  corrected it, which is itself a demonstration.
-
-The `Conditions` block at the bottom of `describe` is where the HPA tells you what it thinks:
-`AbleToScale`, `ScalingActive` and `ScalingLimited`, each with a reason. `ScalingActive: False` with
-reason `FailedGetResourceMetric` is the `<unknown>` case stated precisely, and it is much more useful
-than the dash in the table.
+The `Conditions` block in `describe` (`AbleToScale`, `ScalingActive`, `ScalingLimited`) states the reason precisely; `ScalingActive: False` with `FailedGetResourceMetric` is the `<unknown>` case.
 
 ---
 
 ### Step 9 - Generate load and watch it respond
 
-**Purpose**
+An autoscaler you have not seen move is a configuration file. This step makes it move, with an honest fallback if your build cannot.
 
-An autoscaler you have not seen move is a configuration file, not a control loop. This step makes it
-move, and gives you an honest fallback if your build cannot.
-
-**Run from**
-
-```text
-aws-floci-course/
-```
-
-**Command - part 1, a watcher script**
+**Part 1 - a watcher script**
 
 ```bash
 cat > scripts/utilities/hpa-watch.sh << 'EOF'
@@ -1277,7 +898,7 @@ Run it in a **second terminal** and leave it there:
 ./scripts/utilities/hpa-watch.sh 60
 ```
 
-**Command - part 2, the load generator**
+**Part 2 - the load generator**
 
 ```bash
 cat > manifests/lab-08/20-loadgen.yaml << 'EOF'
@@ -1326,23 +947,11 @@ kubectl apply -f manifests/lab-08/20-loadgen.yaml
 kubectl rollout status deployment/usms-loadgen --timeout=120s
 ```
 
-**What the command does**
+- Three pods loop `wget` against the gateway's `/enrolment/`, so both the gateway and enrolment do work.
+- `|| true` keeps one failed request from ending the loop.
+- The YAML `>` block folds lines into one; the trailing semicolons keep it valid shell. If the pod crash-loops, check them first.
 
-Three pods, each looping `wget` against the gateway's `/enrolment/` path as fast as the network
-allows. The requests go gateway to Service to enrolment pods, so **both** the gateway and the
-enrolment pods do work - which is realistic, and which is also why the gateway becomes the bottleneck
-if you push this much harder.
-
-`|| true` inside the loop stops a single failed request from ending the shell. Without it, one
-transient failure during a rolling update kills the load generator and the graph goes flat for
-reasons that have nothing to do with the autoscaler.
-
-The `>` block scalar in YAML folds the following lines into one line with spaces. The trailing
-semicolons are what keep it a valid shell command after folding, and they are easy to lose when
-editing. If the pod crash-loops immediately, check them first.
-
-**What to watch in the second terminal.** Within 30 to 60 seconds the CPU column should climb past
-50%, and then `REPLICAS` should start moving. A typical run:
+Within 30 to 60 seconds CPU should pass 50% and `REPLICAS` should move. A typical run:
 
 ```text
 TIME      CPU/TARGET     REPLICAS   READY    PODS
@@ -1358,23 +967,15 @@ TIME      CPU/TARGET     REPLICAS   READY    PODS
 > Example output - your percentages and timings will differ, and the exact replica counts depend on
 > how much CPU your machine can give the load generators.
 
-Read what happened: utilisation went to 71%, the HPA computed `ceil(2 * 71 / 50) = 3` - but the
-`scaleUp` policy allowed doubling, and `selectPolicy: Max` took the more permissive of the two
-policies, so it went to 4. Utilisation then fell below target and it stopped. That is the algorithm
-from Step 8 doing exactly what the arithmetic said it would.
+At 71%, `ceil(2 * 71 / 50) = 3`, but the scale-up policy allowed doubling and `selectPolicy: Max` took it, so it went to 4.
 
-**Command - part 3, remove the load and watch the stabilisation window**
+**Part 3 - remove the load and watch the stabilisation window**
 
 ```bash
 kubectl scale deployment/usms-loadgen --replicas=0
 ```
 
-Keep watching. CPU falls within a few seconds. **The replica count does not.** For five full minutes
-the HPA holds its recommendation, because `scaleDown.stabilizationWindowSeconds` is 300. Then it
-removes one pod per minute until it reaches `minReplicas: 2`.
-
-Sitting through those five minutes once is worth more than reading about them. It is also exactly
-what a student expects to be a bug, and it is the behaviour you would most want in production.
+CPU falls within seconds; **replicas do not**. For five minutes the HPA holds (`stabilizationWindowSeconds: 300`), then removes one pod per minute down to 2. That is intended behaviour, not a bug.
 
 ```bash
 kubectl describe hpa usms-enrolment-hpa | grep -A8 'Events:'
@@ -1394,13 +995,9 @@ Events:
 > in your lab report rather than paraphrasing.
 
 !!! note "Floci Limitation - the metrics pipeline may be absent, and then this step cannot run"
-    On a build with no metrics-server and no way to install one, the HPA exists, reports
-    `<unknown>/50%`, and never acts.
+    With no metrics-server, the HPA reports `<unknown>/50%` and never acts. On real EKS you install metrics-server once (or as an add-on) and it works.
 
-    On real EKS you install metrics-server once per cluster (or use the EKS add-on) and it works.
-
-    **The fallback, and it is a legitimate result.** Do this instead, and say in your report that you
-    did:
+    **The fallback, a legitimate result.** Do this and say so in your report:
 
     ```bash
     kubectl describe hpa usms-enrolment-hpa | sed -n '/Conditions/,/Events/p'
@@ -1409,14 +1006,10 @@ Events:
     kubectl scale deployment/usms-enrolment --replicas=2
     ```
 
-    Then, in `notes/lab-08-notes.md`: quote the `ScalingActive: False` condition and its reason
-    verbatim; work the Step 8 arithmetic by hand for two pods at 71% and state what the HPA *would*
-    have done; and say what you would check first on a real cluster showing this. An honest
-    `<unknown>` with the reasoning written out earns more than an invented percentage.
+    Then in `notes/lab-08-notes.md`: quote the `ScalingActive: False` condition verbatim, work Step 8's arithmetic by hand for two pods at 71%, and say what you would check first on a real cluster.
 
 !!! warning "If replicas climb and new pods sit in `Pending`"
-    The HPA did its job and there is nowhere to put the pods. This is dimensions 1 and 3 from Step 3
-    failing to meet.
+    The HPA did its job and there is nowhere to put the pods (dimensions 1 and 3 from Step 3).
 
     ```bash
     kubectl get pods -l app=usms-enrolment
@@ -1424,10 +1017,7 @@ Events:
     kubectl describe node <any node> | sed -n '/Allocated resources/,/Events/p'
     ```
 
-    `Insufficient cpu` in the events is the confirmation. Step 10 is the AWS-side answer, and Step 11
-    explains what would do it automatically. In the meantime, lower `maxReplicas` or raise the node
-    group - do not lower the CPU request, because that changes the HPA's denominator and makes the
-    numbers you have been reading incomparable.
+    `Insufficient cpu` confirms it. Step 10 is the AWS-side answer. Lower `maxReplicas` or raise the node group; do not lower the CPU request, which changes the HPA's denominator.
 
 **Checkpoint 3**
 
@@ -1442,21 +1032,12 @@ Scaling, by controller
 ```
 
 ---
+
 ### Step 10 - Scale the data plane from the AWS side
 
-**Purpose**
+Dimension 3, more nodes, and the only step that uses the AWS CLI. It makes Section 5's two-control-loops picture concrete.
 
-Everything so far has been dimension 1 - more pods. This is dimension 3 - more nodes - and it is the
-only step in this lab that uses the AWS CLI. It is also the step that makes the two-control-loops
-picture in Section 6 concrete.
-
-**Run from**
-
-```text
-aws-floci-course/
-```
-
-**Command - part 1, read the current configuration**
+**Part 1 - read the current configuration**
 
 ```bash
 aws eks describe-nodegroup \
@@ -1482,7 +1063,7 @@ aws eks describe-nodegroup \
 
 > Example output - subnet IDs will differ.
 
-**Command - part 2, change it**
+**Part 2 - change it**
 
 ```bash
 aws eks update-nodegroup-config \
@@ -1493,8 +1074,6 @@ aws eks update-nodegroup-config \
   --output table
 ```
 
-**What the command does**
-
 ```text
 aws
  └── eks                              the SERVICE
@@ -1504,13 +1083,8 @@ aws
            └── --scaling-config       min, max and desired, as a shorthand structure
 ```
 
-Note what this operation **cannot** change: `instanceTypes`, `amiType`, `subnets`, `nodeRole`,
-`diskSize`. Those are fixed at creation. Dimension 4 from Step 3 - bigger nodes - is not an update, it
-is a new node group plus a drain plus a delete. `update-nodegroup-config` handles scaling, labels,
-taints and the update configuration, and nothing else.
-
-The response is an **Update object with an ID and a status of `InProgress`**, not the node group. On
-real AWS you would poll it:
+- It cannot change `instanceTypes`, `amiType`, `subnets`, `nodeRole` or `diskSize`; bigger nodes means a new node group (dimension 4).
+- The response is an asynchronous **Update object** (`InProgress`), not the node group. EKS uses this pattern for every mutation. On real AWS you would poll it:
 
 ```bash
 UPDATE_ID=$(aws eks list-updates \
@@ -1524,10 +1098,7 @@ aws eks describe-update \
   || echo "describe-update unsupported on this build - read the node group directly instead"
 ```
 
-That asynchronous-update-object pattern is worth recognising because EKS uses it for every mutation:
-version upgrades, add-on changes, endpoint access changes. It is not specific to scaling.
-
-**Command - part 3, verify from both sides**
+**Part 3 - verify from both sides**
 
 ```bash
 aws eks describe-nodegroup \
@@ -1538,28 +1109,18 @@ echo "--- and what Kubernetes actually sees ---"
 kubectl get nodes -o custom-columns='NAME:.metadata.name,STATUS:.status.conditions[-1].type,LABELS:.metadata.labels.workload'
 ```
 
-**What to look for:** `minSize 2, maxSize 6, desiredSize 3` from the AWS side. From the Kubernetes
-side, **the node count may not change at all**, and that is the honest and expected outcome here.
+AWS side: `minSize 2, maxSize 6, desiredSize 3`. Kubernetes side: the node count may not change at all, and that is expected here.
 
 !!! note "Floci Limitation - the node group's `desiredSize` is recorded, not enacted"
-    Floci stores the scaling configuration faithfully and returns it faithfully. It does not start a
-    third node container, because the local cluster's nodes were created when the cluster was created
-    and are not managed by an Auto Scaling group.
+    Floci stores and returns the scaling configuration but starts no third node; the local nodes are not managed by an Auto Scaling group.
 
-    On real AWS, raising `desiredSize` to 3 changes the underlying Auto Scaling group's desired
-    capacity. Within a couple of minutes a third EC2 instance launches from the EKS-optimised AMI,
-    runs the bootstrap script with the cluster name, registers with the API server using
-    `usms-eks-node-role`, and appears in `kubectl get nodes` as `Ready`. Then - and only then - the
-    `Pending` pods from Step 9 get scheduled.
+    On real AWS the ASG launches a third EC2 instance, which joins as `Ready` within minutes; only then do Step 9's `Pending` pods schedule.
 
-    Take away the two-loop picture. **Raising `replicas` and raising `desiredSize` are different
-    operations against different APIs, and nothing connects them unless you install something that
-    does.** Step 11 is about that something.
+    **Raising `replicas` and raising `desiredSize` are different operations against different APIs, and nothing connects them unless you install something that does** (Step 11).
 
-**Command - part 4, put it back, or don't**
+**Part 4 - put it back, or don't**
 
-Leaving it at 3 is fine and is what `configs/lab-08.env` will record. If you would rather restore
-Lab 07's numbers:
+Leaving it at 3 is fine. To restore Lab 7's numbers:
 
 ```bash
 aws eks update-nodegroup-config \
@@ -1568,23 +1129,15 @@ aws eks update-nodegroup-config \
   --query 'update.status' --output text
 ```
 
-Whichever you choose, make `configs/lab-08.env` in Step 19 record what is actually true.
+Either way, Step 19's `configs/lab-08.env` records what is actually true.
 
-**Path B note.** Skip this step. Record in your notes that `usms-eks-nodes` does not exist as an AWS
-object on your build, and answer Section 15 Question 4 - which is about the two-loop picture - from
-the concept rather than from observation.
+**Path B:** skip this step, note that `usms-eks-nodes` does not exist as an AWS object on your build, and answer Section 14 Question 4 from the concept.
 
 ---
 
 ### Step 11 - Cluster Autoscaler and Karpenter, and a `nodeSelector` you can actually use
 
-**Purpose**
-
-Step 10 raised a number by hand. Something should raise it automatically. This step names the two
-things that do, explains why this lab does not install either, and then does the one piece of
-node-aware scheduling that *is* observable locally.
-
-**Concept first - the two options, in one sentence each**
+Something should raise Step 10's number automatically. This step names the two options, then does the node-aware scheduling that is observable locally.
 
 | | Cluster Autoscaler | Karpenter |
 | --- | --- | --- |
@@ -1595,48 +1148,25 @@ node-aware scheduling that *is* observable locally.
 | Bin-packing quality | Whatever your node groups happen to be | Chooses a size that fits, so less waste |
 | Maturity | The long-standing upstream Kubernetes project | AWS's newer project, now used well beyond EKS |
 
-The reason to know both: Cluster Autoscaler thinks in **groups you defined**, Karpenter thinks in
-**capacity that would fit**. If your workload is uniform, groups are fine. If it is varied - a few
-large jobs among many small services - groups force you to guess in advance, and guessing badly is
-how you end up paying for half-empty nodes.
+Cluster Autoscaler thinks in **groups you defined**; Karpenter thinks in **capacity that would fit**.
 
 !!! note "Conceptual / Real AWS - neither autoscaler is installed in this laboratory"
-    Both are Kubernetes Deployments that call the AWS APIs, and both need credentials to do so - in
-    practice through IRSA, which Lab 07 Step 21 established is not available on this build. Cluster
-    Autoscaler additionally needs the node group's Auto Scaling group to carry specific discovery
-    tags, and there is no Auto Scaling group here to tag.
+    Both are Deployments that call AWS APIs through IRSA, which Lab 7 Step 21 showed is not available here; Cluster Autoscaler also needs a tagged Auto Scaling group, and there is none.
 
-    On real EKS, installing Cluster Autoscaler is: create an IAM policy with the `autoscaling:`
-    describe and set-desired-capacity actions, create a role with an IRSA trust policy, install the
-    Helm chart with the cluster name and that role's ARN, and tag the node group's ASG with
-    `k8s.io/cluster-autoscaler/enabled` and `k8s.io/cluster-autoscaler/<cluster-name>`.
+    On real EKS: an IAM policy with the `autoscaling:` describe and set-desired-capacity actions, an IRSA role, the Helm chart, and the ASG tags `k8s.io/cluster-autoscaler/enabled` and `k8s.io/cluster-autoscaler/<cluster-name>`.
 
-    Take away what it does, not the commands: it watches for `Pending` pods and writes `desiredSize`.
-    It is the loop that connects Step 9 to Step 10, and without it those two steps are unrelated.
+    Take away what it does: it watches for `Pending` pods and writes `desiredSize`, connecting Step 9 to Step 10.
 
-**Concept - node labels and `nodeSelector`, which *is* observable**
+Lab 7's node group declared labels `workload=usms` and `tier=app`; a `nodeSelector` steers pods by them.
 
-Lab 07's node group declared Kubernetes labels `workload=usms` and `tier=app`. Those labels are how
-you steer pods at particular nodes - the cheapest form of scheduling control, and the one worth
-learning first.
-
-**Run from**
-
-```text
-aws-floci-course/
-```
-
-**Command - part 1, do the labels exist?**
+**Part 1 - do the labels exist?**
 
 ```bash
 kubectl get nodes --show-labels | tr ',' '\n' | grep -E 'workload|tier' \
   || echo "node group labels did not reach the nodes"
 ```
 
-**Command - part 2, if they did not, apply them by hand**
-
-This is a fair thing to do: on real EKS the node group would have applied them, and the point of the
-step is the `nodeSelector`, not the label's provenance.
+**Part 2 - if they did not, apply them by hand** (on real EKS the node group would have done this)
 
 ```bash
 for N in $(kubectl get nodes -o jsonpath='{.items[*].metadata.name}'); do
@@ -1646,10 +1176,9 @@ done
 kubectl get nodes -L workload,tier
 ```
 
-`-L` adds a column per label - much more readable than `--show-labels` when you know which labels you
-care about.
+`-L` adds one column per label.
 
-**Command - part 3, require the label**
+**Part 3 - require the label**
 
 ```bash
 kubectl patch deployment usms-enrolment --type=merge \
@@ -1659,10 +1188,9 @@ kubectl rollout status deployment/usms-enrolment --timeout=120s
 kubectl get pods -l app=usms-enrolment -o wide
 ```
 
-**What to look for:** the pods rescheduled onto nodes carrying `workload=usms`. Since every node
-carries it, they may land anywhere - which is correct, and which is why part 4 is the actual test.
+Every node carries the label, so pods may land anywhere. Part 4 is the real test.
 
-**Command - part 4, prove the selector is enforced**
+**Part 4 - prove the selector is enforced**
 
 ```bash
 kubectl patch deployment usms-enrolment --type=merge \
@@ -1688,13 +1216,9 @@ Events:
 
 > Example output.
 
-Two things to notice, and both are the deployment strategy from Lab 07 Step 13 paying off. The new
-pod is `Pending` and **the old pods are still serving** - `maxUnavailable: 0` means the roll cannot
-proceed until the new pod is ready, and it never will be. The Deployment is stuck, and stuck is much
-better than broken. On a Deployment with the default strategy, this same mistake would have taken 25%
-of your capacity away.
+The new pod is `Pending` and **the old pods keep serving**: Lab 7 Step 13's `maxUnavailable: 0` stops the roll. Stuck is better than broken.
 
-**Command - part 5, put it back**
+**Part 5 - put it back**
 
 ```bash
 kubectl patch deployment usms-enrolment --type=merge \
@@ -1704,7 +1228,7 @@ kubectl rollout status deployment/usms-enrolment --timeout=120s
 kubectl get pods -l app=usms-enrolment -o wide
 ```
 
-Also record the change in the manifest, so the repository stops lying - Step 5's lesson, applied:
+Record the change in the manifest too, so the repository matches the cluster (Step 5's lesson):
 
 ```bash
 python3 - << 'PY'
@@ -1723,19 +1247,13 @@ PY
 kubectl diff -f manifests/lab-07/20-enrolment.yaml || true
 ```
 
-**What to look for:** `kubectl diff` printing nothing, or only metadata noise. A diff showing a
-`replicas` change is expected and harmless - the HPA owns that field now, as Step 8 explained.
+`kubectl diff` should print nothing, or only metadata noise. A `replicas` difference is expected; the HPA owns that field.
 
 ---
 
 ### Step 12 - A PodDisruptionBudget, and what it does not protect against
 
-**Purpose**
-
-Scaling down and node maintenance both remove pods. A PDB is how you say "not all of them at once".
-It is also routinely misunderstood, so this step includes the misunderstanding.
-
-**Concept first - voluntary and involuntary disruption**
+Scale-in and node maintenance both remove pods. A PDB says "not all of them at once", and is routinely misunderstood.
 
 ```text
 VOLUNTARY - something with an API asked for it. A PDB IS CONSULTED
@@ -1750,18 +1268,9 @@ INVOLUNTARY - nobody asked. A PDB IS IGNORED
   a hardware failure
 ```
 
-A PDB constrains **evictions**, which is a specific API. `kubectl drain` uses it, autoscalers use it,
-and that is why a PDB protects you during maintenance. `kubectl delete pod` does **not** use it - a
-delete is not an eviction - which is why you can always delete straight through a PDB and why
-students conclude, wrongly, that PDBs do not work.
+A PDB constrains **evictions**. `kubectl drain` and autoscalers use the eviction API; `kubectl delete pod` does not, which is why a delete goes straight through a PDB.
 
-**Run from**
-
-```text
-aws-floci-course/
-```
-
-**Command - part 1, write it**
+**Part 1 - write it**
 
 ```bash
 cat > manifests/lab-08/30-pdb-gateway.yaml << 'EOF'
@@ -1800,23 +1309,9 @@ kubectl apply -f manifests/lab-08/30-pdb-gateway.yaml
 kubectl get pdb
 ```
 
-**What the command does**
-
-Two PDBs, expressed two different ways, deliberately.
-
-`minAvailable: 1` on the gateway says "at least one gateway pod must remain". The gateway runs a
-single replica, so **this PDB blocks every voluntary eviction of it** - draining its node will hang
-until you either scale the gateway up or force it. That is not a mistake in the manifest; it is the
-correct expression of "this service must not go away", and it tells you something true: *a
-single-replica Deployment cannot be both highly available and drainable.* Exercise 2 asks you to fix
-it properly.
-
-`maxUnavailable: 1` on enrolment says "at most one enrolment pod may be down at a time". With the HPA
-running between 2 and 8 replicas, that is the more useful form, because it scales with the replica
-count instead of being a fixed floor.
-
-Choose `minAvailable` when you know the absolute floor you need. Choose `maxUnavailable` when the
-replica count moves.
+- `minAvailable: 1` on the single-replica gateway **blocks every voluntary eviction**: a single-replica Deployment cannot be both highly available and drainable. Exercise 2 fixes it.
+- `maxUnavailable: 1` on enrolment scales with the HPA's replica count.
+- Use `minAvailable` for a fixed floor, `maxUnavailable` when the count moves.
 
 **Expected result**
 
@@ -1828,10 +1323,9 @@ usms-gateway-pdb     1               N/A               0                     5s
 
 > Example output.
 
-**`ALLOWED DISRUPTIONS` is the column that matters.** `0` for the gateway is the fact stated above:
-right now, nothing may voluntarily evict it. `1` for enrolment means one of its pods may go.
+`ALLOWED DISRUPTIONS` is the column that matters: `0` for the gateway, `1` for enrolment.
 
-**Command - part 2, prove it is consulted, and then prove what ignores it**
+**Part 2 - prove it is consulted, and then prove what ignores it**
 
 ```bash
 NODE=$(kubectl get pods -l app=usms-gateway -o jsonpath='{.items[0].spec.nodeName}')
@@ -1852,15 +1346,8 @@ kubectl create --raw "/api/v1/namespaces/usms/pods/$POD/eviction" \
   -f outputs/lab-08-eviction.json 2>&1 | tail -3
 ```
 
-**What the command does**
-
-An eviction is not an ordinary object you can `kubectl create -f` - it is a **subresource** of a pod,
-reached by POSTing to `/api/v1/namespaces/<ns>/pods/<pod>/eviction`. `kubectl create --raw <path> -f
-<file>` is how you POST an arbitrary body to an arbitrary API path, and it is worth knowing for
-exactly this kind of case.
-
-**The heredoc is unquoted** here - `<< EOF` - because `$POD` must expand. The eviction body has to
-name a real pod. Contrast with every manifest in this lab, which uses `<< 'EOF'`.
+- An eviction is a pod **subresource**; `kubectl create --raw <path> -f <file>` POSTs a body to it.
+- **The heredoc is unquoted** (`<< EOF`) because `$POD` must expand. Every manifest in this lab uses `<< 'EOF'`.
 
 **Expected result**
 
@@ -1876,18 +1363,15 @@ kubectl delete pod "$POD"
 kubectl get pods -l app=usms-gateway
 ```
 
-The pod is deleted, a replacement starts, and the PDB said nothing. **Both of those outcomes are
-correct.** A PDB is a constraint on a cooperative process, not a lock.
+The pod is deleted and replaced and the PDB said nothing. Both outcomes are correct: a PDB constrains a cooperative process; it is not a lock.
 
-**Command - part 3, the practical consequence**
+**Part 3 - the practical consequence**
 
 ```bash
 kubectl drain "$NODE" --ignore-daemonsets --delete-emptydir-data --dry-run=client 2>&1 | tail -5
 ```
 
-`--dry-run=client` shows what a drain would attempt without doing it. On a two-node local cluster an
-actual drain would evacuate a large fraction of your workload, so the dry run is the responsible
-demonstration here.
+`--dry-run=client` shows what a drain would attempt without doing it.
 
 !!! danger "Read before running a real drain"
     **What will happen:** every evictable pod on that node is evicted and rescheduled elsewhere, and
@@ -1914,15 +1398,10 @@ Infrastructure scaling and safety
 ```
 
 ---
+
 ### Step 13 - Rung one: ClusterIP and `port-forward`
 
-**Purpose**
-
-The bottom of the exposure ladder. Everything Lab 07 built is here already; this step names what
-that means and shows the one way to reach a ClusterIP Service from your laptop without changing
-anything.
-
-**Concept first - the four Service types, and one non-type**
+The bottom of the exposure ladder: what Lab 7 built, and the one way to reach it from your laptop without changing anything.
 
 | | Reachable from | Creates | Use it for |
 | --- | --- | --- | --- |
@@ -1932,17 +1411,9 @@ anything.
 | `ExternalName` | n/a | A DNS CNAME to something outside the cluster | Pointing at a managed database without changing application code |
 | `kubectl port-forward` | **Only your terminal** | Nothing. It is a tunnel through the API server | Debugging. Never anything else |
 
-The important structural fact, and the reason "ladder" is the right word: **each type is a superset of
-the one above.** A `LoadBalancer` Service still has a `nodePort` and still has a `clusterIP`, and you
-can see all three on one object. Step 15 will show exactly that.
+**Each type is a superset of the one above**: a `LoadBalancer` Service still has a `nodePort` and a `clusterIP`. Step 15 shows all three on one object.
 
-**Run from**
-
-```text
-aws-floci-course/
-```
-
-**Command - part 1, confirm nothing is reachable from here**
+**Part 1 - confirm nothing is reachable from here**
 
 ```bash
 kubectl get svc -o wide
@@ -1953,11 +1424,9 @@ echo "gateway ClusterIP: $CIP"
 curl -s --max-time 5 "http://$CIP/" || echo "as expected: a ClusterIP is not routable from your machine"
 ```
 
-**What to look for:** the `curl` failing. `10.43.x.x` is an address inside the cluster's virtual
-network; your laptop has no route to it and no reason to. If it *does* succeed, you have unusual
-routing configured and should note it.
+The `curl` should fail: your laptop has no route to the cluster's virtual network.
 
-**Command - part 2, tunnel to it**
+**Part 2 - tunnel to it**
 
 ```bash
 kubectl port-forward svc/usms-gateway 18080:80
@@ -1979,11 +1448,7 @@ curl -s http://localhost:18080/results/ ; echo
 {"service":"usms-results","pod":"usms-results-84cd7f6b59-h4xkz","campus":"rtc","version":"1.0.0"}
 ```
 
-> Example output - pod names differ. This is the first time in Practical 4 that a request from
-> **outside** the cluster has reached the application, and it is worth noticing that it did so
-> through the Kubernetes API server rather than through any networking you configured.
-
-**What the command does**
+> Example output - pod names differ. This request reached the application through the API server, not through any networking you configured.
 
 ```text
 kubectl
@@ -1992,33 +1457,15 @@ kubectl
            └── 18080:80       localPort:remotePort
 ```
 
-Two properties make this a debugging tool and nothing else:
-
-- **It is a single tunnel to a single pod.** Naming a Service does not load-balance; `kubectl` picks
-  one pod and every request goes there. Scaling the Deployment changes nothing about your tunnel.
-- **It exists only while that command runs, only on your machine, and it goes through the API
-  server** - so every byte is carried by your cluster's control plane, and it stops the moment you
-  press ++ctrl+c++ or your laptop sleeps.
-
-Anyone who proposes `kubectl port-forward` as part of a production access path should be gently
-redirected to Step 15.
-
-Stop the forward with ++ctrl+c++ in the first terminal.
+`port-forward` is for debugging only: it is a single tunnel to a single pod (no load balancing), it exists only while the command runs on your machine, and every byte goes through the control plane. Stop it with ++ctrl+c++.
 
 ---
 
 ### Step 14 - Rung two: NodePort
 
-**Purpose**
+The first rung that opens a real port on real machines, and the layer underneath `LoadBalancer` and `Ingress`.
 
-The first rung that opens a real port on real machines. It is also the layer underneath everything
-above it, so understanding it makes `LoadBalancer` and `Ingress` unmysterious.
-
-**Concept first**
-
-Setting `type: NodePort` makes the cluster allocate one port - by default from 30000 to 32767 - and
-open it on **every node**, whether or not that node runs a pod of the Service. A request to any node
-on that port is forwarded, by kube-proxy, to a ready pod anywhere in the cluster.
+`type: NodePort` allocates one port (default range 30000–32767) and opens it on **every node**; kube-proxy forwards it to a ready pod anywhere in the cluster.
 
 ```text
         node ag0 :31567 ---+
@@ -2028,23 +1475,9 @@ on that port is forwarded, by kube-proxy, to a ready pod anywhere in the cluster
         node srv0:31567 ---+
 ```
 
-Three consequences worth knowing:
+The port is the same on every node, which is what makes a load balancer's job trivial. A node with no pods still answers (`externalTrafficPolicy: Local` changes that).
 
-- **The port is the same on every node.** That is what makes an external load balancer's job trivial:
-  register all the nodes on one port and stop thinking about pods.
-- **A node with no pods still answers.** The extra hop costs a little latency, and it is why
-  `externalTrafficPolicy: Local` exists - it restricts a node to its own pods, preserves the client's
-  source IP, and in exchange makes some nodes answer nothing.
-- **The port range is high and non-obvious**, which is why nobody exposes a public website this way
-  directly. You pin it or you let it be allocated, but either way it is not port 80.
-
-**Run from**
-
-```text
-aws-floci-course/
-```
-
-**Command - part 1, a new Service rather than a patch**
+**Part 1 - a new Service rather than a patch**
 
 ```bash
 cat > manifests/lab-08/40-service-nodeport.yaml << 'EOF'
@@ -2072,15 +1505,8 @@ kubectl apply -f manifests/lab-08/40-service-nodeport.yaml
 kubectl get svc usms-results-np -o wide
 ```
 
-**What the command does**
-
-A **second** Service selecting the **same pods**. That is legal, common and useful: one workload can
-have an internal ClusterIP Service and a separately-exposed NodePort Service, with different names,
-different policies and different lifetimes. Nothing about `usms-results` itself changed.
-
-`nodePort: 30080` pins the port instead of letting the cluster allocate one. Pinning is a trade: your
-firewall rules and your documentation can be written in advance, but the port can collide with
-another Service and the failure - `provided port is already allocated` - arrives at apply time.
+- A **second** Service selecting the **same pods**; `usms-results` itself is unchanged.
+- `nodePort: 30080` pins the port: predictable, but it can collide (`provided port is already allocated`).
 
 **Expected result**
 
@@ -2091,10 +1517,9 @@ usms-results-np   NodePort   10.43.44.108    <none>        80:30080/TCP   3s    
 
 > Example output.
 
-**Read `PORT(S)` carefully: `80:30080/TCP`.** The Service still has a ClusterIP answering on 80 - the
-rung below is still there - and *additionally* every node answers on 30080. Superset, not replacement.
+`80:30080/TCP`: the ClusterIP on 80 is still there, and every node additionally answers on 30080.
 
-**Command - part 2, reach it from inside the cluster, on a node address**
+**Part 2 - reach it from inside the cluster, on a node address**
 
 ```bash
 NODEIP=$(kubectl get nodes -o jsonpath='{.items[0].status.addresses[?(@.type=="InternalIP")].address}')
@@ -2104,7 +1529,7 @@ kubectl run usms-debug --rm -it --restart=Never --image=busybox:1.36 -- \
   wget -qO- "http://$NODEIP:30080/"
 ```
 
-**Command - part 3, prove that *every* node answers**
+**Part 3 - prove that *every* node answers**
 
 ```bash
 for IP in $(kubectl get nodes -o jsonpath='{range .items[*]}{.status.addresses[?(@.type=="InternalIP")].address}{"\n"}{end}'); do
@@ -2114,24 +1539,20 @@ for IP in $(kubectl get nodes -o jsonpath='{range .items[*]}{.status.addresses[?
 done
 ```
 
-**What to look for:** a JSON response through **each** node address, and the `pod` field varying -
-proof that a node forwards to pods it does not host.
+A JSON response through **each** node address, with the `pod` field varying: nodes forward to pods they do not host.
 
-**Command - part 4, from your machine**
+**Part 4 - from your machine**
 
 ```bash
 curl -s --max-time 5 http://localhost:30080/ ; echo
 ```
 
 !!! note "Floci Limitation - a NodePort is not automatically published to your host"
-    The nodes are containers. A container's port is reachable from your machine only if it was
-    published when the container was created, and 30080 was not.
+    The nodes are containers, and 30080 was not published when they were created.
 
-    On real AWS the nodes are EC2 instances with addresses in your VPC, so a NodePort is reachable
-    from anything that can route to them and whose traffic the security group admits - which is
-    exactly how a load balancer reaches them.
+    On real AWS the nodes are EC2 instances in your VPC, reachable on the NodePort by anything the security group admits, which is how a load balancer reaches them.
 
-    **The fallback**, which keeps the demonstration honest without pretending:
+    **The fallback:**
 
     ```bash
     kubectl port-forward svc/usms-results-np 30080:80
@@ -2139,10 +1560,7 @@ curl -s --max-time 5 http://localhost:30080/ ; echo
     curl -s http://localhost:30080/ ; echo
     ```
 
-    Note what that proves and what it does not: it proves the Service works, not that the NodePort is
-    externally reachable. Say so in your report. If your `k3d` build supports it, the honest local
-    equivalent is to add a port mapping to the cluster, which requires recreating it - not worth it
-    for this rung.
+    This proves the Service works, not that the NodePort is externally reachable. Say so in your report.
 
 **Checkpoint 5**
 
@@ -2160,38 +1578,11 @@ Exposure ladder, rungs 1 and 2
 
 ### Step 15 - Rung three: LoadBalancer
 
-**Purpose**
+On a real cloud, this rung provisions infrastructure. Lab 7's `_lb_ports_` tag is used here.
 
-The rung that, on a real cloud, provisions infrastructure. This is where Lab 07's `_lb_ports_` tag
-earns its keep, and where the comparison with Lab 05 begins.
+`type: LoadBalancer` does everything NodePort does, then the cloud controller creates a load balancer and writes its address into `status.loadBalancer.ingress[0]`. `<pending>` means it has not finished, or, if permanent, that no controller is listening. **One `LoadBalancer` Service is one load balancer and one bill**; that is the economic argument for Ingress.
 
-**Concept first - what `type: LoadBalancer` actually does**
-
-```text
-1. Everything NodePort does: a clusterIP, and a nodePort open on every node.
-2. The cloud-controller-manager notices the new Service.
-3. On AWS it creates a Network Load Balancer, adds a listener, and registers
-   the nodes (or, with the newer controller, the pod IPs) as targets.
-4. When the load balancer has an address, the controller writes it back into
-   the Service's status.loadBalancer.ingress[0].
-```
-
-Step 4 of that list is why `EXTERNAL-IP` shows `<pending>` and then fills in. The pending state is not
-a failure; it means the controller has been asked and has not finished - or, if it stays pending
-forever, that **no controller is listening**, which is precisely what happens on a cluster with no
-cloud provider integration.
-
-**The cost model is the thing students miss.** One `LoadBalancer` Service is one load balancer. Ten
-Services of type `LoadBalancer` is ten load balancers, ten monthly charges and ten DNS names. That is
-the entire economic argument for Ingress, which Step 16 is about.
-
-**Run from**
-
-```text
-aws-floci-course/
-```
-
-**Command - part 1, promote the gateway**
+**Part 1 - promote the gateway**
 
 ```bash
 cat > manifests/lab-08/50-service-loadbalancer.yaml << 'EOF'
@@ -2223,14 +1614,7 @@ kubectl apply -f manifests/lab-08/50-service-loadbalancer.yaml
 kubectl get svc usms-gateway -o wide
 ```
 
-**What the command does**
-
-This is a **complete Service manifest** that replaces the one Lab 07 applied, not a patch. The name
-is the same, so `apply` updates the existing object rather than creating a second one, and the file
-in your repository now describes what the cluster contains. Step 5's lesson, applied for the second
-time.
-
-**Read the three annotations, because they are the whole of "EKS-specific" in this lab:**
+This is a **complete Service manifest** replacing Lab 7's, not a patch, so the repository describes the cluster. The three annotations are the whole of "EKS-specific" in this lab:
 
 ```text
 aws-load-balancer-type: external
@@ -2249,11 +1633,9 @@ aws-load-balancer-scheme: internet-facing
     Lab 05 required both. An internal scheme would use the private pair instead.
 ```
 
-Annotations are how Kubernetes carries cloud-specific configuration without polluting the portable
-`spec`. The manifest still applies on any cluster; on a non-AWS one, the annotations are inert
-strings. That is the portability claim from Lab 07 Section 1, with its honest caveat attached.
+On a non-AWS cluster the annotations are inert strings, so the manifest stays portable.
 
-**Command - part 2, watch for an address**
+**Part 2 - watch for an address**
 
 ```bash
 kubectl get svc usms-gateway -w
@@ -2278,11 +1660,9 @@ usms-gateway   LoadBalancer   10.43.201.77    <pending>     80:31946/TCP   3m
 
 > Example output. Either is a valid result on this platform.
 
-**Notice `PORT(S)`: `80:31946/TCP`.** A nodePort was allocated automatically, even though you did not
-ask for one. That is the superset property made visible for the second time: `LoadBalancer` contains
-`NodePort` contains `ClusterIP`.
+`80:31946/TCP`: a nodePort was allocated automatically. `LoadBalancer` contains `NodePort` contains `ClusterIP`.
 
-**Command - part 3, reach it**
+**Part 3 - reach it**
 
 ```bash
 echo "--- via the published host port from Lab 07's _lb_ports_ tag ---"
@@ -2299,22 +1679,11 @@ echo "EXTERNAL-IP = ${EXT:-none}"
 ```
 
 !!! note "Floci Limitation - a LoadBalancer Service may stay `<pending>` forever, and that is the honest result"
-    Whether an external address appears depends on whether your build starts a service load balancer
-    for the local cluster. Some do; some deliberately do not, to keep host port usage small. The
-    `_lb_ports_` tag from Lab 07 Step 8 is what publishes 8081 and 8082 on your host when it does.
+    Some builds start a service load balancer for the local cluster and publish 8081 and 8082 through the `_lb_ports_` tag; some do not.
 
-    On real EKS with the AWS Load Balancer Controller installed, this Service produces a Network Load
-    Balancer in your public subnets within two or three minutes, with pod IPs as targets, and
-    `EXTERNAL-IP` becomes a DNS name of the form
-    `k8s-usms-usmsgat-abc123.elb.us-east-1.amazonaws.com`.
+    On real EKS with the AWS Load Balancer Controller, this produces an NLB in your public subnets with pod IPs as targets, and `EXTERNAL-IP` becomes a name like `k8s-usms-usmsgat-abc123.elb.us-east-1.amazonaws.com`.
 
-    **Take away the shape.** One Service, one load balancer, one bill. And note the annotation that
-    said `target-type: ip` - you configured exactly that by hand in Lab 05, on an ALB, for a Fargate
-    service. The infrastructure is the same; only who asked for it has changed.
-
-    If yours stays `<pending>`, use `kubectl port-forward svc/usms-gateway 8080:80` to demonstrate the
-    Service works, record the `<pending>` state, and say in your report which of the four rungs of
-    the ladder you observed and which you reasoned about.
+    Take away the shape: one Service, one load balancer, one bill, and `target-type: ip` exactly as in Lab 5. If yours stays `<pending>`, use `kubectl port-forward svc/usms-gateway 8080:80` to show the Service works, record the `<pending>` state, and say which rungs you observed and which you reasoned about.
 
 **Verify**
 
@@ -2323,25 +1692,15 @@ kubectl get svc usms-gateway \
   -o jsonpath='{"type="}{.spec.type}{"  clusterIP="}{.spec.clusterIP}{"  nodePort="}{.spec.ports[0].nodePort}{"  external="}{.status.loadBalancer.ingress[0].ip}{"\n"}'
 ```
 
-**What to look for:** all four fields on one line, with `type=LoadBalancer`, a `clusterIP`, a
-`nodePort` and an `external` that is either an address or empty. That single line is the ladder, and
-it is worth putting in your lab report.
+`type=LoadBalancer`, a `clusterIP`, a `nodePort`, and an `external` address or empty. That one line is the ladder; put it in your report.
 
 ---
 
 ### Step 16 - Rung four: Ingress, and the comparison this practical was built for
 
-**Purpose**
+The top rung, and the point where Practical 2 and Practical 4 turn out to describe the same infrastructure.
 
-The top rung, the one that makes the economics work, and the point where Practical 2 and Practical 4
-turn out to be describing the same infrastructure.
-
-**Concept first - what an Ingress is, and what it is not**
-
-An **Ingress** is a set of HTTP routing rules: host names, paths, and the Service each should reach.
-It is **not** a proxy and it does nothing on its own. Something must watch for Ingress objects and
-implement them - an **ingress controller** - and which controller you run determines what actually
-happens:
+An **Ingress** is a set of HTTP routing rules. It does nothing on its own; an **ingress controller** implements it:
 
 | Controller | What it creates | Where it runs |
 | --- | --- | --- |
@@ -2349,10 +1708,7 @@ happens:
 | ingress-nginx | The same, with nginx | In-cluster |
 | **AWS Load Balancer Controller** | **An Application Load Balancer, in your VPC** | In-cluster, calling the AWS API |
 
-That third row is the one to internalise. On EKS with the AWS Load Balancer Controller, an Ingress
-object produces **an ALB with a target group of type `ip` and listener rules per path**. Read that
-again next to Lab 05, where you created an ALB, a target group of type `ip`, a listener, and a
-path-based rule - by hand, one AWS call at a time.
+On EKS with the AWS Load Balancer Controller, an Ingress produces an ALB with a target group of type `ip` and one listener rule per path: what you built by hand in Lab 5.
 
 ```text
 LAB 05, by hand                          LAB 08, from one Ingress object
@@ -2364,31 +1720,18 @@ LAB 05, by hand                          LAB 08, from one Ingress object
   ecs register/deregister targets           the controller watches Endpoints
 ```
 
-**Nothing new is being provisioned. The same ALB, asked for differently.** That sentence is the point
-of running Practical 2 and Practical 4 back to back, and Step 17 asks you to write it in your own
-words.
+**Nothing new is being provisioned; the same ALB is asked for differently.** And ten paths on one Ingress is one load balancer, not ten.
 
-**And the economics.** Ten Services of type `LoadBalancer` is ten load balancers. Ten paths on one
-Ingress is one. That is why Ingress exists.
-
-**Run from**
-
-```text
-aws-floci-course/
-```
-
-**Command - part 1, is there a controller?**
+**Part 1 - is there a controller?**
 
 ```bash
 kubectl get ingressclass 2>/dev/null || echo "no IngressClass registered"
 kubectl get pods -A | grep -Ei 'traefik|ingress|nginx-controller' || echo "no ingress controller pod found"
 ```
 
-**What to look for:** an IngressClass named `traefik`, `nginx` or similar. If there is none, the
-Ingress you create in part 2 will exist and never receive an address - a Conceptual result, and one
-worth recording precisely rather than working around.
+Look for an IngressClass such as `traefik` or `nginx`. With none, the Ingress will exist but never get an address; record that as a Conceptual result.
 
-**Command - part 2, write the Ingress**
+**Part 2 - write the Ingress**
 
 ```bash
 cat > manifests/lab-08/60-ingress.yaml << 'EOF'
@@ -2440,25 +1783,9 @@ kubectl get ingress
 kubectl describe ingress usms-portal-ingress | tail -20
 ```
 
-**What the command does**
-
-**Rule order matters, and Kubernetes does not use the order you wrote.** An ingress controller matches
-the **longest** matching path, so `/enrolment/x` reaches `usms-enrolment` even though `/` is also a
-match. Compare that with Lab 05, where an ALB listener evaluated rules in **numeric priority order**
-and you gave the `/alb-health` rule priority 10 so it would be seen before the default. Two systems,
-two different disambiguation rules, and getting them confused produces routing that is subtly wrong
-rather than obviously broken.
-
-`pathType: Prefix` matches on whole path segments: `/results` matches `/results` and `/results/2026`
-but not `/resultsarchive`. The alternative, `Exact`, matches only the literal path. There is a third,
-`ImplementationSpecific`, which means "whatever this controller does", and which you should avoid for
-exactly the reason its name suggests.
-
-**Note what this Ingress bypasses.** `/enrolment` now goes **straight to `usms-enrolment`**, not
-through `usms-gateway`. Both paths to that service now exist and they are genuinely different: the
-gateway strips a prefix and adds headers; the Ingress rule does neither. That is a real architectural
-choice - an in-cluster gateway service versus an edge router - and Section 15 Question 6 asks you to
-take a position on it.
+- **Longest matching path wins**, not the order written, so `/enrolment/x` reaches `usms-enrolment` although `/` also matches. Lab 5's ALB used **numeric priority** instead.
+- `pathType: Prefix` matches whole segments: `/results` matches `/results/2026` but not `/resultsarchive`. Avoid `ImplementationSpecific`.
+- `/enrolment` now bypasses `usms-gateway`, which strips a prefix and adds headers. Section 14 Question 6 asks you to choose between the two paths.
 
 **Expected result**
 
@@ -2476,7 +1803,7 @@ usms-portal-ingress   <none>   *                 80      25s
 
 > Example output. The second, with no `CLASS` and no `ADDRESS`, is the no-controller case.
 
-**Command - part 3, exercise the routes**
+**Part 3 - exercise the routes**
 
 ```bash
 for P in / /enrolment/ /results/ ; do
@@ -2486,8 +1813,7 @@ for P in / /enrolment/ /results/ ; do
 done
 ```
 
-If nothing answers on 8081, use the in-cluster equivalent, which tests the routing without depending
-on host port publishing:
+If nothing answers on 8081, test the routing in-cluster:
 
 ```bash
 ADDR=$(kubectl get ingress usms-portal-ingress -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
@@ -2504,22 +1830,11 @@ fi
 ```
 
 !!! note "Floci Limitation - an Ingress needs a controller, and one may not be running"
-    Floci may start the cluster without an ingress controller, in which case your Ingress object is
-    created, stored and served by the API server, and never given an address.
+    Without a controller, the Ingress is stored and served by the API server but never given an address.
 
-    On real EKS you install the AWS Load Balancer Controller - an IRSA-authenticated Deployment - and
-    this same object produces an internet-facing ALB in your public subnets, with one target group per
-    backend Service, targets of type `ip`, and one listener rule per path. Two or three minutes, and
-    `ADDRESS` becomes an ALB DNS name.
+    On real EKS, the AWS Load Balancer Controller turns this object into an internet-facing ALB in your public subnets, one `ip` target group per backend, one rule per path.
 
-    **What to take away regardless:** an Ingress is a *declaration of routing intent*. Its value does
-    not come from the controller you happen to run; it comes from the fact that the same seven lines
-    of routing produce a Traefik rule on a laptop and an ALB rule in production. That is worth more
-    than either implementation.
-
-    If you have no controller, say so in your report, and answer this instead, in prose: *which four
-    `aws elbv2` commands from Lab 05 would the AWS Load Balancer Controller have run on your behalf,
-    and in what order?* You have all four in Lab 05's Appendix A.
+    Take away that an Ingress is a declaration of routing intent: the same lines give a Traefik rule locally and an ALB in production. If you have no controller, answer in prose instead: *which four `aws elbv2` commands from Lab 05 would the AWS Load Balancer Controller have run on your behalf, and in what order?*
 
 **Checkpoint 6**
 
@@ -2538,20 +1853,10 @@ Exposure ladder, complete
 ```
 
 ---
+
 ### Step 17 - Write the Practical 2 / Practical 4 comparison, with both systems running
 
-**Purpose**
-
-Both stacks are up. The ECS service from Lab 04 is still running behind the ALB from Lab 05 with
-the scaling policies from Lab 06, and the EKS cluster from Lab 07 is running the same application
-with the objects from this lab. This is the only session in the course where you can check a claim
-about the two rather than remember one.
-
-**Run from**
-
-```text
-aws-floci-course/
-```
+The ECS stack from Labs 4 to 6 and the EKS stack from Labs 7 and 8 are both running. Check claims about them now rather than remember them later.
 
 **Command - look at both**
 
@@ -2617,34 +1922,15 @@ EOF
 echo "now fill it in - notes/lab-08-notes.md"
 ```
 
-**What to look for:** you filling it in, with both systems in front of you. Section 14 grades this
-and Section 15 Questions 3 and 7 assume you have done it.
-
-Two of the rows have answers that surprise people, so they are worth flagging rather than hiding.
-"Where does that thing run?" - Application Auto Scaling runs in AWS, outside anything you own, so it
-keeps working when your cluster is unhealthy and stops working when AWS's is. The HPA runs in the
-Kubernetes controller manager, which on EKS is part of the control plane AWS operates for you, so the
-answer is *almost* the same and not quite. And "what happens if there is no capacity" - ECS on
-Fargate never runs out, because AWS supplies the capacity; the HPA absolutely does, and Step 9's
-warning box is what that looks like.
+Fill it in with both systems in front of you; Section 13 grades it and Section 14 Questions 3 and 7 assume it. Two rows surprise people: Application Auto Scaling runs in AWS outside anything you own, while the HPA runs in the controller manager (on EKS, AWS-operated, so almost but not quite the same); and Fargate never runs out of capacity, while the HPA can (Step 9's warning).
 
 ---
 
 ### Step 18 - Prove that scaling and exposure configuration survive a restart
 
-**Purpose**
+The course rule since Lab 1: create, perturb, read back. The property is that the HPA, PDBs, Services and Ingress are stored state.
 
-The same rule the course has applied since Lab 1: prove the property, do not observe a proxy for it.
-Here the property is that the HPA, the PDBs, the Services and the Ingress are stored state rather
-than something that happened to be running.
-
-**Run from**
-
-```text
-aws-floci-course/
-```
-
-**Command - part 1, record the truth**
+**Part 1 - record the truth**
 
 ```bash
 {
@@ -2658,7 +1944,7 @@ aws-floci-course/
 } | tee outputs/lab-08-before-restart.txt
 ```
 
-**Command - part 2, perturb**
+**Part 2 - perturb**
 
 !!! danger "Read before running any stop command"
     **What will be stopped:** the Floci container, via `docker compose stop`, and with it the
@@ -2679,7 +1965,7 @@ kubectl cluster-info || { echo "re-establishing kubeconfig"; aws eks update-kube
 kubectl config set-context --current --namespace=usms
 ```
 
-**Command - part 3, read back**
+**Part 3 - read back**
 
 ```bash
 {
@@ -2699,18 +1985,12 @@ diff <(grep -v '^===' outputs/lab-08-before-restart.txt) \
   || echo "differences above - read them before deciding whether they matter"
 ```
 
-**What to look for:** an identical set of rows. Two differences are legitimate and you should decide
-about them rather than dismissing them:
+The rows should be identical. Two differences are legitimate; decide about them rather than dismiss them:
 
-- **A `nodePort` that changed.** If a port was auto-allocated rather than pinned, a new one may be
-  assigned. `usms-results-np` was pinned to 30080 in Step 14 and must not change; `usms-gateway`'s was
-  allocated and may. That contrast is the argument for pinning, arriving on its own.
-- **An `EXTERNAL-IP` that is now `<pending>` again.** The Service object persisted; the thing that
-  fulfils it restarted. On real AWS the load balancer would still exist and the address would still be
-  the same, because the load balancer is not part of the cluster.
+- **A changed `nodePort`** on `usms-gateway` (auto-allocated). `usms-results-np` was pinned to 30080 and must not change: the argument for pinning.
+- **`EXTERNAL-IP` back to `<pending>`.** The Service persisted; whatever fulfils it restarted. On real AWS the load balancer lives outside the cluster and keeps its address.
 
-**If the HPA or the Ingress is missing entirely**, run `./scripts/utilities/floci-storage-check.sh`
-before anything else. Storage mode `memory` is the cause in the overwhelming majority of cases.
+If the HPA or Ingress is missing entirely, run `./scripts/utilities/floci-storage-check.sh` first; storage mode `memory` is the usual cause.
 
 **Checkpoint 7**
 
@@ -2729,17 +2009,7 @@ PERSISTENCE PROVEN
 
 ### Step 19 - Write `configs/lab-08.env`
 
-**Purpose**
-
-The same contract as every lab. IDs and names, never secrets, looked up rather than remembered.
-
-**Run from**
-
-```text
-aws-floci-course/
-```
-
-**Command**
+Names and numbers, never secrets, looked up rather than remembered.
 
 ```bash
 cat > configs/lab-08.env << EOF
@@ -2787,15 +2057,7 @@ EOF
 grep -n 'export .*=$\|None' configs/lab-08.env || echo "all values populated"
 ```
 
-**What the command does**
-
-**The heredoc is unquoted.** Every `$(...)` runs now, and values land on disk. Every manifest in this
-lab used the quoted form for the opposite reason. That contrast has now appeared in five labs, and it
-is still the most common silent bug in the course.
-
-Every value that can be looked up **is** looked up - from the cluster for Kubernetes objects, from the
-AWS API for the node group. Nothing is taken from a shell variable, so a deleted object shows as empty
-and the check below catches it.
+**The heredoc is unquoted** so every `$(...)` runs now; the manifests used `<< 'EOF'` for the opposite reason. Every value is looked up live, so a deleted object shows as empty.
 
 **Expected result**
 
@@ -2803,12 +2065,11 @@ and the check below catches it.
 all values populated
 ```
 
-Three expected exceptions, and they are not gaps:
+Three expected exceptions:
 
-- `USMS_INGRESS_CLASS` is empty if no ingress controller is running. Step 16 recorded that.
-- `USMS_SVC_GATEWAY_NODEPORT` is empty if the Service never left `ClusterIP` - which should not be
-  the case after Step 15, so investigate if you see it.
-- The three `USMS_NODEGROUP_*` values are empty on support Path B. Expected; note it.
+- `USMS_INGRESS_CLASS` is empty if no ingress controller is running (Step 16).
+- `USMS_SVC_GATEWAY_NODEPORT` should not be empty after Step 15; investigate if it is.
+- The three `USMS_NODEGROUP_*` values are empty on Path B.
 
 **Verify**
 
@@ -2819,38 +2080,24 @@ echo "nodeport: $USMS_SVC_NODEPORT   gateway: $USMS_SVC_GATEWAY_TYPE"
 grep -c '^export' configs/lab-08.env
 ```
 
-**What to look for:** `hpa: 2..8 at 50% cpu, scale-in window 300s`, `nodeport: 30080`, `gateway:
-LoadBalancer`, and a count of **19** exported variables.
+`hpa: 2..8 at 50% cpu, scale-in window 300s`, `nodeport: 30080`, `gateway: LoadBalancer`, and **19** exported variables.
 
 ---
 
 ### Step 20 - Commit your work
 
-**Purpose**
-
-The same check as every lab, preserving the property that `.gitignore` was the repository's first
-commit.
-
-**Run from**
-
-```text
-aws-floci-course/
-```
-
-**Command - part 1, look before you add**
+**Part 1 - look before you add**
 
 ```bash
 git status --short
 ```
 
-**What to look for, before typing anything else:**
+Before typing anything else, check:
 
-- No path under `outputs/` appears. This lab wrote six files there, including
-  `lab-08-eviction.json`, which names a pod and is harmless, and the before/after snapshots.
-- No `.env` at the repository root appears.
-- `configs/lab-08.env` **does** appear - names and numbers, no secrets.
-- `manifests/lab-07/20-enrolment.yaml` appears, because Step 11 added a `nodeSelector` to it. That
-  is intentional and is exactly the drift-prevention habit from Step 5.
+- No path under `outputs/` (this lab wrote six files there).
+- No `.env` at the repository root.
+- `configs/lab-08.env` **does** appear.
+- `manifests/lab-07/20-enrolment.yaml` appears because Step 11 added a `nodeSelector`. That is intended.
 
 If anything under `outputs/` is listed, diagnose before committing:
 
@@ -2866,10 +2113,9 @@ git check-ignore -v outputs/lab-08-baseline.txt
 
 > Example output - the line number will differ.
 
-If it prints nothing, the file is not ignored and the rule is probably `outputs/` rather than
-`outputs/*` - the silent failure described in §15 of the course contract.
+If it prints nothing, the rule is probably `outputs/` rather than `outputs/*`, the silent failure from the course contract.
 
-**Command - part 2, add and commit**
+**Part 2 - add and commit**
 
 ```bash
 git add labs/lab-08-eks-scaling manifests/lab-08 manifests/lab-07/20-enrolment.yaml \
@@ -2900,8 +2146,7 @@ git show --stat --oneline HEAD | head -20
 git ls-files | grep -c '^outputs/'
 ```
 
-**What to look for:** this commit and Lab 07's beneath it; a file list containing
-`manifests/lab-08/` and `configs/lab-08.env`; and **`0`** from the last command.
+This commit above Lab 7's; `manifests/lab-08/` and `configs/lab-08.env` in the file list; and **`0`** from the last command.
 
 **Checkpoint 8**
 
@@ -2918,34 +2163,21 @@ committed
 
 ---
 
-### 8.5 Path C - what to do if you have no cluster
+### Path C - what to do if you have no cluster
 
-This lab is harder to do on paper than Lab 07, because its subject is watching numbers move. It is
-still worth doing, and here is the honest version:
+1. **Write every manifest** in Section 6's list and validate them with `kubectl apply --dry-run=client -f manifests/lab-08/`. No cluster is needed.
+2. **Do Steps 3, 6 and 8's concept parts**, and work the HPA arithmetic by hand for 2 pods at 80%, 4 pods at 30%, and 8 pods at 95% with `maxReplicas: 8`. Show the `ceil` each time and say what `behavior` would allow.
+3. **Do Step 10 if you are on Path A**; it needs no `kubectl`.
+4. **Do Step 17 in full**; it needs only Labs 5 and 6.
+5. **Answer all of Section 14**, and do Section 12's Exercises 3 and 4 on paper, labelling output as expected rather than observed.
 
-1. **Write every manifest** in Section 7's list and validate them with
-   `kubectl apply --dry-run=client -f manifests/lab-08/`. No cluster is needed.
-2. **Do Step 3, Step 6 and Step 8's concept sections in full**, and work the HPA arithmetic by hand
-   for at least three cases: 2 pods at 80%, 4 pods at 30%, and 8 pods at 95% with `maxReplicas: 8`.
-   Show the `ceil` calculation each time and say what `behavior` would allow.
-3. **Do Step 10 if you are on Path A** - it is a pure AWS CLI step and needs no `kubectl`.
-4. **Do Step 17 in full.** It is the most valuable step in the lab and it requires only that you can
-   read Lab 05 and Lab 06, both of which you have.
-5. **Answer all of Section 15**, and do Section 13's Exercises 3 and 4 on paper, giving the commands
-   you would run and the output you would expect, clearly labelled as expected rather than observed.
-
-That is a legitimate submission. An invented `kubectl get hpa` output showing a percentage is not.
+That is a legitimate submission. An invented `kubectl get hpa` output is not.
 
 ---
-## 9. Verification
 
-### 9.1 Build `scripts/utilities/verify-lab-08.sh`
+## 8. Verification
 
-**Run from**
-
-```text
-aws-floci-course/
-```
+### 8.1 Build `scripts/utilities/verify-lab-08.sh`
 
 ````markdown
 {% raw %}```bash
@@ -3071,14 +2303,9 @@ PASS=34  FAIL=0
 
 > Example output - the `ok` lines are abbreviated; you will see all 34.
 
-**How to read a failure.** Failures in the **Environment** block are the real problem and everything
-below is usually a consequence.
+Failures in the **Environment** block are the real problem; the rest usually follow from them. On **Path B**, expect exactly two failures (the `_lb_ports_` tag and the node group's `maxSize`): `PASS=32  FAIL=2` is correct.
 
-On support **Path B**, expect exactly **two** failures - the `_lb_ports_` tag and the node group's
-`maxSize` - both marked in the script itself. `PASS=32  FAIL=2` is a correct Path B result. Any other
-failure is genuine.
-
-### 9.2 A quick end-to-end check you can run any time
+A quick end-to-end check you can run any time:
 
 ```bash
 kubectl run usms-smoke --rm -it --restart=Never --image=busybox:1.36 -- sh -c '
@@ -3089,7 +2316,7 @@ kubectl run usms-smoke --rm -it --restart=Never --image=busybox:1.36 -- sh -c '
 kubectl get hpa,pdb,svc,ingress
 ```
 
-### 9.3 Build the cleanup script - DO NOT RUN IT NOW
+### 8.2 Build the cleanup script - DO NOT RUN IT NOW
 
 !!! danger "This script removes everything Lab 08 added"
     **What will be deleted:** the HPA, both PDBs, the NodePort Service, the Ingress and the load
@@ -3155,15 +2382,11 @@ chmod +x scripts/cleanup/lab-08-cleanup.sh
 bash -n scripts/cleanup/lab-08-cleanup.sh && echo "cleanup script: valid bash syntax"
 ```
 
-The deletion order is the lesson again, and it is different from Lab 07's: **Ingress, LoadBalancer
-Service, controllers, workloads, AWS.** The rule underneath it is always the same - remove the thing
-that *references* before the thing *referenced*, and remove anything that provisions external
-infrastructure before you remove what it was provisioned for. An ALB left behind by a deleted cluster
-is the classic way to be billed for something you cannot find.
+The order: **Ingress, LoadBalancer Service, controllers, workloads, AWS**. Remove what references before what is referenced, and anything that provisions external infrastructure first; an ALB left behind by a deleted cluster is billed and hard to find.
 
 ---
 
-## 10. Checkpoints
+## 9. Checkpoints
 
 | # | After step | What must be true |
 | --- | --- | --- |
@@ -3178,31 +2401,30 @@ is the classic way to be billed for something you cannot find.
 
 ---
 
-## 11. Troubleshooting
+## 10. Troubleshooting
+
+!!! warning "Known issue on Floci 2.0.1"
+    On Floci 2.0.1, `update-nodegroup-config` fails, so the node group cannot be resized. Diagnose first, then use the alternative in [Known Issues - Lab 08](known-issues.md#lab-08-eks-scaling). It states what the alternative does and does not prove.
 
 ??? danger "`kubectl get hpa` shows `<unknown>/50%` and never changes"
-    The HPA cannot compute utilisation. `describe` names which of the two causes it is:
+    `describe` names the cause:
 
     ```bash
     kubectl describe hpa usms-enrolment-hpa | sed -n '/Conditions/,/Events/p'
     ```
 
-    `FailedGetResourceMetric` with `unable to get metrics for resource cpu` means the metrics
-    pipeline is not working - go back to Step 7 and check
-    `kubectl get --raw /apis/metrics.k8s.io/v1beta1`.
+    `FailedGetResourceMetric` / `unable to get metrics for resource cpu`: the metrics pipeline is down; go back to Step 7 and check `kubectl get --raw /apis/metrics.k8s.io/v1beta1`.
 
-    `missing request for cpu` means the container has no CPU request. Nothing about the HPA can be
-    changed to work around it; fix the Deployment:
+    `missing request for cpu`: fix the Deployment, not the HPA:
 
     ```bash
     kubectl set resources deployment/usms-enrolment --requests=cpu=50m,memory=32Mi
     ```
 
-    A third, rarer case: the HPA is fine but you are reading it within the first 15 to 30 seconds of
-    its life, before the first poll. Wait and re-read before diagnosing anything.
+    Or you are reading it in its first 15 to 30 seconds. Wait and re-read.
 
 ??? danger "The HPA scales up, but the new pods stay `Pending`"
-    Dimensions 1 and 3 from Step 3 failing to meet. The autoscaler did its job; there is no room.
+    No room for the pods (dimensions 1 and 3 from Step 3).
 
     ```bash
     kubectl get pods -l app=usms-enrolment
@@ -3210,18 +2432,10 @@ is the classic way to be billed for something you cannot find.
     kubectl describe node <any node> | sed -n '/Allocated resources/,/Events/p'
     ```
 
-    `Insufficient cpu` confirms it. The real answers are more nodes (Step 10, or a cluster autoscaler)
-    or a lower `maxReplicas`. **Do not lower the CPU request to make the pods fit** - that changes the
-    HPA's denominator, so every percentage you have recorded becomes incomparable, and the autoscaler
-    will then scale more aggressively for the same real load.
+    `Insufficient cpu` confirms it. Add nodes (Step 10, or a cluster autoscaler) or lower `maxReplicas`. **Do not lower the CPU request**: it changes the HPA's denominator, making recorded percentages incomparable and scaling more aggressive.
 
 ??? danger "`kubectl scale` appears to work and then the replica count changes back"
-    The HPA owns `spec.replicas` now. Within 15 seconds it will overwrite anything you set outside
-    `minReplicas` to `maxReplicas`, and inside that range it will overwrite you as soon as the metric
-    justifies a different number.
-
-    This is correct behaviour, not a conflict to resolve. If you need to scale by hand - during an
-    incident, say - the supported way is to remove the HPA's authority first:
+    The HPA owns `spec.replicas` and overwrites you within 15 seconds. To scale by hand during an incident, remove its authority first:
 
     ```bash
     kubectl delete hpa usms-enrolment-hpa
@@ -3230,13 +2444,10 @@ is the classic way to be billed for something you cannot find.
     kubectl apply -f manifests/lab-08/10-hpa-enrolment.yaml
     ```
 
-    Note the consequence for your repository: `replicas:` in `manifests/lab-07/20-enrolment.yaml` is
-    now only an initial value, and `kubectl diff` will report it as a difference forever. That is
-    expected. Teams usually resolve it by removing the `replicas` field from a manifest once an HPA
-    owns it.
+    `replicas:` in `manifests/lab-07/20-enrolment.yaml` is now only an initial value and `kubectl diff` will always report it. Teams usually remove the field once an HPA owns it.
 
 ??? danger "The load generator runs but CPU never rises"
-    Check that the load is actually arriving:
+    Check the load is arriving:
 
     ```bash
     kubectl logs deploy/usms-loadgen --tail=5
@@ -3244,90 +2455,65 @@ is the classic way to be billed for something you cannot find.
     kubectl exec deploy/usms-loadgen -- wget -qO- http://usms-gateway.usms.svc.cluster.local/enrolment/
     ```
 
-    If the last command returns JSON, the path works and the loop is simply not generating enough
-    load. Raise `replicas` on `usms-loadgen`. If it fails, the gateway or a backend is down and the
-    autoscaler is not your problem yet.
-
-    A subtler cause: the YAML `>` folded block in the manifest lost its trailing semicolons during an
-    edit, and the container is crash-looping. `kubectl get pods -l app=usms-loadgen` shows it
-    immediately.
+    If the last command returns JSON, raise `replicas` on `usms-loadgen`. If it fails, a backend is down. Also check `kubectl get pods -l app=usms-loadgen` for a crash loop caused by lost semicolons in the `>` block.
 
 ??? danger "`nodePort: 30080` is rejected with `provided port is already allocated`"
-    Another Service in the cluster - possibly in a different namespace - has that port.
+    Another Service, possibly in another namespace, has the port:
 
     ```bash
     kubectl get svc -A -o custom-columns='NS:.metadata.namespace,NAME:.metadata.name,TYPE:.spec.type,NODEPORT:.spec.ports[*].nodePort' | grep 30080
     ```
 
-    Either free it, or pick another port in 30000–32767 and update
-    `manifests/lab-08/40-service-nodeport.yaml` and `configs/lab-08.env`. Do not simply remove the
-    `nodePort` line unless you intend to give up pinning - Step 18's persistence check depends on the
-    port being stable.
+    Free it, or pick another port in 30000–32767 and update `manifests/lab-08/40-service-nodeport.yaml` and `configs/lab-08.env`. Keep it pinned; Step 18 depends on a stable port.
 
 ??? danger "`EXTERNAL-IP` stays `<pending>` forever"
-    Nothing is implementing `type: LoadBalancer` on this cluster. That is an expected outcome locally
-    and is covered in Step 15's limitation box.
+    Nothing implements `type: LoadBalancer` here; expected locally (Step 15).
 
     ```bash
     kubectl describe svc usms-gateway | tail -10
     kubectl get pods -A | grep -Ei 'cloud-controller|servicelb|klipper'
     ```
 
-    An `Events` section with no entries at all is the tell: nothing even *tried*. On real EKS with the
-    AWS Load Balancer Controller you would see `EnsuringLoadBalancer` followed by
-    `EnsuredLoadBalancer`, and a stuck `EnsuringLoadBalancer` would mean an IAM or subnet-tagging
-    problem - the public subnets need `kubernetes.io/role/elb=1` for an internet-facing balancer, and
-    forgetting that tag is the commonest cause on a hand-built VPC like Lab 02's.
+    An empty `Events` section means nothing even tried. On real EKS a stuck `EnsuringLoadBalancer` usually means IAM or subnet tagging: public subnets need `kubernetes.io/role/elb=1`.
 
 ??? danger "The Ingress exists but has no ADDRESS and nothing routes"
-    No ingress controller is running, or the Ingress does not name a class the controller claims.
+    No controller is running, or the Ingress names no class it claims.
 
     ```bash
     kubectl get ingressclass
     kubectl describe ingress usms-portal-ingress | tail -12
     ```
 
-    If an IngressClass exists but is not the default, name it explicitly:
+    If an IngressClass exists but is not the default, name it:
 
     ```bash
     kubectl patch ingress usms-portal-ingress --type=merge \
       -p '{"spec":{"ingressClassName":"traefik"}}'
     ```
 
-    If no IngressClass exists at all, this is the Conceptual case. Record it and answer Step 16's
-    written alternative.
+    If none exists, record the Conceptual case and answer Step 16's written alternative.
 
 ??? danger "A drain hangs and never finishes"
-    A PodDisruptionBudget is refusing evictions - most likely `usms-gateway-pdb`, whose
-    `minAvailable: 1` against a single replica means no eviction is ever allowed.
+    A PDB is refusing evictions, most likely `usms-gateway-pdb` (`minAvailable: 1` against one replica).
 
     ```bash
     kubectl get pdb
     kubectl describe pdb usms-gateway-pdb
     ```
 
-    `ALLOWED DISRUPTIONS: 0` is the confirmation. The correct fix is to make the workload drainable -
-    scale the gateway to 2 replicas - not to delete the PDB. Exercise 2 is exactly this.
-
-    If you must proceed now: ++ctrl+c++ the drain, `kubectl uncordon <node>`, and deal with it
-    properly. A node left cordoned is a confusing state to inherit next week.
+    `ALLOWED DISRUPTIONS: 0` confirms it. Fix the workload (scale the gateway to 2; Exercise 2), not the PDB. To back out now: ++ctrl+c++ the drain, then `kubectl uncordon <node>`.
 
 ??? danger "After the restart, `kubectl` works but the namespace default is gone"
-    The kubeconfig was rewritten by `update-kubeconfig`, which sets the context but not your chosen
-    default namespace.
+    `update-kubeconfig` sets the context but not your default namespace.
 
     ```bash
     kubectl config set-context --current --namespace=usms
     kubectl config view --minify --output 'jsonpath={..namespace}'; echo
     ```
 
-    Worth adding to your own shell profile if you find yourself doing it often.
-
 ---
 
-## 12. Floci vs Real AWS
-
-### 12.1 Feature comparison
+## 11. Floci vs Real AWS
 
 | Feature | Real AWS | Floci | Status |
 | --- | --- | --- | --- |
@@ -3350,128 +2536,48 @@ is the classic way to be billed for something you cannot find.
 | Subnet tags `kubernetes.io/role/elb` for load balancer placement | Required, and easy to forget | Not enforced | Conceptual / Real AWS |
 | Cost of a LoadBalancer Service | One NLB per Service, per hour, plus data | Free | Conceptual / Real AWS |
 
-### 12.2 Where Floci is nicer than reality, which makes it a trap
+**Where Floci is nicer than reality (traps on real AWS):** pods start in a second, but a real EKS node takes 60 to 120 seconds to become `Ready`; there is no cost (ten `LoadBalancer` Services are ten NLBs, and `maxReplicas`/`maxSize` are spending limits); no quotas on load balancers, Elastic IPs or instances; a tidier metrics picture than a real bumpy workload; and nothing is eventually consistent (a real ALB from an Ingress takes minutes to become healthy).
 
-- **Scaling is instantaneous.** A pod starts in a second here. A real EKS node takes 60 to 120
-  seconds to launch, bootstrap and become `Ready`, so a scale-out that needs a new node takes minutes.
-  Any capacity plan that ignores that is wrong.
-- **No cost signal at all.** Ten `LoadBalancer` Services is ten NLBs. Six `t3.small` nodes running
-  over a semester break is a real bill. `maxReplicas: 8` and `maxSize: 6` are not just safety limits,
-  they are spending limits.
-- **No quotas.** Real accounts have limits on load balancers per region, on Elastic IPs, and on
-  instances per instance-family. A scale-out that hits a quota fails in a way that looks like a
-  scheduling problem.
-- **The metrics window is short and local.** A real cluster's HPA behaviour under a genuinely bumpy
-  workload is much less tidy than the clean up-and-down you saw in Step 9.
-- **Nothing is eventually consistent.** On AWS, an ALB created from an Ingress takes minutes to become
-  healthy, and a target that has just been registered fails health checks for a while by design.
-
-### 12.3 What you actually observed in this lab
-
-```text
-OBSERVABLE, and you saw it
-  manual and declarative scaling, and the drift between them
-  endpoints growing only on readiness; scale-in removing from endpoints first
-  QoS classes, and the scheduler's allocated-resources arithmetic
-  the HPA computing a percentage of the REQUEST, and acting on it
-  scale-up policies and selectPolicy: Max choosing the more permissive
-  the 300-second stabilisation window holding capacity after load stopped
-  nodeSelector enforcement, and maxUnavailable 0 protecting running pods
-  a PDB refusing an eviction, and a plain delete ignoring it
-  ClusterIP unroutable from the host; port-forward tunnelling through the API server
-  a NodePort answering on EVERY node, including nodes with no pods
-  a LoadBalancer Service keeping its clusterIP and nodePort
-  an Ingress object with three prefix paths
-
-RECORDED BUT NOT ENACTED
-  the node group's min, max and desired sizes
-  the AWS load balancer annotations on the Service and the Ingress
-  whatever your build reports for EXTERNAL-IP
-
-CONCEPTUAL ONLY - you read about it and could not run it
-  the AWS Load Balancer Controller turning the Ingress into an ALB
-  Cluster Autoscaler and Karpenter
-  custom and external metrics
-  scheduled scaling, quotas, throttling and cost
-```
-
-When you write your report, say which column a claim belongs to. "I configured cluster autoscaling"
-is not true. "I wrote the Ingress and node group configuration that a cluster autoscaler and the AWS
-Load Balancer Controller would act on, mapped every annotation to the Lab 05 command it replaces, and
-recorded that neither controller is installed on this build" is true, and is worth more.
+In your report, say whether each claim was observed, recorded but not enacted (node group sizes, AWS annotations, `EXTERNAL-IP`), or conceptual (the AWS Load Balancer Controller, Cluster Autoscaler, Karpenter, custom metrics, cost).
 
 ---
-## 13. Independent Lab Exercises
 
-Work in `labs/lab-08-eks-scaling/exercises.md`. Record commands and output there, and screenshots in
-`screenshots/`. Hints point at documentation or an earlier step; none contains the answer.
+## 12. Independent Lab Exercises
+
+Record commands and output in `labs/lab-08-eks-scaling/exercises.md`; screenshots go in `screenshots/`.
 
 ### Exercise 1 - Basic: a second autoscaler
 
-**Requirements**
-
-Give `usms-results` its own HorizontalPodAutoscaler: minimum 2, maximum 6, targeting 60% CPU, with a
-scale-in stabilisation window of 180 seconds and a scale-up policy that adds at most 2 pods every 30
-seconds.
+**Requirements:** give `usms-results` its own HPA: min 2, max 6, 60% CPU, a 180-second scale-in stabilisation window, and a scale-up policy adding at most 2 pods every 30 seconds.
 
 **Constraints**
 
-- `autoscaling/v2`, written as a manifest at `manifests/lab-08/11-hpa-results.yaml`. Do not use
-  `kubectl autoscale`.
-- The manifest must apply cleanly on a client-side dry run before you apply it for real.
-- Say in one sentence why 60% is a defensible target for a read-mostly results service when
-  `usms-enrolment` uses 50%.
+- `autoscaling/v2`, as a manifest at `manifests/lab-08/11-hpa-results.yaml`. No `kubectl autoscale`.
+- Pass a client-side dry run before applying for real.
+- Say in one sentence why 60% suits a read-mostly results service when enrolment uses 50%.
 
-**Expected outcome**
+**Expected outcome:** `kubectl get hpa` shows two HPAs reporting percentages (or both `<unknown>` with no metrics pipeline; say so).
 
-`kubectl get hpa` shows two HPAs, both reporting a percentage rather than `<unknown>`. If your build
-has no metrics pipeline, both will show `<unknown>` and that is a consistent result - say so.
-
-**Hints**
-
-`manifests/lab-08/10-hpa-enrolment.yaml` is the model. The only fields that change are the target
-name, the two bounds, the percentage and three numbers inside `behavior`. Check that `usms-results`
-actually declares a CPU request before you start - Lab 07 Step 14 set one, but check rather than
-assume.
-
----
+**Hints:** `manifests/lab-08/10-hpa-enrolment.yaml` is the model. Check `usms-results` declares a CPU request first (Lab 7 Step 14).
 
 ### Exercise 2 - Intermediate: make the gateway drainable
 
-**Requirements**
-
-Step 12 showed that `usms-gateway-pdb` allows **zero** disruptions, because a `minAvailable` of 1
-against a single replica leaves no slack. Fix that properly, and prove it.
+**Requirements:** Step 12 showed `usms-gateway-pdb` allows **zero** disruptions. Fix that properly, and prove it.
 
 **Constraints**
 
-- The gateway must end the exercise with `ALLOWED DISRUPTIONS` of at least 1.
-- You may not weaken the PDB. `minAvailable: 1` stays, or you must justify a change in writing.
-- The gateway's pods must not all be on the same node, where the cluster has more than one node. If
-  it has only one, say so and state what you would have done.
-- Update `manifests/lab-07/40-gateway.yaml` so the repository matches the cluster. Show
-  `kubectl diff` producing no difference afterwards.
+- End with `ALLOWED DISRUPTIONS` of at least 1.
+- Do not weaken the PDB; `minAvailable: 1` stays unless you justify a change in writing.
+- Gateway pods must not all share one node, where there is more than one node. If there is only one, say what you would have done.
+- Update `manifests/lab-07/40-gateway.yaml` and show a clean `kubectl diff`.
 
-**Expected outcome**
+**Expected outcome:** non-zero allowance in `kubectl get pdb`, pod placement from `kubectl get pods -o wide`, and a clean `kubectl diff`.
 
-`kubectl get pdb` showing a non-zero allowance for `usms-gateway-pdb`, `kubectl get pods -o wide`
-showing the gateway pods' node placement, and a clean `kubectl diff`.
-
-**Hints**
-
-The PDB is not the thing to change. Lab 07 Exercise 4 named three Kubernetes features for spreading
-pods across nodes; you need at most one of them here, and the simplest fix does not need any of them.
-
----
+**Hints:** the PDB is not the thing to change. Lab 7 Exercise 4 named three ways to spread pods; the simplest fix needs none of them.
 
 ### Exercise 3 - Problem solving: the autoscaler that will not act
 
-**Requirements**
-
-Apply the manifest below exactly as given. It is valid, `kubectl apply` accepts it, the HPA is
-created, and under heavy sustained load the Deployment's replica count never changes. Diagnose it
-with commands, state **both** causes in one sentence each, and fix them with the smallest change to
-each.
+**Requirements:** apply the manifest below exactly. The HPA is created, yet under heavy load the replica count never changes. Diagnose it with commands, state **both** causes in one sentence each, and fix each with the smallest change.
 
 ```yaml
 apiVersion: apps/v1
@@ -3523,111 +2629,57 @@ spec:
 
 **Constraints**
 
-- Find both faults with commands, not by reading the YAML. Show the commands in the order you ran
-  them, and the output that revealed each.
-- Each fix must be a single field.
-- One fault makes the HPA report `<unknown>`; the other makes it incapable of acting even with
-  perfect metrics. Say which is which.
+- Find both faults with commands, not by reading the YAML. Show them in order with the revealing output.
+- Each fix is a single field.
+- One fault gives `<unknown>`; the other prevents action even with perfect metrics. Say which is which.
 
-**Expected outcome**
+**Expected outcome:** a diagnosis with evidence, and an HPA reporting a percentage with room to move. Delete `usms-reports` and its HPA afterwards (CLEAN UP).
 
-A short diagnosis naming both faults with the evidence for each, and an HPA that reports a percentage
-and has room to move. Delete `usms-reports` and its HPA afterwards - it is a CLEAN UP item.
-
-**Hints**
-
-Step 8's `describe` output has a `Conditions` block with three conditions and a reason for each. Read
-all three, not just the first. For the second fault, look at the two numbers the HPA clamps its
-result between and ask what values are possible between them.
-
----
+**Hints:** read all three conditions in `describe`. For the second fault, ask what values are possible between the two numbers the HPA clamps to.
 
 ### Exercise 4 - Challenge: expose the results service properly
 
-**Requirements**
-
-A prose brief, and nothing more:
+**Requirements:** the brief:
 
 > The Examinations Office wants the results endpoint reachable from the university network at a
 > stable address, on a normal HTTP port, on a path of its own, without giving the enrolment endpoint
 > the same exposure and without paying for a second load balancer. They also want to know, in
 > advance, what it would cost and what would break if the cluster were unavailable.
 
-Design it, implement as much as your build allows, and justify every choice in prose.
+Design it, implement what your build allows, and justify every choice in prose.
 
 **Constraints**
 
-- No second `type: LoadBalancer` Service. The brief rules it out and you must say why in one
-  sentence.
-- Your answer must state, explicitly, which rung of Step 13's ladder each part of your design sits on.
-- Wherever your build cannot demonstrate something, say what would happen on real EKS and name the
-  specific object or annotation that would make it happen.
-- Include the two things the Examinations Office asked for that are not technical: the cost, and the
-  failure mode.
+- No second `type: LoadBalancer` Service; say why in one sentence.
+- State which rung of Step 13's ladder each part sits on.
+- Where your build cannot demonstrate something, name the object or annotation that would do it on real EKS.
+- Answer the cost and the failure mode.
 
-**Expected outcome**
+**Expected outcome:** one or two manifests, routing evidence, and about half a page of reasoning. Marks are for design and honesty, not YAML.
 
-One or two manifests, evidence of whatever routing you could demonstrate, and roughly half a page of
-reasoning. Marks are for the design and the honesty about what you could not show, not for the YAML.
-
-**Hints**
-
-Step 16 already routes `/results` somewhere. Ask whether the existing Ingress is the answer, a
-starting point, or the wrong shape entirely - all three are defensible positions and the argument is
-the exercise. For the cost question, an NLB and an ALB are billed differently, and one Ingress with
-five paths is billed once.
-
----
+**Hints:** Step 16 already routes `/results`. Is the existing Ingress the answer, a starting point, or the wrong shape? NLBs and ALBs are billed differently; one Ingress with five paths is billed once.
 
 ### Exercise 5 - Integration: the artefacts Lab 10 needs, and the argument this practical was for
 
-**Requirements**
+**Requirements:** three parts.
 
-Three parts.
-
-**Part 1 - capture the scaling evidence.** Produce `outputs/lab-08-scaling-evidence.json`: a single
-JSON document containing the HPA's spec and status, the Deployment's current replica count, the node
-group's scaling configuration (or a stated absence), and a timestamp. It must be valid JSON that
-`python3 -m json.tool` accepts.
-
-**Part 2 - verify Lab 10's readiness, from the cluster.** Produce
-`outputs/lab-08-lab06-readiness.txt` showing: the ARN of `USMSStudentDataReadWrite`; every role
-carrying it; the bucket ARN named in its `Resource` field; whether that bucket exists; and - this is
-the new part - **which ServiceAccount in the `usms` namespace would be annotated to use it under
-IRSA**, and what that annotation would say.
-
-**Part 3 - write the argument.** Append to `notes/lab-08-notes.md` a section of no more than 400
-words titled "ECS or Kubernetes for USMS", making a recommendation and naming the strongest argument
-against it. It must cite at least three specific observations from Practicals 2 and 4 - a command
-output, a number, or a behaviour you saw - and not one generic claim about either platform.
+- **Part 1:** `outputs/lab-08-scaling-evidence.json`: the HPA's spec and status, the Deployment's replica count, the node group's scaling configuration (or a stated absence) and a timestamp, as valid JSON that `python3 -m json.tool` accepts.
+- **Part 2:** `outputs/lab-08-lab06-readiness.txt`: the ARN of `USMSStudentDataReadWrite`, every role carrying it, the bucket ARN in its `Resource`, whether the bucket exists, and **which ServiceAccount in `usms` would be annotated to use it under IRSA**, with the annotation.
+- **Part 3:** append to `notes/lab-08-notes.md` at most 400 words titled "ECS or Kubernetes for USMS": a recommendation, the strongest argument against it, and at least three specific observations from Practicals 2 and 4.
 
 **Constraints**
 
-- Part 1 must be assembled from live API calls, not typed. If a value is unavailable on your build,
-  the JSON must say so explicitly rather than omitting the key.
-- Part 2 must read the bucket ARN **out of the policy document**. Typing it means the exercise is not
-  done. Lab 07 Exercise 5 did the first half of this; do not copy the answer, re-derive it.
-- Part 3 must be your own argument. Two students with opposite recommendations can both score full
-  marks; two students with the same three citations cannot.
+- Part 1 is assembled from live API calls; unavailable values are stated explicitly, not omitted.
+- Part 2 reads the bucket ARN **out of the policy document**. Re-derive it; do not copy Lab 7 Exercise 5.
+- Part 3 is your own argument, with no generic claims.
 
-**Expected outcome**
+**Expected outcome:** two files in `outputs/` (check with `git check-ignore -v`) and a new notes section. Lab 10's first step reads all three.
 
-Two files in `outputs/` (git-ignored - check with `git check-ignore -v`) and a new section in your
-notes. Lab 10's first step reads all three.
-
-**Hints**
-
-For Part 1, `kubectl get hpa usms-enrolment-hpa -o json` gives you a document; combining it with the
-AWS output is a job for `python3` reading both, or for `jq` if you have it. Either is fine; a shell
-heredoc that pastes fragments together is not, because it will not survive an empty value.
-
-For Part 2's new half: Lab 07 Step 21 laid out the six-step IRSA chain and created
-`usms-enrolment-sa`. The annotation key is `eks.amazonaws.com/role-arn` and the value is a role ARN -
-which role, and why that one rather than `usms-eks-node-role`, is the question.
+**Hints:** combine `kubectl get hpa usms-enrolment-hpa -o json` with the AWS output using `python3` or `jq`, not a heredoc of fragments. Lab 7 Step 21 created `usms-enrolment-sa`; the annotation key is `eks.amazonaws.com/role-arn`. Which role, and why not `usms-eks-node-role`?
 
 ---
 
-## 14. Lab Assessment Checklist
+## 13. Lab Assessment Checklist
 
 Tick each item only when you can show the command output that proves it.
 
@@ -3692,76 +2744,28 @@ Tick each item only when you can show the command output that proves it.
 
 **Understanding**
 
-- [ ] Section 15 answered in prose in `notes/lab-08-notes.md`
+- [ ] Section 14 answered in prose in `notes/lab-08-notes.md`
 - [ ] Step 17's two comparison tables filled in with both systems running
 - [ ] Five exercises attempted; Exercise 5's two `outputs/` files present
-- [ ] `usms-loadgen` deleted at the end (Section 16)
+- [ ] `usms-loadgen` deleted at the end (Section 15)
 
 ---
 
-## 15. Review Questions
+## 14. Review Questions
 
-Answer in prose in `notes/lab-08-notes.md`. No command output - these ask what you understood.
+Answer in prose in `notes/lab-08-notes.md`.
 
-**1.** A colleague sets `averageUtilization: 50` on an HPA and reports that "the pods scale when the
-node hits 50% CPU". Correct them precisely. Then explain what happens to that HPA's behaviour if
-somebody halves the container's CPU request without changing the HPA, and say whether the workload
-ends up with more capacity or less.
-
-**2.** `usms-enrolment` needs to handle ten times its current traffic by next Monday. Using Step 3's
-four dimensions, give an ordered plan, say what you would check between each step, and name the one
-dimension that cannot be changed in place and what you would have to do instead.
-
-**3.** Lab 06's Application Auto Scaling and this lab's HorizontalPodAutoscaler both write a single
-integer. Describe two consequences of the fact that one runs outside your workload and the other runs
-inside your cluster. At least one must be about what happens when something is broken.
-
-**4.** The HPA raises `replicas` from 4 to 8 and four pods sit in `Pending` for twenty minutes.
-Explain what has happened using the two-control-loops picture from Section 6, name the component that
-would normally resolve it, and say why lowering the CPU request is a bad way to make the pods fit.
-
-**5.** Students routinely conflate a **NodePort** with a **LoadBalancer**, and separately conflate a
-**Service** with an **Ingress**. Take one pair. Explain the distinction, then describe a concrete
-requirement that the wrong choice would fail to meet and the right one would satisfy.
-
-**6.** Step 16's Ingress routes `/enrolment` straight to `usms-enrolment`, bypassing `usms-gateway`,
-which also serves that path. Both routes now exist. Argue for one of them as the design USMS should
-keep, and say what you would delete. Your answer must address what the gateway does that the Ingress
-rule does not.
-
-**7.** A PodDisruptionBudget with `minAvailable: 1` did not stop `kubectl delete pod`. Explain why
-that is correct behaviour and not a bug, distinguish voluntary from involuntary disruption, and give
-one realistic scenario in which the PDB you wrote would genuinely save a production service.
+1. A colleague says an HPA with `averageUtilization: 50` "scales when the node hits 50% CPU". Correct them. What happens if someone halves the container's CPU request without changing the HPA, and does the workload end up with more capacity or less?
+2. `usms-enrolment` must handle ten times its traffic by Monday. Using Step 3's four dimensions, give an ordered plan with the check between each step, and name the dimension that cannot change in place and what you would do instead.
+3. Lab 6's Application Auto Scaling and this lab's HPA both write one integer. Give two consequences of one running outside your workload and the other inside your cluster, at least one about failure.
+4. The HPA raises `replicas` from 4 to 8 and four pods sit `Pending` for twenty minutes. Explain using Section 5's two-control-loops picture, name the component that would normally resolve it, and say why lowering the CPU request is a bad fix.
+5. Students conflate **NodePort** with **LoadBalancer**, and **Service** with **Ingress**. Take one pair, explain the distinction, and give a requirement the wrong choice fails and the right one meets.
+6. Step 16's Ingress sends `/enrolment` straight to `usms-enrolment`, bypassing `usms-gateway`, which also serves that path. Argue for one route, say what you would delete, and address what the gateway does that the Ingress rule does not.
+7. A PDB with `minAvailable: 1` did not stop `kubectl delete pod`. Why is that correct? Distinguish voluntary from involuntary disruption, and give one realistic scenario where your PDB saves a production service.
 
 ---
 
-## 16. What We Built
-
-### 16.1 Reflection
-
-Both halves of this lab turned out to be ladders, and both ladders end with something whose whole
-purpose is to hide the rungs below it. An HPA hides the fact that scaling is one integer. An Ingress
-hides the fact that reaching a pod is still a ClusterIP, still a nodePort, still kube-proxy. The
-reason to climb them one rung at a time - rather than starting at the top, which would have been
-faster - is that when the top rung misbehaves, the diagnosis is always somewhere below it. An Ingress
-with no address is not an Ingress problem. An HPA that will not scale is usually a resource-request
-problem or a capacity problem.
-
-Step 9 is the moment worth remembering. Load arrived, a percentage crossed 50, an integer changed, and
-pods appeared - and then load stopped, the percentage collapsed, **and nothing happened for five
-minutes**. That five minutes of apparent inaction is the single most deliberate piece of engineering
-in this laboratory. It exists because the cost of removing capacity you still need is an outage and
-the cost of keeping capacity you no longer need is small change. Lab 06 encoded the same asymmetry as
-`ScaleInCooldown: 300`. Two platforms, one doctrine, and the doctrine is the part that transfers.
-
-And Step 16 is the moment Practical 2 and Practical 4 stop being two topics. The annotations on that
-Ingress - `target-type: ip`, `scheme: internet-facing`, `listen-ports`, `healthcheck-path` - are, one
-for one, the arguments you typed into `aws elbv2` commands four weeks ago. The AWS Load Balancer
-Controller does not invent anything. It reads a Kubernetes object and makes the same four calls you
-made by hand. What Kubernetes gave you is not a different load balancer; it is a way of asking for the
-one you already knew how to build, in a form that also works somewhere else.
-
-### 16.2 KEEP and CLEAN UP
+## 15. KEEP vs CLEAN UP
 
 ```text
 ╔══════════════════ KEEP ══════════════════╗    ╔═══════════ CLEAN UP ═══════════╗
@@ -3790,8 +2794,7 @@ kubectl get nodes | grep -i cordon && echo "a node is cordoned - uncordon it" ||
 kubectl get all
 ```
 
-**What to look for:** five pods - two enrolment, two results, one gateway - plus whatever Exercise 1
-and Exercise 2 left. No `usms-loadgen`. No cordoned nodes.
+You want five pods (two enrolment, two results, one gateway) plus whatever Exercises 1 and 2 left; no `usms-loadgen`; no cordoned nodes.
 
 !!! danger "Read before running any delete command"
     **What will be deleted:** the load generator Deployment, Exercise 3's practice objects, and any
@@ -3802,11 +2805,7 @@ and Exercise 2 left. No `usms-loadgen`. No cordoned nodes.
     re-applied at any time.
     **Effect on later labs:** none.
 
-Do **not** run `scripts/cleanup/lab-08-cleanup.sh`, `lab-07-cleanup.sh`, `lab-04-cleanup.sh`,
-`lab-03-cleanup.sh` or `lab-02-cleanup.sh`. They are for the end of the course, and Section 9.3 gives
-the order.
-
-### 16.3 The architecture you now have
+Do **not** run `scripts/cleanup/lab-08-cleanup.sh` or any earlier lab's cleanup script; they are for the end of the course, in the order Section 8.2 gives.
 
 ```text
 Lab 01  IAM
@@ -3885,12 +2884,9 @@ Lab 10  Lambda
 
 ---
 
-## 17. Preparation for the Next Lab
+## 16. Preparation for the Next Lab
 
-Lab 10 - S3 - creates `usms-student-data`, and it is the moment a policy written in the first
-laboratory of this course stops being hypothetical for the **third** role at once. It needs nothing
-from the scaling or exposure configuration you just built, and it needs two things from your
-repository.
+Lab 10 creates `usms-student-data`, the bucket Lab 1's policy has named all along. It needs nothing from this lab's scaling or exposure configuration, only these:
 
 | From this lab | Lab 10 uses it for |
 | --- | --- |
@@ -3906,17 +2902,9 @@ repository.
 | Lab 02 `usms-s3-endpoint` | The gateway endpoint that has been on the private route table since Lab 2 and has had nothing to reach |
 | Lab 07 `usms-enrolment-sa` | The ServiceAccount that, on real EKS, would carry the IRSA annotation instead of relying on the node role |
 
-**The connection to state out loud before the next session.** Lab 01 wrote a policy for a bucket that
-did not exist. Lab 03 attached it to a virtual machine. Lab 04 attached it, unchanged, to a
-serverless container. Lab 07 attached it, unchanged again, to a Kubernetes node. Lab 02 built a VPC
-endpoint whose only purpose is to reach S3 privately, and it has been sitting on the private route
-table doing nothing for five laboratories.
+Creating that one bucket resolves the chains from Labs 1, 2, 3, 4 and 7 without modifying any of them.
 
-**Five laboratories have prepared for one `create-bucket` call**, and when Lab 10 makes it, four
-separate chains resolve at the same instant and not one of them has to be modified. That is worth more
-than any single command in this course.
-
-**Before the next session, confirm all six of these:**
+Before the next session:
 
 ```bash
 cd ~/aws-floci-course
@@ -3931,27 +2919,15 @@ aws iam list-entities-for-policy \
   --query 'PolicyRoles[].RoleName' --output text
 ```
 
-You want: `FAIL=0` from the first on Path A or `FAIL=3` on Path B; `FAIL=0` from the second on Path A
-or `FAIL=2` on Path B; a count of **19**; one HPA, two PDBs and one Ingress; three Deployments reading
-at least `2`, `2` and `1`; and - from the last command - **three role names**.
+You want `FAIL=0` from the first on Path A or `FAIL=3` on Path B; `FAIL=0` from the second on Path A or `FAIL=2` on Path B; **19**; one HPA, two PDBs and one Ingress; three Deployments at least `2`, `2` and `1`; and **three role names**. Fewer than three means an attachment from Lab 3, 4 or 7 is missing; fix it now.
 
-That last one is the one to care about. If it lists fewer than three, one of the attachments from Lab
-03, Lab 04 or Lab 07 is missing, and Lab 10's central demonstration loses a third of its force. It
-is a one-command fix today.
-
-**Read ahead, five minutes:** find out what an S3 **bucket policy** is and how it differs from the
-identity policy you have been attaching to roles since Lab 1. Lab 10 assumes neither, but the
-distinction is the axis the whole laboratory turns on, and it moves considerably faster if the words
-are not new.
-
-Finally, take a snapshot so that a mistake in Lab 10 is recoverable:
+Take a snapshot so a Lab 10 mistake is recoverable:
 
 ```bash
 floci snapshot save lab-08-complete
 ```
 
-If `floci snapshot` is not available on your build, use the filesystem fallback - and stop Floci
-first, because archiving a live data directory can capture a half-written file:
+If `floci snapshot` is unavailable, stop Floci first and archive outside the repository:
 
 ```bash
 ./scripts/setup/floci-down.sh
@@ -3959,65 +2935,9 @@ tar -czf ~/floci-data-lab-08.tar.gz -C ~ floci-data
 ./scripts/setup/floci-up.sh
 ```
 
-Keep the archive **outside** the repository so it is never a commit candidate.
-
 ---
 
-## Appendix A - Command Reference
-
-**Environment**
-
-| Command | Purpose |
-| --- | --- |
-| `./scripts/setup/floci-up.sh` / `floci-down.sh` | Start and stop Floci. The only supported way |
-| `./scripts/utilities/whoami.sh` | Identity and endpoint; exits 1 on the wrong account |
-| `./scripts/utilities/floci-storage-check.sh` | Six read-only checks that name a persistence failure |
-| `./scripts/utilities/verify-lab-07.sh` | Lab 07's 30 checks - run it before this lab |
-| `./scripts/utilities/verify-lab-08.sh` | This lab's 34 checks |
-| `./scripts/utilities/hpa-watch.sh [n]` | Poll the HPA and its Deployment every 10 seconds |
-
-**Scaling**
-
-| Command | Purpose |
-| --- | --- |
-| `kubectl scale deployment/X --replicas=N` | Write `spec.replicas`. No new ReplicaSet |
-| `kubectl set resources deployment/X --requests=... --limits=...` | Change dimension 2. Restarts the pods |
-| `kubectl get hpa` | The one-line summary: current/target, bounds, replicas |
-| `kubectl describe hpa X` | `Conditions` and `Events` - where the HPA explains itself |
-| `kubectl top nodes` / `kubectl top pods` | The metrics API, read by you. Same source the HPA uses |
-| `kubectl get --raw /apis/metrics.k8s.io/v1beta1` | Is the metrics API registered at all? |
-| `aws eks update-nodegroup-config --scaling-config min=,max=,desired=` | Dimension 3, from the AWS side |
-| `aws eks list-updates` / `describe-update` | EKS's asynchronous update objects |
-| `kubectl get pdb` | `ALLOWED DISRUPTIONS` - the column that matters |
-| `kubectl drain <node> --ignore-daemonsets --dry-run=client` | What a drain would attempt |
-| `kubectl uncordon <node>` | Undo the schedulability half of a drain |
-
-**Exposure**
-
-| Command | Purpose |
-| --- | --- |
-| `kubectl get svc -o wide` | Type, ClusterIP, external address, ports and selector |
-| `kubectl get endpoints <svc>` | Which pods is this Service actually using? |
-| `kubectl port-forward svc/X 8080:80` | A tunnel through the API server. Debugging only |
-| `kubectl get ingress` / `describe ingress X` | Class, address, rules and the backend for each |
-| `kubectl get ingressclass` | Is any controller claiming Ingress objects? |
-| `kubectl create --raw <path> -f <file>` | POST an arbitrary body to an arbitrary API path |
-
-**General**
-
-| Command | Purpose |
-| --- | --- |
-| `kubectl apply -f <file or dir>` | Declarative create-or-update |
-| `kubectl diff -f <file>` | What would change. Exits 1 on a difference - a feature |
-| `kubectl apply --dry-run=client -f <dir>` | Validate without a cluster. Path C's whole toolkit |
-| `kubectl patch X --type=merge -p '<json>'` | A quick change - and a source of drift. Prefer `apply` |
-| `kubectl get X -o custom-columns='A:.path,B:.path'` | Exactly the table you want |
-| `kubectl get nodes -L label1,label2` | One column per named label. Better than `--show-labels` |
-| `kubectl config set-context --current --namespace=usms` | Stop typing `-n usms` |
-
----
-
-## Appendix B - New JMESPath, `kubectl` and CLI patterns introduced
+## Appendix - New CLI and JMESPath patterns
 
 **`kubectl`**
 
@@ -4029,8 +2949,8 @@ Keep the archive **outside** the repository so it is never a commit candidate.
 | `kubectl create --raw <path> -f <file>` | POST to an API path directly - the only way to reach a subresource such as `eviction` | Step 12 |
 | `kubectl get svc -w` | Watch one object change. How you see `<pending>` become an address | Step 15 |
 | `-o jsonpath` with literal text and `{"\n"}` | Build a one-line report from several fields | Step 15 |
-| `--request-timeout=10s` | Bound a call so a script cannot hang forever | Section 9 |
-| `--dry-run=client -f <dir>` | Validate a whole directory of manifests with no cluster | Section 9, 8.5 |
+| `--request-timeout=10s` | Bound a call so a script cannot hang forever | Section 8 |
+| `--dry-run=client -f <dir>` | Validate a whole directory of manifests with no cluster | Section 8, Path C |
 
 **Kubernetes objects and fields**
 
@@ -4082,7 +3002,3 @@ Keep the archive **outside** the repository so it is never a commit candidate.
 - LocalStack EKS provider - k3d-backed clusters, the `_lb_ports_` tag, node groups and known
   limitations, which is the emulator behaviour this course calls Floci:
   [docs.localstack.cloud - EKS](https://docs.localstack.cloud/aws/services/eks/)
-
-*Compiled for DSO303, Royal Thimphu College / CST, RUB. Laboratory content verified against the
-Kubernetes and AWS documentation and Floci's documented EKS behaviour; output shown in this document
-is illustrative and labelled as such throughout.*

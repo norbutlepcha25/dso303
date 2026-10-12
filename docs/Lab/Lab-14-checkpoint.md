@@ -52,6 +52,9 @@ assessor will run your verify scripts.
 
 ## 3. Deliverables
 
+!!! info "Features that do not run on Floci 2.0.1"
+    Present those features with the labelled alternatives in [Known Issues - Lab 14](known-issues.md#lab-14-checkpoint), and keep the original verifier output beside them.
+
 Five files, all committed, all under `project/checkpoint-01/`. Appendix C of Lab 13 has the commands
 that generate three of them.
 

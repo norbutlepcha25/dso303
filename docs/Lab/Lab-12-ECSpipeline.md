@@ -1,104 +1,40 @@
 # Lab 12 - Deploying to Amazon ECS from the Pipeline
 
-*Practical 7 - Practical 5 in the module descriptor. The second half of the pipeline: an
-image with a name, a task definition that points at it, and a deploy stage that closes the loop.
-This document also carries the Practical 7 in-class assessment, in Section 14.1.*
+*Practical 7 (Practical 5 in the module descriptor; laboratory numbering follows the dependency graph, as Lab 11 explains). This document also carries the Practical 7 in-class assessment, in Section 13.1.*
 
-!!! info "Numbering - the same note as Lab 11"
-    Your module descriptor numbers this practical **5**; the delivery schedule numbers it **7**.
-    Laboratory numbering follows the dependency graph, not a slot reserved in advance - see Lab 11's
-    note for the full table. The Amazon S3 configuration document that Lab 10 Section 17 promised is
-    still unwritten; it takes whatever number fits the graph when it is written, not a number promised
-    now. Section 17 of this lab hands over to it.
+## 1. Objectives
 
----
+- Create a private ECR repository, authenticate Docker against it with a token on standard input, and push an image, reading the registry host from the API.
+- Explain image tag versus image digest, and derive a new task definition revision with describe, strip, register.
+- Version the two pipeline IAM policies (create **and** set as default) and add an ECS Deploy stage with get-modify-put, driven by `imagedefinitions.json`.
+- Deploy through the pipeline, prove the service moved, and roll a bad release back by hand.
+- Specify a blue/green deployment with CodeDeploy, stating honestly that you did not perform one.
 
-## 1. Lab Overview
-
-Lab 11 left a machine that turns a source change into an artifact. The artifact is real: it has a
-release number, a build ID, and an S3 key. It also, at the moment, goes nowhere. The enrolment service
-running on `usms-ecs-cluster` is still running the placeholder image that Lab 04 chose because the
-course had no application of its own.
-
-This laboratory connects the two ends. By the time you finish:
-
-- the enrolment service's source will be built into a **container image** and pushed to a **private
-  Amazon ECR repository** that you create;
-- the ECS task definition will name **your image**, not the placeholder;
-- the pipeline will have a **third stage** that takes the build artifact, reads
-  `imagedefinitions.json` out of it, registers a new task definition revision with the new image, and
-  updates the service - with no human typing `aws ecs update-service`.
-
-Three things in that list are genuinely new to this course. Nothing before this lab has ever built a
-container image, pushed to a registry, or deployed anything without a person at a keyboard.
-
-The lab also spends a step on the thing that makes deployment pipelines survivable: **what happens
-when the new version is wrong.** Section 8 Step 18 is a rollback drill, and Step 19 reads the
-blue/green mechanism that makes rollback near-instant on real AWS - as a document, honestly labelled,
-because this emulator cannot run it.
+!!! info "Concepts used in this lab"
+    Read these first if a term is new: [images, tags and digests](../unit2/topic1.md#images-layers-manifests-tags-and-digests) ·
+    [Dockerfiles and the build cache](../unit2/topic1.md#dockerfiles-and-the-build-cache) ·
+    [Amazon ECR concepts](../unit2/topic1.md#amazon-ecr-concepts) ·
+    [ECS task definitions](../unit2/topic1.md#ecs-task-definitions) ·
+    [the rolling update](../unit2/topic3.md#deployment-the-rolling-update) ·
+    [the deployment circuit breaker](../unit2/topic3.md#the-deployment-circuit-breaker) ·
+    [blue/green with CodeDeploy](../unit2/topic3.md#bluegreen-with-aws-codedeploy) ·
+    [AWS CodeBuild](../unit5/topic1.md#aws-codebuild) ·
+    [pipeline artefacts](../unit5/topic2.md#artefacts-and-how-data-moves) ·
+    [tag versus digest in a pipeline](../unit5/topic2.md#container-artefact-identity-tag-versus-digest) ·
+    [deployment actions for ECS](../unit5/topic2.md#deployment-actions-for-ecs-and-eks) ·
+    [iam:PassRole](../unit8/topic1.md#iampassrole) ·
+    [IAM policy versions](https://docs.aws.amazon.com/IAM/latest/UserGuide/access_policies_managed-versioning.html)
 
 !!! warning "Do not run `aws login`"
-    If you see `NoCredentials`, the AWS CLI v2 will suggest `aws login`. That begins a sign-in to
-    **real AWS**. The answer in this course is always `source configs/course.env` or a missing
-    `floci` profile - never a sign-in. See Errata 01 Section 3.
-
-### 1.1 What is genuinely new here
-
-| New thing | Why it matters |
-| --- | --- |
-| A private ECR repository | The first registry in this course that is yours. Everything before pulled from public registries |
-| `docker build` and `docker push` | The step that turns a source tree into something ECS can run |
-| Image tag versus image digest | A tag can be moved; a digest cannot. This distinction decides what "the version we deployed" means |
-| Task definition revisions from a template | `describe` → modify → `register` is the pattern the deploy action automates. You do it by hand once, so you can see what it automates |
-| `imagedefinitions.json` | The contract between a build and an ECS deploy action. Three fields, one of which must match a container name exactly |
-| IAM policy versions | `USMSCodeBuildBase` gets a `v2`. Creating a version does not activate it - you must say so |
-| `update-pipeline` | A replace-only API. Get, modify, put. There is no "add a stage" |
-| Deployment rollback | What the circuit breaker does, what it cannot do, and what you do when it does not fire |
-
-### 1.2 Time
-
-Roughly three and a half hours, plus the in-class assessment in Section 14.1, which is timed at sixty
-minutes and is normally run in a separate session.
+    If you see `NoCredentials`, the AWS CLI v2 suggests `aws login`, which signs in to **real AWS**. The answer is always `source configs/course.env` or a missing `floci` profile (Errata 01 Section 3).
 
 ---
 
-## 2. Learning Objectives
+## 2. Prerequisites
 
-By the end of this laboratory you will be able to:
-
-1. Create a private ECR repository, authenticate Docker against it, and push an image - reading the
-   registry host from the API rather than assuming it.
-2. Explain the difference between an image tag and an image digest, and say which one a production
-   task definition should name and what that costs.
-3. Produce a new ECS task definition revision from an existing one with `describe` → modify →
-   `register`, and name the read-only fields that must be stripped before re-registering.
-4. Write `imagedefinitions.json`, and explain precisely what the ECS deploy action does with it - and
-   what it cannot express.
-5. Create a new version of a customer-managed IAM policy and set it as the default, and explain why
-   those are two operations.
-6. Extend a CodePipeline safely with the get-modify-put sequence, and say what would have been lost by
-   sending only the new stage.
-7. Deploy an application to ECS entirely through a pipeline, and verify the deployment by reading the
-   service's task definition and the image its tasks are running.
-8. Roll a deployment back, and explain what the ECS deployment circuit breaker does, when it fires,
-   and when it will not save you.
-9. Describe a blue/green ECS deployment with CodeDeploy accurately enough to specify one, while
-   stating clearly that you did not perform one.
-
----
-
-## 3. Prerequisites
-
-- **Lab 11 complete**, including Exercise 5 if you did it. Section 8 Step 1 reads its readiness file
-  and tolerates its absence.
-- Labs 01, 02, 03, 04, 05 and 06 complete. Lab 07-08 (EKS) and Lab 09 (security) are helpful but
-  not required.
-- `docker` working for your user, and a Docker daemon you can reach: `docker info` must succeed. This
-  lab builds an image locally. There is no path through this laboratory without a Docker daemon.
-- Roughly 1 GB of free disk for the base image and your layers.
-- `python3`, `zip`/`unzip` as in Lab 11.
-
-Baseline verification:
+- **Lab 11 complete** (Exercise 5 optional; Step 1 tolerates its absence). Labs 01 to 06 complete; Labs 07 to 10 helpful.
+- `docker info` must succeed for your user: there is no path through this lab without a Docker daemon. About 1 GB of free disk.
+- `python3`, `zip` and `unzip`, as in Lab 11.
 
 ```bash
 cd ~/aws-floci-course
@@ -111,29 +47,19 @@ source configs/course.env
 docker info >/dev/null 2>&1 && echo "docker reachable"
 ```
 
-If `verify-lab-11.sh` reports failures outside the known-benign list in Lab 11 Section 9.1, fix them
-before starting. This lab modifies the pipeline that script checks.
+If `verify-lab-11.sh` fails outside the known-benign list in Lab 11 Section 9.1, fix it first: this lab modifies the pipeline that script checks.
 
 ---
 
-## 4. Connection to Previous Labs
+## 3. What This Lab Reuses
 
-### 4.1 Current environment
+- From Lab 01: `USMSECSTaskExecution`, whose four `ecr:*` pull actions were written before any repository existed; Step 5 creates the repository they were always about, and the execution role needs no change. `usms-ecs-exec-role` and `usms-ecs-task-role` are passed in Step 15.
+- From Lab 04: `usms-ecs-cluster`, family `usms-enrolment` (rev 2), service `usms-enrolment-svc`, container `enrolment-api` on port 80 (the join key in `imagedefinitions.json`, Step 14), the circuit breaker (Step 18) and `--force-new-deployment`'s "the tag now points at a different image", which Step 17 makes true.
+- From Lab 05: `usms-enrolment-alb` and `usms-enrolment-tg`, which a blue/green setup would pair (Step 19).
+- From Lab 06: the scalable target that a deployment-controller change would strand (Step 19).
+- From Lab 11: `usms-pipeline-artifacts`, `usms-enrolment-build`, `usms-enrolment-pipeline` (Source, Build), both roles and policies, `labs/lab-11-cicd/app/` with its buildspec and local runner.
 
 ```text
-Created in previous labs:
-- Lab 01: IAM foundation; usms-ecs-exec-role and usms-ecs-task-role come from here
-- Lab 02: usms-vpc, two public and two private subnets
-- Lab 04: usms-ecs-cluster, task family usms-enrolment (rev 2), service usms-enrolment-svc,
-           container enrolment-api on port 80, log group /usms/ecs/enrolment,
-           policy USMSECSTaskExecution - which already grants the four ecr:* pull actions
-- Lab 05: usms-enrolment-alb, target group usms-enrolment-tg, the service registered behind it
-- Lab 06: scalable target min 2 max 10 on the service
-- Lab 10: bucket usms-student-data
-- Lab 11: usms-pipeline-artifacts (versioned), usms-enrolment-build, usms-enrolment-pipeline
-           (Source -> Build), usms-codebuild-role + USMSCodeBuildBase,
-           usms-codepipeline-role + USMSCodePipelineBase, labs/lab-11-cicd/app/ with buildspec.yml
-
 Created in this lab:
 - usms-enrolment                 ECR repository - the first private registry in this course
 - Dockerfile                     in labs/lab-11-cicd/app/, beside the source it packages
@@ -152,26 +78,9 @@ Required for future labs:
                                     CloudFormation lab consumes it in earnest
 ```
 
-### 4.2 The three artefacts this lab makes newly meaningful
-
-**Lab 01's `USMSECSTaskExecution` already contains four `ecr:*` actions** -
-`GetAuthorizationToken`, `BatchCheckLayerAvailability`, `GetDownloadUrlForLayer`, `BatchGetImage` -
-on `Resource: "*"`. When Lab 04 wrote them, there was no ECR repository in the account and the
-statement was a hypothesis. Step 5 of this lab creates the repository those four actions were always
-about. The execution role needs no change; that is the payoff of having scoped it correctly a month
-ago.
-
-**Lab 04 Step 15 introduced `--force-new-deployment`** and justified it with "the image tag now
-points at a different image". Step 17 of this lab is the first time in the course that sentence
-describes something that actually happened.
-
-**Lab 04's container name, `enrolment-api`,** has been a string in a task definition. In Step 14 it
-becomes the join key in `imagedefinitions.json`, and a mismatch there is the most common failure in
-ECS deployment pipelines. This is why Lab 11's `pre_build` validates it.
-
 ---
 
-## 5. What We Are Building
+## 4. What We Are Building
 
 ```text
   BEFORE (end of Lab 11)                     AFTER (end of this lab)
@@ -184,20 +93,11 @@ ECS deployment pipelines. This is why Lab 11's `pre_build` validates it.
                                                                           its tasks
 ```
 
-Concretely, four new things and three modified ones.
-
-New: an ECR repository; a `Dockerfile`; an image with a tag; a third pipeline stage.
-
-Modified: the buildspec gains an image build and an `imagedefinitions.json` writer; both IAM policies
-gain a version 2; the task definition family gains revisions that name your image instead of the
-placeholder.
-
-The application itself does not change. It is the same four files it was in Lab 11, and that is
-deliberate - everything interesting in this lab is about how those four files reach a running task.
+Four new things (an ECR repository, a `Dockerfile`, a tagged image, a third pipeline stage) and three modified ones (the buildspec gains an image build and an `imagedefinitions.json` writer; both pipeline IAM policies gain a v2; the task definition family gains revisions naming your image). The application's four files do not change: this lab is about how they reach a running task.
 
 ---
 
-## 6. Architecture
+## 5. Architecture
 
 ```text
    labs/lab-11-cicd/app/                         ECR: usms-enrolment
@@ -246,13 +146,13 @@ deliberate - everything interesting in this lab is about how those four files re
 
 The four numbered steps inside the deploy action are the part worth memorising. Notice what is *not*
 in that list: the deploy action never reads a task definition file from your repository. It takes the
-one the service is running and changes one field in it. That is a genuine constraint, and Section 12
+one the service is running and changes one field in it. That is a genuine constraint, and Section 11
 returns to it - a change to the task definition's memory, environment variables or log configuration
 cannot travel through this mechanism at all.
 
 ---
 
-## 7. Directory Structure
+## 6. Directory Structure
 
 What this lab adds.
 
@@ -299,22 +199,18 @@ belongs with the source it packages; splitting them across two directories would
 context is one directory and the instructions another, which works and is a bad habit.
 
 ---
-## 8. Step-by-Step Implementation
+
+## 7. Step-by-Step Implementation
+
+!!! info "Run every command from `aws-floci-course/`"
+    Unless a step shows its own **Run from** block, commands run from the repository root. Steps 7 and 14 run inside `labs/lab-11-cicd/app/`.
+
+!!! tip "Shell variables die with the terminal"
+    `ECR_URI`, `IMAGE_TAG`, `IMAGE_DIGEST` and `EXEC_ID` are captured with `$(...)`; Step 20 writes what later labs need to `configs/lab-12.env`.
 
 ### Step 1 - Start Floci, and read what Lab 11 left you
 
-**Purpose**
-
-Start the environment, and begin by reading the inventory the previous lab wrote rather than assuming
-what is there. A lab that opens by assuming is a lab that fails in the middle.
-
-**Run from**
-
-```text
-aws-floci-course/
-```
-
-**Command**
+Start the environment and read Lab 11's inventory rather than assuming it.
 
 ```bash
 cd ~/aws-floci-course
@@ -331,12 +227,7 @@ else
 fi
 ```
 
-**What the command does**
-
-`outputs/lab-11-lab08b-readiness.txt` is what Lab 11 Exercise 5 asked you to leave behind: the
-artifact key and the contents of the `imagedefinitions.json` your build produced. If it exists, Step 14
-is a replacement of something you already wrote; if it does not, Step 14 is the first time you write
-it. Either way the lab proceeds.
+`outputs/lab-11-lab08b-readiness.txt` is what Lab 11 Exercise 5 left: the artifact key and the `imagedefinitions.json` your build produced. If it exists Step 14 replaces it; if not, Step 14 writes it for the first time.
 
 **Expected result**
 
@@ -359,18 +250,7 @@ imagedefinitions.json:
 
 ### Step 2 - Source every earlier lab's environment
 
-**Purpose**
-
-This lab reads from Lab 01, 04, 05 and 11, and it writes a file the CloudFormation lab will read.
-Shell variables die with the terminal; the env files are the only thing that crosses one.
-
-**Run from**
-
-```text
-aws-floci-course/
-```
-
-**Command**
+This lab reads Labs 01, 04, 05 and 11 and writes a file the CloudFormation lab will read.
 
 ```bash
 source configs/course.env
@@ -394,24 +274,13 @@ printf 'cluster=%s service=%s container=%s pipeline=%s project=%s exec-role=%s\n
   "${USMS_BUILD_PROJECT:-MISSING}" "${USMS_ECS_EXEC_ROLE_ARN:-MISSING}"
 ```
 
-**What to look for:** no `MISSING`. In particular `USMS_ENROLMENT_CONTAINER` must be `enrolment-api`
-and `USMS_PIPELINE_NAME` must be `usms-enrolment-pipeline`. Everything in this lab keys off those two
-strings.
+**What to look for:** no `MISSING`. `USMS_ENROLMENT_CONTAINER` must be `enrolment-api` and `USMS_PIPELINE_NAME` must be `usms-enrolment-pipeline`; everything keys off those two strings.
 
 ---
 
 ### Step 3 - Probe the deployment surface
 
-**Purpose**
-
-Lab 11 probed CodeBuild and CodePipeline. This lab depends on three more things: ECR, the ECS deploy
-action, and - for Step 19 only - CodeDeploy. Find out now.
-
-**Run from**
-
-```text
-aws-floci-course/
-```
+Find out now whether this build supports ECR, the ECS deploy action and (for Step 19 only) CodeDeploy.
 
 ```bash
 cat > scripts/utilities/deploy-support-probe.sh << 'EOF'
@@ -476,7 +345,7 @@ elif [ "$DOCKER_OK" = yes ] && [ "$ECS_OK" = yes ]; then
 else
   P="C"
   echo "PATH C - no Docker or no ECS. Every document in this lab is still written"
-  echo "         and validated. Section 12 says exactly what to claim."
+  echo "         and validated. Section 11 says exactly what to claim."
 fi
 printf 'USMS_CICD_DEPLOY_PATH=%s\nUSMS_CODEDEPLOY_SUPPORTED=%s\n' "$P" "$DEPLOY_OK" \
   > outputs/lab-12-deploy-probe.txt
@@ -488,13 +357,7 @@ bash -n scripts/utilities/deploy-support-probe.sh && echo "syntax OK"
 ./scripts/utilities/deploy-support-probe.sh
 ```
 
-**What the command does**
-
-The ECR part does not stop at "the API answered". It creates a repository and reads back its
-`repositoryUri`, because that URI is the thing a `docker push` actually needs, and a build that
-returns a URI with no host part cannot be pushed to no matter what the API says. Then it deletes the
-probe repository with `--force`, which is required for a repository containing images and harmless
-for an empty one.
+The ECR probe does not stop at "the API answered": it reads back the `repositoryUri`, because that is what `docker push` needs, then deletes the probe repository with `--force`.
 
 **Expected result**
 
@@ -518,9 +381,7 @@ recorded in outputs/lab-12-deploy-probe.txt
 > Example output - the exact `repositoryUri` host differs between emulator builds, which is precisely
 > why nothing in this lab hard-codes it.
 
-**What to look for:** the `repositoryUri` line. Read it, and notice that it is not
-`<account>.dkr.ecr.<region>.amazonaws.com` as it would be on real AWS. **Never type a registry host
-into a command in this lab.** Every step derives it from `describe-repositories`.
+**What to look for:** the `repositoryUri` is not `<account>.dkr.ecr.<region>.amazonaws.com`. **Never type a registry host in this lab**; every step derives it from `describe-repositories`.
 
 **Checkpoint 1**
 
@@ -534,12 +395,7 @@ outputs/lab-12-deploy-probe.txt
 
 ### Step 4 - Publish the ECR port range
 
-**Purpose**
-
-Only port `4566` is published by the Compose file. Depending on the build, an ECR registry may be
-served on its own port from the `5100-5104` range, and a `docker push` from your host cannot reach a
-port that is not published. This is the one step in this lab that edits `docker-compose.yml`, and it
-uncomments exactly one line.
+Only `4566` is published. An ECR registry may be served from the `5100-5104` range, which a host `docker push` cannot reach until it is published. This step uncomments exactly one line of `docker-compose.yml`.
 
 !!! danger "Read before editing docker-compose.yml"
     **What will change:** one commented line in `docker-compose.yml` becomes active, publishing five
@@ -554,12 +410,6 @@ uncomments exactly one line.
     the other ranges; publishing roughly six hundred ports makes Docker Desktop crawl and collides on
     shared machines.
 
-**Run from**
-
-```text
-aws-floci-course/
-```
-
 **Command**
 
 ```bash
@@ -568,12 +418,9 @@ cd ~/aws-floci-course
 grep -n '5100-5104' docker-compose.yml
 ```
 
-**What to look for:** one line, currently commented, inside the `ports:` list. If `grep` prints
-nothing, your compose file does not carry the range; add it by hand under `ports:` in the same style
-as the `4566` line, and say so in your notes.
+**What to look for:** one commented line inside `ports:`. If `grep` prints nothing, add the range by hand under `ports:` in the style of the `4566` line, and note it.
 
-Now uncomment it. Either edit the file in your editor and delete the leading `#`, or use the guarded
-substitution below, which only touches a line that mentions this one range:
+Uncomment it in your editor, or with this guarded substitution:
 
 ```bash
 cp docker-compose.yml "docker-compose.yml.bak-$(date +%Y%m%d%H%M%S)"
@@ -584,12 +431,7 @@ rm -f docker-compose.yml.tmp
 grep -n '5100-5104' docker-compose.yml
 ```
 
-**What the command does**
-
-`sed -i.tmp` is the portable in-place form - GNU `sed` accepts a bare `-i`, BSD `sed` on macOS does
-not, and `-i.tmp` followed by `rm` works on both. The pattern captures the leading whitespace in `\1`
-and the list item in `\2`, and writes them back without the `#` between them. The `cp` before it is
-not decorative: this is the one file in the course that decides how Floci runs.
+`sed -i.tmp` followed by `rm` is the in-place form that works on both GNU and BSD (macOS) `sed`. The `cp` backup matters: this file decides how Floci runs.
 
 **Expected result**
 
@@ -606,11 +448,7 @@ not decorative: this is the one file in the course that decides how Floci runs.
 docker port floci
 ```
 
-**What to look for:** `4566` and the `5100-5104` range in the published list. If `floci-up.sh` reports
-that it recreated the container, that is expected and correct - the ports are part of the container's
-definition and cannot be added to a running one.
-
-Then confirm nothing was lost by the recreate:
+**What to look for:** `4566` and `5100-5104` published. A recreated container is expected: ports cannot be added to a running one. Then confirm the recreate lost nothing:
 
 ```bash
 aws ecs describe-services --cluster "$USMS_ECS_CLUSTER" --services "$USMS_ENROLMENT_SERVICE" \
@@ -618,41 +456,16 @@ aws ecs describe-services --cluster "$USMS_ECS_CLUSTER" --services "$USMS_ENROLM
   --output table
 ```
 
-**What to look for:** the service is still `ACTIVE` with the task definition Lab 04 left. This is the
-`create → perturb → read back` shape with the container recreate as the perturbation, and it is the
-proof that hybrid storage is doing what Lab 01 claimed. If the service is gone, you are in memory
-mode; stop and run `floci-storage-check.sh`.
+**What to look for:** the service still `ACTIVE` on Lab 04's task definition (create, perturb, read back). If it is gone you are in memory mode: stop and run `floci-storage-check.sh`.
 
 ---
 
 ### Step 5 - Create the ECR repository
 
-**Purpose**
+A private place for your image: the repository Lab 01's `USMSECSTaskExecution` has described since before it existed.
 
-A place to put your image that is not a public registry. This is the repository that Lab 01's
-`USMSECSTaskExecution` policy has been describing, in the abstract, since before it existed.
-
-**Concept first - what a repository is, and what a tag is**
-
-An ECR **repository** holds the images for one thing. `usms-enrolment` will hold every build of the
-enrolment service, distinguished by **tag** - `r6`, `r7`, and so on.
-
-A tag is a label, and by default it is **mutable**: pushing a different image with the tag `r6`
-silently moves `r6` to the new bytes. The image's **digest** - `sha256:...` - is derived from the
-content and cannot be moved.
-
-That difference is the whole of Step 9 and half of Section 15's questions. `IMMUTABLE` tag mutability
-makes ECR reject a second push to an existing tag. This lab uses `MUTABLE`, deliberately, so that
-Step 18's rollback drill can demonstrate what goes wrong; Exercise 2 asks you to argue for the other
-choice.
-
-**Run from**
-
-```text
-aws-floci-course/
-```
-
-**Command**
+!!! info "Tags and digests"
+    A repository holds every build of one thing, distinguished by **tag** (`r6`, `r7`). A tag is **mutable** by default: a second push moves it. The **digest** (`sha256:...`) is derived from the content and cannot move. This lab uses `MUTABLE` deliberately so Step 18 can show what goes wrong; Exercise 2 argues for `IMMUTABLE`. See [images, tags and digests](../unit2/topic1.md#images-layers-manifests-tags-and-digests).
 
 ```bash
 ECR_REPO="usms-enrolment"
@@ -667,8 +480,6 @@ aws ecr create-repository \
   --output table
 ```
 
-**What the command does**
-
 ```text
 aws
  └── ecr                                the SERVICE (Elastic Container Registry)
@@ -678,9 +489,7 @@ aws
            └── --encryption-configuration      AES256 is the default; KMS is the alternative
 ```
 
-`scanOnPush=true` asks ECR to scan every pushed image against a vulnerability database. On real AWS
-this is genuinely useful and nearly free. On this emulator it is almost certainly stored and not
-performed, which Section 12 records.
+`scanOnPush=true` is useful and nearly free on real AWS; here it is stored, not performed (Section 11).
 
 **Expected result**
 
@@ -707,50 +516,20 @@ ECR_REGISTRY="${ECR_URI%%/*}"
 printf 'repository uri : %s\nregistry host  : %s\n' "$ECR_URI" "$ECR_REGISTRY"
 ```
 
-**What the command does**
-
-`${ECR_URI%%/*}` is shell parameter expansion: remove the longest match of `/*` from the end, leaving
-everything before the first slash - the registry host. This is how every later step gets the host, and
-it is why none of them contains a hard-coded hostname.
-
-**What to look for:** two lines, the second a host and port with no path. If `ECR_REGISTRY` equals
-`ECR_URI`, the URI has no slash in it and your build is not returning a pushable URI - that is Path B
-from Step 3, and Step 8 tells you what to do instead.
+`${ECR_URI%%/*}` strips everything from the first `/`, leaving the registry host. **What to look for:** two lines, the second a host and port with no path. If `ECR_REGISTRY` equals `ECR_URI`, the URI is not pushable: that is Path B, and Step 8 says what to do.
 
 ---
 
 ### Step 6 - Authenticate Docker against the registry
 
-**Purpose**
-
-`docker push` needs credentials for the registry. ECR issues a short-lived token; you exchange your
-AWS credentials for it and hand it to Docker.
-
-**Concept first - what `get-login-password` actually returns**
-
-A password, valid for twelve hours, for the username `AWS`. It is a credential, so it goes into
-`docker login` through **standard input** and never onto the command line - arguments are visible in
-`ps` output and in your shell history, and this course has been redirecting credentials straight into
-`outputs/` since Lab 01 for the same reason.
-
-**Run from**
-
-```text
-aws-floci-course/
-```
-
-**Command**
+ECR issues a twelve-hour password for the username `AWS`. It is a credential, so it goes to `docker login` through **standard input**, never onto the command line (visible in `ps` and shell history).
 
 ```bash
 aws ecr get-login-password --region "$AWS_REGION_COURSE" \
   | docker login --username AWS --password-stdin "$ECR_REGISTRY"
 ```
 
-**What the command does**
-
-The pipe is the point. Nothing writes the token to a file, nothing echoes it, and it does not appear
-in `history`. Docker stores a reference to it in `~/.docker/config.json`; on a shared machine that
-file is worth knowing about.
+The pipe means nothing writes or echoes the token. Docker keeps a reference in `~/.docker/config.json`; on a shared machine, know that file exists.
 
 **Expected result**
 
@@ -786,29 +565,16 @@ ECR
 
 ### Step 7 - Write the Dockerfile
 
-**Purpose**
+Turn the build output into an image with a deliberately small Dockerfile.
 
-Turn the build output into an image. The Dockerfile is deliberately four lines, because everything
-interesting about this lab is what happens to the image afterwards.
-
-**Concept first - the build context, and why `dist/` is what gets copied**
-
-`docker build .` sends the whole of `.` - the **build context** - to the daemon, and the Dockerfile
-can only copy from inside it. The buildspec has already produced `dist/`, containing the substituted
-`index.html`, the health file, `build-metadata.json` and `service.json`. That directory, and not the
-source tree, is what belongs in the image: the image should contain the built output, not the build
-inputs, the tests, or the buildspec that produced it.
-
-`.dockerignore` enforces that from the other side, and also keeps the context small - a context that
-includes `.git` on a real repository can be hundreds of megabytes sent over a socket for nothing.
+!!! info "Build context"
+    `docker build .` sends `.` (the **build context**) to the daemon, and `COPY` can only read from it. The image ships the built `dist/`, not the source, tests or buildspec; `.dockerignore` enforces that and keeps the context small. See [Dockerfiles and the build cache](../unit2/topic1.md#dockerfiles-and-the-build-cache).
 
 **Run from**
 
 ```text
 aws-floci-course/labs/lab-11-cicd/app/
 ```
-
-**Command**
 
 ```bash
 cd ~/aws-floci-course/labs/lab-11-cicd/app
@@ -844,17 +610,8 @@ EOF
 echo "--- Dockerfile ---"; cat Dockerfile
 ```
 
-**What the command does**
-
-`FROM nginx:1.27-alpine` is the same base Lab 07 used, for a practical reason: since you built
-Labs 07-08 (EKS), your Docker daemon already has it cached and the build is instant. The alternative,
-`public.ecr.aws/nginx/nginx:stable-alpine`, is what Lab 04's placeholder task definition names; either
-works, and Exercise 1 asks you to try the other.
-
-Note that `.dockerignore` excludes `src/` and `config/` while `COPY dist/` copies their processed
-output. That is not a contradiction - it is the distinction between what a build consumes and what an
-image ships, and getting it right is why the image is about 8 MB rather than including a test script
-and a build specification that a running container has no use for.
+- `nginx:1.27-alpine` is the base Lab 07 used, so it is probably cached; Lab 04's `public.ecr.aws/nginx/nginx:stable-alpine` also works (Exercise 1).
+- `.dockerignore` excludes `src/` and `config/` while `COPY dist/` ships their processed output: what a build consumes versus what an image ships.
 
 **Verify**
 
@@ -866,20 +623,13 @@ test -d labs/lab-11-cicd/app/dist && echo "dist/ present - Step 8 can build" \
      && echo "dist/ rebuilt by the local runner"
 ```
 
-**What to look for:** both files exist, and `dist/` is present. If the local runner had to rebuild it,
-that is fine - it is the same runner from Lab 11 Step 14, and it is now doing exactly the job it was
-written for.
+**What to look for:** both files exist and `dist/` is present. If the Lab 11 Step 14 local runner had to rebuild it, that is fine.
 
 ---
+
 ### Step 8 - Build the image and push it, by hand
 
-**Purpose**
-
-Prove the image path works before asking a pipeline to walk it. If `docker build` or `docker push`
-fails, you want to see that failure in your own terminal, not as a red stage in a system you have not
-finished building.
-
-**Concept first - three names for one thing**
+Prove the image path in your own terminal before a pipeline walks it.
 
 ```text
   usms-enrolment:r6                                   a local name
@@ -887,15 +637,7 @@ finished building.
   sha256:8f3a91c4...                                  the digest - the content's identity
 ```
 
-`docker tag` adds a name to an image that already exists; it copies nothing. `docker push` needs the
-name to include the registry host, which is why the second form exists. The digest is not a name you
-choose - it falls out of the content, and it is the only one of the three that cannot lie to you.
-
-**Run from**
-
-```text
-aws-floci-course/
-```
+`docker tag` adds a name and copies nothing; `docker push` needs a name that includes the registry host; the digest falls out of the content and is the only one of the three that cannot lie.
 
 **Command - part 1, set the release and rebuild the output**
 
@@ -909,9 +651,7 @@ IMAGE_TAG=$(tr -d '[:space:]' < labs/lab-11-cicd/app/VERSION)
 echo "image tag will be: $IMAGE_TAG"
 ```
 
-**What to look for:** the smoke tests pass and `build-metadata.json` says `"release": "r6"`. The image
-you are about to build contains that file, which is how, later, you can open a running container and
-ask it which build it came from.
+**What to look for:** smoke tests pass and `build-metadata.json` says `"release": "r6"`; the image carries that file, so a running container can say which build it came from.
 
 **Command - part 2, build, tag, push**
 
@@ -927,12 +667,7 @@ docker push "$ECR_URI:$IMAGE_TAG"
 cd ~/aws-floci-course
 ```
 
-**What the command does**
-
-Three commands, three distinct operations, and the middle one is the one people skip and then cannot
-explain. `docker build -t name:tag .` builds from the context `.`; `docker tag` gives the result a
-second name that includes the registry; `docker push` uploads the layers under that name. Nothing is
-uploaded by `build` and nothing is built by `push`.
+`build` uploads nothing and `push` builds nothing; `tag` is the step people skip and then cannot explain.
 
 **Expected result**
 
@@ -954,10 +689,7 @@ r6: digest: sha256:1c92f0ab... size: 1571
 
 > Example output - your digests, layer IDs and timings will differ.
 
-**What to look for:** the last line, which gives the **digest of the pushed image**. Note that it is
-not the same value as the `writing image sha256:` line from the build: the build reports the image
-config digest, the push reports the manifest digest, and the manifest digest is the one ECR indexes
-and the one a task definition can pin. Those two being different surprises everybody once.
+**What to look for:** the last line's **manifest digest**. It differs from the build's `writing image sha256:` (the config digest); the manifest digest is what ECR indexes and a task definition can pin.
 
 !!! note "Floci Limitation - push may not be supported at all"
     Some builds provide the ECR control plane - repositories, tags, policies - with no registry data
@@ -975,17 +707,7 @@ and the one a task definition can pin. Those two being different surprises every
 
 ### Step 9 - Prove the image is in the registry
 
-**Purpose**
-
-`docker push` printing `Pushed` is a client reporting its own success. The read-back is the evidence.
-
-**Run from**
-
-```text
-aws-floci-course/
-```
-
-**Command**
+`Pushed` is the client reporting its own success; the registry's read-back is the evidence.
 
 ```bash
 aws ecr describe-images \
@@ -1002,12 +724,7 @@ printf '%s %s %s\n' "$IMAGE_TAG" "$IMAGE_DIGEST" "$(date -u +%Y-%m-%dT%H:%M:%SZ)
   | tee -a outputs/lab-12-image-digest.txt
 ```
 
-**What the command does**
-
-`describe-images` is the registry's own index. `--image-ids imageTag=r6` asks about one image by tag
-and returns, among other things, its digest - the mapping from the mutable name to the immutable
-content. Appending it to `outputs/lab-12-image-digest.txt` builds a small local ledger: tag, digest,
-timestamp. Step 18 uses it, and Section 15 asks you what it is worth as evidence.
+`describe-images --image-ids imageTag=r6` maps the mutable name to the immutable digest. The appended line in `outputs/lab-12-image-digest.txt` is a small ledger Step 18 and Section 14 use.
 
 **Expected result**
 
@@ -1027,8 +744,7 @@ r6 sha256:1c92f0ab... 2026-09-17T04:12:51Z
 
 **Verify - the create, perturb, read back proof**
 
-The perturbation here is deleting your local copy. If the image survives that and can be fetched back
-**by digest**, it is genuinely in the registry and not merely in your laptop's cache.
+Delete your local copy; if the image can be fetched back **by digest**, it is in the registry, not just your cache.
 
 !!! danger "Read before running any remove command"
     **What will be deleted:** the two local Docker image names, `usms-enrolment:r6` and the registry
@@ -1049,11 +765,7 @@ docker pull "$ECR_URI@$IMAGE_DIGEST"
 docker images --digests | grep usms-enrolment | head -3
 ```
 
-**What to look for:** `no local copy remains`, then a successful pull. Note the `@` rather than `:` -
-`repository@sha256:...` addresses an image by digest, and it is the only form that cannot be pointed
-somewhere else after the fact. A production task definition that names a digest is deploying exactly
-the bytes that were tested; one that names a tag is deploying whatever that tag points at when the
-task starts.
+**What to look for:** `no local copy remains`, then a successful pull. `repository@sha256:...` addresses by digest: a task definition naming a digest deploys exactly the tested bytes; one naming a tag deploys whatever the tag points at when the task starts.
 
 **Checkpoint 3**
 
@@ -1068,34 +780,10 @@ outputs/lab-12-image-digest.txt
 
 ### Step 10 - Register a task definition revision that names your image
 
-**Purpose**
+The service runs `usms-enrolment:2` with the placeholder image. Produce revision 3, identical except the image, by deriving it from revision 2 rather than writing it from memory.
 
-The service is still running `usms-enrolment:2`, whose container image is the placeholder. This step
-produces revision 3, identical in every respect except the image - and produces it the way you should
-always produce one: from the existing revision, not from a file somebody wrote from memory.
-
-**Concept first - describe, strip, register**
-
-`register-task-definition` takes a full task definition document. You almost never want to write one
-from scratch for an existing family, because you will silently drop something - a log configuration, a
-health check, a `runtimePlatform` - that nobody notices until the service degrades.
-
-So: `describe-task-definition` gives you the current one; you remove the fields that AWS owns; you
-change what you meant to change; you register the result. The read-only fields are
-`taskDefinitionArn`, `revision`, `status`, `requiresAttributes`, `compatibilities`, `registeredAt`,
-`registeredBy` and `deregisteredAt`. Leaving any of them in produces a validation error that names
-one field at a time, which makes fixing it a game of whack-a-mole.
-
-This is exactly what the ECS deploy action does for you in Step 16. Doing it by hand once is how you
-know what it is doing.
-
-**Run from**
-
-```text
-aws-floci-course/
-```
-
-**Command**
+!!! info "Describe, strip, register"
+    Writing a task definition from scratch silently drops something (log configuration, health check, `runtimePlatform`). Instead: `describe-task-definition`, remove the fields AWS owns, change one value, register. The read-only fields are `taskDefinitionArn`, `revision`, `status`, `requiresAttributes`, `compatibilities`, `registeredAt`, `registeredBy` and `deregisteredAt`; leaving one in fails validation one field at a time. The ECS deploy action does exactly this in Step 16. See [ECS task definitions](../unit2/topic1.md#ecs-task-definitions).
 
 ```bash
 cd ~/aws-floci-course
@@ -1133,13 +821,7 @@ python3 -m json.tool templates/lab-12-taskdef-v3.json > /dev/null && echo "valid
 grep -c '\$' templates/lab-12-taskdef-v3.json
 ```
 
-**What the command does**
-
-The Python is doing three things worth naming: it strips the read-only fields; it finds the container
-**by name** rather than by position, because position is not a contract; and it fails loudly if that
-name is absent instead of quietly writing a document that registers fine and deploys nothing.
-
-The `grep -c '\$'` is the usual check for an unexpanded variable. The answer must be `0`.
+The Python strips the read-only fields, finds the container **by name** (position is not a contract), and fails loudly if it is absent. `grep -c '\$'` must print `0`.
 
 **Expected result**
 
@@ -1172,26 +854,13 @@ aws ecs describe-task-definition --task-definition usms-enrolment \
   --output json
 ```
 
-**What to look for:** `Revision` is `3`, `Image` is your ECR URI with the `r6` tag, and - this is the
-point of the describe-strip-register pattern - `Cpu` is still `256`, `Memory` is still `1024`, and the
-health check command from Lab 04 Step 14 is still there. If any of those are missing, you wrote a
-task definition instead of deriving one.
+**What to look for:** `Revision` `3`, `Image` your ECR URI with `r6`, and still `Cpu` `256`, `Memory` `1024` and Lab 04 Step 14's health check. Anything missing means you wrote a task definition instead of deriving one.
 
 ---
 
 ### Step 11 - Deploy revision 3 by hand, and watch it
 
-**Purpose**
-
-One more thing done manually before the pipeline does it, so that when the pipeline does it you
-recognise what you are looking at. This is also the step where the enrolment service starts running
-your application.
-
-**Run from**
-
-```text
-aws-floci-course/
-```
+Do it manually once so you recognise what the pipeline does later. From here the service runs your application.
 
 **Command - part 1, a watcher you will reuse**
 
@@ -1238,13 +907,7 @@ chmod +x scripts/utilities/usms-ecs-watch.sh
 bash -n scripts/utilities/usms-ecs-watch.sh && echo "syntax OK"
 ```
 
-**What the command does**
-
-A polling loop rather than `aws ecs wait services-stable`, for the reason Lab 04 gave: on this
-emulator the waiter can run until it exhausts its attempts without telling you what it saw. This
-prints the deployment table on every poll, so a service that is stuck tells you *how* it is stuck. It
-exits 0 when there is exactly one deployment and its running count equals the desired count, which is
-what "settled" actually means.
+A polling loop rather than `aws ecs wait services-stable`, which on this emulator can exhaust its attempts silently (Lab 04). It prints the deployment table every poll and exits 0 when there is one deployment with running equal to desired.
 
 **Command - part 2, deploy**
 
@@ -1276,10 +939,7 @@ aws ecs update-service \
 > Example output - two deployments during the overlap is the normal, healthy shape of a rolling ECS
 > deployment.
 
-**What to look for:** two rows during the rollout - the new `PRIMARY` coming up and the old `ACTIVE`
-going down - collapsing to one row when it finishes. That overlap is `minimumHealthyPercent 100` and
-`maximumPercent 200` from Lab 04 doing their job: never fewer than two healthy tasks, never more than
-four.
+**What to look for:** two rows during the rollout (new `PRIMARY` up, old `ACTIVE` down) collapsing to one. That overlap is Lab 04's `minimumHealthyPercent 100` / `maximumPercent 200`. See [the rolling update](../unit2/topic3.md#deployment-the-rolling-update).
 
 !!! note "Floci Limitation - tasks that never reach RUNNING"
     Lab 04 Step 3 defined three support paths, and its Path B - a control plane with no task
@@ -1305,40 +965,11 @@ ECS service usms-enrolment-svc
 
 ### Step 12 - Version 2 of `USMSCodeBuildBase`
 
-**Purpose**
+From Step 14 the build pushes to ECR, so the build role needs push permission. This is the course's first policy version you create yourself.
 
-From Step 14 the build itself will push to ECR, so the build role needs permission to. This is also
-the first time in the course that a customer-managed policy gets a second version, and the mechanics
-have a trap in them.
-
-**Concept first - a version is not a default**
-
-`create-policy-version` adds a version. It does **not** make it active. Until you set it as the
-default - either with `--set-as-default` on creation or with `set-default-policy-version` afterwards -
-every principal carrying the policy is still evaluating v1.
-
-A policy holds at most **five** versions. The sixth `create-policy-version` fails, and the fix is to
-delete an old non-default version first. On a policy that changes often, that limit arrives sooner
-than you expect.
-
-Lab 01's `USMSDeveloperBase` is already on v2, so this is a pattern the course has used; this is the
-first time you perform it.
-
-**Concept first - why `ecr:GetAuthorizationToken` must be on `Resource: "*"`**
-
-Every other ECR action here is scoped to the repository ARN. `GetAuthorizationToken` cannot be: it is
-a registry-level operation, not a repository-level one, and there is no repository in its request to
-scope against. A policy that scopes it to a repository ARN denies it, and the resulting failure is a
-`docker login` error that mentions authentication and not IAM. It is a well-known piece of ECR trivia
-and it is worth knowing before it costs you an hour.
-
-**Run from**
-
-```text
-aws-floci-course/
-```
-
-**Command**
+!!! info "Two facts this step relies on"
+    - **A version is not a default.** `create-policy-version` adds a version; until `--set-as-default` (or `set-default-policy-version`) every principal still evaluates v1. A policy holds at most **five** versions.
+    - **`ecr:GetAuthorizationToken` must be on `Resource: "*"`.** It is registry-level, with no repository to scope against; scoping it denies it, and the failure surfaces as a `docker login` authentication error, not an IAM one.
 
 ```bash
 cat > policies/usms-codebuild-policy-v2.json << 'EOF'
@@ -1417,13 +1048,7 @@ aws iam create-policy-version \
   --output table
 ```
 
-**What the command does**
-
-The document is v1 plus two statements. Note the five push actions in order - `BatchCheckLayer`,
-`InitiateLayerUpload`, `UploadLayerPart`, `CompleteLayerUpload`, `PutImage` - which is literally the
-sequence a `docker push` performs: ask which layers are already there, then upload the missing ones in
-parts, then write the manifest. A policy missing any one of them fails a push partway through, and the
-Docker error names the HTTP status rather than the action.
+v1 plus two statements. The five push actions (`BatchCheckLayerAvailability`, `InitiateLayerUpload`, `UploadLayerPart`, `CompleteLayerUpload`, `PutImage`) are the order a `docker push` performs; missing one fails the push partway with an HTTP status, not an action name.
 
 **Verify**
 
@@ -1435,10 +1060,7 @@ aws iam list-policy-versions --policy-arn arn:aws:iam::000000000000:policy/USMSC
   --query 'Versions[].{Version:VersionId,Default:IsDefaultVersion,Created:CreateDate}' --output table
 ```
 
-**What to look for:** `DefaultVersionId` is `v2`, and the version list shows `v1` with
-`Default: False`. If the default is still `v1`, you created a version without activating it - run
-`aws iam set-default-policy-version --policy-arn ... --version-id v2`. That mistake is silent: the
-policy looks updated in the console's JSON view if you happen to be looking at v2.
+**What to look for:** `DefaultVersionId` `v2`, and `v1` with `Default: False`. If the default is still `v1`, run `aws iam set-default-policy-version --policy-arn ... --version-id v2`; the mistake is otherwise silent.
 
 ✏️ **Your turn**
 
@@ -1453,32 +1075,13 @@ A document with five statements. Two of them will not match Step 15 exactly, and
 the interesting part of this exercise is which two and why.
 ```
 
+Hint: Lab 11's v1 shows the scoped `PassRole` shape; the ECS calls are the ones Step 10 made by hand.
+
 ---
 
 ### Step 13 - Let the build run Docker
 
-**Purpose**
-
-A CodeBuild container cannot run `docker build` unless the project says it may. This step turns that
-on and gives the build the registry URI it will push to.
-
-**Concept first - what `privilegedMode` actually does**
-
-It runs the build container with the Docker daemon's socket available and elevated capabilities, so
-that the build can start containers of its own. That is what "Docker in Docker" means here.
-
-It is also a meaningful privilege. A build with `privilegedMode` can, in principle, reach the host's
-Docker daemon and everything it can see. On a real account, that is a reason to care who can trigger
-the build and what source it builds - which is the same reason the pipeline role's `StartBuild` is
-scoped to one project ARN rather than `project/*`.
-
-**Run from**
-
-```text
-aws-floci-course/
-```
-
-**Command**
+A CodeBuild container cannot run `docker build` unless the project enables `privilegedMode`, which gives it a Docker daemon and elevated capabilities. That is a real privilege, which is why who can trigger the build matters (and why the pipeline role's `StartBuild` is scoped to one project). See [AWS CodeBuild](../unit5/topic1.md#aws-codebuild).
 
 ```bash
 cat > templates/lab-12-codebuild-update.json << EOF
@@ -1508,15 +1111,9 @@ aws codebuild update-project \
   --output json
 ```
 
-**What the command does**
-
-`update-project` with `--cli-input-json` needs `name` plus only the members you are changing -
-`environment` here - and leaves the source, artifacts, service role, timeout and tags as they were.
-Note that `environment` is replaced **as a whole**: omitting `environmentVariables` would clear them,
-and omitting `image` would fail validation. Another replace-only shape, in a smaller form than
-`update-pipeline`.
-
-The unquoted heredoc substitutes `${ECR_URI}`; the `grep -c '\$'` must print `0`.
+- `update-project --cli-input-json` takes `name` plus only the members you change, leaving source, artifacts, role and tags alone.
+- `environment` is replaced **as a whole**: omit `environmentVariables` and they are cleared.
+- Unquoted heredoc, so `${ECR_URI}` is substituted; `grep -c '\$'` must print `0`.
 
 **Expected result**
 
@@ -1544,9 +1141,7 @@ aws codebuild batch-get-projects --names usms-enrolment-build \
   --output table
 ```
 
-**What to look for:** `Source` is still `CODEPIPELINE` - you did not undo Lab 11 Step 18 - `Role` is
-still `usms-codebuild-role`, `Privileged` is `true`, and `Repo` is your ECR URI. All four matter; the
-first is the one people break with an over-broad `update-project`.
+**What to look for:** `Source` still `CODEPIPELINE` (you did not undo Lab 11 Step 18), `Role` still `usms-codebuild-role`, `Privileged` `true`, and `Repo` your ECR URI.
 
 **Checkpoint 5**
 
@@ -1561,16 +1156,13 @@ CodeBuild usms-enrolment-build
 ```
 
 ---
+
 ### Step 14 - Extend the buildspec: build the image, write `imagedefinitions.json`
 
-**Purpose**
+This makes the pipeline capable of deploying: the build produces an image and the small file telling the deploy action which image to use.
 
-This is the step that makes the pipeline capable of deploying. Two additions: the build produces an
-image, and the build produces the small JSON file that tells the deploy action which image to use.
-
-**Concept first - `imagedefinitions.json`, exactly**
-
-It is a JSON **array**. Each element has two fields:
+!!! info "`imagedefinitions.json`, exactly"
+    A JSON **array**; each element has `name` (the **container name** in the task definition, not the service, family or repository) and `imageUri` (the full pushable reference). See [deployment actions for ECS](../unit5/topic2.md#deployment-actions-for-ecs-and-eks).
 
 ```json
 [
@@ -1581,9 +1173,6 @@ It is a JSON **array**. Each element has two fields:
 ]
 ```
 
-`name` must equal the **container name** in the task definition - not the service, not the family, not
-the repository. `imageUri` is the full pushable reference including the tag or digest.
-
 Three ways this file goes wrong, all of which produce failures that do not mention the file:
 
 - It is a JSON **object** rather than an array. The deploy action rejects it.
@@ -1592,17 +1181,7 @@ Three ways this file goes wrong, all of which produce failures that do not menti
 - It is not at the **root** of the input artifact. This is why `artifacts.base-directory: dist` matters
   and why the build writes the file into `dist/` rather than beside the source.
 
-**Concept first - why the image build is guarded**
-
-The build container may or may not have a reachable Docker daemon, even with `privilegedMode` on, and
-the registry may or may not be reachable from inside it. Rather than writing a buildspec that works
-only on the happy path, the `build` phase checks `docker info` and skips the image build when there is
-no daemon - always writing `imagedefinitions.json` either way, naming the tag that Step 8 already
-pushed by hand.
-
-That is not a workaround for the emulator. It is a real pattern: a build that degrades to "the image
-must already exist at this reference" is a build you can reason about, and one that says so in its log
-is a build you can debug.
+The image build is **guarded**: if the build container has no Docker daemon it skips the build and still writes `imagedefinitions.json`, naming the tag Step 8 pushed by hand, and says so in its log.
 
 **Run from**
 
@@ -1684,7 +1263,7 @@ phases:
         if docker info >/dev/null 2>&1; then
           docker build -t "${IMAGE_REPO_URI}:$USMS_RELEASE" .
           docker push "${IMAGE_REPO_URI}:$USMS_RELEASE" \
-            || echo "push failed - see Section 11; the deploy stage will use the existing tag"
+            || echo "push failed - see Section 10; the deploy stage will use the existing tag"
         fi
       - |
         IMAGE_URI="${IMAGE_REPO_URI}:$USMS_RELEASE" python3 - > "$ARTIFACT_DIR/imagedefinitions.json" << 'IMGDEF'
@@ -1713,29 +1292,14 @@ BUILDSPEC
 echo "buildspec rewritten; the Lab 11 version is kept at buildspec.yml.lab08a"
 ```
 
-**What the command does**
+- `env.variables` gains `IMAGE_REPO_URI` with a default of `nginx`; Step 13's project variable overrides it.
+- `pre_build` logs in to the registry if Docker is available, deriving the host with `${IMAGE_REPO_URI%%/*}`.
+- `build` builds and pushes (guarded), then always writes `imagedefinitions.json`, reading the container name from `config/service.json`.
+- `build-metadata.json` gains `imageUri`, which turns artifacts into an audit trail.
+- Unchanged: `artifacts.base-directory: dist`, which puts the file at the artifact root.
 
-Four changes from the Lab 11 version, and one thing deliberately unchanged.
-
-- `env.variables` gains `IMAGE_REPO_URI` with a **default** of `nginx`. The project's environment
-  variable from Step 13 overrides it. The default exists so the local runner produces a sensible file
-  rather than failing on an unset variable.
-- `pre_build` resolves the release and, if Docker is available, logs in to the registry - deriving the
-  host with `${IMAGE_REPO_URI%%/*}`, the same expansion as Step 5.
-- `build` builds and pushes, guarded, and then always writes `imagedefinitions.json` by reading the
-  container name out of `config/service.json`. The container name is read, never typed twice.
-- `build-metadata.json` gains an `imageUri` field, so the artifact records which image it corresponds
-  to. That single field is what turns a pile of artifacts into an audit trail.
-
-Unchanged: `artifacts.base-directory: dist`. The new file must land at the artifact root, and this is
-the line that puts it there.
-
-Note the nested heredocs again, and their quoting: the outer `<< 'BUILDSPEC'` is quoted so every `$`
-reaches the file; the inner `<< META` is unquoted because those variables must expand at build time;
-the inner `<< 'IMGDEF'` is **quoted** because that Python source must reach the interpreter exactly as
-written - which is why the image URI is passed in through the environment rather than interpolated
-into the program text. Building a program by string substitution is how injection bugs are born, and
-the habit of passing data through the environment instead is worth having even for a two-line script.
+!!! warning "Heredoc quoting: three levels"
+    The outer `<< 'BUILDSPEC'` is quoted so every `$` reaches the file; the inner `<< META` is unquoted because it must expand at build time; the inner `<< 'IMGDEF'` is quoted so the Python reaches the interpreter as written, which is why the image URI is passed through the environment rather than interpolated into program text.
 
 **Command - part 2, the eighth smoke test**
 
@@ -1759,11 +1323,7 @@ PY
 bash -n tests/smoke.sh && echo "smoke.sh syntax OK"
 ```
 
-**What the command does**
-
-Inserts one more assertion after the container-name check. It does three things in one expression: the
-file parses as JSON, it is a list of length one, and its single entry names `enrolment-api`. Those are
-exactly the three ways the file goes wrong, from the concept note above.
+One assertion after the container-name check: the file parses, is a one-element list, and names `enrolment-api`, covering the three failure modes above.
 
 **Verify - run it locally first**
 
@@ -1800,19 +1360,10 @@ smoke tests failed: 0
 
 > Example output - eight assertions now, and the image URI is whatever your registry reported.
 
-**What to look for:** eight `ok` lines, and an `imageUri` containing your registry host. If `imageUri`
-reads `nginx:r6`, the `IMAGE_REPO_URI` you set on the command line did not reach the runner.
+**What to look for:** eight `ok` lines and an `imageUri` with your registry host. `nginx:r6` means the command-line `IMAGE_REPO_URI` did not reach the runner.
 
 !!! info "Why the variable on the command line wins"
-    The runner generates `export IMAGE_REPO_URI="${IMAGE_REPO_URI:-nginx}"` from the buildspec's
-    `env.variables`, so a value already in your environment overrides the default rather than being
-    overwritten by it. That is deliberate, and it mirrors CodeBuild: a **project-level** environment
-    variable - the one Step 13 set on `usms-enrolment-build` - wins over an `env.variables` default in
-    the buildspec.
-
-    The default exists so that the buildspec is runnable with no configuration at all. It is not the
-    value you want deployed, which is why `imagedefinitions.json` is worth reading before you believe a
-    green pipeline.
+    The runner generates `export IMAGE_REPO_URI="${IMAGE_REPO_URI:-nginx}"`, so a value already in your environment overrides the default. CodeBuild behaves the same way: a project-level variable (Step 13) wins over a buildspec `env.variables` default. Read `imagedefinitions.json` before you believe a green pipeline.
 
 **Command - part 3, ship it**
 
@@ -1826,9 +1377,7 @@ aws s3api put-object \
   --query 'VersionId' --output text
 ```
 
-**What to look for:** a new version ID. Do **not** start the pipeline yet - its Build stage would
-succeed and its (still absent) Deploy stage would not exist, so the run would tell you nothing. Step 16
-adds the stage; Step 17 runs it.
+**What to look for:** a new version ID. Do **not** start the pipeline yet: Step 16 adds the Deploy stage and Step 17 runs it.
 
 **Checkpoint 6**
 
@@ -1845,36 +1394,12 @@ labs/lab-11-cicd/app/
 
 ### Step 15 - Version 2 of `USMSCodePipelineBase`
 
-**Purpose**
+The deploy action runs as the **pipeline** role. It reads the service, reads and registers task definitions, updates the service, and must pass the two ECS roles, because registering a task definition that names an execution role and a task role hands both to ECS.
 
-The deploy action runs as the **pipeline** role, not the build role. It needs to read the service, read
-and register task definitions, update the service - and pass the two ECS roles, because registering a
-task definition that names an execution role and a task role is a role handoff exactly like the one
-Lab 11 Step 15 discussed.
-
-**Concept first - the second `PassRole`, and why it is not the same one**
-
-Lab 11's v1 passes `usms-codebuild-role` to `codebuild.amazonaws.com`. That is the pipeline handing a
-role to the build service.
-
-`register-task-definition` names `executionRoleArn` and `taskRoleArn`. Whoever registers it is handing
-those two roles to ECS. Without `iam:PassRole` on them, `RegisterTaskDefinition` is refused - and the
-error names `iam:PassRole`, not the ECS call, which confuses people who have not met this before.
-
-The receiving service is `ecs-tasks.amazonaws.com`, not `ecs.amazonaws.com`. That distinction is real:
-`ecs-tasks` is the principal that tasks run as, and it is the value Lab 04 used in
-`policies/trust-ecs-tasks.json`. Getting it wrong produces a condition that never matches and a
-`PassRole` that never applies.
+!!! info "The second `PassRole`"
+    Lab 11's v1 passes `usms-codebuild-role` to `codebuild.amazonaws.com`. Without `iam:PassRole` on the two ECS roles, `RegisterTaskDefinition` is refused with an error naming `iam:PassRole`, not the ECS call. The receiving service is `ecs-tasks.amazonaws.com` (Lab 04's `policies/trust-ecs-tasks.json`), not `ecs.amazonaws.com`; the wrong value is a condition that never matches. See [iam:PassRole](../unit8/topic1.md#iampassrole).
 
 Compare your `notes/lab-12-my-pipeline-policy.json` from Step 12's "Your turn" with what follows.
-
-**Run from**
-
-```text
-aws-floci-course/
-```
-
-**Command**
 
 ```bash
 cd ~/aws-floci-course
@@ -1962,19 +1487,11 @@ aws iam create-policy-version \
   --output table
 ```
 
-**What the command does**
+Six statements, three unchanged from v1. The new ones:
 
-Six statements. Three are unchanged from v1. The three new ones are worth reading individually:
-
-- `DeployToTheEnrolmentServiceOnly` names **one service ARN**. The pipeline can update the enrolment
-  service and no other service in the cluster.
-- `ReadAndRegisterTaskDefinitions` is on `Resource: "*"`, and that is not laziness.
-  `RegisterTaskDefinition` creates a resource that does not exist yet, so there is no ARN to scope it
-  to - the same shape as `ecr:GetAuthorizationToken` in Step 12. What bounds the damage is the
-  `PassRole` statement below it: a task definition can only be registered naming roles you may pass.
-  Exercise 4 asks you to argue about whether that is sufficient.
-- `PassTheTwoEcsRolesAndOnlyToEcsTasks` names exactly the two roles Lab 01 created and the service that
-  may receive them.
+- `DeployToTheEnrolmentServiceOnly` names **one service ARN**.
+- `ReadAndRegisterTaskDefinitions` is on `Resource: "*"` because `RegisterTaskDefinition` creates a resource with no ARN yet (like `GetAuthorizationToken`). The `PassRole` statement bounds it; Exercise 4 tests whether that suffices.
+- `PassTheTwoEcsRolesAndOnlyToEcsTasks` names exactly Lab 01's two roles and the service that may receive them.
 
 **Verify**
 
@@ -1988,17 +1505,13 @@ aws iam get-policy --policy-arn arn:aws:iam::000000000000:policy/USMSCodePipelin
   --query 'Policy.DefaultVersionId' --output text
 ```
 
-**What to look for:** six Sids, and `v2` as the default. If the default is `v1`, run
-`aws iam set-default-policy-version --policy-arn ... --version-id v2`.
+**What to look for:** six Sids and `v2` as default. If the default is `v1`, run `aws iam set-default-policy-version --policy-arn ... --version-id v2`.
 
 ---
 
 ### Step 16 - Add the Deploy stage
 
-**Purpose**
-
-Turn a two-stage pipeline into a three-stage one. This is the step with the replace-only API in it, and
-it is the step where careless work destroys something.
+Turn the two-stage pipeline into three stages, through a replace-only API where careless work destroys something.
 
 !!! danger "Read before running update-pipeline"
     **What will be replaced:** the entire pipeline document. `update-pipeline` has no merge semantics
@@ -2013,8 +1526,6 @@ it is the step where careless work destroys something.
     **Effect on later labs:** the CloudFormation lab re-declares this pipeline and compares it with
     what you built by hand. A pipeline missing two stages makes that comparison meaningless.
 
-**Concept first - get, modify, put**
-
 ```text
    get-pipeline  ──>  { "pipeline": {...}, "metadata": {...} }
                           │              └── created/updated timestamps and ARN - NOT sent back
@@ -2024,18 +1535,7 @@ it is the step where careless work destroys something.
    update-pipeline <── { "pipeline": {...} }
 ```
 
-The `metadata` object comes back from `get-pipeline` and must not be sent to `update-pipeline`. Taking
-`--query 'pipeline'` at the read step is what keeps it out.
-
-This is the same category as `put-bucket-notification-configuration` in Lab 10, and the same category
-as `update-assume-role-policy` in Lab 09. Replace-only APIs are a family; recognising the family is
-worth more than remembering any one member.
-
-**Run from**
-
-```text
-aws-floci-course/
-```
+Take `--query 'pipeline'` on the read so `metadata` is never sent back. Replace-only APIs are a family (`put-bucket-notification-configuration` in Lab 10, `update-assume-role-policy` in Lab 09); recognise the family.
 
 **Command - part 1, read the current document**
 
@@ -2063,9 +1563,7 @@ stages: ['Source', 'Build']
 
 > Example output.
 
-**What to look for:** two stages. If you see three, you have already run this step; skip to the verify.
-If you see one, something has already gone wrong - restore from
-`templates/lab-11-pipeline.json` before continuing.
+**What to look for:** two stages. Three means you already ran this step (skip to the verify); one means something went wrong: restore from `templates/lab-11-pipeline.json` first.
 
 **Command - part 2, the surgery**
 
@@ -2118,16 +1616,7 @@ python3 -m json.tool templates/lab-12-pipeline.json > /dev/null && echo "valid J
 grep -c '\$' templates/lab-12-pipeline.json
 ```
 
-**What the command does**
-
-The two `assert`/`raise` lines are the interesting part. The script refuses to run against a pipeline
-whose first two stages are not the ones it expects, and refuses to add a second Deploy stage. A
-script that edits a replace-only resource should be paranoid about what it is editing; this one costs
-three lines to make idempotent and safe.
-
-`DeploymentTimeout` is in **minutes**, as a string like every other value in `configuration`. Ten
-minutes is generous for two Fargate tasks and short enough that a stuck deployment fails the stage
-rather than hanging the pipeline.
+The `assert` and `raise` refuse to edit a pipeline whose first two stages are unexpected, or to add a second Deploy stage: a script editing a replace-only resource should be paranoid. `DeploymentTimeout` is in **minutes**, as a string.
 
 **Expected result**
 
@@ -2173,9 +1662,7 @@ aws codepipeline get-pipeline --name usms-enrolment-pipeline \
 
 > Example output.
 
-**What to look for:** three rows, and the chain of artifact names down the `Input` column - nothing,
-then `SourceOutput`, then `BuildOutput`. That column is the pipeline's data flow, and reading it is how
-you check a pipeline's wiring without reading the whole document.
+**What to look for:** three rows and the artifact chain down `Input`: nothing, `SourceOutput`, `BuildOutput`. That column is the pipeline's data flow. See [pipeline artefacts](../unit5/topic2.md#artefacts-and-how-data-moves).
 
 ✏️ **Your turn**
 
@@ -2190,6 +1677,8 @@ A precise answer: the action would look for imagedefinitions.json at the root of
 the source archive, not find it, and fail in Deploy - not in Build, where the
 mistake actually is.
 ```
+
+Hint: ask which artifact contains `dist/` at its root.
 
 **Checkpoint 7**
 
@@ -2206,23 +1695,7 @@ usms-enrolment-pipeline
 
 ### Step 17 - Run it end to end, and prove the service moved
 
-**Purpose**
-
-The moment the lab has been building towards. Change a version number; have a running service change,
-with no `aws ecs update-service` typed by a human.
-
-**Concept first - what you must read to know it worked**
-
-A green Deploy stage is a report. The evidence is that the service's task definition **revision
-number increased**, and that the new revision's image is the one the build produced. Those are two
-separate facts and you should check both: a deploy action that ran but registered a revision with the
-old image is a thing that can happen when `imagedefinitions.json` is stale.
-
-**Run from**
-
-```text
-aws-floci-course/
-```
+Change a version number and have a running service change with no human typing `aws ecs update-service`. A green Deploy stage is a report; the evidence is that the service's revision **increased** and that the new revision's image is the one the build produced. Check both.
 
 **Command - part 1, record the before**
 
@@ -2233,8 +1706,7 @@ BEFORE_TD=$(aws ecs describe-services --cluster "$USMS_ECS_CLUSTER" \
 echo "before: $BEFORE_TD"
 ```
 
-**What to look for:** `.../usms-enrolment:3` from Step 11. Write it down; the proof is a comparison and
-you need both halves.
+**What to look for:** `.../usms-enrolment:3` from Step 11. The proof is a comparison; keep both halves.
 
 **Command - part 2, perturb and run**
 
@@ -2317,8 +1789,7 @@ aws ecs describe-task-definition --task-definition "$AFTER_TD" \
   --output table
 ```
 
-`Cpu` 256, `Mem` 1024, both roles present, log driver `awslogs`. The deploy action copied all of it
-from revision 3 and changed one field. That is the mechanism from Section 6, observed.
+`Cpu` 256, `Mem` 1024, both roles, log driver `awslogs`: the deploy action copied revision 3 and changed one field, the mechanism from Section 5 observed.
 
 **Checkpoint 8**
 
@@ -2331,38 +1802,13 @@ ECS service usms-enrolment-svc
 ```
 
 ---
+
 ### Step 18 - The rollback drill
 
-**Purpose**
+Deploy a release whose image does not exist, watch what happens, and roll back.
 
-Every deployment mechanism is judged by what it does when the new version is wrong. This step deploys
-a release whose image does not exist, watches what happens, and rolls back.
-
-**Concept first - the deployment circuit breaker**
-
-Lab 04 configured the service with
-`deploymentCircuitBreaker: {enable: true, rollback: true}`. On real AWS that means: if enough tasks in
-a new deployment fail to start or fail their health checks, ECS marks the deployment `FAILED`, stops
-launching new tasks, and - because `rollback` is true - starts a fresh deployment using the last task
-definition that reached a steady state.
-
-Three things it does **not** do, and each has caught somebody:
-
-- It does not notice an application that starts successfully and then behaves wrongly. It watches task
-  start-up and health checks, nothing else.
-- It does not roll back a deployment that has already completed. Once the old tasks are gone, the
-  breaker's window has closed.
-- It does not undo anything outside the service - a database migration the new version ran is still
-  run.
-
-The failure this drill produces - an image that cannot be pulled - is the clearest case: the task never
-starts, and the breaker's purpose is exactly this.
-
-**Run from**
-
-```text
-aws-floci-course/
-```
+!!! info "What the circuit breaker does, and does not do"
+    Lab 04 set `deploymentCircuitBreaker: {enable: true, rollback: true}`. On real AWS, if enough new tasks fail to start or fail health checks, ECS marks the deployment `FAILED` and redeploys the last steady-state revision. It does **not** notice an app that starts and then misbehaves, does not roll back a deployment that already completed, and does not undo anything outside the service (a migration stays run). An unpullable image is its clearest case. See [the deployment circuit breaker](../unit2/topic3.md#the-deployment-circuit-breaker).
 
 **Command - part 1, deploy a release whose image was never pushed**
 
@@ -2380,10 +1826,7 @@ aws ecr describe-images --repository-name usms-enrolment \
   --query 'imageDetails[].imageTags[]' --output text
 ```
 
-**What to look for:** `r6` and `r7`, and **no `r8`**. That is the whole setup: the build will write
-`imagedefinitions.json` naming `usms-enrolment:r8`, and nothing will have pushed it. If your build
-*can* push, temporarily set the project's `IMAGE_REPO_URI` to a repository that does not exist, or
-simply stop Docker for the duration - the point is a deploy whose image cannot be pulled.
+**What to look for:** `r6` and `r7`, **no `r8`**. If your build *can* push, temporarily point the project's `IMAGE_REPO_URI` at a nonexistent repository or stop Docker; the point is a deploy whose image cannot be pulled.
 
 ```bash
 BEFORE_ROLLBACK=$(aws ecs describe-services --cluster "$USMS_ECS_CLUSTER" \
@@ -2463,12 +1906,9 @@ aws ecs describe-services --cluster "$USMS_ECS_CLUSTER" --services "$USMS_ENROLM
   --query 'services[0].taskDefinition' --output text
 ```
 
-**What to look for:** the service is back on revision 4. Note what rollback *is*: pointing the service
-at a task definition that already exists. There is no special rollback API, no undo. This is why
-revisions are never deleted and why a task definition family is an append-only log - the previous
-revision is the rollback.
+**What to look for:** the service back on revision 4. Rollback is pointing the service at a revision that already exists; there is no undo API, which is why a task definition family is an append-only log.
 
-Now fix the source so the repository is not left in a state that deploys a missing image:
+Now fix the source so it no longer deploys a missing image:
 
 ```bash
 printf 'r7\n' > labs/lab-11-cicd/app/VERSION
@@ -2490,6 +1930,8 @@ defensible. What is not defensible is not having noticed it exists. Your answer
 should say how somebody would notice, six months from now, without being told.
 ```
 
+Hint: think about what a later `describe-task-definition` or audit script would show about revision 5.
+
 **Checkpoint 9**
 
 ```text
@@ -2506,15 +1948,7 @@ Service usms-enrolment-svc -> :4   (rolled back by hand)
 
 ### Step 19 - Blue/green with CodeDeploy, on paper
 
-**Purpose**
-
-The deploy action you built does a **rolling** deployment: new tasks come up alongside old ones inside
-one service, and the target group holds both for a while. The alternative is **blue/green**, where the
-new version runs as a separate task set, is tested on its own listener, and then receives production
-traffic in one switch. This step writes the documents for it, reads them, and does not run them -
-because this emulator has no CodeDeploy.
-
-**Concept first - the four differences that matter**
+Your deploy action does a **rolling** deployment. **Blue/green** runs the new version as a separate task set, tests it on its own listener, then switches production traffic. This step writes and validates the documents for it and does not run them: this emulator has no CodeDeploy. See [blue/green with CodeDeploy](../unit2/topic3.md#bluegreen-with-aws-codedeploy).
 
 | | Rolling (what you built) | Blue/green (CodeDeploy) |
 | --- | --- | --- |
@@ -2532,14 +1966,6 @@ uses `imageDetail.json`, which is an object, not an array:
 ```
 
 and an `appspec.yaml` that names the task definition, the container and the port.
-
-**Run from**
-
-```text
-aws-floci-course/
-```
-
-**Command**
 
 ```bash
 cd ~/aws-floci-course
@@ -2638,16 +2064,7 @@ else:
 PY
 ```
 
-**What the command does**
-
-Writes two documents and validates both. Read them rather than skimming: the deployment group names
-**two** target groups and **two** listeners, and that is the structural heart of blue/green. Lab 05
-created one of each. A real blue/green setup for this service would need a second target group -
-`usms-enrolment-tg-green` - and a second listener on a test port, which Exercise 3 asks you to create.
-
-`CodeDeployDefault.ECSLinear10PercentEvery1Minutes` shifts ten percent of traffic each minute. The
-alternatives are `ECSAllAtOnce` and the canary configurations. The choice is a business decision about
-how much traffic you are prepared to expose to a bad release, expressed as a configuration name.
+The deployment group names **two** target groups and **two** listeners: the structural heart of blue/green. Lab 05 created one of each; Exercise 3 creates the second. `CodeDeployDefault.ECSLinear10PercentEvery1Minutes` shifts ten percent a minute; the alternatives are `ECSAllAtOnce` and canary configurations, a business decision expressed as a name.
 
 !!! note "Conceptual / Real AWS - CodeDeploy is absent"
     Your Step 3 probe almost certainly reported that `deploy list-applications` does not answer. Nothing
@@ -2686,18 +2103,7 @@ templates/
 
 ### Step 20 - Record this lab's outputs
 
-**Purpose**
-
-Write down what the next lab, the CloudFormation lab, and your own report will need. Shell variables
-die with the terminal; `ECR_URI`, `IMAGE_DIGEST` and `EXEC_ID` are all about to.
-
-**Run from**
-
-```text
-aws-floci-course/
-```
-
-**Command**
+Write what the CloudFormation lab and your report will need; `ECR_URI`, `IMAGE_DIGEST` and `EXEC_ID` die with this terminal.
 
 ```bash
 cd ~/aws-floci-course
@@ -2767,15 +2173,8 @@ grep -n 'export .*=$\|None' configs/lab-12.env || echo "all values populated"
 grep -c '^export' configs/lab-12.env
 ```
 
-**What the command does**
-
-Unquoted heredoc, so every `$(...)` runs now. Each lookup ends in a `grep` filter and an `|| echo`
-default, so a resource that genuinely does not exist on your path produces `not-created` or `unknown`
-rather than `None` - the Lab 06 idiom, for the reason Lab 11 Step 21 gave.
-
-`USMS_ECR_REGISTRY` uses `cut -d/ -f1` rather than the shell expansion `${...%%/*}`, because inside an
-unquoted heredoc the expansion would be performed by your shell against a variable that does not exist
-there. Two ways to take the host off a URI; the one that survives a heredoc is the one to use here.
+- **Unquoted heredoc**, so every `$(...)` runs now. Each lookup ends in a `grep` filter and an `|| echo` default, so a missing resource reads `not-created` or `unknown` rather than `None` (the Lab 06 idiom).
+- `USMS_ECR_REGISTRY` uses `cut -d/ -f1`, not `${...%%/*}`, because inside an unquoted heredoc your shell would expand that against a variable that does not exist there.
 
 **Expected result**
 
@@ -2796,32 +2195,17 @@ printf 'repo=%s\ntag=%s\ndigest=%s\nsvc-taskdef=%s\nstages=%s\ncb=%s cp=%s\npath
   "$USMS_CICD_DEPLOY_PATH"
 ```
 
-**What to look for:** `stages=3`, both policy versions `v2`, and a `digest` beginning `sha256:` if you
-are on Path A. Those four values are the compressed summary of this entire laboratory.
+**What to look for:** `stages=3`, both policy versions `v2`, and a `digest` beginning `sha256:` on Path A.
 
 ---
 
 ### Step 21 - Commit
 
-**Purpose**
-
-Everything this lab wrote that belongs in the repository goes in, and nothing that does not.
-
-**Run from**
-
-```text
-aws-floci-course/
-```
-
-**Command**
-
 ```bash
 git status --short
 ```
 
-**What to look for:** read the list before staging. **No file under `outputs/` may appear**, and
-neither may `docker-compose.yml.bak-*`. If the backup copy from Step 4 shows up, add it to
-`.gitignore` rather than remembering not to commit it:
+**What to look for:** read the list before staging. **No file under `outputs/`**, and no `docker-compose.yml.bak-*`. If the Step 4 backup shows up, ignore it rather than remembering not to commit it:
 
 ```bash
 grep -q '^docker-compose.yml.bak-' .gitignore || \
@@ -2854,25 +2238,13 @@ git status --short
 git commit -m "Lab 12: ECR repository, image build, deploy stage, rollback drill"
 ```
 
-**What the command does**
-
-Note that `docker-compose.yml` is staged. It changed in Step 4 and that change is part of the
-environment contract now - an uncommitted change to the file that defines how Floci runs is how the
-next person's environment differs from yours for reasons nobody can find.
-
-`templates/lab-12-taskdef-base.json` and `templates/lab-12-pipeline-current.json` are deliberately
-**not** staged: they are snapshots of live state at one moment, and committing them invites somebody to
-apply a stale one later. Keep them on disk; leave them out of history.
+`docker-compose.yml` is staged: Step 4's change is now part of the environment contract. `templates/lab-12-taskdef-base.json` and `templates/lab-12-pipeline-current.json` are deliberately **not** staged: they are snapshots of live state, and committing them invites someone to apply a stale one.
 
 ---
 
-## 9. Verification
+## 8. Verification
 
-**Run from**
-
-```text
-aws-floci-course/
-```
+### 8.1 Build `scripts/utilities/verify-lab-12.sh`
 
 {% raw %}```bash
 cat > scripts/utilities/verify-lab-12.sh << 'EOF'
@@ -3029,7 +2401,7 @@ PASS=45  FAIL=0
 
 > Example output - Path B correctly reads `PASS=40  FAIL=5` and Path C `PASS=31  FAIL=14`.
 
-### 9.1 Known benign failures
+Known benign failures:
 
 | Failure | Benign when | What it means |
 | --- | --- | --- |
@@ -3041,545 +2413,7 @@ PASS=45  FAIL=0
 | `source type is still CODEPIPELINE` | Never | **Not benign.** An over-broad `update-project` undid Lab 11 Step 18 |
 | `no secret is tracked` | Never | **Not benign.** Fix `.gitignore`, then `git rm --cached` |
 
----
-
-## 10. Checkpoints
-
-| # | After Step | What must exist |
-| --- | --- | --- |
-| 1 | 3 | `deploy-support-probe.sh`, and your path recorded in `outputs/lab-12-deploy-probe.txt` |
-| 2 | 6 | ECR repository `usms-enrolment`, and a successful `docker login` against its registry host |
-| 3 | 9 | An image with tag `r6`, its digest recorded, deleted locally and pulled back by digest |
-| 4 | 11 | Service `usms-enrolment-svc` on `usms-enrolment:3`, running your image |
-| 5 | 13 | `USMSCodeBuildBase` at `v2`; the project with `privilegedMode` and `IMAGE_REPO_URI` |
-| 6 | 14 | `Dockerfile`, `.dockerignore`, a buildspec that writes `imagedefinitions.json`, 8 smoke tests |
-| 7 | 16 | A three-stage pipeline, its artifact chain readable down one column |
-| 8 | 17 | A task definition revision registered by the pipeline, naming release `r7` |
-| 9 | 18 | A failed deployment, a manual rollback, and a decision recorded about revision 5 |
-| 10 | 19 | `lab-12-appspec.yaml` and the deployment group document, validated, not executed |
-
----
-## 11. Troubleshooting
-
-### `docker login` fails with `http: server gave HTTP response to HTTPS client`
-
-The emulated registry serves plain HTTP. Add the registry host to Docker's `insecure-registries` -
-Docker Desktop, Settings, Docker Engine; or `/etc/docker/daemon.json` on Linux - and restart Docker.
-Never do this for a real registry. See the note in Step 6.
-
-### `docker push` fails with `denied` or a 404 from the registry API
-
-Three causes, in order of likelihood:
-
-1. The registry data plane is not implemented on your build. That is Path B; use the local image.
-2. The `5100-5104` range is not published. Re-check Step 4 with `docker port floci`.
-3. The token expired. `get-login-password` is valid for twelve hours; log in again.
-
-### `CannotPullContainerError` in the service events
-
-The image reference in the task definition does not resolve. Check three things, in this order:
-the tag exists (`aws ecr describe-images --image-ids imageTag=...`), the execution role is
-`usms-ecs-exec-role` and carries `USMSECSTaskExecution` with its four `ecr:*` actions, and the image
-URI in the task definition matches the repository URI character for character. On real AWS the third
-is usually the culprit and usually a region mismatch.
-
-### `register-task-definition` rejects the document, one field at a time
-
-You did not strip all the read-only fields. The full list is in Step 10:
-`taskDefinitionArn`, `revision`, `status`, `requiresAttributes`, `compatibilities`, `registeredAt`,
-`registeredBy`, `deregisteredAt`. Re-run the Python from Step 10 rather than deleting them by hand -
-it strips all eight and you will forget one.
-
-### The Deploy stage fails with something about a container name
-
-`imagedefinitions.json` names a container that is not in the task definition. Print both and compare:
-
-```bash
-python3 -c "import json;print(json.load(open('labs/lab-11-cicd/app/dist/imagedefinitions.json')))"
-aws ecs describe-task-definition --task-definition usms-enrolment \
-  --query 'taskDefinition.containerDefinitions[].name' --output text
-```
-
-The left must contain the right. This is what Lab 11's `pre_build` check is defending against, and if
-that check passed, the mismatch came from an edit to `config/service.json` after the last build.
-
-### The Deploy stage fails immediately, before doing anything
-
-`imagedefinitions.json` is not at the root of `BuildOutput`. Download the artifact and look:
-
-```bash
-KEY=$(aws s3api list-objects-v2 --bucket usms-pipeline-artifacts \
-  --prefix usms-enrolment-pipeline/BuildOutput/ \
-  --query 'sort_by(Contents, &LastModified)[-1].Key' --output text)
-aws s3api get-object --bucket usms-pipeline-artifacts --key "$KEY" /tmp/bo.zip >/dev/null
-python3 -c "import zipfile;print(zipfile.ZipFile('/tmp/bo.zip').namelist())"
-```
-
-If you see `dist/imagedefinitions.json` rather than `imagedefinitions.json`, `artifacts.base-directory`
-is missing or wrong in the buildspec.
-
-### The pipeline lost its Source and Build stages
-
-An `update-pipeline` with an incomplete document. Rebuild from what is committed:
-
-```bash
-python3 - << 'PY'
-import json
-p = json.load(open("templates/lab-11-pipeline.json"))["pipeline"]
-cur = json.load(open("templates/lab-12-pipeline.json"))["pipeline"]
-deploy = [s for s in cur["stages"] if s["name"] == "Deploy"]
-p["stages"] = p["stages"] + deploy
-json.dump({"pipeline": p}, open("templates/lab-12-pipeline-repaired.json", "w"), indent=2)
-print("stages:", [s["name"] for s in p["stages"]])
-PY
-aws codepipeline update-pipeline --cli-input-json file://templates/lab-12-pipeline-repaired.json \
-  --query 'pipeline.{Stages:length(stages)}' --output table
-```
-
-This works because Lab 11 committed its pipeline document. That is the argument for committing
-templates rather than only creating resources from them.
-
-### `update-project` wiped the environment variables
-
-`environment` is replaced whole. Re-run Step 13's `--cli-input-json`, which contains all four
-variables. Then check `source.type` is still `CODEPIPELINE` - an `update-project` that omitted `source`
-leaves it alone, but one that included a partial `source` will not.
-
-### The build's `docker build` says `dist: no such file or directory`
-
-The `build` phase's image build runs after `dist/` is created, so this means an earlier command in the
-phase failed and the phase continued. Check whether `cp -R src/. "$ARTIFACT_DIR"/` ran; if the buildspec
-was edited, confirm the image build is still *after* the artifact assembly.
-
-### Everything worked yesterday, nothing works today
-
-Floci was restarted in memory mode, or the data directory moved.
-Run `./scripts/utilities/floci-storage-check.sh` and read the first failing check. If a **new
-terminal** is the thing that broke, see Errata 01.
-
----
-
-## 12. Floci vs Real AWS
-
-### 12.1 Feature by feature
-
-| Feature | Real AWS | Floci | Status |
-| --- | --- | --- | --- |
-| `ecr create-repository`, `describe-repositories` | Full | Typically full | **Implemented in Floci** |
-| ECR as an OCI registry - `docker push` and `pull` | Full, HTTPS only, IAM-authorised | Build-dependent; often HTTP, sometimes absent | **Floci Limitation** |
-| `repositoryUri` | `<acct>.dkr.ecr.<region>.amazonaws.com/<repo>` | A localhost-style host and port | **Floci Limitation** |
-| Image scanning on push | Basic and enhanced scanning against a CVE database | Setting stored; no scan performed | **Floci Limitation** |
-| Image tag immutability | Enforced - a second push to an existing tag is rejected | Setting stored; enforcement build-dependent | **Floci Limitation** |
-| ECR lifecycle policies | Full - expire untagged images after N days | Usually stored, not evaluated | **Conceptual / Real AWS** |
-| `ecs register-task-definition` | Full, with validation | Typically full | **Implemented in Floci** |
-| `ecs update-service` changing the task definition | Full, with a rolling deployment | Pointer changes; tasks may not run | **Floci Limitation** |
-| Deployment circuit breaker and automatic rollback | Trips on repeated task failures; rolls back | Stored, not enforced | **Floci Limitation** |
-| `rolloutState` and `rolloutStateReason` | Populated throughout a deployment | Frequently absent | **Floci Limitation** |
-| Service events (`CannotPullContainerError`, and so on) | The primary diagnostic | Usually empty | **Floci Limitation** |
-| CodePipeline ECS deploy action | Reads `imagedefinitions.json`, registers a revision, updates the service | Build-dependent; may store the stage and never run it | **Floci Limitation** |
-| `privilegedMode` builds | Docker in Docker inside the managed build container | Depends on the emulator's build backend | **Floci Limitation** |
-| CodeDeploy, blue/green, task sets, test listeners | Full | Absent | **Conceptual / Real AWS** |
-| `imageDetail.json` and `appspec.yaml` | Consumed by a CodeDeploy deploy action | Nothing consumes them | **Conceptual / Real AWS** |
-| ECR image signing and registry policies | Full | Absent | **Conceptual / Real AWS** |
-| Cost - ECR storage and data transfer, build minutes | Billed | Free | **Floci Limitation** |
-
-### 12.2 What you observed, and what you recorded
-
-```text
-OBSERVED - you saw this happen on your own machine
-  a container image built from the build output, with a name and a digest
-  the difference between the build's image id and the push's manifest digest
-  a task definition revision derived from its predecessor with one field changed
-  everything else in that revision surviving the derivation - cpu, memory, roles, logs
-  the service pointing at a revision that names your image instead of the placeholder
-  a three-stage pipeline document, and its artifact chain down one column
-  a deployment to a release whose image was never pushed, and nothing warning you
-  a rollback performed by naming an earlier revision
-
-RECORDED - correct, checkable by reading, not enforced here
-  the ECR push permissions, and why GetAuthorizationToken cannot be scoped
-  the second iam:PassRole, to ecs-tasks.amazonaws.com and two named roles
-  the deploy action's single-service ARN
-  scanOnPush and MUTABLE tag settings
-  the CodeDeploy appspec and deployment group, including the test listener
-
-NOT AVAILABLE AT ALL
-  blue/green deployment, task sets, traffic shifting
-  the circuit breaker actually tripping and rolling back
-  image vulnerability scan results
-  ECR lifecycle expiry
-```
-
-If Step 3 reported Path B or Path C, move the corresponding lines from OBSERVED to RECORDED in your own
-report. "I deployed to ECS from a pipeline" and "I built and validated the deploy stage on a build that
-executes no pipelines, and deployed by hand to prove the task definition mechanics" are different
-claims, and the second, stated plainly, is worth more than an overstated first one.
-
-### 12.3 Where Floci is nicer than reality
-
-- **Images appear instantly and cost nothing.** Real ECR bills for storage per gigabyte-month, and a
-  repository with six months of untagged layers is a real line item. This is what lifecycle policies
-  are for, and this course never needed one.
-- **No pull rate limits.** `nginx:1.27-alpine` comes from Docker Hub, which rate-limits anonymous pulls
-  on real infrastructure. A CI pipeline that pulls a public base image on every build will hit that
-  limit, which is why real pipelines mirror base images into their own registry.
-- **No propagation delay.** A task definition registered one second ago is usable immediately here.
-  Real ECS is eventually consistent in places, and a deployment that references a revision registered
-  microseconds earlier occasionally needs a retry.
-- **Nothing fails at 3am.** No capacity errors, no AZ impairments, no image pull throttling. Every
-  failure in this lab was one you caused deliberately, which is exactly what a laboratory should give
-  you and exactly what production will not.
-
----
-
-## 13. Independent Lab Exercises
-
-Five exercises, increasing in difficulty. Write your answers and evidence in
-`labs/lab-12-cicd-deploy/exercises.md`.
-
-### Exercise 1 - Basic: a second base image, and a smaller one
-
-**Requirements**
-
-Rebuild the enrolment image on a different base - `public.ecr.aws/nginx/nginx:stable-alpine`, the image
-Lab 04's placeholder task definition named - and push it as tag `r7-alt`. Compare the two images'
-sizes and layer counts.
-
-**Constraints**
-
-- Do not change `VERSION`; the tag is set explicitly for this exercise only.
-- Do not deploy it. This exercise ends at the registry.
-- Record both sizes from `describe-images`, not from `docker images`, and say why those two numbers
-  differ.
-
-**Expected outcome**
-
-Two tags in the repository, two sizes, and a one-paragraph note on what the difference consists of.
-
-**Hints**
-
-`docker history` shows layer sizes. The registry reports compressed sizes and the local daemon reports
-uncompressed ones; that is most of the difference, but not all of it.
-
-### Exercise 2 - Intermediate: argue for immutable tags, then implement it
-
-**Requirements**
-
-Set the repository's tag mutability to `IMMUTABLE`, attempt to push `r7` again, and record what
-happens. Then work out what would have to change in this lab's buildspec for an immutable-tag
-repository to work, and make that change.
-
-**Constraints**
-
-- Use `aws ecr put-image-tag-mutability`, not a new repository.
-- The buildspec must still produce a deployable `imagedefinitions.json`.
-- Set it back to `MUTABLE` at the end, or leave it immutable and say why - but say which, because
-  Section 9's verification does not check this field and a later lab might be surprised.
-
-**Expected outcome**
-
-A recorded rejection, a buildspec that cannot collide with an existing tag, and a paragraph on what
-immutable tags buy and what they cost.
-
-**Hints**
-
-A tag that includes something unique per build cannot collide. CodeBuild sets
-`CODEBUILD_RESOLVED_SOURCE_VERSION` and `CODEBUILD_BUILD_NUMBER`; the local runner sets neither, so
-whatever you choose needs a defined fallback.
-
-### Exercise 3 - Problem solving: build the blue/green scaffolding
-
-**Requirements**
-
-Step 19 wrote documents that reference a second target group and a test listener, neither of which
-exists. Create them: `usms-enrolment-tg-green` with the same settings as Lab 05's target group, and a
-test listener on port `8080` of `usms-enrolment-alb` forwarding to it.
-
-Then re-validate `templates/lab-12-codedeploy-deployment-group.json` with the real ARNs substituted for
-the two placeholders.
-
-**Constraints**
-
-- Reuse Lab 05's settings exactly: target type `ip`, HTTP:80 health check on `/`, matcher 200.
-- Do **not** change the ECS service's deployment controller. Step 19's danger admonition says why.
-- The document must contain no angle-bracket placeholders when you are finished.
-
-**Expected outcome**
-
-Two target groups, two listeners, and a deployment group document that would be accepted by an account
-where CodeDeploy exists.
-
-**Hints**
-
-Lab 05 Step 6 created the first target group and Step 8 the listener; `--query` those resources for
-their ARNs rather than copying them. The `deployment group` document is JSON, so use `python3` for the
-substitution, as Step 16 did.
-
-### Exercise 4 - Challenge: close the hole in the pipeline policy
-
-**Requirements**
-
-Step 15 granted `ecs:RegisterTaskDefinition` on `Resource: "*"` and argued that the `PassRole`
-statement bounds the damage. Test that argument.
-
-Write, in prose, the most damaging thing a compromised pipeline role could do with the v2 policy as
-written. Then produce a v3 that closes it, or argue - with specifics - that it cannot be closed with
-IAM alone and say what other control would be needed.
-
-**Constraints**
-
-- Your v3, if you write one, must not break the pipeline. Prove it by running an execution.
-- Do not use conditions you have not checked exist. If you propose a condition key, cite the
-  documentation page that lists it for that action.
-- Five versions maximum per policy; you may need to delete one first.
-
-**Expected outcome**
-
-A specific attack described in two or three sentences, and either a working v3 or a reasoned argument
-that the control belongs somewhere other than this policy.
-
-**Hints**
-
-Think about what a task definition can contain besides an image, and what a task that runs with
-`usms-ecs-task-role` can reach. Lab 01 attached `USMSStudentDataReadWrite` to that role. The question
-is not whether the pipeline can pass the role - it can, by design - but what it can make the role do.
-
-### Exercise 5 - Integration: prove a release end to end, for an auditor
-
-**Requirements**
-
-Produce a single document, `outputs/lab-12-release-evidence.md`, that traces release `r7` from the
-source byte to the running service, using only command output as evidence. It must include, in order:
-the S3 version ID of the source archive; the pipeline execution ID; the build ID; the image digest; the
-task definition revision ARN; and the service's current task definition.
-
-Then break one link deliberately - retag `r7` in the registry to point at a different image - and write
-what the document can and cannot still prove.
-
-**Constraints**
-
-- Every value must come from a command, shown in the document alongside its output.
-- The retag must be recorded in `outputs/lab-12-image-digest.txt` as a second line for the same tag.
-- Do not deploy the retagged image.
-
-**Expected outcome**
-
-An evidence chain, and a demonstration of exactly which link a mutable tag breaks. This is the artefact
-the CloudFormation lab's audit exercise starts from, and it is the strongest answer you can give to
-Section 15's question 7.
-
-**Hints**
-
-`docker tag` plus `docker push` retags. `describe-images` will then show the old digest with no tags,
-or with the tag moved, depending on your build. The chain you are testing is: does a task definition
-that names a *tag* let you prove which bytes ran?
-
----
-
-## 14. Lab Assessment Checklist
-
-- [ ] `deploy-support-probe.sh` run, and the path recorded in your notes
-- [ ] The `5100-5104` range uncommented, `floci-up.sh` re-run, and the service proved to have survived
-- [ ] ECR repository `usms-enrolment` created with `scanOnPush` and a recorded tag-mutability decision
-- [ ] The registry host derived from `describe-repositories`, never typed
-- [ ] `docker login` succeeded, with the token passed through standard input
-- [ ] `Dockerfile` and `.dockerignore` written, and the `COPY dist/` choice explained in one sentence
-- [ ] An image built, tagged, pushed, and its digest recorded in `outputs/lab-12-image-digest.txt`
-- [ ] The image deleted locally and pulled back **by digest** - the create, perturb, read back proof
-- [ ] Task definition revision 3 derived with describe-strip-register, with all eight read-only fields stripped
-- [ ] Revision 3 verified to have kept cpu, memory, both roles and the health check
-- [ ] `usms-ecs-watch.sh` written and used
-- [ ] `USMSCodeBuildBase` v2 created **and set as default**, with `GetAuthorizationToken` on `"*"` explained
-- [ ] `privilegedMode` enabled, and what it grants stated in your notes
-- [ ] The buildspec extended: guarded image build, `imagedefinitions.json`, `imageUri` in the metadata
-- [ ] The eighth smoke-test assertion added and passing
-- [ ] `USMSCodePipelineBase` v2 created and set as default, with the second `PassRole` explained
-- [ ] The Deploy stage added with get-modify-put, and the danger admonition read first
-- [ ] An end-to-end execution, with `outputs/lab-12-deploy-evidence.txt` showing before and after
-- [ ] The rollback drill run, and a decision recorded about `usms-enrolment:5`
-- [ ] `lab-12-appspec.yaml` and the deployment group document written and validated
-- [ ] `configs/lab-12.env` with 26 populated exports
-- [ ] `verify-lab-12.sh` run, with its count and any benign failures recorded
-- [ ] `git status --short` checked before staging; no `outputs/` file and no compose backup committed
-- [ ] Five exercises attempted
-- [ ] Section 15 answered in prose in `notes/lab-12-notes.md`
-
-### 14.1 In-class assessment - Practical 7
-
-**Format.** Sixty minutes, at a machine, with the documentation open. You may read Labs 11 and 12,
-the AWS documentation, and your own notes. You may not copy a command sequence wholesale from the labs
-without changing it to fit the task - the tasks are written so that a copied sequence produces the
-wrong answer.
-
-**Starting state.** Labs 11 and 12 complete and `verify-lab-12.sh` passing at your path's expected
-count. If it is not, say so before you start; you will be assessed against what you have.
-
-**Submit.** One file, `outputs/lab-12-assessment.md`, containing for each task: the commands you ran,
-their output, and the short written answers requested. Plus whatever resources the tasks created, which
-will be checked.
-
----
-
-#### Task A - A second service through the same pipeline (35 marks)
-
-The university wants the **results service** deployed the same way. It does not exist yet.
-
-1. Create an ECR repository `usms-results`, with the same settings as `usms-enrolment` except that its
-   tags must be **immutable**.
-2. Create a source tree at `labs/lab-11-cicd/app-results/` - a `VERSION`, one HTML file, a
-   `config/service.json` naming container `results-api` and port `80`, a `Dockerfile`, and a
-   `buildspec.yml` that writes an `imagedefinitions.json` for `results-api`.
-3. Build the image as tag `r1` and push it.
-4. Register a task definition family `usms-results` with one container named `results-api`, using the
-   same execution and task roles as the enrolment service.
-
-You are **not** asked to create an ECS service or a pipeline for it.
-
-**Marks:** repository with correct settings 6; source tree complete and the buildspec parsing 10;
-image built and pushed, digest shown 8; task definition registered with the correct container name and
-roles 8; marks lost for any hard-coded registry host.
-
----
-
-#### Task B - Trace a release, and find the gap (30 marks)
-
-Using only command output as evidence, answer these in `outputs/lab-12-assessment.md`:
-
-1. Which task definition revision is `usms-enrolment-svc` running right now, and which image URI does
-   it name? (4)
-2. Which image digest does that URI currently resolve to? (4)
-3. Which pipeline execution registered that revision, and which S3 source version did that execution
-   consume? Show how you established the link. (10)
-4. Name one link in that chain that your evidence does **not** actually prove, and explain in three or
-   four sentences what an attacker or an accident could do in that gap. (12)
-
-Question 4 is the one that separates answers. A correct answer identifies a specific mechanism, not a
-general worry.
-
----
-
-#### Task C - Design, in writing only (25 marks)
-
-The university's change-control committee will not allow automatic deployment to production. They want
-the pipeline to stop before Deploy and wait for a named person to approve.
-
-In no more than 400 words, and with a JSON fragment for the stage you would add:
-
-1. Name the action category and provider you would use, and where in the pipeline it goes. (6)
-2. State what the approver actually sees, and what they must be given in order to decide. (6)
-3. Explain what happens to the artifacts while the pipeline waits, and what the timeout is. (7)
-4. State, in one sentence, whether this is demonstrable on Floci, and how you know. (6)
-
-No commands are required for this task. Correct JSON that would be rejected by Floci scores full marks;
-an approximation that "looks about right" does not.
-
----
-
-#### Task D - Housekeeping (10 marks)
-
-1. Run `verify-lab-12.sh` and paste the result. (3)
-2. Run `git status --short` and confirm nothing under `outputs/` is staged. (3)
-3. State which support path your build is on and one thing in this assessment you could therefore not
-   demonstrate. (4)
-
----
-
-**Marking notes for the instructor.** Total 100. Task A is checkable mechanically:
-`aws ecr describe-repositories --repository-names usms-results`,
-`aws ecs describe-task-definition --task-definition usms-results`, and `bash -n` plus a YAML parse on
-the new buildspec. Task B question 3 is where copied work shows: a student who ran the lab has the
-execution ID in `outputs/lab-12-deploy-evidence.txt` and can say how they linked it; one who did not
-will assert the link without evidence. Task C question 4 should say that CodePipeline manual approval
-actions are not modelled on this emulator and cite the Step 3 probe or Section 12's table - a student
-who claims to have tested it has not.
-
----
-
-## 15. Review Questions
-
-Answer in prose, in `notes/lab-12-notes.md`. No command output.
-
-1. The ECS deploy action changes exactly one field of the task definition. Name three realistic changes
-   to a service that therefore **cannot** travel through this pipeline, and describe how you would
-   deploy each of them instead.
-
-2. `ecr:GetAuthorizationToken` must be granted on `Resource: "*"` and `ecs:RegisterTaskDefinition`
-   effectively must be too. Are these the same kind of exception? Argue both sides, then commit to an
-   answer.
-
-3. Explain to a sceptical colleague why an image digest is worth the inconvenience over a tag. Then
-   make the strongest case *against* pinning digests in task definitions - there is a real one.
-
-4. Step 18's deployment pointed the service at an image that did not exist, and nothing on this
-   emulator objected. On real AWS the circuit breaker would have caught it. Describe a failure the
-   circuit breaker would **not** catch, and say what mechanism would.
-
-5. `update-pipeline`, `put-bucket-notification-configuration`, `update-assume-role-policy` and
-   `put-bucket-policy` are all replace-only. What do these APIs have in common that makes replacement
-   the natural design, and what would a merge-based version of `update-pipeline` have to decide that a
-   replace-based one does not?
-
-6. This lab created a second IAM policy version twice and had to set each as default. Why is
-   `create-policy-version` not simply `--set-as-default` by default? Describe the workflow that design
-   is protecting.
-
-7. You have `outputs/lab-12-deploy-evidence.txt`, `outputs/lab-12-image-digest.txt`, and the pipeline
-   execution history. A colleague claims the enrolment service is running code that was never reviewed.
-   Which of those three artefacts helps, which does not, and what would you have needed to record at
-   build time to settle it in one command?
-
----
-
-## 16. What We Built
-
-### 16.1 Reflection
-
-The enrolment service is now running code that came out of this repository, and the thing that put it
-there is a document rather than a person. That is the change. Lab 04 made a service exist; Lab 05
-gave it a front door; Lab 06 let it grow; Lab 11 turned source into an artifact; and this lab
-connected the artifact to the running thing.
-
-Two moments in this lab are worth keeping.
-
-The first is Step 10, where you produced a task definition revision by describing the existing one,
-stripping eight read-only fields and changing a single value. That is a tedious procedure, and it is
-the thing the deploy action does for you in a few hundred milliseconds. Having done it by hand once,
-you know exactly what the automation is and - much more usefully - exactly what it is not. It is not a
-way to change the memory allocation. It is not a way to add an environment variable. Knowing the shape
-of a tool's competence is most of knowing when to reach for a different one.
-
-The second is Step 18, where a deployment referenced an image that did not exist and nothing said so.
-On real AWS a mechanism would have caught it. Here nothing did - and the lesson is not "the emulator is
-limited" but "a deployment mechanism is only as good as the health signal behind it". The circuit
-breaker is not a safety net; the health check is the safety net, and the circuit breaker is what reads
-it. A service with a health check that always returns 200 has a circuit breaker that will never fire,
-on real AWS as surely as here.
-
-### 16.2 KEEP and CLEAN UP
-
-```text
-╔══════════════════ KEEP ══════════════════╗    ╔═══════════ CLEAN UP ═══════════╗
-║ usms-enrolment  (ECR repository)         ║    ║ usms-probe-delete-me           ║
-║ images r6 and r7                         ║    ║   - the Step 3 probe repo, if  ║
-║ task definitions usms-enrolment:3 and :4 ║    ║     it survived the probe      ║
-║ the three-stage pipeline                 ║    ║ usms-enrolment:5               ║
-║ USMSCodeBuildBase v2 (default)           ║    ║   - the failed revision; your  ║
-║ USMSCodePipelineBase v2 (default)        ║    ║     Step 18 decision governs   ║
-║ Dockerfile, .dockerignore, buildspec.yml ║    ║ docker-compose.yml.bak-*       ║
-║ templates/lab-12-*.json and .yaml       ║    ║   - keep one, delete the rest  ║
-║ scripts/utilities/usms-ecs-watch.sh      ║    ║ labs/.../app/dist/             ║
-║ scripts/utilities/verify-lab-12.sh      ║    ║   - build output, git-ignored  ║
-║ configs/lab-12.env                      ║    ║ outputs/lab-12-*              ║
-║ the 5100-5104 port range, published      ║    ║   - keep until your report is  ║
-║ buildspec.yml.lab08a (for comparison)    ║    ║     written                    ║
-╚══════════════════════════════════════════╝    ╚════════════════════════════════╝
-```
-
-Do not clean up the KEEP column. The CloudFormation lab re-declares every object in it as a template
-and compares the result with what you built by hand; a missing pipeline stage makes that comparison
-meaningless.
-
-### 16.3 The end-of-course cleanup script
+### 8.2 Build the end-of-course cleanup script
 
 !!! danger "Read before running any delete command"
     **What will be deleted:** the pipeline's Deploy stage, task definition revisions 3 to 5
@@ -3702,7 +2536,481 @@ scripts/cleanup/lab-03-cleanup.sh
 scripts/cleanup/lab-02-cleanup.sh
 ```
 
-### 16.4 The architecture now
+---
+
+## 9. Checkpoints
+
+| # | After Step | What must exist |
+| --- | --- | --- |
+| 1 | 3 | `deploy-support-probe.sh`, and your path recorded in `outputs/lab-12-deploy-probe.txt` |
+| 2 | 6 | ECR repository `usms-enrolment`, and a successful `docker login` against its registry host |
+| 3 | 9 | An image with tag `r6`, its digest recorded, deleted locally and pulled back by digest |
+| 4 | 11 | Service `usms-enrolment-svc` on `usms-enrolment:3`, running your image |
+| 5 | 13 | `USMSCodeBuildBase` at `v2`; the project with `privilegedMode` and `IMAGE_REPO_URI` |
+| 6 | 14 | `Dockerfile`, `.dockerignore`, a buildspec that writes `imagedefinitions.json`, 8 smoke tests |
+| 7 | 16 | A three-stage pipeline, its artifact chain readable down one column |
+| 8 | 17 | A task definition revision registered by the pipeline, naming release `r7` |
+| 9 | 18 | A failed deployment, a manual rollback, and a decision recorded about revision 5 |
+| 10 | 19 | `lab-12-appspec.yaml` and the deployment group document, validated, not executed |
+
+---
+
+## 10. Troubleshooting
+
+!!! warning "Known issue on Floci 2.0.1"
+    On Floci 2.0.1, the CodePipeline ECS deploy provider is unavailable and `describe-images` is inconsistent. Diagnose first, then use the alternative in [Known Issues - Lab 12](known-issues.md#lab-12-ecs-pipeline-deploy). It states what the alternative does and does not prove.
+
+### `docker login` fails with `http: server gave HTTP response to HTTPS client`
+
+The emulated registry serves plain HTTP. Add the registry host to Docker's `insecure-registries` -
+Docker Desktop, Settings, Docker Engine; or `/etc/docker/daemon.json` on Linux - and restart Docker.
+Never do this for a real registry. See the note in Step 6.
+
+### `docker push` fails with `denied` or a 404 from the registry API
+
+Three causes, in order of likelihood:
+
+1. The registry data plane is not implemented on your build. That is Path B; use the local image.
+2. The `5100-5104` range is not published. Re-check Step 4 with `docker port floci`.
+3. The token expired. `get-login-password` is valid for twelve hours; log in again.
+
+### `CannotPullContainerError` in the service events
+
+The image reference in the task definition does not resolve. Check three things, in this order:
+the tag exists (`aws ecr describe-images --image-ids imageTag=...`), the execution role is
+`usms-ecs-exec-role` and carries `USMSECSTaskExecution` with its four `ecr:*` actions, and the image
+URI in the task definition matches the repository URI character for character. On real AWS the third
+is usually the culprit and usually a region mismatch.
+
+### `register-task-definition` rejects the document, one field at a time
+
+You did not strip all the read-only fields. The full list is in Step 10:
+`taskDefinitionArn`, `revision`, `status`, `requiresAttributes`, `compatibilities`, `registeredAt`,
+`registeredBy`, `deregisteredAt`. Re-run the Python from Step 10 rather than deleting them by hand -
+it strips all eight and you will forget one.
+
+### The Deploy stage fails with something about a container name
+
+`imagedefinitions.json` names a container that is not in the task definition. Print both and compare:
+
+```bash
+python3 -c "import json;print(json.load(open('labs/lab-11-cicd/app/dist/imagedefinitions.json')))"
+aws ecs describe-task-definition --task-definition usms-enrolment \
+  --query 'taskDefinition.containerDefinitions[].name' --output text
+```
+
+The left must contain the right. This is what Lab 11's `pre_build` check is defending against, and if
+that check passed, the mismatch came from an edit to `config/service.json` after the last build.
+
+### The Deploy stage fails immediately, before doing anything
+
+`imagedefinitions.json` is not at the root of `BuildOutput`. Download the artifact and look:
+
+```bash
+KEY=$(aws s3api list-objects-v2 --bucket usms-pipeline-artifacts \
+  --prefix usms-enrolment-pipeline/BuildOutput/ \
+  --query 'sort_by(Contents, &LastModified)[-1].Key' --output text)
+aws s3api get-object --bucket usms-pipeline-artifacts --key "$KEY" /tmp/bo.zip >/dev/null
+python3 -c "import zipfile;print(zipfile.ZipFile('/tmp/bo.zip').namelist())"
+```
+
+If you see `dist/imagedefinitions.json` rather than `imagedefinitions.json`, `artifacts.base-directory`
+is missing or wrong in the buildspec.
+
+### The pipeline lost its Source and Build stages
+
+An `update-pipeline` with an incomplete document. Rebuild from what is committed:
+
+```bash
+python3 - << 'PY'
+import json
+p = json.load(open("templates/lab-11-pipeline.json"))["pipeline"]
+cur = json.load(open("templates/lab-12-pipeline.json"))["pipeline"]
+deploy = [s for s in cur["stages"] if s["name"] == "Deploy"]
+p["stages"] = p["stages"] + deploy
+json.dump({"pipeline": p}, open("templates/lab-12-pipeline-repaired.json", "w"), indent=2)
+print("stages:", [s["name"] for s in p["stages"]])
+PY
+aws codepipeline update-pipeline --cli-input-json file://templates/lab-12-pipeline-repaired.json \
+  --query 'pipeline.{Stages:length(stages)}' --output table
+```
+
+This works because Lab 11 committed its pipeline document. That is the argument for committing
+templates rather than only creating resources from them.
+
+### `update-project` wiped the environment variables
+
+`environment` is replaced whole. Re-run Step 13's `--cli-input-json`, which contains all four
+variables. Then check `source.type` is still `CODEPIPELINE` - an `update-project` that omitted `source`
+leaves it alone, but one that included a partial `source` will not.
+
+### The build's `docker build` says `dist: no such file or directory`
+
+The `build` phase's image build runs after `dist/` is created, so this means an earlier command in the
+phase failed and the phase continued. Check whether `cp -R src/. "$ARTIFACT_DIR"/` ran; if the buildspec
+was edited, confirm the image build is still *after* the artifact assembly.
+
+### Everything worked yesterday, nothing works today
+
+Floci was restarted in memory mode, or the data directory moved.
+Run `./scripts/utilities/floci-storage-check.sh` and read the first failing check. If a **new
+terminal** is the thing that broke, see Errata 01.
+
+---
+
+## 11. Floci vs Real AWS
+
+| Feature | Real AWS | Floci | Status |
+| --- | --- | --- | --- |
+| `ecr create-repository`, `describe-repositories` | Full | Typically full | **Implemented in Floci** |
+| ECR as an OCI registry - `docker push` and `pull` | Full, HTTPS only, IAM-authorised | Build-dependent; often HTTP, sometimes absent | **Floci Limitation** |
+| `repositoryUri` | `<acct>.dkr.ecr.<region>.amazonaws.com/<repo>` | A localhost-style host and port | **Floci Limitation** |
+| Image scanning on push | Basic and enhanced scanning against a CVE database | Setting stored; no scan performed | **Floci Limitation** |
+| Image tag immutability | Enforced - a second push to an existing tag is rejected | Setting stored; enforcement build-dependent | **Floci Limitation** |
+| ECR lifecycle policies | Full - expire untagged images after N days | Usually stored, not evaluated | **Conceptual / Real AWS** |
+| `ecs register-task-definition` | Full, with validation | Typically full | **Implemented in Floci** |
+| `ecs update-service` changing the task definition | Full, with a rolling deployment | Pointer changes; tasks may not run | **Floci Limitation** |
+| Deployment circuit breaker and automatic rollback | Trips on repeated task failures; rolls back | Stored, not enforced | **Floci Limitation** |
+| `rolloutState` and `rolloutStateReason` | Populated throughout a deployment | Frequently absent | **Floci Limitation** |
+| Service events (`CannotPullContainerError`, and so on) | The primary diagnostic | Usually empty | **Floci Limitation** |
+| CodePipeline ECS deploy action | Reads `imagedefinitions.json`, registers a revision, updates the service | Build-dependent; may store the stage and never run it | **Floci Limitation** |
+| `privilegedMode` builds | Docker in Docker inside the managed build container | Depends on the emulator's build backend | **Floci Limitation** |
+| CodeDeploy, blue/green, task sets, test listeners | Full | Absent | **Conceptual / Real AWS** |
+| `imageDetail.json` and `appspec.yaml` | Consumed by a CodeDeploy deploy action | Nothing consumes them | **Conceptual / Real AWS** |
+| ECR image signing and registry policies | Full | Absent | **Conceptual / Real AWS** |
+| Cost - ECR storage and data transfer, build minutes | Billed | Free | **Floci Limitation** |
+
+**What you observed versus recorded.** On Path A you observed an image built and its digest, a revision derived with one field changed, the service pointing at your image, a three-stage pipeline, an undetected deploy of an unpushed image, and a rollback by naming a revision. You recorded but could not see enforced: the ECR push permissions, the second `iam:PassRole`, the single-service ARN, `scanOnPush` and tag mutability, and the CodeDeploy documents. Blue/green, a tripping circuit breaker, scan results and lifecycle expiry are not available at all. On Path B or C, move lines from observed to recorded in your report: an honestly stated smaller claim is worth more than an overstated one.
+
+**Where Floci is nicer than reality (traps on real AWS):** images appear instantly and cost nothing (real ECR bills storage, which is what lifecycle policies are for); no Docker Hub pull rate limits (real pipelines mirror base images); no propagation delay on a just-registered revision; and nothing fails at 3am, so every failure here was one you caused.
+
+---
+
+## 12. Independent Lab Exercises
+
+Five exercises, increasing in difficulty. Write your answers and evidence in
+`labs/lab-12-cicd-deploy/exercises.md`.
+
+### Exercise 1 - Basic: a second base image, and a smaller one
+
+**Requirements**
+
+Rebuild the enrolment image on a different base - `public.ecr.aws/nginx/nginx:stable-alpine`, the image
+Lab 04's placeholder task definition named - and push it as tag `r7-alt`. Compare the two images'
+sizes and layer counts.
+
+**Constraints**
+
+- Do not change `VERSION`; the tag is set explicitly for this exercise only.
+- Do not deploy it. This exercise ends at the registry.
+- Record both sizes from `describe-images`, not from `docker images`, and say why those two numbers
+  differ.
+
+**Expected outcome**
+
+Two tags in the repository, two sizes, and a one-paragraph note on what the difference consists of.
+
+**Hints**
+
+`docker history` shows layer sizes. The registry reports compressed sizes and the local daemon reports
+uncompressed ones; that is most of the difference, but not all of it.
+
+### Exercise 2 - Intermediate: argue for immutable tags, then implement it
+
+**Requirements**
+
+Set the repository's tag mutability to `IMMUTABLE`, attempt to push `r7` again, and record what
+happens. Then work out what would have to change in this lab's buildspec for an immutable-tag
+repository to work, and make that change.
+
+**Constraints**
+
+- Use `aws ecr put-image-tag-mutability`, not a new repository.
+- The buildspec must still produce a deployable `imagedefinitions.json`.
+- Set it back to `MUTABLE` at the end, or leave it immutable and say why - but say which, because
+  Section 8's verification does not check this field and a later lab might be surprised.
+
+**Expected outcome**
+
+A recorded rejection, a buildspec that cannot collide with an existing tag, and a paragraph on what
+immutable tags buy and what they cost.
+
+**Hints**
+
+A tag that includes something unique per build cannot collide. CodeBuild sets
+`CODEBUILD_RESOLVED_SOURCE_VERSION` and `CODEBUILD_BUILD_NUMBER`; the local runner sets neither, so
+whatever you choose needs a defined fallback.
+
+### Exercise 3 - Problem solving: build the blue/green scaffolding
+
+**Requirements**
+
+Step 19 wrote documents that reference a second target group and a test listener, neither of which
+exists. Create them: `usms-enrolment-tg-green` with the same settings as Lab 05's target group, and a
+test listener on port `8080` of `usms-enrolment-alb` forwarding to it.
+
+Then re-validate `templates/lab-12-codedeploy-deployment-group.json` with the real ARNs substituted for
+the two placeholders.
+
+**Constraints**
+
+- Reuse Lab 05's settings exactly: target type `ip`, HTTP:80 health check on `/`, matcher 200.
+- Do **not** change the ECS service's deployment controller. Step 19's danger admonition says why.
+- The document must contain no angle-bracket placeholders when you are finished.
+
+**Expected outcome**
+
+Two target groups, two listeners, and a deployment group document that would be accepted by an account
+where CodeDeploy exists.
+
+**Hints**
+
+Lab 05 Step 6 created the first target group and Step 8 the listener; `--query` those resources for
+their ARNs rather than copying them. The `deployment group` document is JSON, so use `python3` for the
+substitution, as Step 16 did.
+
+### Exercise 4 - Challenge: close the hole in the pipeline policy
+
+**Requirements**
+
+Step 15 granted `ecs:RegisterTaskDefinition` on `Resource: "*"` and argued that the `PassRole`
+statement bounds the damage. Test that argument.
+
+Write, in prose, the most damaging thing a compromised pipeline role could do with the v2 policy as
+written. Then produce a v3 that closes it, or argue - with specifics - that it cannot be closed with
+IAM alone and say what other control would be needed.
+
+**Constraints**
+
+- Your v3, if you write one, must not break the pipeline. Prove it by running an execution.
+- Do not use conditions you have not checked exist. If you propose a condition key, cite the
+  documentation page that lists it for that action.
+- Five versions maximum per policy; you may need to delete one first.
+
+**Expected outcome**
+
+A specific attack described in two or three sentences, and either a working v3 or a reasoned argument
+that the control belongs somewhere other than this policy.
+
+**Hints**
+
+Think about what a task definition can contain besides an image, and what a task that runs with
+`usms-ecs-task-role` can reach. Lab 01 attached `USMSStudentDataReadWrite` to that role. The question
+is not whether the pipeline can pass the role - it can, by design - but what it can make the role do.
+
+### Exercise 5 - Integration: prove a release end to end, for an auditor
+
+**Requirements**
+
+Produce a single document, `outputs/lab-12-release-evidence.md`, that traces release `r7` from the
+source byte to the running service, using only command output as evidence. It must include, in order:
+the S3 version ID of the source archive; the pipeline execution ID; the build ID; the image digest; the
+task definition revision ARN; and the service's current task definition.
+
+Then break one link deliberately - retag `r7` in the registry to point at a different image - and write
+what the document can and cannot still prove.
+
+**Constraints**
+
+- Every value must come from a command, shown in the document alongside its output.
+- The retag must be recorded in `outputs/lab-12-image-digest.txt` as a second line for the same tag.
+- Do not deploy the retagged image.
+
+**Expected outcome**
+
+An evidence chain, and a demonstration of exactly which link a mutable tag breaks. This is the artefact
+the CloudFormation lab's audit exercise starts from, and it is the strongest answer you can give to
+Section 14's question 7.
+
+**Hints**
+
+`docker tag` plus `docker push` retags. `describe-images` will then show the old digest with no tags,
+or with the tag moved, depending on your build. The chain you are testing is: does a task definition
+that names a *tag* let you prove which bytes ran?
+
+---
+
+## 13. Lab Assessment Checklist
+
+- [ ] `deploy-support-probe.sh` run, and the path recorded in your notes
+- [ ] The `5100-5104` range uncommented, `floci-up.sh` re-run, and the service proved to have survived
+- [ ] ECR repository `usms-enrolment` created with `scanOnPush` and a recorded tag-mutability decision
+- [ ] The registry host derived from `describe-repositories`, never typed
+- [ ] `docker login` succeeded, with the token passed through standard input
+- [ ] `Dockerfile` and `.dockerignore` written, and the `COPY dist/` choice explained in one sentence
+- [ ] An image built, tagged, pushed, and its digest recorded in `outputs/lab-12-image-digest.txt`
+- [ ] The image deleted locally and pulled back **by digest** - the create, perturb, read back proof
+- [ ] Task definition revision 3 derived with describe-strip-register, with all eight read-only fields stripped
+- [ ] Revision 3 verified to have kept cpu, memory, both roles and the health check
+- [ ] `usms-ecs-watch.sh` written and used
+- [ ] `USMSCodeBuildBase` v2 created **and set as default**, with `GetAuthorizationToken` on `"*"` explained
+- [ ] `privilegedMode` enabled, and what it grants stated in your notes
+- [ ] The buildspec extended: guarded image build, `imagedefinitions.json`, `imageUri` in the metadata
+- [ ] The eighth smoke-test assertion added and passing
+- [ ] `USMSCodePipelineBase` v2 created and set as default, with the second `PassRole` explained
+- [ ] The Deploy stage added with get-modify-put, and the danger admonition read first
+- [ ] An end-to-end execution, with `outputs/lab-12-deploy-evidence.txt` showing before and after
+- [ ] The rollback drill run, and a decision recorded about `usms-enrolment:5`
+- [ ] `lab-12-appspec.yaml` and the deployment group document written and validated
+- [ ] `configs/lab-12.env` with 26 populated exports
+- [ ] `verify-lab-12.sh` run, with its count and any benign failures recorded
+- [ ] `git status --short` checked before staging; no `outputs/` file and no compose backup committed
+- [ ] Five exercises attempted
+- [ ] Section 14 answered in prose in `notes/lab-12-notes.md`
+
+### 13.1 In-class assessment - Practical 7
+
+**Format.** Sixty minutes, at a machine, with the documentation open. You may read Labs 11 and 12,
+the AWS documentation, and your own notes. You may not copy a command sequence wholesale from the labs
+without changing it to fit the task - the tasks are written so that a copied sequence produces the
+wrong answer.
+
+**Starting state.** Labs 11 and 12 complete and `verify-lab-12.sh` passing at your path's expected
+count. If it is not, say so before you start; you will be assessed against what you have.
+
+**Submit.** One file, `outputs/lab-12-assessment.md`, containing for each task: the commands you ran,
+their output, and the short written answers requested. Plus whatever resources the tasks created, which
+will be checked.
+
+---
+
+#### Task A - A second service through the same pipeline (35 marks)
+
+The university wants the **results service** deployed the same way. It does not exist yet.
+
+1. Create an ECR repository `usms-results`, with the same settings as `usms-enrolment` except that its
+   tags must be **immutable**.
+2. Create a source tree at `labs/lab-11-cicd/app-results/` - a `VERSION`, one HTML file, a
+   `config/service.json` naming container `results-api` and port `80`, a `Dockerfile`, and a
+   `buildspec.yml` that writes an `imagedefinitions.json` for `results-api`.
+3. Build the image as tag `r1` and push it.
+4. Register a task definition family `usms-results` with one container named `results-api`, using the
+   same execution and task roles as the enrolment service.
+
+You are **not** asked to create an ECS service or a pipeline for it.
+
+**Marks:** repository with correct settings 6; source tree complete and the buildspec parsing 10;
+image built and pushed, digest shown 8; task definition registered with the correct container name and
+roles 8; marks lost for any hard-coded registry host.
+
+---
+
+#### Task B - Trace a release, and find the gap (30 marks)
+
+Using only command output as evidence, answer these in `outputs/lab-12-assessment.md`:
+
+1. Which task definition revision is `usms-enrolment-svc` running right now, and which image URI does
+   it name? (4)
+2. Which image digest does that URI currently resolve to? (4)
+3. Which pipeline execution registered that revision, and which S3 source version did that execution
+   consume? Show how you established the link. (10)
+4. Name one link in that chain that your evidence does **not** actually prove, and explain in three or
+   four sentences what an attacker or an accident could do in that gap. (12)
+
+Question 4 is the one that separates answers. A correct answer identifies a specific mechanism, not a
+general worry.
+
+---
+
+#### Task C - Design, in writing only (25 marks)
+
+The university's change-control committee will not allow automatic deployment to production. They want
+the pipeline to stop before Deploy and wait for a named person to approve.
+
+In no more than 400 words, and with a JSON fragment for the stage you would add:
+
+1. Name the action category and provider you would use, and where in the pipeline it goes. (6)
+2. State what the approver actually sees, and what they must be given in order to decide. (6)
+3. Explain what happens to the artifacts while the pipeline waits, and what the timeout is. (7)
+4. State, in one sentence, whether this is demonstrable on Floci, and how you know. (6)
+
+No commands are required for this task. Correct JSON that would be rejected by Floci scores full marks;
+an approximation that "looks about right" does not.
+
+---
+
+#### Task D - Housekeeping (10 marks)
+
+1. Run `verify-lab-12.sh` and paste the result. (3)
+2. Run `git status --short` and confirm nothing under `outputs/` is staged. (3)
+3. State which support path your build is on and one thing in this assessment you could therefore not
+   demonstrate. (4)
+
+---
+
+**Marking notes for the instructor.** Total 100. Task A is checkable mechanically:
+`aws ecr describe-repositories --repository-names usms-results`,
+`aws ecs describe-task-definition --task-definition usms-results`, and `bash -n` plus a YAML parse on
+the new buildspec. Task B question 3 is where copied work shows: a student who ran the lab has the
+execution ID in `outputs/lab-12-deploy-evidence.txt` and can say how they linked it; one who did not
+will assert the link without evidence. Task C question 4 should say that CodePipeline manual approval
+actions are not modelled on this emulator and cite the Step 3 probe or Section 11's table - a student
+who claims to have tested it has not.
+
+---
+
+## 14. Review Questions
+
+Answer in prose, in `notes/lab-12-notes.md`. No command output.
+
+1. The ECS deploy action changes exactly one field of the task definition. Name three realistic changes
+   to a service that therefore **cannot** travel through this pipeline, and describe how you would
+   deploy each of them instead.
+
+2. `ecr:GetAuthorizationToken` must be granted on `Resource: "*"` and `ecs:RegisterTaskDefinition`
+   effectively must be too. Are these the same kind of exception? Argue both sides, then commit to an
+   answer.
+
+3. Explain to a sceptical colleague why an image digest is worth the inconvenience over a tag. Then
+   make the strongest case *against* pinning digests in task definitions - there is a real one.
+
+4. Step 18's deployment pointed the service at an image that did not exist, and nothing on this
+   emulator objected. On real AWS the circuit breaker would have caught it. Describe a failure the
+   circuit breaker would **not** catch, and say what mechanism would.
+
+5. `update-pipeline`, `put-bucket-notification-configuration`, `update-assume-role-policy` and
+   `put-bucket-policy` are all replace-only. What do these APIs have in common that makes replacement
+   the natural design, and what would a merge-based version of `update-pipeline` have to decide that a
+   replace-based one does not?
+
+6. This lab created a second IAM policy version twice and had to set each as default. Why is
+   `create-policy-version` not simply `--set-as-default` by default? Describe the workflow that design
+   is protecting.
+
+7. You have `outputs/lab-12-deploy-evidence.txt`, `outputs/lab-12-image-digest.txt`, and the pipeline
+   execution history. A colleague claims the enrolment service is running code that was never reviewed.
+   Which of those three artefacts helps, which does not, and what would you have needed to record at
+   build time to settle it in one command?
+
+---
+
+## 15. KEEP vs CLEAN UP
+
+```text
+╔══════════════════ KEEP ══════════════════╗    ╔═══════════ CLEAN UP ═══════════╗
+║ usms-enrolment  (ECR repository)         ║    ║ usms-probe-delete-me           ║
+║ images r6 and r7                         ║    ║   - the Step 3 probe repo, if  ║
+║ task definitions usms-enrolment:3 and :4 ║    ║     it survived the probe      ║
+║ the three-stage pipeline                 ║    ║ usms-enrolment:5               ║
+║ USMSCodeBuildBase v2 (default)           ║    ║   - the failed revision; your  ║
+║ USMSCodePipelineBase v2 (default)        ║    ║     Step 18 decision governs   ║
+║ Dockerfile, .dockerignore, buildspec.yml ║    ║ docker-compose.yml.bak-*       ║
+║ templates/lab-12-*.json and .yaml       ║    ║   - keep one, delete the rest  ║
+║ scripts/utilities/usms-ecs-watch.sh      ║    ║ labs/.../app/dist/             ║
+║ scripts/utilities/verify-lab-12.sh      ║    ║   - build output, git-ignored  ║
+║ configs/lab-12.env                      ║    ║ outputs/lab-12-*              ║
+║ the 5100-5104 port range, published      ║    ║   - keep until your report is  ║
+║ buildspec.yml.lab08a (for comparison)    ║    ║     written                    ║
+╚══════════════════════════════════════════╝    ╚════════════════════════════════╝
+```
+
+Do not clean up the KEEP column. The CloudFormation lab re-declares every object in it as a template
+and compares the result with what you built by hand; a missing pipeline stage makes that comparison
+meaningless.
+
+Do **not** run `scripts/cleanup/lab-12-cleanup.sh` now; it is for the end of the course, in the order Section 8.2 gives.
+
+**The architecture you now have**
 
 ```text
   labs/lab-11-cicd/app/  ──zip──>  S3 usms-pipeline-artifacts  ──>  CodePipeline
@@ -3721,25 +3029,11 @@ scripts/cleanup/lab-02-cleanup.sh
    └── private subnets a,b ── 2 to 10 Fargate tasks, container enrolment-api:80
 ```
 
-Every box in that diagram was built by hand in this course, in order, and the arrows between the top
-row are the only ones that did not exist a day ago.
-
 ---
 
-## 17. Preparation for the Next Lab
+## 16. Preparation for the Next Lab
 
-The next laboratory is the S3 configuration document Lab 10 Section 17 promised and the delivery
-schedule deferred - still unwritten, with no fixed slot number in this sequence. It opens with a
-bucket that exists, holds real objects, is wired to a real trigger - and is still missing every piece
-of configuration that makes a bucket production-ready.
-
-Nothing in this lab blocks it. What this lab adds to it is a second, harder example of the same
-question: `usms-pipeline-artifacts` is now a bucket holding build outputs with no lifecycle rule, no
-encryption configuration and no bucket policy, and it will accumulate an object per pipeline execution
-forever. The S3 configuration lab configures `usms-student-data`; the obvious exercise is to do the
-same to the artifact bucket, and that lab's Exercise 5 does exactly that.
-
-### What the S3 configuration lab will consume
+The next laboratory is the S3 configuration document Lab 10 Section 17 promised (still unwritten, with no fixed number). Nothing here blocks it. It configures `usms-student-data`; its Exercise 5 does the same to `usms-pipeline-artifacts`, which now gains an object per execution with no lifecycle rule, encryption configuration or bucket policy.
 
 | Artefact | From | How it is used |
 | --- | --- | --- |
@@ -3748,18 +3042,9 @@ same to the artifact bucket, and that lab's Exercise 5 does exactly that.
 | `usms-pipeline-artifacts` | Lab 11 Step 5 | The second bucket in Exercise 5 - versioned already, unmanaged otherwise |
 | `configs/lab-11.env`, `configs/lab-12.env` | Steps 20, and Lab 11 Step 21 | Sourced; the artifact bucket's name comes from there |
 
-### The thing the S3 configuration lab must be careful about
+**Be careful with lifecycle rules there.** Expiring noncurrent versions in `usms-pipeline-artifacts` also expires the source archive versions this lab's executions reference, so their provenance cannot be re-established. That is a trade-off (storage cost against provenance retention) to decide explicitly, not by default.
 
-A lifecycle rule that expires noncurrent versions in `usms-pipeline-artifacts` will also expire the
-**source archive versions** that this lab's pipeline executions reference. A CodePipeline execution
-records the S3 version ID it consumed; if that version has been expired, the execution's provenance
-cannot be re-established, and re-running an old execution fails.
-
-That is a genuine operational trade-off rather than a mistake to avoid: storage costs money, and
-provenance has a retention period like everything else. That lab should make the decision explicitly
-rather than by default, which is the whole argument for doing it in a lab.
-
-### Pre-session checks
+**Pre-session checks**
 
 ```bash
 cd ~/aws-floci-course
@@ -3771,7 +3056,7 @@ grep -c '^export' configs/lab-12.env          # 26
 aws s3api head-bucket --bucket usms-student-data && echo "Lab 10's bucket is present"
 ```
 
-### Snapshot before you finish
+**Snapshot before you finish**
 
 ```bash
 floci snapshot save lab-12-complete
@@ -3789,48 +3074,9 @@ tar -czf ~/floci-data-lab-12.tar.gz -C ~ floci-data
 
 Keep the archive **outside** the repository so it is never a commit candidate.
 
-### Read ahead
-
-- **S3 versioning cannot be turned off, only suspended.** You have now enabled it on one bucket
-  deliberately. Consider what suspension means for a bucket that already has versions, and what it does
-  not mean.
-- **A bucket policy and an identity policy can both grant access to the same object.** You have seen
-  this three times now: at the Lambda function in Lab 10, at the artifact bucket here, and in Lab 09.
-  Work out which you would use to grant a *different account* access, and why the answer is not
-  symmetric.
-- **Lifecycle rules act on noncurrent versions separately from current ones.** Read the two
-  configuration blocks before the session; the distinction is the whole of the trade-off described
-  above.
-
 ---
 
-## Appendix A - Command Reference
-
-| Command | What it does here |
-| --- | --- |
-| `aws ecr create-repository --repository-name R` | Creates a private repository |
-| `aws ecr describe-repositories --repository-names R` | Reads back `repositoryUri` - the only correct source of the registry host |
-| `aws ecr get-login-password \| docker login --password-stdin H` | Twelve-hour registry credential, never on the command line |
-| `aws ecr describe-images --repository-name R --image-ids imageTag=T` | The tag-to-digest mapping |
-| `aws ecr delete-repository --repository-name R --force` | Deletes the repository **and its images** |
-| `aws ecr put-image-tag-mutability` | Switches a repository between `MUTABLE` and `IMMUTABLE` |
-| `docker build -t name:tag .` | Builds from the context; `.dockerignore` decides what is sent |
-| `docker tag a b` | Adds a second name; copies nothing |
-| `docker push name:tag` | Uploads layers, then the manifest; prints the manifest digest |
-| `docker pull repo@sha256:...` | Fetches by digest - the only unforgeable reference |
-| `aws ecs describe-task-definition --task-definition F` | The latest active revision of family `F` |
-| `aws ecs register-task-definition --cli-input-json file://T` | Creates the next revision |
-| `aws ecs update-service --task-definition F:N` | Points the service at a revision; also the rollback |
-| `aws ecs deregister-task-definition --task-definition F:N` | Retires a revision; the number is never reused |
-| `aws iam create-policy-version --set-as-default` | New version, activated. Without the flag, not activated |
-| `aws iam set-default-policy-version --version-id vN` | Activates an existing version |
-| `aws iam list-policy-versions` | Five maximum; delete one before adding a sixth |
-| `aws codebuild update-project --cli-input-json file://T` | Replaces the members named in the document |
-| `aws codepipeline get-pipeline --query 'pipeline'` | The document without `metadata` - the read half of get-modify-put |
-| `aws codepipeline update-pipeline --cli-input-json file://T` | Replaces the whole pipeline |
-| `docker port floci` | Which host ports the container publishes |
-
-## Appendix B - New JMESPath and CLI patterns introduced
+## Appendix - New CLI and JMESPath patterns
 
 | Pattern | Meaning | Where |
 | --- | --- | --- |
@@ -3879,9 +3125,3 @@ Keep the archive **outside** the repository so it is never a commit candidate.
   (the target group a blue/green setup would have to pair), Lab 06 (the scalable target a controller
   change would strand), Lab 09 Step 8 (`usms-deploy-role`), Lab 10 Section 17 (replace-only APIs as a
   family), Lab 11 (the pipeline this one extends), Errata 01.
-
----
-
-*Lab 12 complete. The enrolment service is running code this repository produced, put there by a
-document rather than a person - and you have seen both what that mechanism can express and what it
-cannot. The S3 configuration lab goes back to the bucket everything has been pointing at.*

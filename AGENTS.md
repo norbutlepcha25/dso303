@@ -391,60 +391,56 @@ single most valuable sentence in the lab.
 
 ## 8. Required lab structure
 
-Every lab uses exactly this section skeleton and numbering:
+Labs are **concise**: commands, outputs, checks and warnings stay complete; concept explanations
+live in the unit notes and are linked, not repeated. `docs/Lab/Lab-02-VPC.md` is the style
+reference. Every lab uses exactly this section skeleton and numbering:
 
 ```text
-# Lab NN — <Topic>
-## 1. Lab Overview
-## 2. Learning Objectives
-## 3. Prerequisites
-## 4. Connection to Previous Labs        ← includes the Current Environment block
-## 5. What We Are Building
-## 6. Architecture                       ← ASCII diagram
-## 7. Directory Structure                ← what this lab adds
-## 8. Step-by-Step Implementation        ← Step 1, Step 2, ... with Checkpoints
-## 9. Verification                       ← builds scripts/utilities/verify-lab-NN.sh
-## 10. Checkpoints                       ← consolidated table
-## 11. Troubleshooting
-## 12. Floci vs Real AWS
-## 13. Independent Lab Exercises         ← 5 exercises, increasing difficulty
-## 14. Lab Assessment Checklist
-## 15. Review Questions                  ← 5–7 conceptual
-## 16. What We Built                     ← reflection + KEEP/CLEAN UP + architecture
-## 17. Preparation for the Next Lab
-## Appendix A — Command Reference
-## Appendix B — New JMESPath / CLI patterns introduced
+# Lab NN - <Topic>
+## 1. Objectives                         ← 3-5 bullets + "Concepts used in this lab" link box
+## 2. Prerequisites                      ← short bullets + one check command
+## 3. What This Lab Reuses               ← bullets "resource: where used (Step N)" + Created/Required block
+## 4. What We Are Building               ← 2-4 sentences + resource/address plan table
+## 5. Architecture                       ← diagram (figure or ASCII)
+## 6. Directory Structure                ← what this lab adds + mkdir
+## 7. Step-by-Step Implementation        ← Step 1, Step 2, ... with Checkpoints
+## 8. Verification                       ← 8.1 verify-lab-NN.sh, 8.2 cleanup script
+## 9. Checkpoints                        ← consolidated table
+## 10. Troubleshooting
+## 11. Floci vs Real AWS
+## 12. Independent Lab Exercises         ← 5 exercises, increasing difficulty
+## 13. Lab Assessment Checklist
+## 14. Review Questions                  ← 5-7 conceptual
+## 15. KEEP vs CLEAN UP                  ← inventory box + architecture-so-far diagram
+## 16. Preparation for the Next Lab
+## Appendix - New CLI and JMESPath patterns
 ## Sources
 ```
+
+Do not add reflection essays, "what you observed" lists, read-ahead suggestions, a full command
+reference appendix, or in-lab concept interludes. A concept the next steps rely on gets a short
+`!!! info` box with the two or three facts needed and a link to the owning unit note.
 
 Numbering rules:
 
 - **Steps** run in one sequence from 1. Only Lab 1 has Part A / Part B; later labs do not.
 - **Checkpoints** are numbered sequentially within the lab, starting at 1.
 - **Cross-references** use bare "Step N" only within the same lab. Across labs, always write
-  "Lab 1 Step 14" — never a bare number.
+  "Lab 1 Step 14" — never a bare number. Step numbers are a public interface: other labs cite
+  them, so never renumber steps in an existing lab.
 - Before returning, verify every "Step N" you referenced actually exists in that lab.
 
 ---
 
 ## 9. Step format
 
-Every step uses this shape. Do not compress it.
+Every step uses this shape. Put one `!!! info "Run every command from aws-floci-course/"` box at
+the start of Section 7 and add a **Run from** block only to steps that run somewhere else.
 
 ````text
-### Step 7 — Create the public subnet
+### Step 7 - Create the public subnet
 
-**Purpose**
-
-One or two sentences: why this exists, and what later depends on it.
-
-**Run from**
-
-```text
-aws-floci-course/labs/lab-02-vpc/
-```
-
-**Command**
+Lab 3 launches the web server here. It only becomes public after Step 10.   ← 1-2 sentences: why
 
 ```bash
 PUBLIC_SUBNET_ID=$(aws ec2 create-subnet \
@@ -457,9 +453,7 @@ PUBLIC_SUBNET_ID=$(aws ec2 create-subnet \
 echo "$PUBLIC_SUBNET_ID"
 ```
 
-**What the command does**
-
-Explain each meaningful part — the flags, the query, why this CIDR, why this AZ.
+- 1-3 bullets: only what is needed to run and understand THIS command; link to notes for concepts.
 
 **Expected result**
 
@@ -477,7 +471,7 @@ aws ec2 describe-subnets --subnet-ids "$PUBLIC_SUBNET_ID" \
   --output table
 ```
 
-Then say what to look for in that output, not just that it should appear.
+One line stating the success criterion (for example: `Free` is `251`, not `256`).
 
 **Checkpoint 3**
 
@@ -488,35 +482,23 @@ usms-vpc
 ```
 ````
 
-Every step answers, in order: **What am I doing? Why? What do I run? Where? What should I see?
-What happens next?**
+Every step still answers: **Why? What do I run? What should I see? How do I check it?** — briefly.
 
 ---
 
 ## 10. Writing rules
 
-### 10.1 Explain every command
+### 10.1 Explain commands briefly
 
-Never present a block of commands without explanation. On first use of a service or flag, decompose
-it:
+Never present a command without saying what it does, but keep it to 1-3 lines or bullets: the
+flags and values that matter for this step. Do not re-explain what an earlier lab taught (§6.4).
 
-```text
-aws
- └── ec2                    the SERVICE
-      └── create-subnet     the OPERATION
-           └── --vpc-id     an OPTION
-```
+### 10.2 Link concepts, do not teach them in the lab
 
-Explain what the service is, what the operation does, and what the flags mean — once. After that,
-reference rather than repeat.
-
-### 10.2 Concept before command
-
-If a command introduces a new idea, explain the idea first. Before `aws ec2 create-vpc
---cidr-block 10.0.0.0/16`, the student needs to know what a VPC is, what CIDR notation means, how
-many addresses `/16` gives, and why we chose that range.
-
-Enough to reason with. Not a textbook chapter.
+The unit notes own concept explanations (see Part II "Avoiding duplication" for owners). Link the
+specific section with `../unitN/topicM.md#anchor`, confirming the anchor exists. Fall back to an
+official AWS documentation link only when no note covers the concept. Keep in the lab only the
+facts the next command depends on.
 
 ### 10.3 Show expected output, and label it honestly
 
@@ -687,7 +669,7 @@ Consequences you must handle in every lab that touches permissions:
   always give a "read the policy JSON and justify your answer" fallback.
 - Say plainly: *judge your policies by reading them, not by whether the command succeeded.*
 
-### 12.3 Section 12 of every lab
+### 12.3 Section 11 of every lab
 
 A table with three columns — Feature · Real AWS · Floci — plus a Status column using the three
 labels above. Close with a short block listing what in this lab was observable versus conceptual.
@@ -704,7 +686,7 @@ Also flag where **Floci is nicer than reality**, because those are traps on real
 
 The environment is permanent. Do **not** end labs by destroying it.
 
-Every lab's Section 16 needs an explicit KEEP vs CLEAN UP inventory:
+Every lab's Section 15 needs an explicit KEEP vs CLEAN UP inventory:
 
 ```text
 ╔══════════ KEEP ══════════╗    ╔═══════ CLEAN UP ═══════╗
@@ -922,7 +904,8 @@ Run through this before returning any lab. Do not return one with unchecked boxe
 
 ```text
 STRUCTURE
-☐ All 17 sections present, in order
+☐ All 16 sections present, in order (§8), concise style
+☐ Concepts linked to unit notes, not explained in the lab
 ☐ Steps numbered from 1, no gaps
 ☐ Checkpoints numbered sequentially from 1
 ☐ Every "Step N" / "Checkpoint N" / "Exercise N" reference resolves
@@ -932,7 +915,7 @@ CUMULATIVE
 ☐ Current Environment block lists previous / this lab / future needs
 ☐ At least one resource from an earlier lab is genuinely reused
 ☐ configs/lab-NN.env generated, with an empty-value check
-☐ Section 17 states exactly what the next lab will consume
+☐ Section 16 states exactly what the next lab will consume
 
 ENVIRONMENT CONTRACT
 ☐ No `floci start`, no `docker compose down -v`, no `docker volume prune`
@@ -964,7 +947,7 @@ TEACHING
 ☐ Exactly 5 exercises, increasing in difficulty, exercise 5 integrating
 ☐ 5–7 conceptual review questions
 ☐ KEEP vs CLEAN UP inventory
-☐ verify-lab-NN.sh built in Section 9, checking configuration as well as existence
+☐ verify-lab-NN.sh built in Section 8, checking configuration as well as existence
 
 MKDOCS
 ☐ Every `{{` wrapped in {% raw %} on the fence lines
@@ -1002,7 +985,7 @@ lab created — say so in the opening sentences, state what you are assuming ins
 
 ## Appendix A — Skeleton of `verify-lab-NN.sh`
 
-Every lab builds one of these in Section 9. Adapt the resource checks; keep the environment and
+Every lab builds one of these in Section 8. Adapt the resource checks; keep the environment and
 persistence blocks, because a lab that verifies only its own resources will pass right up until the
 restart that deletes them.
 

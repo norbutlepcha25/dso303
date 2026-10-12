@@ -1,100 +1,44 @@
 # Lab 10 - Edge Functions with AWS Lambda
 
-*Practical 6 in the delivery schedule, Practical 4 in the module descriptor.*
+## 1. Objectives
+
+- Create `usms-student-data`, the bucket Lab 1's `USMSStudentDataReadWrite` has named since the first day, as the CloudFront origin.
+- Build two Lambda@Edge functions (viewer-request and origin-response), invoke them with real CloudFront events, publish versions, and check them against the edge restrictions.
+- Associate both with a CloudFront distribution (or validate the configuration) and prove they compose with `usms-edge-simulate.sh`.
+- Build a regional S3-triggered notifier with an alias and a scoped resource policy, and prove it ran.
+- Prove everything survives a restart and save the identifiers to `configs/lab-10.env`.
+
+**Time:** roughly four hours. **Assessment:** Section 13.
+
+!!! info "Concepts used in this lab"
+    Read these first if a term is new: [edge locations and CloudFront](../unit1/topic1.md#edge-locations-and-amazon-cloudfront) ·
+    [AWS Lambda](../unit1/topic3.md#aws-lambda) ·
+    [limits that decide whether Lambda fits](../unit1/topic3.md#limits-that-decide-whether-lambda-fits) ·
+    [S3 buckets, objects and keys](../unit6/topic1.md#buckets-objects-keys-and-prefixes) ·
+    [S3 event sources](../unit6/topic1.md#event-sources) ·
+    [consuming S3 from Lambda](../unit6/topic1.md#consuming-s3-from-aws-lambda) ·
+    [S3 event notifications](../unit6/topic3.md#amazon-s3-event-notifications) ·
+    [IAM roles](../unit8/topic1.md#iam-roles) ·
+    [identity-based versus resource-based policies](../unit8/topic1.md#identity-based-versus-resource-based-policies) ·
+    [the confused deputy problem](../unit8/topic1.md#the-confused-deputy-problem) ·
+    [Lambda@Edge restrictions (AWS docs)](https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/edge-functions-restrictions.html)
 
 ---
 
-## 1. Lab Overview
+## 2. Prerequisites
 
-Every lab so far has built something that sits **inside** the university's network. A VPC, subnets,
-instances, containers behind a load balancer, a Kubernetes cluster. All of it lives in one region,
-in one account, behind one front door.
-
-This lab builds the front door itself, and then puts code **in** it.
-
-An **edge function** is a piece of your application that runs in the content delivery network,
-physically close to the person making the request, before the request ever reaches your origin. On
-AWS the two mechanisms are **Lambda@Edge** - a normal Lambda function, written in Node.js or
-Python, associated with a CloudFront distribution - and **CloudFront Functions**, a much smaller and
-much faster JavaScript runtime for viewer-only work. This lab builds the first and explains the
-second, because choosing between them is the actual engineering decision and a student who has only
-seen one cannot make it.
-
-The USMS system needs this for a concrete reason. Student transcripts are static files. They are
-requested from all over the country, they are identical every time they are requested, and they must
-not be handed to someone who has not authenticated. Serving them from an instance in `us-east-1` is
-slow for a student in Trashigang and wasteful for everyone. Serving them from a CDN is fast - but a
-CDN with no logic in it cannot tell an authenticated request from an unauthenticated one. An edge
-function is how you keep the speed and add the judgement.
-
-There is one more thing this lab does, and it is overdue. Every policy Lab 1 wrote, every role Lab 09
-audited, has referred to a bucket named `usms-student-data` that **has never existed**. Step 5
-creates it. From that step onwards, `USMSStudentDataReadWrite` stops being a hypothesis about a
-resource and becomes a statement about a real one.
-
-By the end you will have three Lambda functions, two of them shaped for the edge and one of them a
-conventional regional function triggered by S3, plus the CloudFront distribution that ties the first
-two to the origin bucket - and, more importantly, a clear account of which parts of that you have
-genuinely observed and which parts you have only recorded.
-
-**Time:** roughly four hours. **Assessment:** Section 14.
-
----
-
-## 2. Learning Objectives
-
-By the end of this laboratory you will be able to:
-
-1. Explain what an edge function is, where it executes, and what problem it solves that neither a
-   plain CDN nor a regional application server solves.
-2. Distinguish **Lambda@Edge** from **CloudFront Functions** by runtime, trigger points,
-   capabilities and cost, and justify a choice between them for a stated requirement.
-3. Name the four CloudFront trigger points - `viewer-request`, `origin-request`, `origin-response`,
-   `viewer-response` - and say what is and is not available to your code at each.
-4. Package a Lambda function as a deployment archive and create it with `aws lambda create-function`,
-   choosing a runtime, handler, role, memory and timeout deliberately rather than by default.
-5. Read and write the CloudFront event structure - `event.Records[0].cf.request` and
-   `.cf.response` - including the header shape that trips up everybody on first contact.
-6. Invoke a function directly with a crafted event payload, read its response, and read its logs,
-   using `--payload fileb://` and `--log-type Tail`.
-7. Publish an immutable **version** of a function and explain why Lambda@Edge accepts a
-   version-qualified ARN and refuses both `$LATEST` and an alias.
-8. State the Lambda@Edge restrictions - region, no environment variables, no VPC, memory and timeout
-   caps per trigger point - and check a function against them by reading its configuration.
-9. Attach functions to a CloudFront distribution with `LambdaFunctionAssociations`, and describe the
-   request path a `GET` takes through both of them.
-10. Distinguish a Lambda **execution role** (what the function may do) from a Lambda **resource
-    policy** (who may invoke the function), and configure both.
-11. Wire an S3 event notification to a Lambda alias and prove, from logs, that the object upload
-    reached the code.
-12. Say precisely which of the above you observed working in Floci and which you recorded without
-    being able to observe.
-
----
-
-## 3. Prerequisites
-
-Before starting, you need:
-
-- Labs 1 through 9 complete, and their `configs/lab-NN.env` files present. Step 2 checks this - see
-  Section 4.
-- Floci running under Docker Compose, with `FLOCI_STORAGE_MODE` set to `hybrid`.
-- A terminal in which a **new window** already has `AWS_PROFILE` and `COURSE_ROOT` set. If that is
-  not true, you have the defect described in Errata 01 and you should fix it now rather than halfway
-  through Step 12.
-- `python3` on your path. This lab uses it for JSON validation and as the portable fallback for
-  building a `.zip` archive.
-- Roughly 1 GB of free disk. Floci starts one container per Lambda runtime it executes.
-
-Run this before anything else:
+- Labs 1 to 9 complete, with their `configs/lab-NN.env` files present (Step 2 checks this).
+- Floci running under Docker Compose with `FLOCI_STORAGE_MODE=hybrid`.
+- A **new** terminal window already has `AWS_PROFILE` and `COURSE_ROOT` set. If not, fix the defect described in Errata 01 now.
+- `python3` on your path (JSON validation and building `.zip` archives).
+- About 1 GB of free disk; Floci starts one container per Lambda runtime.
 
 ```bash
 cd ~/aws-floci-course
 ./scripts/utilities/floci-storage-check.sh
 ```
 
-You want `PASS=16  FAIL=0`. A failure in the first block means a new terminal cannot find the
-course, and the AWS CLI will tell you that your *credentials* are wrong, which they are not.
+You want `PASS=16  FAIL=0`. A failure in the first block means a new terminal cannot find the course, and the AWS CLI will then blame your credentials, which are fine.
 
 !!! warning "Do not run `aws login`"
     If you see `NoCredentials`, the AWS CLI v2 will suggest `aws login`. That begins a sign-in to
@@ -103,52 +47,23 @@ course, and the AWS CLI will tell you that your *credentials* are wrong, which t
 
 ---
 
-## 4. Connection to Previous Labs
+## 3. What This Lab Reuses
 
-### 4.1 What this lab can assume is already done
+From Lab 1:
 
-By this point in the course, every student has built the same sequence: ECS + Fargate (Lab 04), the
-ALB front door (Lab 05) and Service Auto Scaling (Lab 06), then EKS (Lab 07) and EKS Scaling (Lab 08)
-as a second deployment target for the same application, and finally the security review (Lab 09)
-across both. There is no alternate path to account for and no cohort-dependent gap to bridge.
+- `usms-lambda-exec-role`: the execution role on all three functions; Step 6 adds the edge principal to its trust policy.
+- `USMSLambdaBasic`: read back in Step 6; the notifier stays inside it (logs and `s3:GetObject`).
+- `USMSStudentDataReadWrite` and `USMS_BUCKET_NAME`: Step 5 creates the bucket the policy has always named.
 
-Step 2 still sources every `configs/lab-*.env` file with an existence check rather than a bare
-`source`, because a missing file is a real error worth naming precisely - not because any of Labs 01
-through 09 is optional. Where this lab reuses a specific earlier artefact - Lab 09's
-`outputs/lab-09-bucket-policy-draft.json`, Lab 08's `outputs/lab-08-scaling-evidence.json` - the step
-that wants it says so, and still supplies a fallback that manufactures an equivalent in case an
-earlier exercise was skipped.
+From later labs:
 
-### 4.2 A note on the roadmap
+- Lab 02 `usms-s3-endpoint`: why a private-subnet caller reaches the new bucket without a NAT hop (Step 5).
+- Lab 06 `outputs/lab-06-scaling-history.json` and Lab 08 `outputs/lab-08-scaling-evidence.json`: candidate first objects uploaded in Step 20.
+- Lab 09 `outputs/lab-09-bucket-policy-draft.json`: validated in Exercise 5 against the now-real bucket. Lab 09's identity-versus-resource-policy distinction returns in Step 19.
 
-Earlier drafts of this course planned a dedicated S3 configuration lab between Security and Lambda,
-and assumed Lambda would follow it. That S3 lab was never written, and the delivery schedule has put
-edge functions directly after Security instead. That creates one real problem, not a cosmetic one: a
-Lambda@Edge lab needs an origin, and the origin the whole course has been pointing at does not exist.
-
-So this lab creates `usms-student-data` - and creates it *plainly*: `create-bucket`, one tag, one
-object. It does not configure versioning, encryption, lifecycle rules, a bucket policy, a website
-configuration or public-access blocks. Those remain the subject matter of the still-unwritten S3
-configuration lab, and they stay untouched here. Whenever that lab is written, it will begin with
-`head-bucket` **succeeding** instead of failing, and with Lab 09's drafted bucket policy still
-un-applied and waiting.
-
-### 4.3 Current Environment
+The planned S3 configuration lab was never written, so this lab creates the bucket **plainly** (one tag, objects, a notification) and leaves versioning, encryption, lifecycle and the bucket policy for that lab.
 
 ```text
-Created in previous labs:
-- Lab 01: IAM foundation - 3 groups, 3 users, 3 roles, 5 policies, 1 instance profile
-- Lab 01: usms-lambda-exec-role (trusts lambda.amazonaws.com) + USMSLambdaBasic - UNUSED UNTIL NOW
-- Lab 01: Floci under Compose, hybrid storage, persistence proven
-- Lab 02: usms-vpc 10.0.0.0/16, 4 subnets, IGW, NAT, route tables, usms-app-sg, usms-s3-endpoint
-- Lab 03: usms-web-01, usms-db-01, usms-app-key, usms-web-golden AMI
-- Lab 04: usms-ecs-cluster, usms-enrolment-svc, usms-ecs-task-role, /usms/ecs/enrolment
-- Lab 05: usms-enrolment-alb, usms-enrolment-tg, usms-alb-sg
-- Lab 06: target-tracking and step-scaling policies, usms-enrolment-queue-high alarm
-- Lab 09: USMSStudentDataReadOnly, usms-deploy-role, scoped egress
-- Lab 07/08: usms-eks-cluster, usms-eks-nodes, usms-enrolment-hpa, usms-portal-ingress
-- NOT created by anybody: the bucket usms-student-data that four policies already name
-
 Created in this lab:
 - usms-student-data ................. the origin bucket, created plainly
 - usms-edge-viewer-request .......... Lambda@Edge viewer-request function (Node.js)
@@ -167,48 +82,17 @@ Required for future labs:
 - outputs/lab-10-s3-readiness.txt → the S3 configuration lab reads it at the start
 ```
 
-### 4.4 What this lab genuinely reuses
+---
 
-Not "mentions". Uses.
+## 4. What We Are Building
 
-| From | Resource | How this lab actually uses it |
-| --- | --- | --- |
-| Lab 01 | `usms-lambda-exec-role` | The execution role on all three functions. Step 6 rewrites its trust policy to add the edge principal - the first time this role has ever been touched since it was created |
-| Lab 01 | `USMSLambdaBasic` | Read back in Step 6 to establish what the functions may do: write logs, and `s3:GetObject`. The notifier's code is written to stay inside it |
-| Lab 01 | `USMSStudentDataReadWrite` | Step 5 creates the bucket whose ARN this policy has named since the first day of the course, and Step 5's verify proves the ARN now resolves |
-| Lab 01 | `USMS_BUCKET_NAME` | The bucket name, taken from `configs/lab-01.env` rather than typed |
-| Lab 02 | `usms-s3-endpoint` | Explained in Step 5 as the reason a private-subnet caller reaches the new bucket without a NAT hop |
-| Lab 06 | `outputs/lab-06-scaling-history.json` | One of the two candidate payloads uploaded in Step 20 to fire the notifier |
-| Lab 08 | `outputs/lab-08-scaling-evidence.json` | The other. Lab 08 Section 17 promised this file would be the bucket's first `put-object`, and Step 20 is where that promise is kept |
-| Lab 09 | `outputs/lab-09-bucket-policy-draft.json` | Exercise 5 validates its ARNs against the bucket that now exists |
-| Lab 09 | the identity-vs-resource-policy distinction | Step 18 is the same distinction applied to Lambda, and says so |
+A student requests `/transcripts/2026/stu-00417.json`. At the CloudFront edge, `usms-edge-viewer-request` runs before the cache: it lowercases the URI (one cache entry per object) and returns a `403` itself if the authentication header is missing, so the origin is never contacted. On a cache miss CloudFront fetches from `usms-student-data`, and `usms-edge-origin-response` adds the security headers a bucket does not provide. Separately, every upload under `transcripts/` triggers the regional `usms-transcript-notifier`.
+
+Edge functions are for the request path; regional functions are for what happens afterwards. This lab builds Lambda@Edge and explains the lighter CloudFront Functions runtime, because choosing between them is the real decision.
 
 ---
 
-## 5. What We Are Building
-
-The transcript delivery path, end to end.
-
-A student's browser asks for `/transcripts/2026/stu-00417.json`. That request arrives at the nearest
-CloudFront edge location. Before CloudFront looks in its cache, `usms-edge-viewer-request` runs: it
-checks for the header the USMS portal attaches to authenticated requests, normalises the URI so that
-`/transcripts/2026/STU-00417.JSON` and `/transcripts/2026/stu-00417.json` are the same cache entry,
-and either returns the request for CloudFront to continue with, or returns a `403` response of its
-own - in which case the origin is never contacted at all.
-
-If the request continues and CloudFront has no cached copy, it fetches the object from
-`usms-student-data`. On the way back, `usms-edge-origin-response` runs and attaches the security
-headers that a static file served from a bucket does not have by itself.
-
-Separately, whenever anything is written into `transcripts/` in that bucket, S3 invokes
-`usms-transcript-notifier`, which is where the results-notification logic will eventually live.
-
-Three functions, two of them at the edge, one of them regional - and that split is the lesson.
-Edge functions are for the request path. Regional functions are for what happens afterwards.
-
----
-
-## 6. Architecture
+## 5. Architecture
 
 ```text
                     STUDENT'S BROWSER
@@ -274,7 +158,7 @@ in the cache and served to everyone afterwards.
 
 ---
 
-## 7. Directory Structure
+## 6. Directory Structure
 
 What this lab adds. Nothing is restructured; `manifests/` from Lab 07 is untouched.
 
@@ -307,9 +191,9 @@ aws-floci-course/
 ├── scripts/
 │   ├── utilities/
 │   │   ├── usms-edge-simulate.sh     # Step 16
-│   │   └── verify-lab-10.sh          # Section 9
+│   │   └── verify-lab-10.sh          # Section 8
 │   └── cleanup/
-│       └── lab-10-cleanup.sh         # Section 16 - DO NOT RUN NOW
+│       └── lab-10-cleanup.sh         # Section 8.2 - DO NOT RUN NOW
 │
 └── outputs/                          # git-ignored, nothing here is committed
     ├── usms-edge-viewer-request.zip        ├── lab-10-support-probe.txt
@@ -329,23 +213,18 @@ written to `outputs/`, which is git-ignored, because a `.zip` rebuilt from commi
 something to commit.
 
 ---
-## 8. Step-by-Step Implementation
+
+## 7. Step-by-Step Implementation
+
+!!! info "Run every command from `aws-floci-course/`"
+    All paths are relative to the repository root. If a command reports `No such file or directory`, check `pwd`.
+
+!!! tip "Shell variables die with the terminal"
+    Every ARN and version is captured with `$(...)`. Step 23 writes them to `configs/lab-10.env`; until then, a new terminal loses them.
 
 ### Step 1 - Start the environment and prove a new terminal can find it
 
-**Purpose**
-
-Everything after this assumes Floci is running with persistent storage and that your shell knows
-where the course is. Both have failed silently for students before, in ways whose symptoms appear
-several steps later attributed to something else.
-
-**Run from**
-
-```text
-aws-floci-course/
-```
-
-**Command**
+Everything below assumes Floci is running with persistent storage and your shell knows where the course is.
 
 ```bash
 cd ~/aws-floci-course
@@ -353,15 +232,7 @@ cd ~/aws-floci-course
 ./scripts/utilities/floci-storage-check.sh
 ```
 
-**What the command does**
-
-`floci-up.sh` starts the Compose project if it is not running and adopts it if it is. It is
-idempotent, so running it when Floci is already up costs you two seconds and changes nothing. It
-refuses to adopt a container that was not started by Compose, which is the guard against a stray
-`floci start` from a previous term.
-
-`floci-storage-check.sh` is read-only. Its first block answers "can a new terminal find the course",
-its second answers "will today's work survive tonight".
+`floci-up.sh` is idempotent and refuses to adopt a container not started by Compose. `floci-storage-check.sh` is read-only: its first block checks that a new terminal can find the course, its second that today's work will survive.
 
 **Expected result**
 
@@ -371,30 +242,13 @@ PASS=16  FAIL=0
 
 > Example output - the lines above the total name your own paths and login shell.
 
-**Verify**
-
-Any failure in the first block is the real problem, and most failures below it are a consequence of
-it. Fix the shell integration before continuing: Errata 01 Patch 1 is the step that installs it
-properly.
+Any failure in the first block is the real problem. Fix the shell integration first (Errata 01 Patch 1).
 
 ---
 
 ### Step 2 - Source every lab environment file that exists, and confirm your identity
 
-**Purpose**
-
-This lab needs `USMS_BUCKET_NAME` and `USMS_ROLE_LAMBDA` from Lab 1, and it also reuses artefacts from
-Lab 06, Lab 07, Lab 08 and Lab 09. A loop that checks each file's existence before sourcing it turns a
-missing file into a specific, named line of output instead of a `command not found` several steps
-later with no obvious cause.
-
-**Run from**
-
-```text
-aws-floci-course/
-```
-
-**Command**
+This lab needs `USMS_BUCKET_NAME` and `USMS_ROLE_LAMBDA` from Lab 1 and reuses artefacts from Labs 06 to 09. Checking each file before sourcing it turns a missing file into a named line of output.
 
 ```bash
 source configs/course.env
@@ -414,16 +268,7 @@ done
 ./scripts/utilities/whoami.sh
 ```
 
-**What the command does**
-
-The `for` loop is deliberately not `source configs/lab-*.env`. A glob would silently source a file
-you did not intend - a stray `lab-04.env` left over from the superseded Lab 04 document, say - and
-would give you no report of what it did. Naming the files makes the output a statement about the
-state of your repository.
-
-`whoami.sh` prints the caller identity and the endpoint, and exits `1` unless the account is
-`000000000000`. It is the last thing standing between a mistyped endpoint and a command that reaches
-real AWS.
+The files are named, not globbed, so nothing stray is sourced and the output reports exactly what was loaded. `whoami.sh` exits `1` unless the account is `000000000000`.
 
 **Expected result**
 
@@ -455,28 +300,13 @@ printf 'lambda role  : %s\n' "${USMS_ROLE_LAMBDA:-<UNSET>}"
 printf 'account id   : %s\n' "${USMS_ACCOUNT_ID:-<UNSET>}"
 ```
 
-**What to look for:** three populated values. `usms-student-data`, `usms-lambda-exec-role` and
-`000000000000`. If `USMS_BUCKET_NAME` is unset, `configs/lab-01.env` predates the convention; set it
-now with `export USMS_BUCKET_NAME=usms-student-data` and add the line to that file, because Step 5
-and every verification afterwards read it.
+You want `usms-student-data`, `usms-lambda-exec-role` and `000000000000`. If `USMS_BUCKET_NAME` is unset, run `export USMS_BUCKET_NAME=usms-student-data` and add that line to `configs/lab-01.env`; Step 5 and the verification read it.
 
 ---
 
 ### Step 3 - Create this lab's directories
 
-**Purpose**
-
-Three directories for source code, and nothing else new. Creating them in one deliberate step means
-no later step fails on a missing parent directory, which is failure mode number one from the course's
-teaching philosophy.
-
-**Run from**
-
-```text
-aws-floci-course/
-```
-
-**Command**
+One directory per function, because each deployment archive is built from its own directory.
 
 ```bash
 mkdir -p labs/lab-10-lambda-edge/edge-viewer-request \
@@ -486,12 +316,7 @@ mkdir -p labs/lab-10-lambda-edge/edge-viewer-request \
 ls -d labs/lab-10-lambda-edge/*/
 ```
 
-**What the command does**
-
-`mkdir -p` creates parents as needed and does not complain if the directory already exists, which
-makes this step safe to re-run. Each function gets its own directory because a deployment archive is
-built from a directory, and a single directory holding three handlers would produce three archives
-that each contain all three files.
+`mkdir -p` creates parents and is safe to re-run.
 
 **Expected result**
 
@@ -511,23 +336,7 @@ test -d labs/lab-10-lambda-edge/edge-viewer-request && echo "source tree ready"
 
 ### Step 4 - Find out what this Floci build actually supports
 
-**Purpose**
-
-This lab depends on three services. Lambda is well emulated and you will see it work. S3 is well
-emulated. CloudFront is the one that varies most between builds, and Lambda@Edge - the association
-of a function with a distribution trigger - is not executed by any emulator at all. Establishing
-that now, in writing, means that when Step 15 behaves differently on your machine than on the one
-next to you, you already know why.
-
-This is the course's rule applied to a whole lab: find out what is true before depending on it.
-
-**Run from**
-
-```text
-aws-floci-course/
-```
-
-**Command**
+Lambda and S3 are well emulated. CloudFront varies most between builds, and no emulator executes Lambda@Edge. Record what your build supports before depending on it.
 
 ```bash
 probe() {   # $1 = label, $2 = command to try
@@ -549,19 +358,7 @@ probe() {   # $1 = label, $2 = command to try
 } | tee outputs/lab-10-support-probe.txt
 ```
 
-**What the command does**
-
-`probe` runs a harmless read-only call and reports only whether it returned zero. It deliberately
-does not print the error, because the errors differ between builds and the only decision this output
-drives is which path you take later.
-
-`{ ...; } | tee file` groups the commands so that a single pipe captures all of their output.
-Lab 09 introduced this pattern; it is here because you want this record in `outputs/` when you come
-to write up the lab.
-
-The one probe worth explaining: `aws lambda list-layers` is separate from `list-functions` because
-some builds implement the function API and not the layer API, and a student who assumes one from the
-other loses an hour in Exercise 4.
+`probe` runs a harmless read-only call and reports only whether it returned zero. `{ ...; } | tee file` captures the whole group into `outputs/`. `list-layers` is probed separately because some builds implement functions but not layers.
 
 **Expected result**
 
@@ -579,9 +376,7 @@ Floci support probe for Lab 10 - 2026-09-16T04:12:07Z
 > Example output - your build may report CloudFront as SUPPORTED. Either answer is normal and the
 > lab handles both.
 
-**What to look for:** the first four lines must say `SUPPORTED`. If `lambda (list-functions)` says
-`UNSUPPORTED`, stop and read Section 11 - the rest of this lab cannot proceed, and the cause is
-almost always that Floci is still starting.
+The first four lines must say `SUPPORTED`. If `lambda (list-functions)` is `UNSUPPORTED`, stop and read Section 10; Floci is usually still starting.
 
 The CloudFront line decides which path Step 15 takes:
 
@@ -590,38 +385,13 @@ The CloudFront line decides which path Step 15 takes:
 | `SUPPORTED` | Path A - create the distribution and read the associations back from the API |
 | `UNSUPPORTED` | Path B - validate the distribution config structurally and record it for real AWS |
 
-Either way Step 16 is what actually proves your two functions compose, so nobody is left without a
-result.
+Either way, Step 16 proves your two functions compose.
 
 ---
 
 ### Step 5 - Create the origin bucket, and watch a policy stop being hypothetical
 
-**Purpose**
-
-`usms-student-data` is the origin CloudFront will fetch from, and the bucket whose objects will
-trigger the notifier. It is also the resource that Lab 1's `USMSStudentDataReadWrite` has named since
-the first day of this course without ever resolving to anything.
-
-**Run from**
-
-```text
-aws-floci-course/
-```
-
-**Concept first - what "the bucket does not exist" has meant until now**
-
-An IAM policy names resources by ARN. It does **not** require them to exist. You can write, attach
-and audit a policy granting `s3:PutObject` on `arn:aws:s3:::usms-student-data/*` in an account with
-no buckets at all, and every IAM call will succeed.
-
-That is not a bug, it is the point: identity policies are written about a namespace, not about an
-inventory. But it has a consequence students find genuinely disorienting, and it is worth naming.
-For five labs, `USMSStudentDataReadWrite` has been attached to real roles, audited, counted and
-reasoned about - and it has been granting access to nothing. The policy was never wrong. It was
-waiting.
-
-**Command**
+`usms-student-data` is the CloudFront origin and the bucket whose uploads trigger the notifier. An IAM policy names resources by ARN and does not require them to exist, so `USMSStudentDataReadWrite` has been attached and audited for several labs while granting access to nothing. It was never wrong; it was waiting.
 
 ```bash
 BUCKET="${USMS_BUCKET_NAME:-usms-student-data}"
@@ -637,37 +407,10 @@ aws s3api put-bucket-tagging \
 echo "$BUCKET"
 ```
 
-**What the command does**
-
-```text
-aws
- └── s3api                 the SERVICE, low-level: one subcommand per API call
-      └── create-bucket    the OPERATION
-           └── --bucket    an OPTION - the bucket name, which IS its identifier
-```
-
-Lab 04's reading-ahead note mentioned `aws s3` versus `aws s3api`. The short form: `aws s3` is a
-small set of file-transfer verbs (`cp`, `sync`, `ls`) built for humans moving files; `aws s3api` maps
-one-to-one onto the S3 REST API and is what you use when you care about a specific parameter. This
-course uses `s3api` for anything structural and `s3` only where it genuinely reads better.
-
-Two things about `create-bucket` that catch people:
-
-**There is no `--region` and no `--create-bucket-configuration` here, and that is correct.**
-`us-east-1` is S3's original region, and its API treats it as the default. Passing
-`--create-bucket-configuration LocationConstraint=us-east-1` is an error on real AWS - it is the one
-region where you must *omit* the constraint. Every other region requires it. Floci is lenient about
-this; real AWS is not, so learn it here.
-
-**Bucket names are globally unique across every AWS account on earth.** Not per-account, not
-per-region - global. `usms-student-data` is almost certainly taken on real AWS. In Floci the
-namespace is your own machine, so it works; when you do this for real you will be appending
-something account-specific. The habit to take away is that a bucket name is a public identifier and
-should not encode anything you would not put on a postcard.
-
-The `head-bucket ... && ... || ...` construction makes the step idempotent. `head-bucket` returns
-non-zero when the bucket is absent, which is exactly the probe Lab 3 Section 17 and Lab 09 Step 6
-told you would eventually flip.
+- `aws s3api` maps one-to-one onto the S3 API; `aws s3` is a small set of file-transfer verbs. This course uses `s3api` for structural work.
+- No `--create-bucket-configuration` in `us-east-1`: it is the one region where you must **omit** `LocationConstraint` (real AWS rejects it; Floci is lenient).
+- Bucket names are **globally** unique across all accounts. `usms-student-data` works in Floci but is almost certainly taken on real AWS.
+- `head-bucket ... && ... || ...` makes the step idempotent.
 
 **Expected result**
 
@@ -695,8 +438,7 @@ aws iam get-policy-version \
   --query 'PolicyVersion.Document.Statement[].Resource' --output json
 ```
 
-**What to look for:** `head-bucket` exits `0` - for the first time in this course. The tag table
-shows three rows. And the last command prints the ARNs the policy has always named:
+`head-bucket` exits `0` for the first time in this course, the tag table shows three rows, and the last command prints the ARNs the policy has always named:
 
 ```text
 [
@@ -710,22 +452,14 @@ shows three rows. And the last command prints the ARNs the policy has always nam
 > Example output - your policy may split bucket and object ARNs across two statements, which is the
 > shape Lab 1 described.
 
-Look at those two strings and at the bucket you just created. They are the same name. As of this
-step, every role carrying that policy - `usms-ec2-app-role`, `usms-ecs-task-role`, and
-`usms-eks-node-role` from the EKS build in Labs 07 and 08 - has real permissions on a real resource.
-That is the single most important sentence in this lab, and it took several labs to earn.
+They match the bucket you just created. From this step on, every role carrying that policy (`usms-ec2-app-role`, `usms-ecs-task-role`, `usms-eks-node-role`) has real permissions on a real resource.
 
 !!! note "Floci Limitation - the permission is still not enforced"
-    Floci accepts any non-empty credentials and does not evaluate IAM policies against requests.
-    The bucket now exists and the policy now resolves, but a caller with no permissions at all will
-    still be able to read it here.
+    Floci does not evaluate IAM policies, so even a caller with no permissions can read the bucket here.
 
-    Real AWS evaluates every request against identity policies, resource policies, boundaries and
-    session policies, and denies by default.
+    Real AWS evaluates every request against identity policies, resource policies, boundaries and session policies, and denies by default.
 
-    The takeaway is the one Lab 09 made: judge your policies by reading them, not by whether the
-    command succeeded. What changed in this step is real and checkable - the ARN now resolves - and
-    it changed in IAM's data, not in Floci's enforcement.
+    Judge your policies by reading them. What changed in this step (the ARN now resolves) changed in IAM's data, not in Floci's enforcement.
 
 **Checkpoint 1**
 
@@ -741,36 +475,14 @@ usms-student-data                       ← EXISTS, at last
 
 ### Step 6 - Read the execution role back, and give it the edge principal
 
-**Purpose**
-
-Lab 1 created `usms-lambda-exec-role` and nothing has used it since. Before attaching it to three
-functions you should know what it permits, and you must fix one thing about it: its trust policy
-names only `lambda.amazonaws.com`, and a Lambda@Edge function is invoked by a second service
-principal as well.
-
-**Run from**
-
-```text
-aws-floci-course/
-```
-
-**Concept first - two principals, because two services replicate your function**
-
-When you associate a function with a CloudFront trigger, CloudFront does not call your function in
-`us-east-1` on every request. It **replicates** the function's code and configuration out to the edge
-locations, and the replicas are invoked there by CloudFront's own machinery. That replication is
-performed by a distinct service principal, `edgelambda.amazonaws.com`.
-
-So the execution role has to be assumable by two services:
+Lab 1 created `usms-lambda-exec-role` and nothing has used it since. Its trust policy names only `lambda.amazonaws.com`, but CloudFront replicates Lambda@Edge functions to edge locations using a second principal:
 
 | Principal | Why it needs to assume the role |
 | --- | --- |
 | `lambda.amazonaws.com` | The ordinary Lambda service, when it runs the function |
 | `edgelambda.amazonaws.com` | CloudFront's replication and edge invocation path |
 
-Omitting the second is the single most common Lambda@Edge setup error on real AWS. The distribution
-update fails with a message about the function not being assumable, and people go and look at the
-function.
+Omitting `edgelambda.amazonaws.com` is the most common Lambda@Edge setup error on real AWS.
 
 **Command - part 1, read what the role currently is**
 
@@ -804,9 +516,7 @@ aws iam list-attached-role-policies --role-name "$ROLE_NAME" \
 
 > Example output - your ARNs and dates will differ.
 
-**What to look for:** one principal, and one attached policy. `USMSLambdaBasic` grants CloudWatch
-Logs writes and `s3:GetObject`. That is the whole budget your three functions have to live inside,
-and the notifier in Step 17 is written to respect it.
+One principal and one policy. `USMSLambdaBasic` grants CloudWatch Logs writes and `s3:GetObject`; that is the whole budget for your three functions.
 
 **Command - part 2, write the two-principal trust policy**
 
@@ -833,16 +543,7 @@ EOF
 python3 -m json.tool policies/trust-lambda-edge.json > /dev/null && echo "valid JSON"
 ```
 
-**What the command does**
-
-`<< 'EOF'` - **quoted**. This is a policy document, and nothing in it should be expanded by the
-shell. If you wrote `<< EOF` here, the document would still be valid JSON and nothing would appear
-to go wrong; the failure mode of getting this backwards is silent, which is why the course restates
-it every time it matters. The contrast comes in Step 23, where the heredoc writing
-`configs/lab-10.env` is deliberately **unquoted** because you want `$(...)` to run.
-
-`"Principal": {"Service": [...]}` takes a list. Two entries here; one is the more common form and
-both are valid.
+**Quoted heredoc** (`<< 'EOF'`): this is a policy document and nothing should be expanded. Getting it backwards is silent. Step 23 deliberately uses the unquoted form because it wants `$(...)` to run.
 
 **Command - part 3, replace the trust policy**
 
@@ -857,22 +558,7 @@ EDGE_ROLE_ARN=$(aws iam get-role --role-name "$ROLE_NAME" \
 echo "$EDGE_ROLE_ARN"
 ```
 
-**What the command does**
-
-`update-assume-role-policy` **replaces** the trust policy wholesale. There is no add-principal call.
-This is why part 2 wrote both principals rather than the one that was missing: an update that named
-only `edgelambda.amazonaws.com` would have removed the ordinary Lambda principal and broken the role
-for every non-edge use.
-
-`file://` reads the document from disk. That is not cosmetic - a JSON policy passed inline has to
-survive your shell's quoting, and every course that teaches inline policies produces a cohort that
-cannot tell a quoting error from a policy error.
-
-`EDGE_ROLE_ARN` is captured with `$(...)` rather than copied by hand, per the rule from Lab 1. It is
-also the first of several shell variables this lab depends on, so it is worth saying the thing the
-course says once per lab: **shell variables die with the terminal.** Close this window and
-`EDGE_ROLE_ARN` is gone. That is precisely why Step 23 writes everything durable into
-`configs/lab-10.env`.
+`update-assume-role-policy` **replaces** the whole trust policy; there is no add-principal call. That is why part 2 lists both principals: naming only `edgelambda` would remove `lambda` and break the role.
 
 **Expected result**
 
@@ -893,21 +579,14 @@ aws iam get-role --role-name "$ROLE_NAME" \
   --output text
 ```
 
-**What to look for:** `2`, then `edgelambda.amazonaws.com`. If the first returns `1`, the update did
-not apply; if it returns nothing at all, your build stores the trust document as a string rather than
-an object - re-read it with `--query 'Role.AssumeRolePolicyDocument' --output json` and check by eye.
+You want `2`, then `edgelambda.amazonaws.com`. If the first prints `1`, the update did not apply; if it prints nothing, read the document with `--query 'Role.AssumeRolePolicyDocument' --output json` and check by eye.
 
 !!! note "Floci Limitation - trust policies are stored, not evaluated"
-    Floci records the document faithfully and will hand it back to you, but it does not perform the
-    trust evaluation when a service invokes your function. A function with an empty trust policy
-    will still run here.
+    Floci returns the document faithfully but does not evaluate it; a function with an empty trust policy still runs here.
 
-    Real AWS refuses `create-function` outright if the role cannot be assumed by
-    `lambda.amazonaws.com`, and refuses the CloudFront association if `edgelambda.amazonaws.com` is
-    missing.
+    Real AWS refuses `create-function` if `lambda.amazonaws.com` cannot assume the role, and refuses the CloudFront association if `edgelambda.amazonaws.com` is missing.
 
-    Take away the two-principal requirement itself. It is a fact about Lambda@Edge, not about the
-    emulator, and it is checkable by reading - which is what the verify above did.
+    The two-principal requirement is a fact about Lambda@Edge, checkable by reading, as the verify above did.
 
 **Checkpoint 2**
 
@@ -923,21 +602,7 @@ usms-lambda-exec-role
 
 ### Step 7 - Write the viewer-request handler
 
-**Purpose**
-
-This is the function that runs on every request before the cache is consulted. It decides who gets a
-transcript, and it makes the cache work properly by normalising the URI. It is also where you meet
-the CloudFront event structure, which is unlike any other Lambda event you will see.
-
-**Run from**
-
-```text
-aws-floci-course/
-```
-
-**Concept first - the CloudFront event, and the header shape**
-
-A Lambda@Edge function receives an event with exactly one record:
+This function runs on every request before the cache. It decides who gets a transcript and normalises the URI. The CloudFront event has one record:
 
 ```text
 event
@@ -948,7 +613,7 @@ event
            └── response  ← present ONLY at origin-response and viewer-response
 ```
 
-Your handler returns one of three things, and which are legal depends on the trigger point:
+What you may return depends on the trigger point:
 
 | Return value | Meaning | Legal at |
 | --- | --- | --- |
@@ -956,8 +621,7 @@ Your handler returns one of three things, and which are legal depends on the tri
 | a `response` object | stop here, send this to the viewer | viewer-request, origin-request |
 | the `response` object | continue, with this (possibly modified) response | origin-response, viewer-response |
 
-The header shape is the part everyone gets wrong first. Headers are **not** a map of strings. Each
-header name is a lowercase key whose value is an **array of objects**, each with `key` and `value`:
+Headers are **not** a map of strings. Each lowercase key holds an **array** of `{key, value}` objects (HTTP allows repeated headers):
 
 ```text
 "headers": {
@@ -966,13 +630,7 @@ header name is a lowercase key whose value is an **array of objects**, each with
 }
 ```
 
-The outer key is lowercase because HTTP header names are case-insensitive and CloudFront normalises
-them so your code can look them up reliably. The inner `key` preserves the original casing so that
-it can be sent on to an origin that cares. The array exists because HTTP permits a header to appear
-more than once. Reading `headers['x-usms-student'].value` returns `undefined` and is the single most
-common bug in a first edge function; you want `headers['x-usms-student'][0].value`.
-
-**Command**
+So `headers['x-usms-student'].value` is `undefined`; you want `headers['x-usms-student'][0].value`.
 
 ```bash
 cat > labs/lab-10-lambda-edge/edge-viewer-request/index.mjs << 'EOF'
@@ -1038,25 +696,9 @@ node --check labs/lab-10-lambda-edge/edge-viewer-request/index.mjs 2>/dev/null \
   || echo "node not installed locally - syntax will be checked by the first invoke"
 ```
 
-**What the command does**
-
-`<< 'EOF'` - **quoted**, and this time it is load-bearing rather than merely correct. Look at line 4
-of section 4 of the handler: it contains a JavaScript template literal with `${studentId...}` inside
-backticks. With an unquoted `<< EOF`, bash would expand `${studentId.toLowerCase()}` to an empty
-string before the file was ever written, and the backticks would be treated as command substitution.
-You would get a file that is valid JavaScript, deploys cleanly, runs without error, and silently
-stamps every request with an empty student id.
-
-That is the same class of failure as the persistence bug this course was rebuilt around: a command
-that appears to succeed, and does not do what you meant.
-
-The file is `index.mjs`, not `index.js`. The `.mjs` extension tells Node to treat the file as an ES
-module, which is what makes `export const handler` valid. The Lambda handler string will be
-`index.handler` - the filename without its extension, a dot, and the exported name.
-
-`node --check` parses the file without running it. If you have no local Node installation the
-fallback message is honest: the first invocation in Step 9 will fail loudly on a syntax error, which
-is a slower but perfectly adequate check.
+- **Quoted heredoc, and load-bearing:** the handler contains `${studentId.toLowerCase()}` inside a template literal. An unquoted heredoc would expand it to nothing, producing code that deploys and runs but stamps every request with an empty student id.
+- `.mjs` makes Node treat the file as an ES module, so `export const handler` is valid; the handler string is `index.handler`.
+- `node --check` parses without running. Without local Node, Step 9's first invoke catches syntax errors.
 
 **Expected result**
 
@@ -1074,41 +716,20 @@ grep -c 'studentId' labs/lab-10-lambda-edge/edge-viewer-request/index.mjs
 grep -n 'toLowerCase()}' labs/lab-10-lambda-edge/edge-viewer-request/index.mjs
 ```
 
-**What to look for:** around 50 lines, `studentId` appearing three times, and - this is the
-important one - the third command must print a line containing `${studentId.toLowerCase()}` with the
-dollar sign and braces **intact**. If it prints nothing, your heredoc was unquoted and bash ate the
-expression. Delete the file and run the command again with `<< 'EOF'`.
+Around 50 lines, `studentId` three times, and the third command must print `${studentId.toLowerCase()}` with the dollar sign and braces **intact**. If it prints nothing, delete the file and rerun with `<< 'EOF'`.
 
 ---
 
 ### Step 8 - Package the function and create it
 
-**Purpose**
-
-A Lambda function is code plus configuration. The code arrives as a ZIP archive; the configuration -
-runtime, handler, role, memory, timeout - arrives as flags. Choosing those flags deliberately is the
-difference between a function that can be promoted to the edge and one that cannot.
-
-**Run from**
-
-```text
-aws-floci-course/
-```
-
-**Concept first - the memory and timeout caps are not defaults, they are limits**
-
-Lambda's defaults are 128 MB and 3 seconds. Lambda@Edge's *limits* depend on which trigger point the
-function is associated with:
+A Lambda function is code (a ZIP archive) plus configuration (flags). Lambda's defaults are 128 MB and 3 seconds, but Lambda@Edge **limits** depend on the trigger point:
 
 | Trigger point | Max memory | Max timeout | Max response body |
 | --- | --- | --- | --- |
 | `viewer-request`, `viewer-response` | 128 MB | 5 seconds | 40 KB |
 | `origin-request`, `origin-response` | 10,240 MB | 30 seconds | 1 MB |
 
-A viewer-trigger function configured with 256 MB is not slow - it is **rejected** when you try to
-associate it. So the memory and timeout you pass below are chosen for the trigger point, not picked
-out of the air, and that is the habit worth forming: configuration that encodes a constraint should
-be written down at the moment the constraint applies.
+A viewer-trigger function with 256 MB is not slow; it is **rejected** at association time. Choose memory and timeout for the trigger point.
 
 **Command - part 1, build the archive**
 
@@ -1119,29 +740,12 @@ be written down at the moment the constraint applies.
 python3 -m zipfile -l outputs/usms-edge-viewer-request.zip
 ```
 
-**What the command does**
-
-The subshell - the `( ... )` - is doing real work. `python3 -m zipfile -c archive.zip index.mjs`
-stores the entry under the **path you gave it**, so running it from the repository root with
-`labs/lab-10-lambda-edge/edge-viewer-request/index.mjs` would produce an archive containing that
-whole path, and Lambda would look for `index.mjs` at the archive root and not find it. The error you
-get - `Cannot find module 'index.mjs'` - names the file, not the path, so it reads as though the file
-is missing when in fact it is present and buried.
-
-Wrapping the `cd` in a subshell means the directory change is scoped: when the parenthesis closes,
-your shell is back where it was. The alternative, a bare `cd` followed by `cd -`, works right up
-until the command in the middle fails and the `cd -` never runs - which is the anti-pattern the
-course's rules call "a `cd` that never comes back".
-
-`python3 -m zipfile` rather than `zip` because `python3` is a prerequisite of this course and `zip` is
-not installed on every minimal Linux image. If you have `zip`, this is the equivalent:
+The subshell `( cd ... && ... )` matters: the archive stores the path you pass, so zipping from the repository root would bury `index.mjs` under `labs/...` and Lambda would report `Cannot find module`. The subshell also returns you to where you were even if the command fails. If you have `zip`, this is equivalent (`-j` drops paths):
 
 ```bash
 ( cd labs/lab-10-lambda-edge/edge-viewer-request \
   && zip -j "$COURSE_ROOT/outputs/usms-edge-viewer-request.zip" index.mjs )
 ```
-
-`-j` means "junk the paths", storing the basename only - the same property the subshell gives you.
 
 **Expected result**
 
@@ -1152,8 +756,7 @@ index.mjs                                      2026-09-16 10:22:14         1893
 
 > Example output - your size and timestamp will differ.
 
-**What to look for:** one entry, named exactly `index.mjs`, with no directory prefix. That single
-line is the difference between a function that runs and a two-hour debugging session.
+One entry, named exactly `index.mjs`, with no directory prefix.
 
 **Command - part 2, create the function**
 
@@ -1176,40 +779,10 @@ VIEWER_FN_ARN=$(aws lambda create-function \
 echo "$VIEWER_FN_ARN"
 ```
 
-**What the command does**
-
-```text
-aws
- └── lambda                the SERVICE
-      └── create-function  the OPERATION
-           ├── --runtime        which language runtime executes your code
-           ├── --role           the EXECUTION role: what your code may do
-           ├── --handler        <file-without-extension>.<exported-name>
-           ├── --zip-file       the code, as bytes
-           ├── --timeout        seconds before Lambda kills the invocation
-           └── --memory-size    MB - also determines the CPU share you get
-```
-
-Four of those deserve more than a line.
-
-**`--zip-file fileb://`, with the `b`.** `file://` reads a file as **text** and hands it to the CLI as
-a string. `fileb://` reads it as **binary** and hands over the raw bytes. A ZIP archive is binary;
-reading it as text corrupts it, usually with an error about an invalid base64 string or an unzip
-failure. This is the first time the course has needed `fileb://` and it will come back in Step 9 for
-the invocation payload.
-
-**`--runtime nodejs20.x`.** Lambda@Edge supports Node.js and Python only - no Go, no Java, no custom
-runtimes, no container images. That is a real restriction and it is the reason this lab's two edge
-functions are JavaScript while the regional notifier in Step 17 is Python: the contrast is the point.
-
-**`--handler index.handler`.** Two parts separated by a dot. `index` is the module -
-`index.mjs` with the extension dropped. `handler` is the name you exported. Change the filename and
-you must change this flag; the error when you do not is `Cannot find module 'index'`.
-
-**`--memory-size 128` and `--timeout 5`.** Chosen from the viewer-trigger row of the table above, not
-from the defaults. Note that memory on Lambda is also the CPU dial - you do not allocate vCPU
-separately; more memory means proportionally more CPU. At 128 MB you have the smallest slice
-available, which for a function that reads two headers and returns is correct.
+- `--zip-file fileb://`: `fileb://` reads **binary**; `file://` reads text and corrupts a ZIP.
+- `--runtime nodejs20.x`: Lambda@Edge supports only Node.js and Python, no containers or custom runtimes.
+- `--handler index.handler`: `<file without extension>.<exported name>`.
+- `--memory-size 128 --timeout 5`: the viewer-trigger caps. Memory also sets the CPU share.
 
 **Expected result**
 
@@ -1231,7 +804,7 @@ aws lambda get-function-configuration --function-name "$VIEWER_FN" \
   --output table
 ```
 
-**What to look for:**
+You want:
 
 ```text
 ------------------------------------------------------------------------------
@@ -1250,24 +823,13 @@ aws lambda get-function-configuration --function-name "$VIEWER_FN" \
 
 > Example output - `State` may be absent on some builds, which is not an error.
 
-`State` should be `Active`. If it says `Pending`, Floci is still pulling the runtime image; wait ten
-seconds and re-run. `Version` says `$LATEST`, which is the mutable pointer at whatever code you last
-uploaded - and in Step 11 you will see why the edge refuses to accept it.
+`State` should be `Active` (`Pending` means the runtime image is still downloading; wait ten seconds). `Version` is `$LATEST`, the mutable pointer the edge will refuse (Step 11).
 
 ---
+
 ### Step 9 - Invoke the function with a real CloudFront event
 
-**Purpose**
-
-A function you have not invoked is a function you have not written. This step builds the event
-CloudFront would actually deliver, sends it, and reads what came back - which is the only way to
-find out whether your handler understands the header shape.
-
-**Run from**
-
-```text
-aws-floci-course/
-```
+Build the event CloudFront would deliver, send it, and read the result.
 
 **Command - part 1, write the event**
 
@@ -1309,21 +871,7 @@ EOF
 python3 -m json.tool templates/lab-10-viewer-request-event.json > /dev/null && echo "valid JSON"
 ```
 
-**What the command does**
-
-This is a genuine CloudFront viewer-request event, trimmed of the fields your handler does not read.
-Three details are deliberate and each one is testing something:
-
-- The `uri` is `/transcripts/2026/STU-00417.json`, in **upper case**. Your handler lowercases it, so
-  the response will show a different URI than the request did. That is how you will know the
-  normalisation ran.
-- The `x-usms-student` header is present, so this event takes the allow path.
-- The header key is lowercase and its value is a one-element array of an object. If you had guessed
-  the shape, this is where the guess would be corrected.
-
-`203.0.113.178` is from `TEST-NET-3`, a range RFC 5737 reserves for documentation. Using a reserved
-range in example data is a small professional habit worth having: it can never collide with a real
-address, so it cannot be mistaken for one in a log or a bug report.
+The URI is deliberately upper case (the handler should lowercase it), the auth header is present (allow path), and `203.0.113.178` is from a range reserved for documentation (RFC 5737).
 
 **Command - part 2, invoke**
 
@@ -1338,23 +886,9 @@ aws lambda invoke \
 python3 -m json.tool outputs/lab-10-viewer-allow.json
 ```
 
-**What the command does**
-
-`aws lambda invoke` is unusual among AWS CLI commands: it takes a **positional argument**, the path
-of the file to write the function's response into. Everything the CLI prints on stdout is metadata
-about the invocation; the function's actual return value goes to that file. Students who expect the
-payload on stdout conclude that the function returned nothing.
-
-`--payload fileb://` again - the same `b` as in Step 8. The payload is declared as a blob in the API
-model, so the CLI expects bytes. `fileb://` supplies bytes. The alternative you will see in other
-people's scripts is `--payload file://event.json --cli-binary-format raw-in-base64-out`, which tells
-the CLI to treat text input as raw rather than base64; both work, and `fileb://` is shorter and
-harder to get wrong.
-
-`--query` here selects three fields out of the invocation metadata. `StatusCode` is the **HTTP**
-status of the invoke call, so `200` means "Lambda ran your function", not "your function succeeded".
-The field that answers the second question is `FunctionError`, which is absent on success and reads
-`Unhandled` when your code threw.
+- The final **positional argument** is the file that receives the function's return value; stdout carries only invocation metadata.
+- `--payload fileb://` supplies bytes, as Step 8 did. (`file://` plus `--cli-binary-format raw-in-base64-out` also works.)
+- `StatusCode` `200` means Lambda ran your function, not that it succeeded; `FunctionError` reads `Unhandled` if your code threw.
 
 **Expected result**
 
@@ -1404,13 +938,7 @@ The field that answers the second question is `FunctionError`, which is absent o
 
 **Verify**
 
-Three things to read, in order of importance:
-
-1. `Error` is `None`. Anything else and your function threw; Step 10 reads the stack trace.
-2. `uri` is now **lower case**. The normalisation ran.
-3. There is an `x-usms-edge` header that was not in the request, and its value ends `student=stu-00417`
-   - lower-cased, with the student id present. If it ends `student=` with nothing after it, your
-   heredoc in Step 7 was unquoted; go back and re-read that step's verify.
+Check, in order: `Error` is `None`; `uri` is **lower case**; and a new `x-usms-edge` header ends with `student=stu-00417`. If it ends `student=` with nothing after it, the Step 7 heredoc was unquoted.
 
 ```bash
 python3 -c "
@@ -1460,31 +988,7 @@ usms-edge-viewer-request
 
 ### Step 10 - Read the function's logs
 
-**Purpose**
-
-When a function misbehaves, the response tells you what it returned and the logs tell you why.
-Lambda gives you two routes to the logs, and the difference between them matters when you are
-debugging something that only fails occasionally.
-
-**Run from**
-
-```text
-aws-floci-course/
-```
-
-**Concept first - two ways to get logs, and when each is right**
-
-Every Lambda function writes to a CloudWatch Logs group named `/aws/lambda/<function-name>`, created
-automatically on first invocation. That group is the durable record and it is what you query when
-something failed an hour ago.
-
-`--log-type Tail` is the other route: it attaches the **last 4 KB** of that invocation's log output
-to the invoke response, base64-encoded, in a field called `LogResult`. It only works for synchronous
-invocations, it only gives you the tail, and it gives it to you immediately. For interactive
-debugging it is the better tool, because there is no delay between the invocation and the log being
-readable.
-
-**Command**
+Every function writes to the CloudWatch Logs group `/aws/lambda/<function-name>` (the durable record). `--log-type Tail` instead returns the **last 4 KB** of one synchronous invocation's log, base64-encoded in `LogResult`, immediately, which is better for interactive debugging.
 
 ```bash
 aws lambda invoke \
@@ -1496,16 +1000,7 @@ aws lambda invoke \
   | openssl base64 -d -A
 ```
 
-**What the command does**
-
-`--log-type Tail` asks for the log tail. `--query 'LogResult' --output text` prints only that field,
-unquoted, so it can be piped.
-
-`openssl base64 -d -A` decodes it. The course chose `openssl` over `base64` in Lab 3 for a reason
-that applies again here: GNU `base64` decodes with `-d` and BSD `base64` - the one on macOS - uses
-`-D`. A lab that hard-codes either one breaks half the room. `openssl base64` behaves the same on
-both, and `-A` tells it to accept the whole encoded blob as a single line, which is how Lambda sends
-it.
+`openssl base64 -d -A` decodes identically on macOS and Linux (`base64` uses `-D` on BSD and `-d` on GNU); `-A` accepts the single-line blob Lambda sends.
 
 **Expected result**
 
@@ -1517,14 +1012,7 @@ REPORT RequestId: 4c8e2b51-0a7f-4e1c-9d33-6d2a0f4b17aa	Duration: 18.42 ms	Billed
 
 > Example output - your request id, durations and memory figures will differ.
 
-**What to look for:** three lines, `START` / `END` / `REPORT`, with matching request ids. There is no
-application output because the handler never calls `console.log` - which is itself worth noticing:
-your function is silent by design, and in Step 17 the notifier will be the opposite.
-
-The `REPORT` line is the one to learn to read. `Duration` is how long your code ran; `Billed
-Duration` is what you pay for, rounded up; `Max Memory Used` against `Memory Size` is how you decide
-whether 128 MB was the right choice. For a viewer-trigger function it must be the right choice,
-because 128 MB is the ceiling.
+You want `START`, `END` and `REPORT` with matching request ids, and no application output (this handler never logs). In `REPORT`, compare `Max Memory Used` with `Memory Size`; 128 MB is the viewer-trigger ceiling anyway.
 
 **Verify - the durable route**
 
@@ -1537,34 +1025,17 @@ aws logs describe-log-groups \
 **What to look for:** one row, named `/aws/lambda/usms-edge-viewer-request`.
 
 !!! note "Floci Limitation - log delivery is build-dependent"
-    Some Floci builds return an empty `LogResult`, and some create the log group without writing
-    streams into it. If the decode above printed nothing, do not conclude that your function did not
-    run - Step 9 already proved it did, by returning a correctly modified request.
+    Some builds return an empty `LogResult`, or create the log group without streams. Step 9 already proved the function ran.
 
-    Real AWS always attaches `LogResult` to a synchronous invoke with `--log-type Tail`, and always
-    creates the group and stream.
+    Real AWS always attaches `LogResult` to a synchronous `--log-type Tail` invoke and always creates the group and stream.
 
-    If logs are unavailable on your build, note it in `outputs/lab-10-support-probe.txt` and use the
-    returned payload as your evidence throughout this lab. Section 11 has the fallback for Step 21,
-    which is the step that actually depends on logs.
+    If logs are unavailable, note it in `outputs/lab-10-support-probe.txt` and use returned payloads as evidence. Section 10 has the fallback for Step 21, which depends on logs.
 
 ---
 
 ### Step 11 - Publish a version, and find out why the edge insists on one
 
-**Purpose**
-
-`$LATEST` is a mutable pointer. Everything you have built so far can be changed by the next
-`update-function-code`, retroactively, everywhere. CloudFront will not accept that, and the reason is
-worth more than the command.
-
-**Run from**
-
-```text
-aws-floci-course/
-```
-
-**Concept first - three ways to name a function, and what the edge accepts**
+`$LATEST` is mutable. CloudFront accepts only an immutable version:
 
 | How you refer to it | What it points at | Accepted by Lambda@Edge? |
 | --- | --- | --- |
@@ -1572,21 +1043,7 @@ aws-floci-course/
 | `...:function:usms-edge-viewer-request:live` | an alias - a movable label | No |
 | `...:function:usms-edge-viewer-request:1` | version 1 - immutable, forever | Yes |
 
-A published version freezes the code **and** the configuration - runtime, handler, memory, timeout,
-role, environment variables. Nothing about version 1 can ever change. You can delete it; you cannot
-edit it.
-
-Now the reason CloudFront requires that. When you associate a function, CloudFront copies it to every
-edge location in the price class - hundreds of points of presence. That replication takes minutes and
-it is not transactional. If the ARN could move underneath it, you would have a window during which
-different edge locations ran different code, with no way to say which request got which. Requiring an
-immutable ARN turns "what is deployed" into a question with one answer.
-
-This is also why an **alias** is refused even though an alias looks stable. An alias is designed to
-be repointed; that is its entire purpose. A thing designed to move cannot be the thing that pins a
-distributed rollout.
-
-**Command**
+A published version freezes code **and** configuration forever. CloudFront replicates the function to hundreds of edge locations over minutes, non-transactionally; if the ARN could move during that, different locations would run different code. An alias is refused for the same reason: it is designed to be repointed.
 
 ```bash
 VIEWER_VERSION=$(aws lambda publish-version \
@@ -1600,14 +1057,7 @@ printf 'version      : %s\n' "$VIEWER_VERSION"
 printf 'qualified ARN: %s\n' "$VIEWER_VERSION_ARN"
 ```
 
-**What the command does**
-
-`publish-version` snapshots `$LATEST` and returns the new version number as a string of digits.
-Versions are assigned sequentially by Lambda and start at `1`; you do not choose the number.
-
-`"${VIEWER_FN_ARN}:${VIEWER_VERSION}"` builds the qualified ARN by concatenation rather than by a
-second API call. The unqualified ARN plus a colon plus the version is exactly the qualified form,
-which is a useful thing to know because you will see it in CloudFront error messages.
+`publish-version` snapshots `$LATEST` and returns the next sequential number. The qualified ARN is the unqualified ARN plus `:<version>`.
 
 **Expected result**
 
@@ -1629,20 +1079,14 @@ printf '%s' "$VIEWER_VERSION_ARN" | grep -qE ':[0-9]+$' \
   || echo "ARN is NOT version-qualified - the edge would refuse this"
 ```
 
-**What to look for:** two rows - `$LATEST` and `1` - and the message saying the ARN is
-version-qualified. That `grep -qE ':[0-9]+$'` is a small thing worth keeping: it is the static check
-that replaces an enforcement Floci does not perform, and it goes into the verification script in
-Section 9.
+You want two rows (`$LATEST` and `1`) and the version-qualified message. The `grep -qE ':[0-9]+$'` check replaces an enforcement Floci does not perform, and goes into the Section 8 verification script.
 
 !!! note "Floci Limitation - nothing here refuses an unqualified ARN"
-    Floci will happily record a CloudFront association pointing at `$LATEST` or at an alias, because
-    it does not implement the Lambda@Edge validation rules.
+    Floci records a CloudFront association pointing at `$LATEST` or an alias without complaint.
 
-    Real AWS rejects the `create-distribution` or `update-distribution` call outright, with
-    `InvalidLambdaFunctionAssociation`.
+    Real AWS rejects the `create-distribution` or `update-distribution` call with `InvalidLambdaFunctionAssociation`.
 
-    So the rule cannot be learned here by making the mistake. It has to be learned by checking - which
-    is what the `grep` above does, and what the verification script will do on every run.
+    You cannot learn this rule here by making the mistake, so check it, as the `grep` above does.
 
 **Checkpoint 4**
 
@@ -1657,34 +1101,7 @@ usms-edge-viewer-request
 
 ### Step 12 - Write and deploy the origin-response function
 
-**Purpose**
-
-A file served straight from a bucket arrives with the headers S3 chose and nothing else. No
-`Strict-Transport-Security`, no `X-Content-Type-Options`, no cache policy of your own. The
-origin-response trigger is where you fix that, once, for every object, without touching a single
-file.
-
-**Run from**
-
-```text
-aws-floci-course/
-```
-
-**Concept first - why this trigger and not one of the other three**
-
-You could add headers at `viewer-response`, which fires on the way out to the viewer. Do not, and the
-reason is the cache.
-
-`origin-response` fires after the origin replies and **before** CloudFront stores the object. The
-headers you add there are stored with the cached object and served from cache to everyone
-afterwards. Your function runs once per cache miss.
-
-`viewer-response` fires on the way to the viewer, after the cache. Headers added there are correct,
-but your function runs **on every single request**, cache hits included. For a static header set,
-that is a function invocation per request for a result that never varies.
-
-Same output, one of them costs a thousand times more. Choosing the trigger point *is* the design
-work at the edge.
+A file served from a bucket has no `Strict-Transport-Security`, `X-Content-Type-Options` or cache policy of your own. Add them at `origin-response`, which fires after the origin replies and **before** caching, so the headers are stored with the object and the function runs once per cache miss. At `viewer-response` it would run on every request, cache hits included, for the same output.
 
 **Command - part 1, the handler**
 
@@ -1747,20 +1164,9 @@ node --check labs/lab-10-lambda-edge/edge-origin-response/index.mjs 2>/dev/null 
   || echo "node not installed locally - syntax will be checked by the first invoke"
 ```
 
-**What the command does**
-
-`<< 'EOF'`, quoted, for the same reason as Step 7 and with the same consequence if you get it wrong:
-section 3 of the handler contains a template literal, and an unquoted heredoc would turn
-`${upstream[0].value}` into an empty string in a file that still deploys and still runs.
-
-The `for (const name of Object.keys(...))` loop rather than four assignments is not style. It means
-that adding a fifth security header is a one-line data change rather than a code change, and that the
-list of headers is a thing you can read in one place. Exercise 1 asks you to add one.
-
-Note what section 1 does **not** do: it does not check whether the header already exists. Overwriting
-is the deliberate choice, and the comment says why. A function that preserved an existing
-`X-Frame-Options` would let whoever uploaded an object decide the frame policy for the whole
-distribution.
+- Quoted heredoc again: section 3 contains `${upstream[0].value}`.
+- The `SECURITY_HEADERS` object makes adding a header a one-line data change (Exercise 1).
+- Headers are overwritten deliberately, so an uploader cannot set the frame policy for the whole distribution.
 
 **Command - part 2, package and create**
 
@@ -1786,15 +1192,7 @@ ORIGIN_FN_ARN=$(aws lambda create-function \
 echo "$ORIGIN_FN_ARN"
 ```
 
-**What the command does**
-
-Identical in shape to Step 8, which is the point - you have now seen the pattern twice and it will not
-be decomposed a third time.
-
-One deliberate choice to notice: 128 MB and 5 seconds again, even though an origin-trigger function
-is *allowed* 10,240 MB and 30 seconds. This function reads four headers and writes five; it does not
-need more. Sizing to the allowance rather than to the work is how a bill grows without anybody
-deciding anything.
+Same shape as Step 8. It keeps 128 MB and 5 seconds although origin triggers allow 10,240 MB and 30 seconds: size to the work, not to the allowance.
 
 **Expected result**
 
@@ -1812,24 +1210,13 @@ aws lambda get-function-configuration --function-name "$ORIGIN_FN" \
   --output table
 ```
 
-**What to look for:** `State` is `Active`, handler is `index.handler`, memory is `128`.
+You want `State` `Active`, handler `index.handler`, memory `128`.
 
 ---
 
 ### Step 13 - Invoke the origin-response function and publish its version
 
-**Purpose**
-
-The second function needs the same treatment as the first: invoke it with a real event of its own
-shape, confirm what it returns, then freeze it as a version. Its event is different from the
-viewer-request event in one structural way, and seeing that difference is most of the value of this
-step.
-
-**Run from**
-
-```text
-aws-floci-course/
-```
+Invoke the second function with an event of its own shape, confirm the result, then freeze it as a version.
 
 **Command - part 1, the origin-response event**
 
@@ -1883,21 +1270,9 @@ EOF
 python3 -m json.tool templates/lab-10-origin-response-event.json > /dev/null && echo "valid JSON"
 ```
 
-**What the command does**
-
-Two structural differences from the viewer-request event, and both are the trigger point showing
-through:
-
-- There is a `response` object. At `viewer-request` there is nothing to respond with yet; at
-  `origin-response` the origin has already answered and you are being shown its answer.
-- The `request` carries `x-usms-edge`, the header the viewer-request function stamped. That is the
-  mechanism by which two edge functions communicate: not shared state, not a database - the request
-  itself, carried forward through the chain.
-
-The `etag` value contains **escaped double quotes**, `\"...\"`. That is not a mistake. An HTTP ETag
-is quoted by specification, so the literal header value includes the quote characters, and inside a
-JSON string those have to be escaped. Getting this wrong produces invalid JSON, which is why the
-`python3 -m json.tool` check follows.
+- There is a `response` object: at `origin-response` the origin has already answered.
+- The `request` carries `x-usms-edge`, stamped by the viewer-request function. Edge functions communicate through the request itself.
+- The ETag value contains escaped quotes (`\"...\"`) because HTTP ETags are quoted; `json.tool` catches mistakes.
 
 **Command - part 2, invoke and publish**
 
@@ -1977,34 +1352,13 @@ print('origin-response: 4 security headers + cache-control + chain marker')
 "
 ```
 
-**What to look for:** the assertion script prints its success line, and the chain header reads
-`viewer-request-allow;student=stu-00417;origin-response`. That string is the first evidence in this
-lab that the two functions **compose** - the value the first one wrote has survived into the output
-of the second.
-
-Notice also what is preserved: `content-type`, `etag` and `server` came from the origin and are still
-there. Your function added to the response; it did not replace it. An edge function that returned a
-freshly built `headers` object would silently discard the origin's `Content-Type`, and the browser
-would guess.
+The assertion line prints, and the chain header reads `viewer-request-allow;student=stu-00417;origin-response`: the first evidence that the two functions **compose**. `content-type`, `etag` and `server` from the origin survive; the function adds to the response rather than replacing it.
 
 ---
 
 ### Step 14 - Check both functions against the Lambda@Edge restrictions
 
-**Purpose**
-
-Floci will let you configure an edge function in ways real AWS rejects. This step deliberately makes
-one of those mistakes, watches it succeed, and then undoes it - because a restriction you have only
-read about is one you will forget, and this is the one place in the lab where the emulator being
-*more* permissive than reality is a trap worth walking into on purpose.
-
-**Run from**
-
-```text
-aws-floci-course/
-```
-
-**Concept first - what Lambda@Edge takes away**
+Floci lets you configure an edge function in ways real AWS rejects. This step makes one such mistake on purpose, then undoes it and checks both functions statically.
 
 | Restriction | Regional Lambda | Lambda@Edge |
 | --- | --- | --- |
@@ -2018,15 +1372,7 @@ aws-floci-course/
 | Function URL | yes | no |
 | Referenced by | name, alias or version | published **version** only |
 
-The environment-variable restriction is the one that bites, because it is the mechanism every Lambda
-tutorial reaches for first. At the edge you have no configuration channel: the code and its constants
-are the same thing, which is why Step 7 and Step 12 both put their constants at the top of the file
-as named `const` declarations. That placement is not decoration - it is the substitute for the
-environment variables you cannot have.
-
-The region restriction is invisible in this course because `us-east-1` is the course region, but it
-is the second most common surprise on real AWS: you write the function in Mumbai, and CloudFront will
-not see it.
+The environment-variable rule bites hardest: at the edge, constants live in the code, which is why Steps 7 and 12 declare them at the top of the file. The region rule is invisible here only because `us-east-1` is the course region.
 
 **Command - part 1, make the mistake**
 
@@ -2052,19 +1398,7 @@ aws lambda update-function-configuration \
 > Example output - on real AWS this call also succeeds. Read the next paragraph before you draw the
 > wrong conclusion from that.
 
-**What just happened, precisely**
-
-The call succeeded, and it would succeed on real AWS too. Lambda does not know or care that you
-intend this function for the edge; `update-function-configuration` is a Lambda API and environment
-variables are a legal Lambda feature.
-
-The rejection comes later, and from a different service. When you associate the function with a
-CloudFront trigger, **CloudFront** validates it and returns
-`InvalidLambdaFunctionAssociation: The function cannot have environment variables`. The error arrives
-in a different API call, about a different resource, minutes after the mistake was made.
-
-That gap - between the call that was wrong and the call that fails - is exactly why this lab checks
-statically instead of waiting to be told.
+The call succeeds on real AWS too: environment variables are a legal Lambda feature. **CloudFront** rejects them later, when you associate the function (`InvalidLambdaFunctionAssociation: The function cannot have environment variables`), in a different API call, about a different resource. That gap is why this lab checks statically.
 
 **Command - part 2, undo it, and check both functions properly**
 
@@ -2101,27 +1435,10 @@ edge_eligibility() {   # $1 = function name, $2 = max memory for its trigger poi
 } | tee outputs/lab-10-function-inventory.json
 ```
 
-**What the command does**
-
-`--environment 'Variables={}'` clears the map. There is no `--no-environment` flag; an empty map is
-how you remove variables, and that asymmetry catches people.
-
-`edge_eligibility` is a shell function that reads one function's configuration once and answers six
-questions about it. It exists because this is the check that Floci cannot perform for you, and
-because you will want it again - Exercise 3 turns it into a reporting script and Section 9 folds two
-of its checks into `verify-lab-10.sh`.
-
-The `python3 -c` one-liners read fields out of the JSON rather than using `--query`, for one specific
-reason: `Environment` is **absent entirely** when no variables are set, and a JMESPath expression on
-an absent key returns `None`, which is a string that `[ "$x" -eq 0 ]` cannot compare. Python's
-`.get("Environment",{}).get("Variables",{}) or {}` collapses both "absent" and "present but empty"
-into the same answer. Reaching for Python here is not a failure of JMESPath; it is choosing the tool
-whose null handling matches the question.
-
-`"length(Versions[?Version!='\$LATEST'])"` counts published versions. The `\$` is escaped because the
-expression sits inside a double-quoted shell string and `$LATEST` would otherwise be expanded to
-nothing - leaving JMESPath comparing against an empty string and counting every version including
-`$LATEST`. The bug would be off-by-one and silent.
+- `--environment 'Variables={}'` is the only way to clear variables; there is no `--no-environment`.
+- `edge_eligibility` reads one configuration and answers six questions. Exercise 3 reuses it and Section 8 folds two checks into `verify-lab-10.sh`.
+- Python reads the JSON because `Environment` is absent when unset, and JMESPath would return `None`, which `[ -eq 0 ]` cannot compare.
+- `\$LATEST` is escaped inside the double-quoted `--query`, or the shell would expand it to nothing and the count would be off by one, silently.
 
 **Expected result**
 
@@ -2153,9 +1470,7 @@ usms-edge-origin-response
 grep -c '  NO   ' outputs/lab-10-function-inventory.json || echo "0 failures - both functions are edge-eligible"
 ```
 
-**What to look for:** `grep -c` prints `0` and exits non-zero, so the `||` message appears. Any `NO`
-line names a restriction you have violated, and the line itself tells you which. If the environment
-variable line still says `NO`, the clear in part 2 did not apply - re-run it and re-check.
+`grep -c` prints `0` and exits non-zero, so the `||` message appears. Any `NO` line names the restriction violated; if the environment line still says `NO`, re-run part 2.
 
 **Checkpoint 5**
 
@@ -2169,21 +1484,7 @@ usms-edge-origin-response    nodejs20.x  128 MB  5 s   version 1   edge-eligible
 
 ### Step 15 - Associate both functions with a CloudFront distribution
 
-**Purpose**
-
-This is the step the lab is named after: the two functions stop being code you can invoke and become
-code that runs on a request path. It is also the step most likely to behave differently on your
-machine than on the next one, which is why Step 4 wrote down which path you are on.
-
-**Run from**
-
-```text
-aws-floci-course/
-```
-
-**Concept first - what a distribution configuration actually says**
-
-A CloudFront distribution is four things in a trench coat:
+This is where the functions join a request path, and the step most likely to differ between builds (Step 4 recorded your path).
 
 | Part of the config | The question it answers |
 | --- | --- |
@@ -2192,11 +1493,7 @@ A CloudFront distribution is four things in a trench coat:
 | `LambdaFunctionAssociations` | what code runs, at which of the four trigger points |
 | `Enabled`, `PriceClass`, `Comment` | is it on, how far does it spread, what is it for |
 
-The cache key deserves the extra sentence. By default CloudFront caches on the URI alone - which is
-why Step 7's lowercase normalisation matters, and why the config below forwards exactly one header,
-`x-usms-student`, and no cookies. Every element you add to the cache key multiplies the number of
-stored copies of the same object. Forwarding all headers is the classic way to build a CDN with a
-zero percent hit rate.
+By default CloudFront caches on the URI alone. This config forwards exactly one header (`x-usms-student`) and no cookies: every extra cache-key element multiplies the stored copies of each object.
 
 **Command - part 1, write the configuration**
 
@@ -2263,26 +1560,9 @@ python3 -m json.tool templates/lab-10-distribution-config.json > /dev/null && ec
 grep -n 'function:usms-edge' templates/lab-10-distribution-config.json
 ```
 
-**What the command does**
-
-`<< EOF` - **unquoted**, and this is the one place in this lab where that is what you want. Three
-things must be expanded at write time: `$(date +%s)` for the caller reference, and the two version
-ARN variables. If you wrote `<< 'EOF'` here you would get a file containing the literal text
-`${VIEWER_VERSION_ARN}`, and CloudFront would reject it with a message about a malformed ARN.
-
-Compare this against Step 6 and Step 7, where the quoted form was essential for the opposite reason.
-Same syntax, one apostrophe apart, opposite meaning, and no error message either way. The rule is
-worth saying as a question you ask before every heredoc: *do I want this file to contain what I
-typed, or what it evaluates to?*
-
-`CallerReference` is CloudFront's idempotency token. Two `create-distribution` calls with the same
-caller reference and the same configuration return the same distribution instead of making a second
-one; with the same reference and a *different* configuration you get an error. `$(date +%s)` - the
-Unix epoch second - gives you a fresh one each time you regenerate the file.
-
-`IncludeBody` appears on the viewer-request association and not on the origin-response one. That is
-not an oversight: `IncludeBody` is only meaningful at `viewer-request` and `origin-request`, the two
-trigger points where a request body exists to be read. Setting it at `origin-response` is an error.
+- **Unquoted heredoc** here, on purpose: `$(date +%s)` and the two version ARNs must be substituted. Ask before every heredoc: *should this file contain what I typed, or what it evaluates to?*
+- `CallerReference` is CloudFront's idempotency token; the epoch second gives a fresh one each time.
+- `IncludeBody` is valid only on request triggers, so it is absent from the origin-response association.
 
 **Expected result**
 
@@ -2294,10 +1574,7 @@ valid JSON
 
 > Example output - line numbers will differ.
 
-**What to look for:** both ARNs end with `:1`. If either ends with the function name and no version,
-your `VIEWER_VERSION_ARN` or `ORIGIN_VERSION_ARN` was empty when the heredoc ran - which happens if
-you opened a new terminal between Step 13 and here. Re-run the `publish-version` capture from Step 11
-and Step 13 and regenerate the file.
+Both ARNs must end with `:1`. If not, the version variables were empty (a new terminal since Step 13); re-run the `publish-version` captures from Steps 11 and 13 and regenerate the file.
 
 **Command - part 2, PATH A: create the distribution**
 
@@ -2327,15 +1604,11 @@ aws cloudfront get-distribution --id "$DIST_ID" \
   --output table
 ```
 
-**What to look for:** two rows in the first table - `viewer-request` and `origin-response` - each
-with a version-qualified ARN. `Status` will read `InProgress` or `Deployed`; on real AWS the
-transition takes several minutes because the configuration is being pushed to every edge location,
-and in Floci it is immediate or absent.
+You want two association rows (`viewer-request`, `origin-response`) with version-qualified ARNs. `Status` reads `InProgress` or `Deployed`; on real AWS the push to every edge location takes minutes.
 
 **Command - part 2, PATH B: validate the configuration instead**
 
-Take this path if Step 4 reported CloudFront as `UNSUPPORTED`. You are not skipping the step; you are
-performing the part of it that can be performed, and recording the part that cannot.
+Take this path if Step 4 reported CloudFront as `UNSUPPORTED`. You perform the part that can be performed and record the rest.
 
 ```bash
 python3 - << 'PY' | tee outputs/lab-10-distribution.json
@@ -2380,25 +1653,14 @@ PY
 
 **Verify - Path B**
 
-**What to look for:** eleven `ok` entries and an empty `errors` list. That output is a real result:
-it says the configuration you would send to real AWS is structurally correct and satisfies the
-Lambda@Edge association rules, which is everything you can honestly claim without a CloudFront to
-send it to.
+You want eleven `ok` entries and an empty `errors` list: the configuration is structurally correct and satisfies the association rules, which is all you can honestly claim without CloudFront.
 
 !!! note "Floci Limitation - no emulator executes Lambda@Edge"
-    Even on a build where `create-distribution` succeeds, Floci stores the distribution as a record.
-    There is no edge location, no replication, no cache, and no request path - so the association is
-    never exercised. This is not a gap in one build; no local emulator runs Lambda@Edge.
+    Even where `create-distribution` succeeds, Floci stores a record: no edge location, replication, cache or request path. No local emulator runs Lambda@Edge.
 
-    On real AWS, `create-distribution` validates each association (region, version-qualified ARN, no
-    environment variables, memory and timeout within the trigger's caps), replicates the function to
-    every point of presence in the price class, and takes several minutes to reach `Deployed`. From
-    then on the function runs on the request path, and its logs appear in the region **nearest the
-    viewer** - not in `us-east-1`.
+    Real AWS validates each association (region, version-qualified ARN, no environment variables, caps), replicates the function to every point of presence, and logs in the region **nearest the viewer**.
 
-    What transfers regardless: the configuration document, the association rules, and the reasoning
-    about which trigger point to use. Step 16 is where you get to watch your code actually run in
-    sequence.
+    The configuration, the association rules and the trigger-point reasoning transfer. Step 16 runs your code in sequence.
 
 **Checkpoint 6**
 
@@ -2415,22 +1677,7 @@ usms-transcript-cdn  (record, or validated configuration)
 
 ### Step 16 - Run the edge chain end to end, without CloudFront
 
-**Purpose**
-
-Step 15 could not prove that your two functions work together on a request path, because nothing
-local runs a request path. This step builds the request path itself: a script that feeds a viewer
-event to the first function, constructs the origin response the bucket would have produced, feeds
-that to the second function, and prints the headers a browser would finally receive.
-
-This is the lab's **create → perturb → read back** proof. The property being proved is composition -
-that the header the first function writes is the header the second function reads - and the only way
-to prove it is to run them in sequence and look at the far end.
-
-**Run from**
-
-```text
-aws-floci-course/
-```
+Nothing local runs a request path, so this script builds one: viewer event to the first function, a simulated origin response, then the second function, printing what a browser would receive. The property proved is **composition**: the header the first function writes is the one the second reads.
 
 **Command - part 1, write the script**
 
@@ -2540,23 +1787,10 @@ chmod +x scripts/utilities/usms-edge-simulate.sh
 bash -n scripts/utilities/usms-edge-simulate.sh && echo "syntax OK"
 ```
 
-**What the command does**
-
-`<< 'EOF'` for the outer heredoc, because the script contains `$1`, `${BASH_SOURCE[0]}` and several
-`$(...)` expressions that must survive into the file and run when the script runs, not when it is
-written. The inner `<< 'PY'` heredocs are quoted for the same reason.
-
-`REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"` resolves the repository root from
-the script's own location rather than from your current directory, which is the course's standing
-rule: `./../../scripts/x.sh` breaks the moment a student is one directory off.
-
-`source "$REPO_ROOT/configs/lab-10.env" 2>/dev/null || true` - the file does not exist yet. Step 23
-creates it. The `|| true` under `set -u` means the script works before and after that step, and the
-`${USMS_EDGE_VIEWER_FN:-usms-edge-viewer-request}` defaults mean it works whichever way.
-
-The decision logic is the interesting part. A viewer-request function returns either a request or a
-response, and there is no discriminator field - you tell them apart by shape. `'status' in d` is that
-test, and it is exactly what CloudFront itself does.
+- Quoted outer heredoc (and quoted inner `<< 'PY'` blocks): `$1`, `${BASH_SOURCE[0]}` and `$(...)` must run when the script runs, not when it is written.
+- `REPO_ROOT` from `${BASH_SOURCE[0]}` makes it work from any directory.
+- `configs/lab-10.env` does not exist until Step 23; `|| true` and the `${...:-default}` values cover both cases.
+- A viewer-request function returns a request or a response with no discriminator field; `'status' in d` tells them apart, as CloudFront does.
 
 **Command - part 2, run it, both ways**
 
@@ -2628,17 +1862,9 @@ print('decision :', t['decision'])
 "
 ```
 
-**What to look for:** two runs, two different chains. The allow run passes through all three stages
-and its final `x-usms-edge-chain` header contains the string the **first** function wrote, followed
-by the marker the **second** one appended. Nothing but genuine composition produces that value.
+The allow run passes all three stages and its `x-usms-edge-chain` holds the first function's string plus the second's marker; only genuine composition produces that. The deny run has a chain of one: an unauthenticated request costs one edge invocation and no origin traffic.
 
-The deny run has a chain of length one. The origin was never contacted - which, in a real
-distribution, is the entire economic argument for a viewer-request function. An unauthenticated
-request costs you one edge invocation and no origin traffic at all.
-
-Because `outputs/lab-10-edge-trace.json` is overwritten by each run, it currently holds the deny
-trace. Re-run the allow case before the end of the lab, because Exercise 5 uploads this file and the
-allow trace is the more interesting artefact:
+The trace file now holds the deny run. Restore the allow trace, which Exercise 5 uploads:
 
 ```bash
 ./scripts/utilities/usms-edge-simulate.sh > /dev/null && echo "allow trace restored"
@@ -2655,22 +1881,10 @@ outputs/lab-10-edge-trace.json                 ← Exercise 5 uploads this
 ```
 
 ---
+
 ### Step 17 - Write the regional notifier
 
-**Purpose**
-
-The two edge functions handle the request path. This one handles what happens afterwards: every time
-a transcript lands in the bucket, something has to react. That is not edge work - nobody is waiting
-for it, it is not on anybody's request path, and it needs privileges an edge function is not allowed
-to carry.
-
-**Run from**
-
-```text
-aws-floci-course/
-```
-
-**Concept first - why this one is not an edge function**
+The edge functions handle the request path; this one reacts after a transcript lands in the bucket. Nobody is waiting for it, so it does not belong at the edge.
 
 | | Edge function | Regional function |
 | --- | --- | --- |
@@ -2680,16 +1894,7 @@ aws-floci-course/
 | Runs | wherever the viewer is | in one region, near your data |
 | Can call other AWS services | badly - every call crosses a continent | yes, that is the normal case |
 
-The last row is the decisive one. An edge function that calls DynamoDB is making a request from
-Tokyo to Virginia in the middle of a page load. A regional function sits next to the services it
-talks to. When you are deciding whether something belongs at the edge, the question is not "would it
-be nice if this were fast" - it is "does this have to happen before the viewer can be answered".
-
-Notifying the registrar that a transcript has been uploaded does not. So it is regional, it is
-Python, and it has environment variables, all three of which are chosen in contrast to the functions
-you have already written.
-
-**Command**
+The test for the edge is "does this have to happen before the viewer can be answered?". Notifying the registrar does not, so this function is regional, in Python, with environment variables.
 
 ```bash
 cat > labs/lab-10-lambda-edge/transcript-notifier/notifier.py << 'EOF'
@@ -2770,24 +1975,9 @@ python3 -m py_compile labs/lab-10-lambda-edge/transcript-notifier/notifier.py \
   && echo "syntax OK (python3)"
 ```
 
-**What the command does**
-
-`<< 'EOF'`, quoted, and here the reason is different again and worth naming: the file contains `%s`
-and `%d` format placeholders and a docstring full of parentheses, none of which bash would expand -
-but it also contains `$` nowhere, so an unquoted heredoc would *appear* to work. That is the trap.
-The rule is not "quote it when you spot a dollar sign", it is "quote it unless you specifically want
-expansion", because the day you add a `${...}` to this file you will not remember to go back and
-change the heredoc.
-
-`python3 -m py_compile` parses the file and reports syntax errors without executing it - the Python
-equivalent of `node --check`. It leaves a `__pycache__` directory behind; the repository's
-`.gitignore` already excludes it, and Step 24 will show you that it does.
-
-The `try: import boto3` inside the function rather than at the top of the file is deliberate. If
-boto3 were imported at module scope and the runtime did not provide it, the function would fail at
-**initialisation**, before your handler ran, and the error would be an import traceback with no
-context about which event caused it. Importing inside the guarded block means a missing or
-unreachable dependency degrades one field of the output instead of killing the invocation.
+- Quoted heredoc even though the file has no `$` today: quote unless you specifically want expansion, or the first `${...}` you add later breaks silently.
+- `py_compile` syntax-checks without running and leaves `__pycache__`, which `.gitignore` excludes (Step 24 confirms).
+- `import boto3` inside the guarded block means an unavailable dependency degrades one output field instead of failing initialisation.
 
 **Expected result**
 
@@ -2801,29 +1991,13 @@ syntax OK (python3)
 grep -n 'os.environ.get' labs/lab-10-lambda-edge/transcript-notifier/notifier.py
 ```
 
-**What to look for:** two lines. Those two `os.environ.get` calls are the thing the edge functions
-were not allowed to have, and they are why the constants in Step 7 and Step 12 had to be hard-coded.
-Seeing the contrast in two files you wrote an hour apart is the point of the exercise.
+Two lines: the `os.environ.get` calls the edge functions were not allowed to have.
 
 ---
 
 ### Step 18 - Create the notifier, publish it, and give it an alias
 
-**Purpose**
-
-Same creation pattern as the edge functions, with two differences that matter: this one takes
-environment variables, and this one gets an **alias**. The alias is the thing the edge refused, and
-seeing where it is the right answer completes the picture.
-
-**Run from**
-
-```text
-aws-floci-course/
-```
-
-**Concept first - what an alias is for**
-
-An alias is a named, movable pointer to a version.
+Same creation pattern, but this function takes environment variables and gets an **alias**, a named, movable pointer to a version:
 
 ```text
 usms-transcript-notifier
@@ -2833,14 +2007,7 @@ usms-transcript-notifier
  └── live ---------→ currently points at 1
 ```
 
-Everything that triggers the function - the S3 notification, an SNS subscription, an API - points at
-`usms-transcript-notifier:live`. To deploy version 2, you repoint the alias with one call. To roll
-back, you point it at 1 again. Nothing that references the function has to be reconfigured, and the
-rollback takes the same one call as the deploy.
-
-That is precisely the property Lambda@Edge cannot use, for precisely the reason it is valuable here:
-the pointer moves. A trigger inside one region can follow it instantly. A function replicated to
-hundreds of edge locations cannot.
+Triggers point at `:live`; deploying or rolling back is one `update-alias` call with no trigger reconfiguration. The edge cannot use this for the very reason it is valuable here: the pointer moves.
 
 **Command - part 1, create**
 
@@ -2868,19 +2035,9 @@ NOTIFIER_FN_ARN=$(aws lambda create-function \
 echo "$NOTIFIER_FN_ARN"
 ```
 
-**What the command does**
-
-`--handler notifier.handler` - the module is `notifier` because the file is `notifier.py`, and the
-function inside it is `handler`. Same `module.export` rule as `index.handler`, in a different
-language.
-
-`--environment "Variables={...}"` uses **double** quotes, because `$BUCKET` must be expanded. That is
-the same decision as a heredoc, made at the level of a single argument, and it is the reason the
-course keeps insisting you notice quoting: the shorthand syntax `Variables={K=V,K2=V2}` has no
-quoting of its own, so the shell's rules are the only rules in play.
-
-`--timeout 30` and `--memory-size 256`, both larger than the edge functions. This one may call S3, so
-it can wait; and it is not bound by any edge cap.
+- `--handler notifier.handler`: module `notifier.py`, function `handler`.
+- `--environment "Variables={...}"` is double-quoted so `$BUCKET` expands; shorthand syntax has no quoting of its own.
+- `--timeout 30 --memory-size 256`: no edge caps apply, and the function may wait on S3.
 
 !!! tip "If the runtime is rejected"
     Some Floci builds carry a shorter list of runtimes than real AWS. If `create-function` fails with
@@ -2925,9 +2082,7 @@ alias ARN : arn:aws:lambda:us-east-1:000000000000:function:usms-transcript-notif
 
 > Example output - your version number may be higher if you have published before.
 
-**What to look for:** the alias ARN ends with `:live`, not `:1`. Both are qualified ARNs; only one of
-them can be repointed. Put this next to `VIEWER_VERSION_ARN` from Step 11 and the difference between
-the two qualification styles is visible in a single glance.
+The alias ARN ends with `:live`, not `:1`. Both are qualified; only one can be repointed.
 
 **Verify**
 
@@ -2940,14 +2095,7 @@ aws lambda get-function-configuration --function-name "$NOTIFIER_FN" --qualifier
   --output json
 ```
 
-**What to look for:** one alias, `live`, pointing at version `1`; and the qualified
-`get-function-configuration` reports `Version: "1"` - not `$LATEST`. `--qualifier` is how you ask
-about a specific version or alias rather than about the function's mutable head, and it appears again
-in Step 19 and Step 21.
-
-The environment variables are present. Read them once more, then look back at Step 14, where the
-identical configuration on an edge function was a mistake. Neither call was wrong; the difference is
-entirely in where the function is going to run.
+You want one alias, `live`, pointing at version `1`, and the qualified configuration reporting `Version: "1"`, not `$LATEST`. `--qualifier` targets a specific version or alias (used again in Steps 19 and 21). The environment variables are present: the same configuration that was a mistake on an edge function in Step 14.
 
 ✏️ **Your turn**
 
@@ -2979,44 +2127,14 @@ usms-transcript-notifier
 
 ### Step 19 - Let S3 invoke the function, and see the other kind of policy
 
-**Purpose**
-
-Your function has an execution role saying what it may do. Nothing yet says who may **call** it. S3
-is about to try, and it will be refused - on real AWS, silently and permanently - until you attach a
-resource-based policy.
-
-**Run from**
-
-```text
-aws-floci-course/
-```
-
-**Concept first - the second policy, and the deputy problem**
-
-Lab 09 drew the distinction between an identity policy and a resource policy. Lambda is where it
-becomes unavoidable, because the two are attached to opposite ends of the same call:
+The execution role says what the function may do; nothing yet says who may **call** it. S3 invokes the function as S3, so it needs a **resource-based policy** on the function. Background: [identity-based versus resource-based policies](../unit8/topic1.md#identity-based-versus-resource-based-policies).
 
 | | Attached to | Answers |
 | --- | --- | --- |
 | Execution role (`usms-lambda-exec-role`) | the function | what may **this code** do |
 | Resource policy (function policy) | the function | who may **invoke** this function |
 
-S3 does not assume your execution role. S3 invokes your function **as S3**, and needs its own
-permission to do so. That permission lives on the function.
-
-Now the part that is easy to skip. The obvious grant is "allow the service principal
-`s3.amazonaws.com` to invoke this function", and it is wrong, because there is more than one S3
-bucket in the world. Any bucket in any account, configured by anyone, could then invoke your
-function - and they would not need access to your account to do it, only the ability to make their
-own bucket send a notification. That is the **confused deputy**: a trusted intermediary (S3) being
-induced to act on behalf of someone who should not be able to reach you.
-
-`--source-arn` and `--source-account` close it. They say: `s3.amazonaws.com` may invoke this
-function, but only when it is acting for **this bucket**, in **this account**. This is the same
-mechanism as the `aws:SourceArn` and `aws:SourceAccount` conditions Lab 09 added to
-`usms-ecs-task-role`'s trust policy - same problem, same shape of answer, different service.
-
-**Command**
+Granting `s3.amazonaws.com` alone would let **any** bucket in any account trigger your function (the [confused deputy](../unit8/topic1.md#the-confused-deputy-problem)). `--source-arn` and `--source-account` restrict it to this bucket in this account, the same idea as the `aws:SourceArn` and `aws:SourceAccount` conditions Lab 09 added to a trust policy.
 
 ```bash
 aws lambda add-permission \
@@ -3030,24 +2148,10 @@ aws lambda add-permission \
   --query 'Statement' --output text | python3 -m json.tool
 ```
 
-**What the command does**
-
-`--qualifier live` attaches the statement to the **alias**, not to the function as a whole. That is
-deliberate and it matches the trigger: S3 will invoke `...:live`, so that is what has to be
-invocable. A permission on the unqualified function does not cover an invocation of the alias.
-
-`--statement-id` is the statement's name inside the policy. It must be unique per function, and you
-need it again to remove the statement (`remove-permission --statement-id`). Naming it after the
-reason it exists, rather than `stmt1`, is the difference between a readable policy and an archaeology
-project.
-
-`--action lambda:InvokeFunction` - the single action. Note that it is not `lambda:*`, and that this
-is one of the few places in AWS where the least-privilege choice is also the obvious one.
-
-The `--query 'Statement' --output text` pipeline is there because `add-permission` returns the new
-statement as a **JSON string inside a JSON field** - a string that contains JSON, not nested JSON.
-`--output text` unwraps the outer layer and `python3 -m json.tool` pretty-prints what is left. Try it
-without the pipe once to see what you would otherwise be reading.
+- `--qualifier live` attaches the statement to the alias S3 will invoke; a permission on the unqualified function does not cover `:live`.
+- `--statement-id` names the statement; you need it to remove it.
+- `--action lambda:InvokeFunction`, not `lambda:*`.
+- `add-permission` returns the statement as a JSON **string**; `--output text | python3 -m json.tool` unwraps and prints it.
 
 **Expected result**
 
@@ -3092,8 +2196,7 @@ print('resource policy: scoped to one bucket in one account')
 "
 ```
 
-**What to look for:** the assertion line prints. If it raises on the condition, you omitted
-`--source-arn`; remove the statement and redo it:
+The assertion line must print. If it fails on the condition, you omitted `--source-arn`; remove the statement and redo it:
 
 !!! danger "Read before running any delete command"
     **What will be deleted:** one statement, `usms-s3-transcript-upload`, from the resource policy on
@@ -3116,44 +2219,17 @@ aws lambda remove-permission \
 ```
 
 !!! note "Floci Limitation - the resource policy is recorded, not enforced"
-    Floci stores the policy and returns it accurately, but it does not check it before letting an
-    event through. Your notification would fire in Step 20 even with no permission at all.
+    Floci stores and returns the policy but does not check it; Step 20's notification would fire even with no permission.
 
-    Real AWS checks it on every invocation. A missing statement produces an S3 notification that
-    fails **silently** - no error in your console, no log line in your function, because the function
-    never ran. It is one of the most frustrating misconfigurations in AWS precisely because the
-    symptom is nothing happening.
+    Real AWS checks it on every invocation. A missing statement makes the notification fail **silently**: no error, no log, because the function never ran.
 
-    So do not read Step 20's success as evidence that the permission is right. Read the policy, as
-    the verify above did.
+    Do not read Step 20's success as evidence the permission is right. Read the policy, as the verify above did.
 
 ---
 
 ### Step 20 - Wire the bucket notification and fire it for real
 
-**Purpose**
-
-Two resources exist and are correctly permitted. This step connects them, and then does the thing
-Lab 06 and Lab 08 both promised: uploads their evidence file into the bucket, as its first real
-object, and makes it trigger something.
-
-**Run from**
-
-```text
-aws-floci-course/
-```
-
-**Concept first - where an S3 trigger is configured**
-
-Not on the function. The notification configuration is a property of the **bucket**, and it names the
-function. That direction catches people who expect to find it under Lambda.
-
-It also means the configuration is **whole-bucket and replace-only**. There is no
-`add-bucket-notification`; `put-bucket-notification-configuration` replaces every notification on the
-bucket with the document you send. Sending a document containing only your Lambda configuration
-removes any SNS or SQS notification that was there before. On a bucket with existing notifications
-the safe sequence is get, merge, put - and this bucket has none, because you created it fifteen
-steps ago.
+The notification is a property of the **bucket** and names the function. `put-bucket-notification-configuration` is **replace-only**: it overwrites every notification on the bucket, so on a bucket with existing notifications you must get, merge, put. This bucket has none yet.
 
 **Command - part 1, the configuration**
 
@@ -3185,24 +2261,9 @@ aws s3api put-bucket-notification-configuration \
   --notification-configuration file://templates/lab-10-bucket-notification.json
 ```
 
-**What the command does**
-
-`<< EOF` unquoted again, because `${NOTIFIER_ALIAS_ARN}` must be substituted. Second and last time in
-this lab.
-
-`"Events": ["s3:ObjectCreated:*"]` covers `Put`, `Post`, `Copy` and the completion of a multipart
-upload. Listing the wildcard rather than the four events individually is correct here because the
-function does not care how the object arrived.
-
-The `Filter` is the part worth dwelling on. Without it, every object written anywhere in the bucket
-invokes the function - including, on a bucket that is also a Lambda's output destination, the objects
-the function itself writes. That is the classic S3-Lambda infinite loop, and it is charged per
-invocation. `prefix: transcripts/` and `suffix: .json` scope this trigger to exactly the objects it
-is about.
-
-Only one prefix rule and one suffix rule are allowed per filter, and overlapping configurations are
-rejected outright by S3 - you cannot have two Lambda configurations on `transcripts/` whose key
-ranges intersect.
+- Unquoted heredoc: `${NOTIFIER_ALIAS_ARN}` must be substituted.
+- `s3:ObjectCreated:*` covers every way an object can arrive.
+- The `Filter` scopes the trigger to `transcripts/*.json`. Without it, a function writing to its own bucket can trigger itself in a loop, billed per invocation. One prefix and one suffix rule per filter; overlapping configurations are rejected.
 
 **Command - part 2, fire it**
 
@@ -3234,21 +2295,7 @@ aws s3api put-object \
   --query '{ETag:ETag}' --output text
 ```
 
-**What the command does**
-
-The `for candidate in ...; do ... break; done` loop picks the first artefact that exists. Both
-`outputs/lab-08-scaling-evidence.json` and `outputs/lab-06-scaling-history.json` exist by this point
-in the course - Lab 08 Section 17 promised the former would be this bucket's first `put-object`, and
-Lab 06 made the same promise for the latter - so the loop prefers Lab 08's, the more recent of the
-two, and this is where that promise is kept. If neither file is present, which most likely means an
-earlier lab's exercise was skipped, the `python3` block manufactures a placeholder rather than
-leaving you stuck - failure mode number one from the teaching philosophy is a student who cannot
-continue.
-
-The key is `transcripts/evidence/<filename>`. Check it against the filter: it begins `transcripts/`
-and ends `.json`, so it matches. That is not an accident and it is worth confirming by eye every time
-you configure a filter, because a non-matching key produces exactly the same silence as a missing
-permission.
+The loop uploads the first existing artefact, preferring Lab 08's evidence file (the first `put-object` Lab 08 promised), then Lab 06's, and otherwise generates a placeholder so you are never stuck. The key `transcripts/evidence/<file>.json` matches the filter; check this by eye every time, because a non-matching key fails as silently as a missing permission.
 
 **Expected result**
 
@@ -3270,9 +2317,7 @@ aws s3api list-objects-v2 --bucket "$BUCKET" --prefix transcripts/ \
   --query 'Contents[].[Key,Size]' --output table
 ```
 
-**What to look for:** one notification row whose ARN ends `:live`, and one object row under
-`transcripts/evidence/`. If `list-objects-v2` returns nothing, the upload failed and the notification
-had nothing to react to - re-read the `put-object` output before going to Step 21.
+You want one notification row whose ARN ends `:live` and one object under `transcripts/evidence/`. If `list-objects-v2` returns nothing, the upload failed.
 
 **Checkpoint 9**
 
@@ -3289,17 +2334,7 @@ usms-student-data
 
 ### Step 21 - Prove the notifier actually ran
 
-**Purpose**
-
-The previous step configured a trigger and uploaded an object. Neither of those is evidence that your
-code executed. This step goes looking for the evidence, and - because event delivery is the least
-reliable part of any emulator - gives you a second way to get it if the first produces nothing.
-
-**Run from**
-
-```text
-aws-floci-course/
-```
+Configuring a trigger and uploading an object is not evidence your code executed. Look for the evidence, with a fallback because event delivery is the least reliable part of any emulator.
 
 **Command - part 1, look for the log**
 
@@ -3316,13 +2351,7 @@ aws logs filter-log-events \
   | tee outputs/lab-10-notifier-logs.txt
 ```
 
-**What the command does**
-
-`filter-log-events` searches **across every stream** in a log group, which is what you want when you
-do not know which container handled your event. `--filter-pattern "USMS_NOTIFY"` is a CloudWatch Logs
-filter pattern, not a regular expression: a bare term matches log events containing that term. The
-prefix exists in the handler for exactly this reason - a marker string makes an interesting line
-findable among the `START`/`END`/`REPORT` noise.
+`filter-log-events` searches every stream in the group. `"USMS_NOTIFY"` is a CloudWatch Logs filter pattern (a plain term, not a regex), which is why the handler prefixes its output with a marker.
 
 **Expected result - if event delivery works on your build**
 
@@ -3333,16 +2362,11 @@ USMS_NOTIFY {"bucket": "usms-student-data", "event": "ObjectCreated:Put", "key":
 
 > Example output - your key, size and `readable` value will differ.
 
-**What to look for:** a `USMS_NOTIFY` line whose `key` is the object you uploaded. `readable` may be
-`false` with a `read_error` field, which means the Lambda container could not reach the S3 API - see
-the limitation note below. It does not mean the trigger failed.
+You want a `USMS_NOTIFY` line naming your object. `readable: false` with a `read_error` means the container could not reach the S3 API (see the note below), not that the trigger failed.
 
 **Command - part 2, the fallback: invoke with a synthetic S3 event**
 
-Do this if part 1 printed nothing. It is not a workaround for the sake of finishing; it separates two
-different failures. If the function runs correctly on a hand-made event, then your code and your
-permissions are right and only the **delivery** is missing. If it fails here too, the problem is in
-the handler and you have a stack trace to read.
+Do this if part 1 printed nothing. If the handler works on a hand-made event, your code and permissions are right and only **delivery** is missing; if it fails here too, the problem is in the handler.
 
 ```bash
 cat > templates/lab-10-s3-event.json << EOF
@@ -3403,28 +2427,14 @@ REPORT RequestId: 8a1f...	Duration: 241.10 ms	Billed Duration: 242 ms	Memory Siz
 > Example output - `read_error: ClientError` is expected here, because the synthetic key names an
 > object that does not exist. That is the `head_object` guard doing its job.
 
-**What to look for:** `"processed": 1`, and a `USMS_NOTIFY` line. Note `Version: 1` in the `START`
-line rather than `$LATEST` - that is `--qualifier live` resolving through the alias to the published
-version, which is exactly what S3 would do.
+You want `"processed": 1` and a `USMS_NOTIFY` line. `Version: 1` in the `START` line shows `--qualifier live` resolving through the alias, exactly as S3 would.
 
 !!! note "Floci Limitation - S3 event delivery and outbound calls from a Lambda container"
-    Two separate things vary by build.
+    Some builds store the notification configuration without delivering events. Separately, the Lambda container may not know the emulator's endpoint, so `boto3` inside it tries real AWS and you see `read_error` (which is why that call is wrapped).
 
-    **Event delivery.** Some builds store the notification configuration without running the
-    dispatcher, so an upload produces no invocation. The configuration is recorded correctly and you
-    can read it back; nothing calls your function.
+    Real AWS delivers the event within seconds and supplies execution-role credentials, so `head_object` succeeds exactly when the role permits it.
 
-    **Outbound AWS calls from inside a Lambda container.** The container has to be told where the
-    emulator's API is. When that injection is missing, `boto3.client("s3")` inside your function
-    tries to reach real AWS, fails, and you see `read_error` - which is why that call is wrapped.
-
-    Real AWS delivers the event within seconds and gives the container credentials from the execution
-    role automatically, so `head_object` succeeds if - and only if - the role permits it. Here it is
-    permitted by `USMSLambdaBasic` and may still fail for reasons that have nothing to do with
-    permissions. Judge the permission by reading the policy, as always.
-
-    Either way, part 2 gives you a genuine execution of your handler over a genuine S3 event
-    structure, and that is what this step needs to establish.
+    Part 2 still gives a genuine execution of your handler over a genuine S3 event structure. Judge the permission by reading the policy.
 
 ✏️ **Your turn**
 
@@ -3446,18 +2456,7 @@ instead and write one sentence per object saying which rule excluded it.
 
 ### Step 22 - Restart Floci and read everything back
 
-**Purpose**
-
-Every lab in this course ends by proving that what it built survives a restart, because the one
-defect that cost students a whole lab's work was a persistence setting that reported success and
-discarded everything. Lambda adds a wrinkle worth checking: function **code** is stored differently
-from function **metadata**, and a build can persist one and lose the other.
-
-**Run from**
-
-```text
-aws-floci-course/
-```
+Prove persistence: create, perturb, read back. Lambda stores function **code** separately from **metadata**, and a build can keep one and lose the other, so the read-back also runs the code.
 
 **Command - part 1, record the state**
 
@@ -3487,12 +2486,7 @@ inventory | tee outputs/lab-10-pre-restart.txt
 ./scripts/utilities/whoami.sh
 ```
 
-**What the command does**
-
-`floci-down.sh` is `docker compose stop`. It stops the container and keeps its state - it is not
-`docker compose down`, and it is emphatically not `docker compose down -v`, which would delete the
-volumes and with them this entire course. The distinction is why the course ships a script instead of
-telling you the command.
+`floci-down.sh` is `docker compose stop`: state is kept. It is not `docker compose down -v`, which deletes the volumes.
 
 **Command - part 3, read back**
 
@@ -3521,21 +2515,13 @@ IDENTICAL - every Lab 10 artefact survived the restart
 
 **Verify - the stronger check**
 
-A list of names surviving is weaker evidence than it looks. What you actually want to know is whether
-the **code** came back, so invoke it:
+Names surviving is weaker evidence than code surviving, so invoke it:
 
 ```bash
 ./scripts/utilities/usms-edge-simulate.sh | tail -20
 ```
 
-**What to look for:** `diff` reports no differences, and the simulation still produces the
-`x-usms-edge-chain` header. Name-level persistence with lost code would pass the first check and fail
-the second, which is precisely the difference between a verification that checks existence and one
-that checks the thing you care about.
-
-If `diff` shows a difference, read which line moved before concluding anything: a missing function is
-a persistence failure, but a changed alias version is just your Step 18 Your-turn exercise not having
-been put back.
+You want no `diff` output and the `x-usms-edge-chain` header still produced. A missing function is a persistence failure; a changed alias version just means Step 18's "Your turn" was not put back.
 
 **Checkpoint 10**
 
@@ -3553,18 +2539,7 @@ after floci-down.sh + floci-up.sh
 
 ### Step 23 - Write `configs/lab-10.env`
 
-**Purpose**
-
-Everything you have captured so far lives in shell variables, and shell variables die with the
-terminal. This is the step that turns this lab's work into something the next lab can source.
-
-**Run from**
-
-```text
-aws-floci-course/
-```
-
-**Command**
+Turn this lab's shell variables into a file the next lab can source.
 
 ```bash
 cat > configs/lab-10.env << EOF
@@ -3630,15 +2605,7 @@ EOF
 cat configs/lab-10.env
 ```
 
-**What the command does**
-
-`<< EOF` - unquoted, deliberately, and for the third and last time in this lab. Every `$(...)` in
-this file must run **now**, at write time, so that the file contains values rather than commands. A
-quoted heredoc here would produce a file full of `aws lambda get-function-configuration ...` text
-that does nothing when sourced, and - the part that makes it dangerous - would produce no error at
-all, either when written or when sourced.
-
-Put the three heredocs of this lab side by side and the rule is visible:
+**Unquoted heredoc**: every `$(...)` runs now, so the file holds values. A quoted one would write command text that does nothing when sourced, with no error. This lab's three heredoc choices:
 
 | Step | Form | Because |
 | --- | --- | --- |
@@ -3646,16 +2613,8 @@ Put the three heredocs of this lab side by side and the rule is visible:
 | 15, 20 | `<< EOF` | two ARNs and a timestamp must be substituted |
 | 23 | `<< EOF` | every value is the output of a command run now |
 
-`"max_by(Versions[?Version!='\$LATEST'], &to_number(Version)).Version"` deserves unpacking. Versions
-come back as **strings**, so `max_by` on the raw value would sort `10` before `9` lexically.
-`&to_number(Version)` is an expression reference that converts each version to a number before
-comparison. `\$LATEST` is escaped so that the shell - inside an unquoted heredoc - leaves the dollar
-sign for JMESPath.
-
-The CloudFront lines end with `| grep -E ... || echo not-created`. That is Lab 06's pattern:
-`--output text` prints `None` when the query matches nothing, and a variable containing the literal
-string `None` is worse than one containing an honest `not-created`, because `None` looks like a
-value. The `grep` passes real output through and fails on `None`, so the `||` branch runs.
+- `max_by(..., &to_number(Version))`: versions are strings, so without `to_number` version 10 sorts before 9. `\$LATEST` is escaped so the shell leaves it for JMESPath.
+- `| grep -E ... || echo not-created`: turns a `None` from `--output text` into an honest sentinel.
 
 **Expected result**
 
@@ -3683,26 +2642,13 @@ grep -n 'export .*=$\|None' configs/lab-10.env || echo "all values populated"
 source configs/lab-10.env && echo "sources cleanly"
 ```
 
-**What to look for:** **25** exports, the message `all values populated`, and a clean source. An
-empty value or the string `None` means a resource does not exist, and catching it here is worth ten
-troubleshooting entries in the next lab. `not-created` on the three CloudFront lines is a populated
-value, not an empty one, and is expected on Path B.
+You want **25** exports, `all values populated`, and a clean source. `not-created` on the three CloudFront lines is a populated value, expected on Path B.
 
 ---
 
 ### Step 24 - Check what Git sees, and commit
 
-**Purpose**
-
-This lab wrote source code, JSON templates, a configuration file and three ZIP archives. Exactly one
-category of those does not belong in the repository, and the point of looking before committing is
-that you find out which before it is in the history rather than after.
-
-**Run from**
-
-```text
-aws-floci-course/
-```
+This lab wrote source, templates, a config file and three ZIP archives. Find out which category does not belong before it is in the history.
 
 **Command - part 1, look**
 
@@ -3727,14 +2673,11 @@ git status --short
 
 > Example output - ordering and the exact set depend on what you have done.
 
-**What to look for**, and this is the check, not the commit:
+Check before committing:
 
-- **No `outputs/` path appears.** Not the ZIP archives, not the trace, not the logs. If any does, the
-  `.gitignore` rule has been damaged - see below.
-- **No `.env` file other than `configs/lab-10.env`.** The repository's `.env` at the root is generated
-  by `floci-up.sh` and must never be committed; `configs/lab-10.env` is a different thing entirely
-  and is meant to be.
-- **No `__pycache__`.** `py_compile` in Step 17 created one.
+- **No `outputs/` path** (archives, trace, logs). If one appears, the `.gitignore` rule is damaged.
+- **No `.env` other than `configs/lab-10.env`.** The root `.env` is generated by `floci-up.sh` and never committed.
+- **No `__pycache__`** (Step 17 created one).
 
 ```bash
 git check-ignore -v outputs/usms-edge-viewer-request.zip
@@ -3752,12 +2695,7 @@ outputs/.gitkeep
 
 > Example output - your line number will differ.
 
-**What to look for:** `check-ignore` names the rule and the line that excluded each file, and
-`git ls-files outputs/` lists `.gitkeep` and nothing else. That is the rule from Lab 1 still holding:
-`outputs/*` excludes the contents while leaving the directory visible to Git, and
-`!outputs/.gitkeep` re-includes the one file that keeps it in the tree. Had the rule been written
-`outputs/` - excluding the directory itself - the negation would silently do nothing and the archives
-above would be committable.
+`check-ignore` names the rule and line, and `git ls-files outputs/` lists only `.gitkeep`. That is Lab 1's `outputs/*` plus `!outputs/.gitkeep` rule still holding; `outputs/` would make the negation silently fail.
 
 **Command - part 2, commit**
 
@@ -3782,16 +2720,7 @@ git commit -m "Lab 10: edge functions with Lambda, origin bucket, S3-triggered n
 - usms-edge-simulate.sh runs the edge chain without a CloudFront request path"
 ```
 
-**What the command does**
-
-`git add` names paths explicitly rather than using `git add -A`. On a repository that contains a
-git-ignored directory full of secrets, `-A` is safe only because the ignore rule is correct - and
-naming the paths means you are not relying on that being true. The two habits reinforce each other
-rather than duplicating.
-
-`verify-lab-10.sh` and `lab-10-cleanup.sh` are in the list; you create them in Section 9 and
-Section 16. If you are running the steps in order and have not reached those yet, `git add` will
-report them as missing - add them in a second commit after Section 9, or run this step last.
+Paths are named explicitly rather than `git add -A`, so you do not rely on the ignore rule alone. `verify-lab-10.sh` and `lab-10-cleanup.sh` are created in Sections 8.1 and 8.2; if you have not reached them yet, add them in a second commit.
 
 **Verify**
 
@@ -3800,7 +2729,7 @@ git log --oneline -1
 git show --stat --oneline HEAD | head -20
 ```
 
-**What to look for:** the commit exists, and the file list contains no `outputs/` path and no `.zip`.
+The commit exists, and its file list contains no `outputs/` path and no `.zip`.
 
 **Checkpoint 11**
 
@@ -3822,27 +2751,12 @@ outputs/  (git-ignored, correctly)
 ```
 
 ---
-## 9. Verification
 
-One script, run at the end of the lab and at the start of the next one. It checks three things that
-are easy to confuse:
+## 8. Verification
 
-- that the resources **exist**,
-- that they are **configured** the way the lab requires - which is where a verification script earns
-  its keep, because existence survives most mistakes,
-- and that the environment underneath them is still sound, because a lab that verifies only its own
-  resources passes right up until the restart that deletes them.
+### 8.1 Build `scripts/utilities/verify-lab-10.sh`
 
-Several checks in it are the static substitutes for enforcement Floci does not perform: that no edge
-function carries environment variables, that every associated ARN is version-qualified, that the
-resource policy is scoped to one bucket. Those are the rules you cannot learn here by breaking them,
-so the script checks them on every run instead.
-
-**Run from**
-
-```text
-aws-floci-course/
-```
+The script checks existence, configuration, and the environment underneath. Several checks are static substitutes for enforcement Floci does not perform: no environment variables on edge functions, version-qualified association ARNs, a resource policy scoped to one bucket.
 
 {% raw %}```bash
 cat > scripts/utilities/verify-lab-10.sh << 'EOF'
@@ -4126,16 +3040,7 @@ PASS=51  FAIL=0
 
 **The expected count is `PASS=51  FAIL=0`.**
 
-Two notes on reading a failure:
-
-**Failures in the Environment block are the real problem.** If Floci is not running, everything below
-it fails as a consequence and none of those lower failures tells you anything. Fix the top block
-first and re-run before reading anything else.
-
-**None of these checks depends on CloudFront being supported.** The association block reads
-`templates/lab-10-distribution-config.json`, which both Path A and Path B produce. That is deliberate:
-a verification script whose result depends on which emulator build you happen to have is not a
-verification script.
+Failures in the **Environment** block are the real problem; fix them first and re-run. No check depends on CloudFront support: the association block reads `templates/lab-10-distribution-config.json`, which both paths produce.
 
 Two checks that are worth understanding rather than merely passing:
 
@@ -4144,656 +3049,7 @@ Two checks that are worth understanding rather than merely passing:
 | `viewer handler kept its template literal` | The static detector for an unquoted heredoc in Step 7. That bug produces a function that deploys, runs, and silently stamps an empty student id - nothing else in this script would catch it |
 | `every associated ARN is version-qualified` | The static substitute for the validation real AWS performs and Floci does not. It is the only thing standing between you and an association that would be rejected in production |
 
----
-
-## 10. Checkpoints
-
-| # | After Step | What must exist | How to check it in one line |
-| --- | --- | --- | --- |
-| 1 | 5 | `usms-student-data`, tagged, and `USMSStudentDataReadWrite` resolving to it | `aws s3api head-bucket --bucket usms-student-data` |
-| 2 | 6 | `usms-lambda-exec-role` trusting both `lambda` and `edgelambda` | `aws iam get-role --role-name usms-lambda-exec-role --query 'length(Role.AssumeRolePolicyDocument.Statement[0].Principal.Service)'` |
-| 3 | 9 | `usms-edge-viewer-request`, invoked on both the allow and the deny path | `python3 -m json.tool outputs/lab-10-viewer-allow.json` |
-| 4 | 11 | Version 1 of the viewer function, and a version-qualified ARN | `aws lambda list-versions-by-function --function-name usms-edge-viewer-request --query 'Versions[].Version'` |
-| 5 | 14 | Both edge functions edge-eligible: no env vars, within caps, published | `grep -c '  NO   ' outputs/lab-10-function-inventory.json` |
-| 6 | 15 | A distribution, or a validated configuration, associating both functions | `python3 -m json.tool templates/lab-10-distribution-config.json` |
-| 7 | 16 | The chain running end to end, allow and deny | `./scripts/utilities/usms-edge-simulate.sh` |
-| 8 | 18 | `usms-transcript-notifier`, version 1, alias `live` | `aws lambda list-aliases --function-name usms-transcript-notifier` |
-| 9 | 20 | Bucket notification wired to the alias and an object uploaded | `aws s3api get-bucket-notification-configuration --bucket usms-student-data` |
-| 10 | 22 | All of the above surviving a stop and start | `diff outputs/lab-10-pre-restart.txt outputs/lab-10-post-restart.txt` |
-| 11 | 24 | A commit containing the source and no `outputs/` path | `git show --stat HEAD` |
-
----
-
-## 11. Troubleshooting
-
-### `aws lambda list-functions` returns a connection error, exit code 255
-
-Exit `255` is a client or connection failure, not a service error. Floci is not answering.
-
-{% raw %}```bash
-docker container inspect floci --format '{{.State.Status}}'
-./scripts/setup/floci-up.sh
-curl -s http://localhost:4566/_localstack/health | head -5
-```{% endraw %}
-
-If the container is running but the health probe is empty, Floci is still starting - the first start
-after an image pull can take a minute. Wait and retry before concluding anything.
-
-### `create-function` fails with `InvalidParameterValueException: The role defined for the function cannot be assumed by Lambda`
-
-Real AWS raises this when the trust policy does not name `lambda.amazonaws.com`. If you see it here,
-you have probably run Step 6's `update-assume-role-policy` with a document naming only
-`edgelambda.amazonaws.com` - remember that the update **replaces** the whole policy.
-
-```bash
-aws iam get-role --role-name usms-lambda-exec-role \
-  --query 'Role.AssumeRolePolicyDocument.Statement[].Principal.Service' --output json
-```
-
-Two entries, not one. Re-run Step 6 part 2 and part 3 if you see one.
-
-### The function returns `Unhandled` with `Cannot find module 'index'`
-
-The archive does not contain `index.mjs` at its root, or the handler string does not match the file
-name. Look inside the archive rather than guessing:
-
-```bash
-python3 -m zipfile -l outputs/usms-edge-viewer-request.zip
-aws lambda get-function-configuration --function-name usms-edge-viewer-request --query 'Handler'
-```
-
-A line reading `labs/lab-10-lambda-edge/edge-viewer-request/index.mjs` instead of plain `index.mjs`
-means you built the archive from the repository root. Rebuild it from inside the function's directory
-- Step 8 part 1 explains why the subshell is there.
-
-### The function runs but the student id in `x-usms-edge` is empty
-
-Your Step 7 heredoc was unquoted and bash expanded the template literal before the file was written.
-
-```bash
-grep -n 'toLowerCase()}' labs/lab-10-lambda-edge/edge-viewer-request/index.mjs
-```
-
-No output means the expression is gone. Delete the file, re-run Step 7 with `<< 'EOF'` - with the
-apostrophes - rebuild the archive, and update the code:
-
-```bash
-aws lambda update-function-code --function-name usms-edge-viewer-request \
-  --zip-file fileb://outputs/usms-edge-viewer-request.zip
-```
-
-Then publish a new version, because version 1 still contains the broken code and is immutable.
-
-### `invoke` writes an empty file and prints nothing useful
-
-You probably forgot the positional output-file argument. `aws lambda invoke` requires it; the
-function's return value goes there and only metadata goes to stdout. Also check that you used
-`--payload fileb://` and not `--payload file://` - the latter hands the CLI a string where it expects
-bytes, and the resulting error mentions base64 rather than mentioning your file.
-
-### `LogResult` is `None`, or the log group does not exist
-
-Log capture is build-dependent. Before assuming your function is silent, confirm it ran at all by
-reading its return value - Step 9's payload is the evidence, and it does not depend on logs.
-
-If you need logs and this build does not provide them, add `print()` or `console.log` output to the
-handler and read the **returned object** instead; the notifier in Step 17 already returns a summary
-for exactly this reason.
-
-### The upload in Step 20 produces no invocation
-
-Three candidates, in the order worth checking:
-
-```bash
-# 1. does the key match the filter?
-aws s3api list-objects-v2 --bucket usms-student-data --query 'Contents[].Key' --output text
-
-# 2. is the notification actually configured?
-aws s3api get-bucket-notification-configuration --bucket usms-student-data
-
-# 3. can the function be invoked at all, given a hand-made event?
-aws lambda invoke --function-name usms-transcript-notifier --qualifier live \
-  --payload fileb://templates/lab-10-s3-event.json /dev/stdout
-```
-
-If 1 and 2 are correct and 3 works, the delivery mechanism is not implemented on your build. That is
-the Step 21 limitation and it is not something you can fix; record it and move on.
-
-### `create-distribution` fails with `InvalidArgument` or the operation does not exist
-
-Your build does not implement CloudFront. Take Path B in Step 15. Nothing later in the lab depends on
-the distribution existing - Step 16 is the proof path, and Section 9 verifies the configuration file
-rather than the distribution.
-
-### `put-bucket-notification-configuration` fails with `InvalidArgument: Unable to validate the following destination configurations`
-
-On real AWS this is the resource policy: S3 checks, at configuration time, that it is permitted to
-invoke the target, and refuses to save a configuration it could not act on. It is one of the few
-places AWS validates a permission eagerly rather than at call time.
-
-Re-run Step 19 and confirm with `aws lambda get-policy --function-name usms-transcript-notifier
---qualifier live`. Note the `--qualifier`: a permission on the unqualified function does not cover an
-invocation of `:live`.
-
-### `verify-lab-10.sh` reports `configs/lab-10.env has 25 exports` as a failure
-
-Count them and find the missing one:
-
-```bash
-grep -c '^export' configs/lab-10.env
-grep -nE '^export [A-Z_]+=$' configs/lab-10.env
-```
-
-An export with an empty value means the `$(...)` that produced it returned nothing - usually because
-the resource was created in a terminal you have since closed and the shell variable it referenced was
-empty when the heredoc ran. Re-derive the value with an `aws` call and edit the line, or re-run
-Step 23 in a shell where Steps 8 to 18 have been re-sourced.
-
-### Everything worked yesterday and nothing works today
-
-```bash
-./scripts/utilities/floci-storage-check.sh
-```
-
-`FAIL` in the shell block means a new terminal lost the course environment - Errata 01. `FAIL` on the
-storage-mode check means Floci is running in `memory` mode and yesterday's work is gone; the fix is
-the compose file, and the loss is unfortunately real.
-
----
-## 12. Floci vs Real AWS
-
-### 12.1 Feature by feature
-
-| Feature | Real AWS | Floci | Status |
-| --- | --- | --- | --- |
-| `create-function`, `update-function-code`, `publish-version` | Full lifecycle, code stored in S3 behind the scenes | Works; code stored and executed in a container | **Implemented in Floci** |
-| Synchronous `invoke` with a JSON payload | Runs the handler, returns its value | Runs the handler, returns its value | **Implemented in Floci** |
-| Versions and aliases | Immutable versions, movable aliases | Both recorded and resolvable; `--qualifier` works | **Implemented in Floci** |
-| Environment variables | Injected into the runtime, encrypted at rest with KMS | Injected; no encryption | **Implemented in Floci** |
-| `--log-type Tail` and `/aws/lambda/<fn>` log groups | Always present | Build-dependent; may return empty `LogResult` | **Floci Limitation** |
-| Resource policy (`add-permission`, `get-policy`) | Checked on every invocation | Stored and returned; never checked | **Floci Limitation** |
-| Execution role permissions | Enforced per API call made by your code | Not enforced; any call your code makes succeeds or fails on connectivity alone | **Floci Limitation** |
-| S3 `ObjectCreated` notification to Lambda | Delivered within seconds | Configuration stored; delivery build-dependent | **Floci Limitation** |
-| Credentials inside the Lambda container | Supplied automatically from the execution role | Often absent; `boto3` may try to reach real AWS | **Floci Limitation** |
-| `cloudfront create-distribution` | Creates a real distribution, `InProgress` then `Deployed` | Absent on many builds; a record at best | **Floci Limitation** |
-| `LambdaFunctionAssociations` validation | Region, version-qualified ARN, no env vars, caps - all checked and rejected | Stored without validation | **Floci Limitation** |
-| Lambda@Edge replication and execution | Function copied to every point of presence, runs on the request path | Never executed. No emulator does this | **Conceptual / Real AWS** |
-| Edge logs in the region nearest the viewer | Yes - a function serving Bhutan logs to an Asia-Pacific region | No edge locations exist | **Conceptual / Real AWS** |
-| CloudFront Functions (`cloudfront-js-2.0`) | Separate runtime, viewer triggers only, sub-millisecond | Absent | **Conceptual / Real AWS** |
-| Cache behaviour, TTLs, cache hit ratio | Real caching with measurable hit rates | No cache exists | **Conceptual / Real AWS** |
-| Origin access control, signed URLs, WAF at the edge | Available | Absent | **Conceptual / Real AWS** |
-| Cost: per-request, per-GB-second, per-replication | Real, and edge invocations are priced differently from regional ones | Free | **Conceptual / Real AWS** |
-
-### 12.2 What you observed, and what you recorded
-
-```text
-OBSERVED - you saw this happen on your own machine
-  · a Node.js function created from a zip you built, and invoked
-  · the CloudFront event structure parsed correctly, including the header array shape
-  · a request modified: uri normalised, x-usms-edge stamped
-  · a request refused: a 403 response object returned instead of a request
-  · a response modified: four security headers and a cache policy added
-  · TWO FUNCTIONS COMPOSING - the header written by the first read by the second
-  · an immutable version published, and an alias pointing at one
-  · a resource policy attached, scoped by source ARN, and read back
-  · a bucket created, an object uploaded, a notification configured
-  · every one of the above surviving a container restart
-
-RECORDED - correct, checkable by reading, not executed here
-  · the two-principal trust policy Lambda@Edge requires
-  · the distribution configuration, including both associations
-  · the version-qualified ARN rule
-  · the no-environment-variables rule (deliberately violated, then undone)
-  · the memory and timeout caps per trigger point
-
-NOT AVAILABLE AT ALL
-  · an actual edge location, an actual cache, an actual viewer request
-  · CloudFront Functions
-  · replication latency, cache hit ratio, cost
-```
-
-### 12.3 Where Floci is nicer than reality
-
-These are the traps. Every one of them is something that worked here and will not work the same way
-in production.
-
-- **Associations are accepted without validation.** Here, an association pointing at `$LATEST` or at a
-  function with environment variables is stored happily. Real AWS refuses the whole
-  `update-distribution` call, and the error arrives minutes after the mistake, about a different
-  resource. This is why Section 9 checks it statically.
-- **Deployment is instant.** `create-distribution` returns and you move on. A real distribution takes
-  several minutes to reach `Deployed`, and an update to an associated function version takes the same
-  again - so a bad edge deploy has a rollback time measured in minutes, not seconds. That, not the
-  code, is what makes edge deployments feel risky.
-- **Nothing is cached, so nothing is stale.** Your `origin-response` function's headers appear
-  immediately on every request. On real CloudFront they are baked into the cached object, so fixing a
-  wrong header means an invalidation or a wait for the TTL. Cached mistakes outlive the code that made
-  them.
-- **IAM is not evaluated.** The resource policy you attached in Step 19 is decorative here. In
-  production, omitting it produces an S3 notification that fails silently - no error, no log, nothing
-  happens - which is among the hardest AWS misconfigurations to diagnose.
-- **No cold starts, no concurrency limits, no throttling.** A viewer-request function that takes
-  400 ms to initialise is invisible here and is a measurable latency regression at the edge, on the
-  exact request path you added it to speed up.
-- **No cost.** Edge invocations are billed per request with no free tier, and a viewer-trigger
-  function runs on cache hits too. The choice between `origin-response` and `viewer-response` in
-  Step 12 was free here and is a three-order-of-magnitude difference in a real bill.
-
-!!! note "Floci Limitation - the one that shapes this whole lab"
-    Floci does not run Lambda@Edge. There is no edge location for a replicated function to run in, and
-    no request path for it to intercept.
-
-    Real AWS replicates the published version to every point of presence in the distribution's price
-    class and invokes it there, logging to the region nearest the viewer.
-
-    What this lab gives you instead is the whole of the function contract - the event structure, the
-    return shapes, the trigger-point semantics, the association rules - exercised directly, plus
-    `usms-edge-simulate.sh`, which runs the chain in the order CloudFront would. What you cannot get
-    here is latency, caching and cost, and those are precisely the three things you must not claim to
-    have tested.
-
----
-
-## 13. Independent Lab Exercises
-
-Five exercises, increasing in difficulty. Record your commands and outputs in
-`labs/lab-10-lambda-edge/exercises.md`; several of them ask for a file in `outputs/` as well.
-
-### Exercise 1 - Basic: extend the security header set
-
-**Requirements**
-
-Add a `Content-Security-Policy` header to the origin-response function, with a policy that permits
-only same-origin content: `default-src 'self'`. Deploy the change, publish version 2 of the function,
-and prove that version 1 still returns the original four headers.
-
-**Constraints**
-
-- The header must be added by editing the `SECURITY_HEADERS` object, not by adding a second block of
-  code. That object exists so that this is a one-line change.
-- You may not delete or overwrite version 1.
-- Update the distribution configuration file to reference the new version.
-
-**Expected outcome**
-
-An invocation of `usms-edge-origin-response` at `$LATEST` returns five security headers; an
-invocation with `--qualifier 1` returns four. `templates/lab-10-distribution-config.json` names
-version 2.
-
-**Hints**
-
-- `aws lambda update-function-code` takes the same `--zip-file fileb://` as `create-function`.
-- `--qualifier` works on `invoke`, not just on `get-function-configuration`.
-- A version is a snapshot of `$LATEST` at the moment you publish it, so the order of operations
-  matters: update the code, then publish.
-
----
-
-### Exercise 2 - Intermediate: a dedicated edge execution role
-
-**Requirements**
-
-`usms-lambda-exec-role` is now carrying three functions with different jobs, and the edge functions do
-not need `s3:GetObject` at all - they never touch the bucket. Create a separate role,
-`usms-edge-exec-role`, with a new customer managed policy `USMSEdgeBasic` granting **only**
-CloudWatch Logs writes. Trust both `lambda.amazonaws.com` and `edgelambda.amazonaws.com`. Repoint
-both edge functions at it and publish new versions.
-
-Then answer, in `labs/lab-10-lambda-edge/exercises.md`, what happened to version 1's role.
-
-**Constraints**
-
-- Follow the course naming conventions: `policies/usms-edge-basic-policy.json` and
-  `policies/trust-lambda-edge.json` - the second already exists and is reusable as-is.
-- Do not modify or detach anything from `usms-lambda-exec-role`; the notifier still uses it.
-- The log-write permission must be scoped to `/aws/lambda/usms-edge-*`, not to `*`.
-
-**Expected outcome**
-
-`get-function-configuration --qualifier 1` on either edge function still reports the **old** role;
-`--qualifier $LATEST` reports the new one. Your written answer explains why, and says what that
-implies for a rollback: repointing to an old version restores its old role along with its old code.
-
-**Hints**
-
-- Lab 01 created five policies this way; `policies/usms-*-policy.json` has the shape.
-- A log-group ARN looks like
-  `arn:aws:logs:us-east-1:000000000000:log-group:/aws/lambda/usms-edge-*:*` - the trailing `:*`
-  covers the streams inside the group and is the part people leave off.
-- Lab 09 Step 4's audit script already knows how to list what a role carries.
-
----
-
-### Exercise 3 - Problem solving: an edge-readiness report
-
-**Requirements**
-
-Write `scripts/utilities/usms-edge-report.sh` which, for every Lambda function in the account whose
-name begins `usms-`, emits a single JSON document to stdout reporting: name, runtime, memory,
-timeout, number of published versions, number of aliases, whether environment variables are set, and
-a boolean `edge_eligible`.
-
-`edge_eligible` must be `true` only when all of: runtime is Node or Python; no environment variables;
-no VPC configuration; at least one published version; memory no greater than 128 and timeout no
-greater than 5 **if** the function's name contains `viewer`, otherwise memory no greater than 10240
-and timeout no greater than 30.
-
-**Constraints**
-
-- Valid JSON on stdout and nothing else; diagnostics go to stderr.
-- Must run correctly from any directory.
-- Must not fail under `set -u` when a function has no `Environment` key at all.
-- Do not hard-code the function list.
-
-**Expected outcome**
-
-```text
-Expected shape:
-[
-  { "name": "usms-edge-viewer-request", "runtime": "nodejs20.x", "memory": 128,
-    "timeout": 5, "versions": 1, "aliases": 0, "env_vars": false, "edge_eligible": true },
-  ...
-]
-```
-
-Three objects, and the notifier reporting `edge_eligible: false` for two independent reasons.
-
-**Hints**
-
-- Step 14's `edge_eligibility` function has the per-field logic; this exercise is about structuring
-  the output, not rediscovering the rules.
-- `aws lambda list-functions --query 'Functions[?starts_with(FunctionName, ...)]'` gets you the list
-  in one call, with most of the configuration already in it.
-- Building JSON by string concatenation in bash is how you produce invalid JSON. Pipe the AWS output
-  into `python3` and build the document there.
-- `${BASH_SOURCE[0]}` is how the other scripts in this repository find the root.
-
----
-
-### Exercise 4 - Challenge: design the transcript delivery policy
-
-The registrar has read about edge functions and has brought you four requirements. They have not
-brought you a design.
-
-> Transcripts must never be served to a request without a valid session token, and the check must not
-> cost us an origin request. A corrected transcript must stop being served within five minutes of the
-> correction, but we do not want to pay to re-fetch unchanged transcripts every five minutes. The
-> Dean's office needs a report of how many transcript requests were refused, by faculty. And whatever
-> you build must survive one edge location being unable to reach the origin.
-
-**Requirements**
-
-Write `notes/lab-10-edge-design.md` - one to two pages - that:
-
-1. Chooses, for each piece of logic, between a CloudFront Function, a Lambda@Edge function at a named
-   trigger point, and a regional function. Justify each choice in one or two sentences.
-2. States the cache key you would configure, and what you would deliberately **not** put in it.
-3. Explains how the five-minute correction window and the do-not-re-fetch requirement can both be
-   met, given that they appear to conflict.
-4. Says where the refusal report comes from, given that edge logs land in the region nearest the
-   viewer.
-5. Names one requirement here that an edge function is the **wrong** tool for, and says what you would
-   use instead.
-
-**Constraints**
-
-- No commands. This is a design document.
-- Every AWS feature you name must be one that exists; if you are unsure, say what you would verify
-  and how.
-- You must state at least one thing you would measure before committing to the design, and what
-  result would change your mind.
-
-**Expected outcome**
-
-A document a colleague could implement from, in which the interesting paragraphs are the trade-offs
-rather than the feature list. There is more than one defensible answer to point 3; there is only one
-defensible attitude to point 5.
-
-**Hints**
-
-- Reread Step 12's argument about `origin-response` versus `viewer-response`. Point 3 is the same
-  kind of reasoning applied to TTLs: `Cache-Control: max-age` and `s-maxage` control different caches.
-- Point 4 is about where logs physically are, which Section 12.2 states.
-- Point 5: something in that list is not on the request path at all.
-
----
-
-### Exercise 5 - Integration: hand the S3 lab a bucket it can start from
-
-The next lab configures `usms-student-data` properly - versioning, encryption, lifecycle, and the
-bucket policy Lab 09 drafted. It needs to know what it is inheriting, and it needs the drafted policy
-checked against a bucket that now actually exists.
-
-**Requirements**
-
-1. Locate `outputs/lab-09-bucket-policy-draft.json`. If you skipped Lab 09's Exercise 5 and do not
-   have it, generate an equivalent draft from `USMSStudentDataReadWrite`: a resource policy on the
-   bucket granting the three role ARNs that carry that policy `s3:GetObject` on
-   `arn:aws:s3:::usms-student-data/*`. Write it to the same path.
-2. Validate it against reality: every bucket ARN it names must match the bucket that now exists, and
-   every principal ARN it names must be a role that currently exists. Report any mismatch; do not fix
-   it silently.
-3. **Do not apply it.** Applying a bucket policy is the S3 lab's step, and Floci does not evaluate it
-   anyway.
-4. Upload `outputs/lab-10-edge-trace.json` - the **allow** trace - to
-   `s3://usms-student-data/transcripts/evidence/lab-10-edge-trace.json`, and confirm from the logs or
-   from a direct invocation that the notifier saw it.
-5. Write `outputs/lab-10-s3-readiness.txt` containing: the bucket name and ARN; the number of
-   objects currently under `transcripts/`; the notification configuration id, target ARN and filter;
-   the three functions with their published versions; whether CloudFront was supported on your build;
-   and the validation result from point 2.
-
-**Constraints**
-
-- `outputs/lab-10-s3-readiness.txt` must be generated by a command sequence you can re-run, not
-  typed by hand.
-- Nothing in it may be a secret, but it stays in `outputs/` regardless - confirm with
-  `git check-ignore -v`.
-- The draft policy file must remain unapplied. Verify with
-  `aws s3api get-bucket-policy --bucket usms-student-data`, which should fail.
-
-**Expected outcome**
-
-```text
-Expected result:
-- outputs/lab-09-bucket-policy-draft.json exists and every ARN in it resolves
-- get-bucket-policy on usms-student-data FAILS (NoSuchBucketPolicy) - correct, the S3 configuration
-  lab applies it
-- at least two objects under transcripts/
-- outputs/lab-10-s3-readiness.txt exists, is git-ignored, and is reproducible
-```
-
-**Hints**
-
-- `aws iam list-entities-for-policy --policy-arn <USMSStudentDataReadWrite>` gives you the roles that
-  carry it; Lab 08's Section 17 pre-flight used exactly this call and expected three names.
-- A failing `get-bucket-policy` is the success condition here. `|| echo "no bucket policy - correct"`
-  turns that into readable output.
-- Step 20's `for candidate in ...` loop is the pattern for "use this file if it exists, otherwise
-  generate one".
-
----
-
-## 14. Lab Assessment Checklist
-
-Tick these before you submit. Every one is checkable by a command you have already run.
-
-**Environment and cumulative state**
-
-- [ ] `floci-storage-check.sh` reports `PASS=16  FAIL=0`
-- [ ] Every `configs/lab-NN.env` from Labs 01 through 09 was sourced in Step 2 without error
-- [ ] `whoami.sh` reports account `000000000000`
-
-**Resources**
-
-- [ ] `usms-student-data` exists and is tagged `Project=USMS`
-- [ ] `USMSStudentDataReadWrite` resolves to the bucket that now exists
-- [ ] `usms-lambda-exec-role` trusts both `lambda.amazonaws.com` and `edgelambda.amazonaws.com`
-- [ ] `usms-edge-viewer-request` exists, 128 MB, 5 s, no environment variables, version 1 published
-- [ ] `usms-edge-origin-response` exists, no environment variables, version 1 published
-- [ ] `usms-transcript-notifier` exists with environment variables and alias `live`
-- [ ] A resource policy on `...:live` names `s3.amazonaws.com` and is scoped by source ARN
-- [ ] The bucket notification is filtered to `transcripts/` and `.json`
-
-**Evidence**
-
-- [ ] `outputs/lab-10-viewer-allow.json` shows a normalised URI and a stamped header
-- [ ] `outputs/lab-10-viewer-deny.json` is a response object with status `403`
-- [ ] `outputs/lab-10-origin-response.json` shows four security headers plus `cache-control`
-- [ ] `outputs/lab-10-edge-trace.json` shows a three-stage chain with `x-usms-edge-chain`
-- [ ] `outputs/lab-10-function-inventory.json` contains no `NO` lines
-- [ ] `outputs/lab-10-pre-restart.txt` and `-post-restart.txt` are identical
-
-**Artefacts and hygiene**
-
-- [ ] `configs/lab-10.env` has 25 exports and no empty values
-- [ ] `scripts/utilities/verify-lab-10.sh` reports `PASS=51  FAIL=0`
-- [ ] `scripts/cleanup/lab-10-cleanup.sh` exists and has **not** been run
-- [ ] `git status --short` shows no `outputs/` path and no `.zip`
-- [ ] The commit from Step 24 exists
-
-**Understanding**
-
-- [ ] `notes/lab-10-notes.md` answers all six review questions in prose
-- [ ] Exercises 1 to 5 are recorded in `labs/lab-10-lambda-edge/exercises.md`
-- [ ] `notes/lab-10-edge-design.md` exists (Exercise 4)
-
-### 14.1 In-class practical assessment
-
-75 minutes, 100 marks. Open notes, open documentation. Your own repository only.
-
-**Task A - build (30 marks).** Create a third edge function, `usms-edge-viewer-response`, in Node.js,
-which adds a single header `x-usms-served-by` whose value is the string `usms-edge`. Configure it for
-the correct trigger point's caps, publish a version, and add it to
-`templates/lab-10-distribution-config.json` as a third association. Marks: function exists and is
-correctly configured (10), invoked successfully against a hand-built `viewer-response` event (10),
-association added with a version-qualified ARN and the file still valid JSON (10).
-
-**Task B - diagnose (25 marks).** You are given the following, and asked what is wrong and how you
-would confirm it:
-
-> A colleague's `viewer-request` function works when invoked directly but the distribution update
-> fails. Their function has `--memory-size 256`, one environment variable, and is associated using
-> `arn:aws:lambda:us-east-1:000000000000:function:their-fn:prod`, where `prod` is an alias pointing at
-> version 4.
-
-Name every distinct reason the update fails - there are three - and give one command per reason that
-would have caught it before the update was attempted. Marks: three faults named (15), three commands
-that genuinely detect them (10).
-
-**Task C - explain (25 marks).** In no more than 300 words in
-`outputs/lab-10-assessment-c.md`: why does Lambda@Edge accept only a version-qualified ARN, and why
-is the alias - which is stable, named and repointable - specifically the wrong answer? Your answer
-must refer to replication.
-
-**Task D - verify (20 marks).** Run `./scripts/utilities/verify-lab-10.sh` and capture its output to
-`outputs/lab-10-assessment-d.txt`. Then deliberately break exactly one configuration the script
-checks, re-run it, and write one sentence naming which check caught you and one sentence saying what
-a student who only checked *existence* would have concluded instead. Restore the configuration.
-Marks: `FAIL=0` before and after (10), the break-and-catch narrative (10).
-
----
-
-## 15. Review Questions
-
-Answer in prose in `notes/lab-10-notes.md`. No command output - these are about reasoning, and a
-transcript of a terminal is not an answer to any of them.
-
-**1.** A colleague proposes moving the whole USMS enrolment API to Lambda@Edge, "because it will be
-faster for everyone". Give the two strongest technical arguments against, and describe the one
-situation in which they would be right.
-
-**2.** Distinguish **CloudFront Functions** from **Lambda@Edge**. Cover runtime, available trigger
-points, what each can and cannot do, and relative cost per invocation. Then state, for each of these
-three jobs, which you would use and why: rewriting a URI to add `/index.html`; checking a JWT
-signature; fetching a per-user redirect target from DynamoDB.
-
-**3.** Step 12 put the security headers at `origin-response` rather than `viewer-response`, and said
-the output would be identical either way. Explain the difference that made the choice, in terms of
-when each function runs relative to the cache. Then describe a requirement that would force you to
-choose `viewer-response` despite the cost.
-
-**4.** Your function's execution role grants `s3:GetObject` on the transcripts bucket, and its
-resource policy allows `s3.amazonaws.com` to invoke it. A colleague says this is redundant - "S3 is
-already allowed, twice". Explain why the two policies are not the same permission, in terms of who is
-making which call. Then say what breaks if you delete each one, separately.
-
-**5.** Step 19 added `--source-arn` and `--source-account` to a permission that would have worked
-without them. Explain the attack they prevent, concretely enough that someone could carry it out.
-Then name the equivalent mechanism you saw in Lab 09, and say what makes the two the same idea.
-
-**6.** Step 14 set environment variables on an edge function and the call succeeded - on Floci and on
-real AWS. Yet the configuration is invalid. Explain where the validation actually happens, why AWS
-does not reject it at the point of the mistake, and what that implies about how you should check
-edge-function configuration. Relate your answer to the course's rule that a command appearing to
-succeed is not evidence that it did what you meant.
-
----
-## 16. What We Built
-
-### 16.1 The reflection
-
-Three functions, and the interesting thing about them is not that they are three - it is that they
-are two different kinds.
-
-The two edge functions have no configuration channel, a hard memory and timeout cap set by the
-trigger point they are attached to, a choice of two languages, and they can only ever be referred to
-by an ARN that can never move. Every
-one of those is a consequence of one fact: the code is going to be copied to hundreds of places and
-run there, on a request path, while somebody waits. Restrictions that look arbitrary in a list stop
-looking arbitrary once you know what they are protecting.
-
-The regional function has environment variables, more memory than it needs, thirty seconds, any
-runtime, and an alias you can repoint in one call. It does not run while anybody is waiting.
-
-If you take one thing from this lab, take the question that separates them: **does this have to
-happen before the viewer can be answered?** Everything else - the trigger point, the memory, the
-qualification rule - follows from the answer.
-
-The second thing worth keeping is what Step 5 did. For five labs, `USMSStudentDataReadWrite` named a
-bucket that did not exist, and every audit of it was correct and meaningless. IAM policies describe a
-namespace, not an inventory. That is a useful property - you can write your access model before you
-build anything - and it is a dangerous one, because "the policy is correct" and "the access model
-works" are different claims, and only one of them can be checked without the resource.
-
-And the third: Step 14, where a wrong configuration was accepted by the API that received it, and
-would have been rejected minutes later by a different API about a different resource. That is the
-course's founding rule in a new costume. A command that appears to succeed is not evidence that it
-did what you meant - so where a property matters, check it, statically, on every run. Ten checks in
-`verify-lab-10.sh` exist for no other reason.
-
-### 16.2 KEEP versus CLEAN UP
-
-```text
-╔═══════════════════════ KEEP ═══════════════════════╗    ╔════════════ CLEAN UP ════════════╗
-║ usms-student-data ... S3 lab configures it         ║    ║ nothing.                          ║
-║ transcripts/evidence/* .... the S3 lab's inventory ║    ║                                   ║
-║ usms-edge-viewer-request ... + version 1           ║    ║ This lab creates no temporary     ║
-║ usms-edge-origin-response .. + version 1           ║    ║ resources, no credentials and no  ║
-║ usms-transcript-notifier ... + version 1 + live    ║    ║ practice artefacts that conflict  ║
-║ the resource policy on ...:live                    ║    ║ with anything later.              ║
-║ the bucket notification configuration              ║    ║                                   ║
-║ usms-lambda-exec-role's two-principal trust policy ║    ║ The environment variables added   ║
-║ the CloudFront distribution, if you took Path A    ║    ║ in Step 14 were already removed   ║
-║ configs/lab-10.env                                 ║    ║ in Step 14 part 2 - that is the   ║
-║ usms-edge-simulate.sh, verify-lab-10.sh            ║    ║ only undo this lab needs.         ║
-║ outputs/lab-10-*  (git-ignored, but keep on disk)  ║    ║                                   ║
-╚════════════════════════════════════════════════════╝    ╚═══════════════════════════════════╝
-```
-
-If you did Exercise 1, you also have version 2 of the origin-response function; keep it. If you did
-Exercise 2, you have `usms-edge-exec-role` and `USMSEdgeBasic`; keep those too and note them in your
-exercises file, because the S3 configuration lab's IAM inventory will find them and you want to know
-why they are there.
-
-If you did the Step 18 Your-turn, check that `live` is pointing back at version 1 before you finish:
-
-```bash
-aws lambda get-alias --function-name usms-transcript-notifier --name live \
-  --query 'FunctionVersion' --output text
-```
-
-### 16.3 The end-of-course cleanup script
+### 8.2 Build the end-of-course cleanup script
 
 !!! danger "DO NOT RUN THIS NOW"
     **What will be deleted:** all three Lambda functions and every version and alias of them, the
@@ -4884,20 +3140,411 @@ chmod +x scripts/cleanup/lab-10-cleanup.sh
 bash -n scripts/cleanup/lab-10-cleanup.sh && echo "syntax OK - and do not run it"
 ```
 
-Three things about the order, because the order is the lesson:
+The order is the lesson: remove the notification first (stop the traffic, then the target); unqualified `delete-function` deletes **every** version (`--qualifier 1` deletes one); and a bucket must be emptied before deletion, where `aws s3 rm --recursive` is simpler than a paginated `s3api delete-objects` loop.
 
-**The notification goes first.** Deleting a function that an active notification points at leaves S3
-trying to invoke something that is not there. Stop the traffic, then remove the target.
+---
 
-**`delete-function` without `--qualifier` deletes every version.** With `--qualifier 1` it deletes
-only that version. The unqualified form is what you want at the end of a course and is emphatically
-not what you want when you meant to remove one bad release.
+## 9. Checkpoints
 
-**A bucket must be empty before it can be deleted.** `aws s3 rm --recursive` is one of the few places
-this course prefers `aws s3` to `aws s3api`, because the `s3api` equivalent is a paginated
-`delete-objects` loop and this is exactly the file-moving job the high-level commands exist for.
+| # | After Step | What must exist | How to check it in one line |
+| --- | --- | --- | --- |
+| 1 | 5 | `usms-student-data`, tagged, and `USMSStudentDataReadWrite` resolving to it | `aws s3api head-bucket --bucket usms-student-data` |
+| 2 | 6 | `usms-lambda-exec-role` trusting both `lambda` and `edgelambda` | `aws iam get-role --role-name usms-lambda-exec-role --query 'length(Role.AssumeRolePolicyDocument.Statement[0].Principal.Service)'` |
+| 3 | 9 | `usms-edge-viewer-request`, invoked on both the allow and the deny path | `python3 -m json.tool outputs/lab-10-viewer-allow.json` |
+| 4 | 11 | Version 1 of the viewer function, and a version-qualified ARN | `aws lambda list-versions-by-function --function-name usms-edge-viewer-request --query 'Versions[].Version'` |
+| 5 | 14 | Both edge functions edge-eligible: no env vars, within caps, published | `grep -c '  NO   ' outputs/lab-10-function-inventory.json` |
+| 6 | 15 | A distribution, or a validated configuration, associating both functions | `python3 -m json.tool templates/lab-10-distribution-config.json` |
+| 7 | 16 | The chain running end to end, allow and deny | `./scripts/utilities/usms-edge-simulate.sh` |
+| 8 | 18 | `usms-transcript-notifier`, version 1, alias `live` | `aws lambda list-aliases --function-name usms-transcript-notifier` |
+| 9 | 20 | Bucket notification wired to the alias and an object uploaded | `aws s3api get-bucket-notification-configuration --bucket usms-student-data` |
+| 10 | 22 | All of the above surviving a stop and start | `diff outputs/lab-10-pre-restart.txt outputs/lab-10-post-restart.txt` |
+| 11 | 24 | A commit containing the source and no `outputs/` path | `git show --stat HEAD` |
 
-### 16.4 The architecture, now
+---
+
+## 10. Troubleshooting
+
+!!! warning "Known issue on Floci 2.0.1"
+    On Floci 2.0.1, functions do not run at edge locations. Diagnose first, then use the alternative in [Known Issues - Lab 10](known-issues.md#lab-10-lambda). It states what the alternative does and does not prove.
+
+### `aws lambda list-functions` returns a connection error, exit code 255
+
+Exit `255` is a client or connection failure: Floci is not answering.
+
+{% raw %}```bash
+docker container inspect floci --format '{{.State.Status}}'
+./scripts/setup/floci-up.sh
+curl -s http://localhost:4566/_localstack/health | head -5
+```{% endraw %}
+
+If the container runs but the health probe is empty, Floci is still starting (the first start after an image pull can take a minute).
+
+### `create-function` fails with `InvalidParameterValueException: The role defined for the function cannot be assumed by Lambda`
+
+The trust policy does not name `lambda.amazonaws.com`, usually because Step 6's update named only `edgelambda` (the update **replaces** the whole policy).
+
+```bash
+aws iam get-role --role-name usms-lambda-exec-role \
+  --query 'Role.AssumeRolePolicyDocument.Statement[].Principal.Service' --output json
+```
+
+You need two entries. Re-run Step 6 parts 2 and 3 if you see one.
+
+### The function returns `Unhandled` with `Cannot find module 'index'`
+
+The archive does not hold `index.mjs` at its root, or the handler string does not match. Look inside:
+
+```bash
+python3 -m zipfile -l outputs/usms-edge-viewer-request.zip
+aws lambda get-function-configuration --function-name usms-edge-viewer-request --query 'Handler'
+```
+
+`labs/lab-10-lambda-edge/edge-viewer-request/index.mjs` instead of `index.mjs` means you zipped from the repository root. Rebuild from inside the function's directory (Step 8 part 1).
+
+### The function runs but the student id in `x-usms-edge` is empty
+
+The Step 7 heredoc was unquoted and bash expanded the template literal.
+
+```bash
+grep -n 'toLowerCase()}' labs/lab-10-lambda-edge/edge-viewer-request/index.mjs
+```
+
+No output means the expression is gone. Re-run Step 7 with `<< 'EOF'`, rebuild the archive, and update the code:
+
+```bash
+aws lambda update-function-code --function-name usms-edge-viewer-request \
+  --zip-file fileb://outputs/usms-edge-viewer-request.zip
+```
+
+Then publish a new version; version 1 is immutable and still broken.
+
+### `invoke` writes an empty file and prints nothing useful
+
+You probably omitted the positional output-file argument; the return value goes there and only metadata to stdout. Also check you used `--payload fileb://`, not `file://` (the error mentions base64, not your file).
+
+### `LogResult` is `None`, or the log group does not exist
+
+Log capture is build-dependent. Confirm the function ran from its return value (Step 9's payload). If this build gives no logs, read the **returned object** instead; the notifier returns a summary for this reason.
+
+### The upload in Step 20 produces no invocation
+
+Three candidates, in order:
+
+```bash
+# 1. does the key match the filter?
+aws s3api list-objects-v2 --bucket usms-student-data --query 'Contents[].Key' --output text
+
+# 2. is the notification actually configured?
+aws s3api get-bucket-notification-configuration --bucket usms-student-data
+
+# 3. can the function be invoked at all, given a hand-made event?
+aws lambda invoke --function-name usms-transcript-notifier --qualifier live \
+  --payload fileb://templates/lab-10-s3-event.json /dev/stdout
+```
+
+If 1 and 2 are correct and 3 works, delivery is not implemented on your build (the Step 21 limitation). Record it and move on.
+
+### `create-distribution` fails with `InvalidArgument` or the operation does not exist
+
+Your build lacks CloudFront. Take Path B in Step 15. Nothing later depends on the distribution: Step 16 is the proof and Section 8 verifies the configuration file.
+
+### `put-bucket-notification-configuration` fails with `InvalidArgument: Unable to validate the following destination configurations`
+
+On real AWS, S3 checks at configuration time that it may invoke the target. Re-run Step 19 and confirm with `aws lambda get-policy --function-name usms-transcript-notifier --qualifier live`. A permission on the unqualified function does not cover `:live`.
+
+### `verify-lab-10.sh` reports `configs/lab-10.env has 25 exports` as a failure
+
+```bash
+grep -c '^export' configs/lab-10.env
+grep -nE '^export [A-Z_]+=$' configs/lab-10.env
+```
+
+An empty value means its `$(...)` returned nothing, usually because a shell variable was empty in a new terminal. Re-derive the value with an `aws` call, or re-run Step 23 in a shell where the Step 8 to 18 variables are set.
+
+### Everything worked yesterday and nothing works today
+
+```bash
+./scripts/utilities/floci-storage-check.sh
+```
+
+`FAIL` in the shell block means a new terminal lost the course environment (Errata 01). `FAIL` on the storage-mode check means Floci ran in `memory` mode and yesterday's work is gone; fix the compose file.
+
+---
+
+## 11. Floci vs Real AWS
+
+| Feature | Real AWS | Floci | Status |
+| --- | --- | --- | --- |
+| `create-function`, `update-function-code`, `publish-version` | Full lifecycle, code stored in S3 behind the scenes | Works; code stored and executed in a container | **Implemented in Floci** |
+| Synchronous `invoke` with a JSON payload | Runs the handler, returns its value | Runs the handler, returns its value | **Implemented in Floci** |
+| Versions and aliases | Immutable versions, movable aliases | Both recorded and resolvable; `--qualifier` works | **Implemented in Floci** |
+| Environment variables | Injected into the runtime, encrypted at rest with KMS | Injected; no encryption | **Implemented in Floci** |
+| `--log-type Tail` and `/aws/lambda/<fn>` log groups | Always present | Build-dependent; may return empty `LogResult` | **Floci Limitation** |
+| Resource policy (`add-permission`, `get-policy`) | Checked on every invocation | Stored and returned; never checked | **Floci Limitation** |
+| Execution role permissions | Enforced per API call made by your code | Not enforced; any call your code makes succeeds or fails on connectivity alone | **Floci Limitation** |
+| S3 `ObjectCreated` notification to Lambda | Delivered within seconds | Configuration stored; delivery build-dependent | **Floci Limitation** |
+| Credentials inside the Lambda container | Supplied automatically from the execution role | Often absent; `boto3` may try to reach real AWS | **Floci Limitation** |
+| `cloudfront create-distribution` | Creates a real distribution, `InProgress` then `Deployed` | Absent on many builds; a record at best | **Floci Limitation** |
+| `LambdaFunctionAssociations` validation | Region, version-qualified ARN, no env vars, caps - all checked and rejected | Stored without validation | **Floci Limitation** |
+| Lambda@Edge replication and execution | Function copied to every point of presence, runs on the request path | Never executed. No emulator does this | **Conceptual / Real AWS** |
+| Edge logs in the region nearest the viewer | Yes - a function serving Bhutan logs to an Asia-Pacific region | No edge locations exist | **Conceptual / Real AWS** |
+| CloudFront Functions (`cloudfront-js-2.0`) | Separate runtime, viewer triggers only, sub-millisecond | Absent | **Conceptual / Real AWS** |
+| Cache behaviour, TTLs, cache hit ratio | Real caching with measurable hit rates | No cache exists | **Conceptual / Real AWS** |
+| Origin access control, signed URLs, WAF at the edge | Available | Absent | **Conceptual / Real AWS** |
+| Cost: per-request, per-GB-second, per-replication | Real, and edge invocations are priced differently from regional ones | Free | **Conceptual / Real AWS** |
+
+**Where Floci is nicer than reality (traps on real AWS):** associations are accepted without validation (real AWS rejects the whole `update-distribution`, minutes later, about a different resource); deployment is instant (a real distribution and every function-version update take minutes, so an edge rollback takes minutes); nothing is cached (on CloudFront, a wrong `origin-response` header is baked into cached objects until invalidation or TTL); IAM is not evaluated (a missing resource policy makes S3 notifications fail silently); no cold starts, concurrency limits or throttling; and no cost (edge invocations have no free tier, and Step 12's trigger choice is a three-order-of-magnitude billing difference).
+
+In your report, separate what you **observed** (functions created and invoked, the event structure, requests modified and refused, responses modified, two functions composing, versions, aliases, the resource policy, the bucket and notification, persistence) from what you only **recorded** (the two-principal trust rule, the distribution configuration, the qualified-ARN rule, the no-environment-variables rule, the caps). Latency, caching and cost were not available at all, and must not be claimed as tested.
+
+!!! note "Floci Limitation - the one that shapes this whole lab"
+    Floci does not run Lambda@Edge: there is no edge location and no request path to intercept.
+
+    Real AWS replicates the published version to every point of presence in the price class and runs it there, logging to the region nearest the viewer.
+
+    This lab exercises the whole function contract directly, plus `usms-edge-simulate.sh` in CloudFront's order.
+
+---
+
+## 12. Independent Lab Exercises
+
+Record commands and output in `labs/lab-10-lambda-edge/exercises.md`; several exercises also ask for a file in `outputs/`.
+
+### Exercise 1 - Basic: extend the security header set
+
+**Requirements:** add `Content-Security-Policy: default-src 'self'` to the origin-response function, deploy it, publish version 2, and prove version 1 still returns the original four headers.
+
+**Constraints**
+
+- Add it by editing the `SECURITY_HEADERS` object, not with a second block of code.
+- Do not delete or overwrite version 1.
+- Update the distribution configuration file to reference the new version.
+
+**Expected outcome:** `$LATEST` returns five security headers; `--qualifier 1` returns four; `templates/lab-10-distribution-config.json` names version 2.
+
+**Hints:** `update-function-code` takes the same `--zip-file fileb://`. `--qualifier` works on `invoke`. Update the code, then publish.
+
+### Exercise 2 - Intermediate: a dedicated edge execution role
+
+**Requirements:** the edge functions never touch the bucket. Create `usms-edge-exec-role` with a new customer managed policy `USMSEdgeBasic` granting **only** CloudWatch Logs writes, trusting both `lambda.amazonaws.com` and `edgelambda.amazonaws.com`. Repoint both edge functions at it and publish new versions. Then explain in `exercises.md` what happened to version 1's role.
+
+**Constraints**
+
+- Use `policies/usms-edge-basic-policy.json`; reuse `policies/trust-lambda-edge.json` as-is.
+- Do not modify or detach anything from `usms-lambda-exec-role`; the notifier still uses it.
+- Scope log writes to `/aws/lambda/usms-edge-*`, not `*`.
+
+**Expected outcome:** `--qualifier 1` still reports the **old** role; `$LATEST` reports the new one. Your answer explains why, and that rolling back to an old version restores its old role too.
+
+**Hints:** Lab 01's `policies/usms-*-policy.json` files show the shape. A log-group ARN ends `log-group:/aws/lambda/usms-edge-*:*`; the trailing `:*` covers the streams. Lab 09 Step 4's audit script lists what a role carries.
+
+### Exercise 3 - Problem solving: an edge-readiness report
+
+**Requirements:** write `scripts/utilities/usms-edge-report.sh` that emits one JSON document listing every `usms-` function with name, runtime, memory, timeout, published versions, aliases, whether environment variables are set, and `edge_eligible`. `edge_eligible` is `true` only when: Node or Python runtime; no environment variables; no VPC configuration; at least one published version; and memory at most 128 and timeout at most 5 **if** the name contains `viewer`, otherwise at most 10240 and 30.
+
+**Constraints**
+
+- Valid JSON on stdout only; diagnostics to stderr.
+- Runs correctly from any directory.
+- Does not fail under `set -u` when a function has no `Environment` key.
+- No hard-coded function list.
+
+**Expected outcome**
+
+```text
+Expected shape:
+[
+  { "name": "usms-edge-viewer-request", "runtime": "nodejs20.x", "memory": 128,
+    "timeout": 5, "versions": 1, "aliases": 0, "env_vars": false, "edge_eligible": true },
+  ...
+]
+```
+
+Three objects, with the notifier `edge_eligible: false` for two independent reasons.
+
+**Hints:** Step 14's `edge_eligibility` has the per-field logic. `list-functions` with a `starts_with` filter returns most of the configuration in one call. Build the JSON in `python3`, not by bash string concatenation. `${BASH_SOURCE[0]}` finds the repository root.
+
+### Exercise 4 - Challenge: design the transcript delivery policy
+
+The registrar brings requirements, not a design:
+
+> Transcripts must never be served to a request without a valid session token, and the check must not
+> cost us an origin request. A corrected transcript must stop being served within five minutes of the
+> correction, but we do not want to pay to re-fetch unchanged transcripts every five minutes. The
+> Dean's office needs a report of how many transcript requests were refused, by faculty. And whatever
+> you build must survive one edge location being unable to reach the origin.
+
+**Requirements:** write `notes/lab-10-edge-design.md` (one to two pages) that:
+
+1. Chooses, for each piece of logic, a CloudFront Function, Lambda@Edge at a named trigger point, or a regional function, justifying each in one or two sentences.
+2. States the cache key, and what you would deliberately **not** put in it.
+3. Explains how the five-minute correction window and the do-not-re-fetch requirement can both be met.
+4. Says where the refusal report comes from, given that edge logs land in the region nearest the viewer.
+5. Names one requirement an edge function is the **wrong** tool for, and what you would use instead.
+
+**Constraints**
+
+- No commands; this is a design document.
+- Every AWS feature named must exist; if unsure, say what you would verify and how.
+- State at least one thing you would measure first, and what result would change your mind.
+
+**Expected outcome:** a document a colleague could implement, whose interesting paragraphs are the trade-offs. Point 3 has more than one defensible answer.
+
+**Hints:** Step 12's `origin-response` versus `viewer-response` reasoning applies to TTLs: `max-age` and `s-maxage` control different caches. Section 11 says where edge logs land. Point 5: one requirement is not on the request path at all.
+
+### Exercise 5 - Integration: hand the S3 lab a bucket it can start from
+
+The next lab configures `usms-student-data` properly and applies Lab 09's drafted bucket policy. Prepare its inheritance.
+
+**Requirements**
+
+1. Locate `outputs/lab-09-bucket-policy-draft.json`. If missing, generate an equivalent: a bucket policy granting the three role ARNs that carry `USMSStudentDataReadWrite` `s3:GetObject` on `arn:aws:s3:::usms-student-data/*`, written to the same path.
+2. Validate it: every bucket ARN must match the existing bucket, every principal must be an existing role. Report mismatches; do not fix them silently.
+3. **Do not apply it.** That is the S3 lab's step.
+4. Upload the **allow** trace `outputs/lab-10-edge-trace.json` to `s3://usms-student-data/transcripts/evidence/lab-10-edge-trace.json` and confirm the notifier saw it (logs or a direct invocation).
+5. Write `outputs/lab-10-s3-readiness.txt`: bucket name and ARN; object count under `transcripts/`; the notification id, target ARN and filter; the three functions and their published versions; whether CloudFront was supported; and the point 2 result.
+
+**Constraints**
+
+- Generate the readiness file with a re-runnable command sequence, not by hand.
+- It stays in `outputs/`; confirm with `git check-ignore -v`.
+- The draft stays unapplied: `aws s3api get-bucket-policy --bucket usms-student-data` must fail.
+
+**Expected outcome**
+
+```text
+Expected result:
+- outputs/lab-09-bucket-policy-draft.json exists and every ARN in it resolves
+- get-bucket-policy on usms-student-data FAILS (NoSuchBucketPolicy) - correct, the S3 configuration
+  lab applies it
+- at least two objects under transcripts/
+- outputs/lab-10-s3-readiness.txt exists, is git-ignored, and is reproducible
+```
+
+**Hints:** `aws iam list-entities-for-policy` lists the roles carrying a policy. `|| echo "no bucket policy - correct"` makes the expected failure readable. Step 20's `for candidate in ...` loop is the "use this file if it exists, otherwise generate one" pattern.
+
+---
+
+## 13. Lab Assessment Checklist
+
+Tick these before you submit. Every one is checkable by a command you have already run.
+
+**Environment and cumulative state**
+
+- [ ] `floci-storage-check.sh` reports `PASS=16  FAIL=0`
+- [ ] Every `configs/lab-NN.env` from Labs 01 through 09 was sourced in Step 2 without error
+- [ ] `whoami.sh` reports account `000000000000`
+
+**Resources**
+
+- [ ] `usms-student-data` exists and is tagged `Project=USMS`
+- [ ] `USMSStudentDataReadWrite` resolves to the bucket that now exists
+- [ ] `usms-lambda-exec-role` trusts both `lambda.amazonaws.com` and `edgelambda.amazonaws.com`
+- [ ] `usms-edge-viewer-request` exists, 128 MB, 5 s, no environment variables, version 1 published
+- [ ] `usms-edge-origin-response` exists, no environment variables, version 1 published
+- [ ] `usms-transcript-notifier` exists with environment variables and alias `live`
+- [ ] A resource policy on `...:live` names `s3.amazonaws.com` and is scoped by source ARN
+- [ ] The bucket notification is filtered to `transcripts/` and `.json`
+
+**Evidence**
+
+- [ ] `outputs/lab-10-viewer-allow.json` shows a normalised URI and a stamped header
+- [ ] `outputs/lab-10-viewer-deny.json` is a response object with status `403`
+- [ ] `outputs/lab-10-origin-response.json` shows four security headers plus `cache-control`
+- [ ] `outputs/lab-10-edge-trace.json` shows a three-stage chain with `x-usms-edge-chain`
+- [ ] `outputs/lab-10-function-inventory.json` contains no `NO` lines
+- [ ] `outputs/lab-10-pre-restart.txt` and `-post-restart.txt` are identical
+
+**Artefacts and hygiene**
+
+- [ ] `configs/lab-10.env` has 25 exports and no empty values
+- [ ] `scripts/utilities/verify-lab-10.sh` reports `PASS=51  FAIL=0`
+- [ ] `scripts/cleanup/lab-10-cleanup.sh` exists and has **not** been run
+- [ ] `git status --short` shows no `outputs/` path and no `.zip`
+- [ ] The commit from Step 24 exists
+
+**Understanding**
+
+- [ ] `notes/lab-10-notes.md` answers all six review questions in prose
+- [ ] Exercises 1 to 5 are recorded in `labs/lab-10-lambda-edge/exercises.md`
+- [ ] `notes/lab-10-edge-design.md` exists (Exercise 4)
+
+### 13.1 In-class practical assessment
+
+75 minutes, 100 marks. Open notes, open documentation. Your own repository only.
+
+**Task A - build (30 marks).** Create a third edge function, `usms-edge-viewer-response`, in Node.js,
+which adds a single header `x-usms-served-by` whose value is the string `usms-edge`. Configure it for
+the correct trigger point's caps, publish a version, and add it to
+`templates/lab-10-distribution-config.json` as a third association. Marks: function exists and is
+correctly configured (10), invoked successfully against a hand-built `viewer-response` event (10),
+association added with a version-qualified ARN and the file still valid JSON (10).
+
+**Task B - diagnose (25 marks).** You are given the following, and asked what is wrong and how you
+would confirm it:
+
+> A colleague's `viewer-request` function works when invoked directly but the distribution update
+> fails. Their function has `--memory-size 256`, one environment variable, and is associated using
+> `arn:aws:lambda:us-east-1:000000000000:function:their-fn:prod`, where `prod` is an alias pointing at
+> version 4.
+
+Name every distinct reason the update fails - there are three - and give one command per reason that
+would have caught it before the update was attempted. Marks: three faults named (15), three commands
+that genuinely detect them (10).
+
+**Task C - explain (25 marks).** In no more than 300 words in
+`outputs/lab-10-assessment-c.md`: why does Lambda@Edge accept only a version-qualified ARN, and why
+is the alias - which is stable, named and repointable - specifically the wrong answer? Your answer
+must refer to replication.
+
+**Task D - verify (20 marks).** Run `./scripts/utilities/verify-lab-10.sh` and capture its output to
+`outputs/lab-10-assessment-d.txt`. Then deliberately break exactly one configuration the script
+checks, re-run it, and write one sentence naming which check caught you and one sentence saying what
+a student who only checked *existence* would have concluded instead. Restore the configuration.
+Marks: `FAIL=0` before and after (10), the break-and-catch narrative (10).
+
+---
+
+## 14. Review Questions
+
+Answer in prose in `notes/lab-10-notes.md`.
+
+1. A colleague proposes moving the whole USMS enrolment API to Lambda@Edge "because it will be faster for everyone". Give the two strongest technical arguments against, and the one situation in which they would be right.
+2. Distinguish CloudFront Functions from Lambda@Edge (runtime, trigger points, capabilities, relative cost). Which would you use to add `/index.html` to a URI, to check a JWT signature, and to fetch a per-user redirect from DynamoDB, and why?
+3. Step 12 put the security headers at `origin-response`, not `viewer-response`, with identical output. Explain the difference in terms of the cache, and describe a requirement that would force `viewer-response` despite the cost.
+4. The notifier's execution role grants `s3:GetObject`, and its resource policy lets `s3.amazonaws.com` invoke it. A colleague calls this redundant. Explain who makes which call under each policy, and what breaks if you delete each one separately.
+5. Step 19 added `--source-arn` and `--source-account` to a permission that worked without them. Describe the attack they prevent concretely, name the equivalent mechanism from Lab 09, and say what makes them the same idea.
+6. Step 14 set environment variables on an edge function and the call succeeded, yet the configuration is invalid. Where does validation actually happen, why is the mistake not rejected immediately, and what does that imply about checking edge configuration? Relate it to the rule that a command appearing to succeed is not evidence it did what you meant.
+
+---
+
+## 15. KEEP vs CLEAN UP
+
+```text
+╔═══════════════════════ KEEP ═══════════════════════╗    ╔════════════ CLEAN UP ════════════╗
+║ usms-student-data ... S3 lab configures it         ║    ║ nothing.                          ║
+║ transcripts/evidence/* .... the S3 lab's inventory ║    ║                                   ║
+║ usms-edge-viewer-request ... + version 1           ║    ║ This lab creates no temporary     ║
+║ usms-edge-origin-response .. + version 1           ║    ║ resources, no credentials and no  ║
+║ usms-transcript-notifier ... + version 1 + live    ║    ║ practice artefacts that conflict  ║
+║ the resource policy on ...:live                    ║    ║ with anything later.              ║
+║ the bucket notification configuration              ║    ║                                   ║
+║ usms-lambda-exec-role's two-principal trust policy ║    ║ The environment variables added   ║
+║ the CloudFront distribution, if you took Path A    ║    ║ in Step 14 were already removed   ║
+║ configs/lab-10.env                                 ║    ║ in Step 14 part 2 - that is the   ║
+║ usms-edge-simulate.sh, verify-lab-10.sh            ║    ║ only undo this lab needs.         ║
+║ outputs/lab-10-*  (git-ignored, but keep on disk)  ║    ║                                   ║
+╚════════════════════════════════════════════════════╝    ╚═══════════════════════════════════╝
+```
+
+If you did Exercise 1, keep version 2 of the origin-response function. If you did Exercise 2, keep `usms-edge-exec-role` and `USMSEdgeBasic` and note them in your exercises file. If you did Step 18's "Your turn", check that `live` points back at version 1:
+
+```bash
+aws lambda get-alias --function-name usms-transcript-notifier --name live \
+  --query 'FunctionVersion' --output text
+```
+
+Do **not** run `scripts/cleanup/lab-10-cleanup.sh`; it is for the end of the course.
 
 ```text
   IAM (Lab 01)                         NETWORK (Lab 02)
@@ -4926,15 +3573,9 @@ this course prefers `aws s3` to `aws s3api`, because the `s3api` equivalent is a
 
 ---
 
-## 17. Preparation for the Next Lab
+## 16. Preparation for the Next Lab
 
-The next lab to be written is the **S3 configuration lab** - the one this course has been anticipating
-since Lab 01, and which does not yet have a number or a file of its own in the current sequence. It
-will no longer open with a bucket that does not exist; it will open with one that does, holding real
-objects, wired to a real trigger, and still missing every piece of configuration that makes a bucket
-production-ready.
-
-### What the S3 configuration lab will consume
+The next lab is the **S3 configuration lab**, not yet numbered. It opens with a real bucket holding real objects and a real trigger, still missing versioning, encryption, lifecycle rules and a bucket policy.
 
 | Artefact | From | How it will be used |
 | --- | --- | --- |
@@ -4947,22 +3588,9 @@ production-ready.
 | `transcripts/evidence/*` | Step 20, Exercise 5 | The objects it enables versioning on, and then modifies to show version history |
 | `usms-s3-endpoint` | Lab 02 | Finally explained in full: why a private-subnet caller reaches this bucket without a NAT hop |
 
-### The thing the S3 configuration lab must be careful about
+**Be careful:** `put-bucket-notification-configuration` replaces the whole notification document, so adding an SNS destination without get-merge-put silently deletes Step 20's Lambda notification. Replace-only APIs are a category: `update-assume-role-policy`, `put-bucket-notification-configuration`, `put-bucket-policy`, `put-bucket-tagging`.
 
-`put-bucket-notification-configuration` **replaces** the bucket's entire notification document. It
-will add an SNS destination, and if it sends a document containing only the SNS configuration, the
-Lambda notification you built in Step 20 disappears - silently, with a successful API call. The
-sequence has to be get, merge, put.
-
-That is worth flagging now rather than discovering later, and it is the same shape as the trust-policy
-replacement in this lab's Step 6. Replace-only APIs are a category, and the category is worth
-recognising: `update-assume-role-policy`, `put-bucket-notification-configuration`,
-`put-bucket-policy`, `put-bucket-tagging`. Every one of them will happily delete something you did not
-mention.
-
-### Pre-session checks
-
-Run these before the next session. All four should pass.
+Before the next session (all four should pass):
 
 ```bash
 cd ~/aws-floci-course
@@ -4975,15 +3603,14 @@ aws s3api get-bucket-policy --bucket usms-student-data 2>/dev/null \
   || echo "no bucket policy yet - correct, the S3 configuration lab applies it"
 ```
 
-### Snapshot before you finish
+Take a snapshot before you finish:
 
 ```bash
 floci snapshot save lab-10-complete
 floci snapshot list
 ```
 
-If `floci snapshot` is not available on your build, use the filesystem fallback - and stop Floci
-first, because archiving a live data directory can capture a half-written file:
+If `floci snapshot` is unavailable, stop Floci first and archive outside the repository:
 
 ```bash
 ./scripts/setup/floci-down.sh
@@ -4993,67 +3620,9 @@ tar -czf ~/floci-data-lab-10.tar.gz -C ~ floci-data
 
 Keep the archive **outside** the repository so it is never a commit candidate.
 
-### Read ahead
-
-Three things, each of which the S3 configuration lab assumes you have thought about for five minutes:
-
-- **S3 versioning is a bucket-level switch that cannot be turned off**, only suspended. Consider what
-  that means for a bucket that already has objects in it.
-- **A bucket policy and an identity policy can both grant access to the same object.** You have now
-  seen this pattern twice - at the function in Step 19, and here. Think about which one you would use
-  to grant access to a principal in another account, and why the answer is not symmetric.
-- **`aws s3` versus `aws s3api`.** Step 5 and Section 16.3 each chose one deliberately. Look at both
-  choices and work out the rule they follow.
-
 ---
 
-## Appendix A - Command Reference
-
-Everything this lab used, in the order you met it.
-
-| Command | What it does here |
-| --- | --- |
-| `aws s3api head-bucket --bucket B` | Existence probe. Non-zero exit means absent |
-| `aws s3api create-bucket --bucket B` | Creates it. No `LocationConstraint` in `us-east-1` |
-| `aws s3api put-bucket-tagging --bucket B --tagging TagSet=[...]` | Tags the bucket |
-| `aws s3api put-object --bucket B --key K --body FILE` | Uploads one object |
-| `aws s3api list-objects-v2 --bucket B --prefix P` | Lists objects under a prefix |
-| `aws s3api put-bucket-notification-configuration --bucket B --notification-configuration file://F` | Sets the event configuration. **Replaces** the whole document |
-| `aws s3api get-bucket-notification-configuration --bucket B` | Reads it back |
-| `aws iam update-assume-role-policy --role-name R --policy-document file://F` | Replaces a trust policy |
-| `aws iam get-role --role-name R` | Reads the role, including the trust document |
-| `aws lambda create-function --function-name F --runtime R --role A --handler H --zip-file fileb://Z` | Creates a function |
-| `aws lambda update-function-code --function-name F --zip-file fileb://Z` | Replaces the code on `$LATEST` |
-| `aws lambda update-function-configuration --function-name F --environment Variables={...}` | Changes configuration. `Variables={}` clears |
-| `aws lambda get-function-configuration --function-name F [--qualifier Q]` | Reads one function, optionally one version or alias |
-| `aws lambda list-functions` | All functions in the account |
-| `aws lambda invoke --function-name F --payload fileb://E OUTFILE` | Synchronous invocation. `OUTFILE` is positional and required |
-| `aws lambda invoke ... --log-type Tail --query LogResult` | Returns the last 4 KB of logs, base64 |
-| `aws lambda publish-version --function-name F` | Freezes `$LATEST` as a numbered version |
-| `aws lambda list-versions-by-function --function-name F` | All versions including `$LATEST` |
-| `aws lambda create-alias --function-name F --name N --function-version V` | Creates a movable pointer |
-| `aws lambda update-alias --function-name F --name N --function-version V` | Repoints it |
-| `aws lambda get-alias` / `list-aliases` | Reads aliases |
-| `aws lambda add-permission --function-name F --qualifier Q --principal P --source-arn A` | Resource policy statement: who may invoke |
-| `aws lambda remove-permission --function-name F --qualifier Q --statement-id S` | Removes one statement |
-| `aws lambda get-policy --function-name F --qualifier Q` | Reads the resource policy. Returns JSON **as a string** |
-| `aws lambda wait function-active-v2 --function-name F` | Blocks until the function is ready |
-| `aws lambda delete-function --function-name F [--qualifier V]` | Without a qualifier, deletes every version |
-| `aws cloudfront create-distribution --distribution-config file://F` | Creates a distribution |
-| `aws cloudfront get-distribution --id D` | Reads it, including the associations |
-| `aws cloudfront list-distributions` | All distributions; also this lab's support probe |
-| `aws logs describe-log-groups --log-group-name-prefix P` | Finds a function's log group |
-| `aws logs filter-log-events --log-group-name G --filter-pattern T` | Searches across every stream in a group |
-| `python3 -m zipfile -c A.zip FILE` | Builds a deployment archive without needing `zip` |
-| `python3 -m zipfile -l A.zip` | Lists what is inside one - check this before blaming your handler |
-| `python3 -m json.tool F` | Validates and pretty-prints JSON |
-| `python3 -m py_compile F.py` | Syntax-checks Python without running it |
-| `node --check F.mjs` | Syntax-checks JavaScript without running it |
-| `openssl base64 -d -A` | Portable base64 decode. GNU uses `-d`, BSD uses `-D`; this works on both |
-
----
-
-## Appendix B - New JMESPath and CLI Patterns Introduced
+## Appendix - New CLI and JMESPath patterns
 
 Everything here is new to the course at Lab 10. Patterns from Labs 1 to 5 are assumed and are not
 repeated.
@@ -5117,7 +3686,7 @@ repeated.
 | Trigger points and their caps | Steps 8, 12, 14 |
 | Execution role versus resource policy | Step 19 |
 | Confused deputy, and `--source-arn` as its answer | Step 19 |
-| Replace-only APIs | Steps 6, 20, and Section 17 |
+| Replace-only APIs | Steps 6, 20, and Section 16 |
 
 ---
 
@@ -5137,11 +3706,6 @@ repeated.
 - [The confused deputy problem - AWS IAM User Guide](https://docs.aws.amazon.com/IAM/latest/UserGuide/confused-deputy.html)
 - [Loading parameters from a file - AWS CLI User Guide](https://docs.aws.amazon.com/cli/latest/userguide/cli-usage-parameters-file.html)
 - [`aws lambda invoke` - AWS CLI Command Reference](https://docs.aws.amazon.com/cli/latest/reference/lambda/invoke.html)
-- Course documents: Lab 01 (IAM), Lab 02 Section 17 (the S3 gateway endpoint), Lab 03 Section 17
+- Course documents: Lab 01 (IAM), Lab 02 Step 21 (the S3 gateway endpoint), Lab 03 Section 17
   (the `head-bucket` probe that was expected to fail), Lab 06 Section 17, Lab 09 Step 4 and its
   identity-versus-resource-policy distinction, Lab 08 Section 17, Errata 01.
-
----
-
-*Lab 10 complete. The bucket exists, the edge functions compose, and the next lab finally gets to
-configure the thing every policy in this course has been pointing at.*

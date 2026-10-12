@@ -1,151 +1,45 @@
 # Lab 05 - Putting the ECS Service Behind an Application Load Balancer
 
-## 1. Lab Overview
+## 1. Objectives
 
-Lab 04 left you with a service that works and that nothing can reach. 
-`usms-enrolment-svc` runs two Fargate tasks in private subnets. Each task has its own elastic network
-interface, its own private address, and a security group that admits the web tier. And every one of
-those addresses is temporary: a task that stops takes its address with it, and a task that starts
-invents a new one. There is no name, no fixed address, and nothing that survives a deployment. The
-service is real, and there is no sentence you can write in a client's configuration file that points at
-it.
+- Give Lab 04's `usms-enrolment-svc` a stable name: an internet-facing Application Load Balancer in Lab 2's two public subnets, with its own security group.
+- Create a target group (`--target-type ip`) with a deliberate health check and deregistration delay, a listener with a default action, and one listener rule.
+- Attach the existing service to the target group so ECS registers and deregisters its own tasks, then cut over so the load balancer is the only thing that can reach the tasks.
+- Watch a deployment drain targets, prove the whole stack survives a restart, and save its ARNs to `configs/lab-05.env` for Lab 06.
 
-This laboratory fixes that, and the fix is the single most common piece of AWS architecture in
-existence: an **Application Load Balancer** in front of a **target group**, with an **ECS service**
-registering and deregistering its own tasks as targets.
+The lab closes with an **in-class assessment** (Section 13.1), done individually at the machine and marked from your repository. **Time:** roughly 3 hours for Sections 7 and 8, plus 75 minutes for the assessment.
 
-The word to hold on to for the next four hours is **indirection**. The load balancer is a stable name
-in front of an unstable set of addresses. Nothing about the tasks becomes more permanent; instead,
-something permanent is placed in front of them, and the job of keeping that thing's idea of reality up
-to date is given to the ECS service. You will never type a task's address into a target group. If you
-find yourself about to, something has gone wrong, and Step 10 explains what.
-
-Four objects, exactly as Lab 04 had four:
-
-```text
-load balancer   a DNS name, in two or more Availability Zones, holding security groups
-listener        one port and protocol on that load balancer, with ONE default action
-rule            a condition and an action, evaluated in priority order before the default
-target group    a set of targets plus a health check that decides which of them get traffic
-```
-
-Lab 04's warning applies again, in a new costume. Students who keep those four apart find load
-balancing obvious. Students who conflate them spend an afternoon looking for the health check on the
-load balancer, where it has never been.
-
-The lab closes with an **in-class assessment**, in Section 14. It is done at the machine, in the
-session, individually, and it is marked from your own repository. Section 14.1 gives you the tasks, the
-timing and the marking rubric in full, so that nothing about it is a surprise except the fault your
-instructor injects for Task B.
-
-**Time:** roughly 3 hours for Sections 8 and 9, plus 75 minutes for the assessment.
-
-**Where this sits in the course**
-
-```text
-Lab 01   IAM ................. roles, policies, instance profile
-Lab 02   VPC ................. subnets, NAT, route tables, security groups
-Lab 03   EC2 ................. usms-web-01 and usms-db-01 in that network
-Lab 04   ECS + Fargate ....... the cluster, the blueprint, the service, and how to operate them
-Lab 05   ECS + ALB ........... THIS LAB - the front door, and the in-class assessment
-Lab 06   Service Auto Scaling  the same service, made elastic
-Lab 07   EKS .................. the same workload, a different control plane
-Lab 08   EKS Scaling ......... HPA, node group scaling, exposure
-Lab 09   Security ............ least-privilege review of the IAM and security-group estate
-Lab 10   Lambda .............. functions triggered from usms-student-data, S3 built inline
-```
-
-!!! info "Where auto scaling went, and why it comes after this lab"
-    Auto scaling is **Lab 06**, and you will do it in the session after this one. This document hands
-    off to that one.
-
-    The ordering is not administrative. Read this table from Lab 06's own Step 7:
-
-    | Predefined metric | Needs |
-    | --- | --- |
-    | `ECSServiceAverageCPUUtilization` | Container Insights |
-    | `ECSServiceAverageMemoryUtilization` | Container Insights |
-    | `ALBRequestCountPerTarget` | A load balancer, which that lab says the course has not built |
-
-    The third row is the best scaling signal a web service has, and that lab is forced to use CPU and
-    to say so, because when it was written there was no target group in the architecture. After this
-    laboratory there is one. Exercise 5 builds the exact `ResourceLabel` string that unlocks it, and
-    Lab 06 is a better lab for having a load balancer underneath it.
-
-    Nothing in this document renames or deletes anything Lab 06 uses. This lab writes
-    `configs/lab-05.env`; Lab 04 wrote `configs/lab-04.env`; Lab 06 writes `configs/lab-06.env`. All
-    three files are meant to coexist, and Lab 06 sources the first two.
+!!! info "Concepts used in this lab"
+    Read these first if a term is new: [load balancers in the request path](../unit1/topic6.md#load-balancers-and-cloudfront-in-the-request-path) ·
+    [ALB vs NLB, target types, the two health checks, draining](../unit2/topic2.md#north-south-getting-traffic-in) ·
+    [how the ALB reaches a task](../unit2/topic2.md#how-the-alb-reaches-a-task) ·
+    [task network modes](../unit2/topic2.md#task-network-modes) ·
+    [service load balancing options](../unit2/topic2.md#service-networking-and-load-balancing) ·
+    [target health](../unit7/topic1.md#elastic-load-balancing-target-health) ·
+    [ECS container health checks plus load balancer health](../unit7/topic1.md#amazon-ecs-container-health-checks-plus-load-balancer-health) ·
+    [security group referencing](../unit1/topic6.md#security-group-referencing-the-cloud-native-idiom)
 
 !!! warning "This lab deliberately changes one thing Lab 04 built, and Lab 04's script will notice"
-    Step 13 removes the rule that let `usms-web-01` talk to the enrolment tasks directly, because after
-    this lab it talks to them through the load balancer instead. That is the correct outcome, and it
-    means `scripts/utilities/verify-lab-04.sh` will afterwards report **exactly one** failure:
+    Step 13 removes the rule that let `usms-web-01` reach the enrolment tasks directly. Afterwards `scripts/utilities/verify-lab-04.sh` reports **exactly one** failure:
 
     ```text
       FAIL usms-enrolment-sg is sourced from usms-app-sg (not a CIDR)
     ```
 
-    That failure is not a mistake in your work. It is a verification script that encodes an
-    architecture which has since changed - which is itself worth noticing, because it happens
-    constantly on real systems. Section 11 says what to do about it, and Exercise 2 asks you to fix it
-    properly. From Step 13 onward, `verify-lab-05.sh` is the script of record.
+    That is not a mistake in your work: the script encodes an architecture that has since changed. Section 10 says what to do; Exercise 2 fixes it properly. From Step 13 onward, `verify-lab-05.sh` is the script of record.
+
+Auto scaling is **Lab 06**, and it comes after this lab on purpose: its best signal, `ALBRequestCountPerTarget`, needs a target group. Exercise 5 builds the `ResourceLabel` that unlocks it. This lab writes `configs/lab-05.env`; Lab 06 sources it alongside `lab-04.env`.
 
 ---
 
-## 2. Learning Objectives
+## 2. Prerequisites
 
-After completing this laboratory you will be able to:
-
-1. Explain why a set of Fargate tasks cannot be addressed directly, and what a load balancer adds that
-   a DNS record alone would not.
-2. Name the four Elastic Load Balancing objects, say which one holds the health check, which one holds
-   the security group, and which one holds the port a client connects to.
-3. Choose between an Application, Network and Gateway Load Balancer for a stated requirement, and
-   justify the choice in one sentence.
-4. Explain why a target group serving Fargate tasks must have `--target-type ip`, and what would happen
-   with `instance`.
-5. Create an internet-facing Application Load Balancer across two Availability Zones, in Lab 2's public
-   subnets, with its own security group.
-6. Create a target group with a deliberate health check configuration, and explain each of its five
-   numbers in terms of how long a broken task keeps receiving traffic.
-7. Distinguish the **container** health check from Lab 04's revision 2 from the **target group** health
-   check created here, and describe a state in which one says healthy and the other says unhealthy.
-8. Create a listener with a default action, add a rule with a condition and a non-forward action, and
-   explain how priority ordering decides which one fires.
-9. Attach an existing ECS service to a target group, and explain why you never call `register-targets`
-   yourself for a Fargate service.
-10. Explain what `--health-check-grace-period-seconds` prevents, and describe the failure loop that
-    occurs without it.
-11. Read `describe-target-health` and interpret `initial`, `healthy`, `unhealthy`, `draining` and
-    `unused`.
-12. Perform the security cutover from a direct client to a load-balanced one, and prove from the
-    security group alone that the load balancer is now the only thing that can reach the tasks.
-13. Explain how `deregistration_delay.timeout_seconds`, ECS `minimumHealthyPercent` and the container's
-    `stopTimeout` interact during a deployment, and what a request in flight experiences.
-14. Prove that the load balancer, its listener, its rule, its target group and the service's attachment
-    to it all survive a restart of the emulator, deriving every ARN from the API.
-
----
-
-## 3. Prerequisites
-
-- **Lab 04 complete**, with `./scripts/utilities/verify-lab-04.sh` reporting `FAIL=0` **before you
-  start this lab**. Run it now, not after Step 13.
-- **Lab 2 complete including its Step 11 "Your turn"**, so that `usms-public-subnet-b` exists. An
-  Application Load Balancer requires at least two subnets in two different Availability Zones and
-  refuses to be created with one. This is the hardest prerequisite in the lab and the one most often
-  missing.
-- **Lab 2 Exercise 5 complete**, so that `usms-private-subnet-b` exists - Lab 04's service already needs
-  it.
-- **Lab 3 complete**, with `usms-web-01` running and carrying `usms-app-sg`. Step 17 resolves a group
-  reference back to it.
-- **Errata 01 applied.** If `echo "$AWS_PROFILE"` in a brand-new terminal prints nothing, stop and apply
-  Errata 01 first.
-- Floci running under Docker Compose with `FLOCI_STORAGE_MODE` set to `hybrid`.
-- `jq` and `python3` available. `python3` is used for timestamps and JSON, because GNU `date` and BSD
-  `date` disagree about every flag that matters.
-
-Check all of that in one go:
+- Lab 04 complete: `./scripts/utilities/verify-lab-04.sh` reports `FAIL=0` **now**, before you start (not after Step 13).
+- Lab 2 Step 11 "Your turn" complete, so `usms-public-subnet-b` exists. An ALB refuses to be created without subnets in two Availability Zones; this is the prerequisite most often missing.
+- Lab 2 Exercise 5 complete (`usms-private-subnet-b`; Lab 04's service already needs it).
+- Lab 3 complete: `usms-web-01` running with `usms-app-sg` (Step 17 resolves it).
+- Errata 01 applied: `echo "$AWS_PROFILE"` in a new terminal must print `floci`.
+- Floci under Docker Compose with `FLOCI_STORAGE_MODE=hybrid`; `jq`, `python3` and `curl` installed.
 
 ```bash
 cd ~/aws-floci-course
@@ -166,46 +60,31 @@ aws-cli/2.17.42 Python/3.11.9 Darwin/23.5.0 exe/x86_64
 PASS=16  FAIL=0
 ```
 
-**What to look for:** four tools found, and `PASS=16  FAIL=0` from the storage check. A failure in that
-script's `shell and profile` block is the real problem and everything below it is a consequence - fix
-that block before starting.
-
-`curl` is listed for the first time in this course because Step 12 tries to reach the load balancer over
-HTTP. If it is missing, install it or use `wget`; Step 12 gives both, and neither is essential to
-passing the lab.
+You want four tools found and `PASS=16  FAIL=0`. A failure in the storage check's `shell and profile` block is the real problem; fix it first. If `curl` is missing, Step 12 also gives a `wget` form, and neither is essential to passing.
 
 ---
 
-## 4. Connection to Previous Labs
+## 3. What This Lab Reuses
 
-### 4.1 Current Environment
+From Lab 2:
+
+- `usms-public-subnet-a` and `-b`: the load balancer's nodes (Step 5).
+- `usms-igw` and `usms-public-rt`: why an internet-facing ALB is reachable (Steps 5, 12).
+- `usms-vpc`: the target group belongs to it permanently (Step 6).
+- `usms-app-sg`: removed as a source (Step 13), resolved back to `usms-web-01` (Step 17).
+
+From Lab 3:
+
+- `usms-web-01`: still the caller, now via a name (Step 17).
+
+From Lab 04:
+
+- `usms-enrolment-svc`: attached to the target group; no new service is created (Step 10).
+- `usms-enrolment:2`: `containerName` `enrolment-api` and `containerPort` `80` must match (Step 10). No new revision is registered.
+- `usms-enrolment-sg`: ingress changes from the web tier to the load balancer (Steps 9, 13). The tasks stay private.
+- `usms-ecs-cluster`: named by every `ecs` call.
 
 ```text
-Created in previous labs:
-- Lab 01: Floci under Compose, hybrid storage, persistence proven
-- Lab 01: groups usms-admins / usms-developers / usms-auditors; three users
-- Lab 01: roles  usms-ec2-app-role, usms-lambda-exec-role, usms-developer-role
-- Lab 01: policies USMSDeveloperBase (v2), USMSStudentDataReadWrite, USMSAssumeAppRoles,
-                   USMSLambdaBasic, USMSSelfManageCredentials (inline)
-- Lab 01: instance profile usms-ec2-app-profile
-- Lab 01: configs/course.env, configs/lab-01.env
-- Lab 02: usms-vpc 10.0.0.0/16, DNS support and hostnames enabled
-- Lab 02: usms-public-subnet-a / -b, usms-private-subnet-a / -b
-- Lab 02: usms-igw, usms-nat (+ Elastic IP), usms-public-rt, usms-private-rt
-- Lab 02: usms-app-sg, usms-db-sg, usms-private-nacl, usms-s3-endpoint
-- Lab 02: configs/lab-02.env, scripts/utilities/verify-lab-02.sh
-- Lab 03: usms-web-01 (public subnet a, usms-app-sg, usms-ec2-app-profile, usms-web-eip)
-- Lab 03: usms-db-01 (private subnet a, usms-db-sg, no public address)
-- Lab 03: usms-web-data-vol, usms-web-golden, usms-app-key
-- Lab 03: configs/lab-03.env, scripts/utilities/verify-lab-03.sh
-- Lab 04: usms-ecs-cluster, Container Insights enabled
-- Lab 04: /usms/ecs/enrolment log group, retention 7 days
-- Lab 04: usms-ecs-exec-role (+ USMSECSTaskExecution), usms-ecs-task-role (+ Lab 01's S3 policy)
-- Lab 04: usms-enrolment-sg, admitting tcp/80 from usms-app-sg
-- Lab 04: usms-enrolment:1 and usms-enrolment:2, two immutable revisions
-- Lab 04: usms-enrolment-svc, desired 2, both private subnets, no public address
-- Lab 04: configs/lab-04.env, scripts/utilities/verify-lab-04.sh
-
 Created in this lab:
 - usms-alb-sg                   security group for the load balancer: tcp/80 from the internet
 - usms-enrolment-alb            internet-facing Application Load Balancer, public subnets a and b
@@ -231,92 +110,11 @@ Required for future labs:
 - configs/lab-05.env           -> Lab 06 sources it alongside lab-01/02/03/04
 ```
 
-### 4.2 What this lab genuinely reuses
-
-Not mentions - uses.
-
-| From | Used here how |
-| --- | --- |
-| Lab 2 `usms-public-subnet-a` and `-b` | Step 5 places the load balancer's nodes in both, by ID from `configs/lab-02.env`. This is the first thing in the course that has *required* two public subnets |
-| Lab 2 `usms-igw` and `usms-public-rt` | Step 5 explains, and Step 12 tests, that this is the only reason an internet-facing load balancer is reachable at all |
-| Lab 2 `usms-vpc` | Step 6 creates the target group inside it. A target group belongs to exactly one VPC, forever |
-| Lab 2 `usms-app-sg` | Step 13 removes it as a source, having replaced it with the load balancer's group. Step 17 resolves it back to `usms-web-01` |
-| Lab 3 `usms-web-01` | Step 17 closes the loop: the portal is still the caller, but now it calls a name instead of a set of addresses |
-| Lab 04 `usms-enrolment-svc` | Step 10 attaches the existing service to the target group. No new service is created |
-| Lab 04 `usms-enrolment:2` | Step 10's `containerName` and `containerPort` must match this revision's `enrolment-api` and `80` exactly |
-| Lab 04 `usms-enrolment-sg` | Steps 9 and 13 change its ingress from the web tier to the load balancer |
-| Lab 04 `usms-ecs-cluster` | Every `ecs` call in this lab names it |
-| `configs/course.env` names | `$COURSE_ROOT`, `$AWS_REGION_COURSE`, `$ACCOUNT_ID`, `$PROJECT` used, never redeclared |
-
-### 4.3 The sentence that makes this lab worth doing
-
-Lab 04 ended with an architecture in which the enrolment tasks had no name. Everything about them was
-correct and nothing about them was reachable.
-
-The reason that matters is not aesthetic. Lab 04's Step 9 wrote a security group rule sourced from a
-*group* rather than an address, and gave a reason: **the tasks have no stable addresses**, so any rule
-written against one of them is wrong before you finish typing it. That was true of the firewall, and it
-is equally true of every client, every configuration file, every monitoring probe and every DNS record
-anyone might want to write.
-
-A load balancer is the general answer to that problem, and the security group rule was a special case
-of it. When you reach Step 10 and the ECS service starts registering its own tasks into the target
-group, notice that you are watching exactly the same idea at a different layer: **something else keeps
-the list of addresses up to date, so that you never have to.**
-
-Say that out loud before you continue. It is Review Question 1.
-
-### 4.4 What changes, and what deliberately does not
-
-| | Before this lab | After this lab |
-| --- | --- | --- |
-| Client of the enrolment API | `usms-web-01` directly, by address | `usms-web-01` via `usms-enrolment-alb`, by name |
-| `usms-enrolment-sg` ingress | tcp/80 from `usms-app-sg` | tcp/80 from `usms-alb-sg` |
-| Tasks' subnets | private a and b | unchanged |
-| Tasks' public address | none | still none - this is the point |
-| Service `desiredCount` | 2 | unchanged |
-| Task definition | `usms-enrolment:2` | unchanged. No new revision is registered |
-| Service `loadBalancers` | empty | one entry |
-| Health checking | container health check only | container health check **and** target group health check |
-
-Note the last two rows of the middle column. The tasks do not become public, and no new blueprint is
-built. This lab adds a front door to a building that is otherwise unchanged.
-
 ---
 
-## 5. What We Are Building
+## 4. What We Are Building
 
-An internet-facing Application Load Balancer, in the public subnets, forwarding to the private Fargate
-tasks that Lab 04 created.
-
-Five decisions justify the shape of what follows, and each is defensible in one sentence.
-
-**The load balancer is internet-facing; the tasks are not.** This is the canonical pattern and the
-reason a public subnet exists at all. The load balancer's nodes have public addresses; the tasks keep
-their private ones; the only path between the internet and a task passes through a listener you
-configured and a security group you wrote. Exercise 4 asks you to argue for `--scheme internal`
-instead, and there is a real case for it here.
-
-**The target group is `--target-type ip`.** A Fargate task has no instance ID, so it cannot be
-registered by one. `ip` is not a preference; it is the only value that works, and choosing `instance`
-produces an error at attachment time rather than at creation time, which is much later than you would
-like.
-
-**The health check is on the target group, and it is not the same health check as Lab 04's.** Lab 04's
-revision 2 added a container health check that runs *inside* the task. This lab adds a health check
-that the load balancer runs *from outside*. They can disagree, and Step 11 shows what that looks like.
-
-**Two Availability Zones, because the load balancer insists.** An ALB places a node in each subnet you
-give it and returns all of them from DNS. With one subnet it is a single point of failure, and the API
-refuses. That constraint is why Lab 2's second public subnet - an optional "Your turn" at the time -
-becomes mandatory today.
-
-**The direct path is removed at the end, not the beginning.** Step 9 adds the load balancer's access
-while the web tier still has its own, Step 12 proves the new path, and only then does Step 13 take the
-old one away. Cutting over in that order is the difference between a migration and an outage, and it is
-worth doing deliberately once so that the habit is there when it matters.
-
-### 5.1 The configuration baseline this lab establishes
+Lab 04's tasks have private, temporary addresses and no name. This lab puts a stable name in front of them: an internet-facing ALB in the public subnets forwarding to a target group that the **ECS service** keeps populated. The tasks stay private; the only path from the internet to a task passes through a listener and a security group you wrote. The old direct path is removed only after the new one is proven (Steps 9, 12, 13): a migration, not an outage.
 
 ```text
 scheme               internet-facing    nodes in public subnets a and b, with public addresses
@@ -330,12 +128,11 @@ grace period         60 seconds         ECS ignores target health for the first 
 task inbound         tcp/80 from usms-alb-sg ONLY
 ```
 
-Every one of those is a decision with a reason, and the in-class assessment asks you to defend three of
-them.
+The in-class assessment asks you to defend three of these.
 
 ---
 
-## 6. Architecture
+## 5. Architecture
 
 ```text
                               Internet
@@ -406,7 +203,7 @@ the service within minutes.
 
 ---
 
-## 7. Directory Structure
+## 6. Directory Structure
 
 This lab adds the following. It restructures nothing and needs no new top-level folder.
 
@@ -415,7 +212,7 @@ aws-floci-course/
 ├── labs/
 │   └── lab-05-ecs-alb/
 │       ├── README.md                                  # this document
-│       └── exercises.md                               # Section 13 and Section 14.1
+│       └── exercises.md                               # Section 12 and Section 13.1
 ├── policies/
 │   ├── usms-alb-sg-ingress.json                       # NEW - the load balancer's inbound rule
 │   └── usms-enrolment-sg-ingress-alb.json             # NEW - the tasks' new inbound rule
@@ -428,7 +225,7 @@ aws-floci-course/
 │   └── lab-05.env                                    # NEW
 ├── scripts/
 │   ├── utilities/
-│   │   └── verify-lab-05.sh                          # NEW - Section 9
+│   │   └── verify-lab-05.sh                          # NEW - Section 8
 │   └── cleanup/
 │       └── lab-05-cleanup.sh                         # NEW - end of course only
 └── outputs/
@@ -456,38 +253,17 @@ labs/lab-01-iam  labs/lab-02-vpc  labs/lab-03-ec2  labs/lab-04-ecs-fargate  labs
 
 ---
 
-## 8. Step-by-Step Implementation
+## 7. Step-by-Step Implementation
 
-!!! info "Where to run every command in this lab"
-    Unless a step says otherwise, run everything from the repository root:
+!!! info "Run every command from `aws-floci-course/`"
+    All paths (`configs/...`, `policies/...`, `templates/...`, `scripts/...`) are relative to the repository root. If a command reports `No such file or directory`, check `pwd`.
 
-    ```text
-    aws-floci-course/
-    ```
-
-    Every path below (`configs/...`, `policies/...`, `templates/...`, `scripts/...`) is relative to that
-    directory. If a command reports `No such file or directory`, check `pwd` first.
-
-    This lab captures **six ARNs**, and Elastic Load Balancing is an ARN-first API: almost nothing in it
-    takes a bare name, and the two calls that do take `--names` are read-only. Capture every one with
-    `$(...)`, `--query` and `--output text`. Shell variables die with the terminal, which is why Step 18
-    writes them all to `configs/lab-05.env`.
+!!! tip "Shell variables die with the terminal"
+    This lab captures six ARNs. Elastic Load Balancing is ARN-first (only the read-only calls take `--names`), so capture every one with `$(...)`, `--query` and `--output text`. Step 18 writes them to `configs/lab-05.env`.
 
 ### Step 1 - Resume the environment and load five env files
 
-**Purpose**
-
-Bring Floci up and load everything the previous four labs recorded. This lab reads eight values from
-`configs/lab-02.env`, `lab-03.env` and `lab-04.env`, and two of them - the public subnets - are the
-ones most likely to be missing.
-
-**Run from**
-
-```text
-aws-floci-course/
-```
-
-**Command**
+Bring Floci up and load what the previous labs recorded. The public subnets are the values most likely to be missing.
 
 ```bash
 cd ~/aws-floci-course
@@ -516,14 +292,7 @@ printf '%-26s %s\n' \
   "region"              "$AWS_REGION_COURSE"
 ```
 
-**What the command does**
-
-`floci-up.sh` is idempotent: it starts the container if it is stopped, says so if it is already running,
-and refuses to adopt a container that Compose did not create. `whoami.sh` exits 1 if the account is not
-`000000000000`, which is the guard that stops a course command reaching a real AWS account.
-
-Five env files is now the standard opening. They are additive and independent: sourcing them in any
-order gives the same result, because no two of them define the same variable.
+The env files are additive and define no variable twice, so source order does not matter.
 
 **Expected result**
 
@@ -551,41 +320,16 @@ region                     us-east-1
 
 > Example output - your IDs will differ.
 
-**Verify**
+**Verify:** twelve non-empty values. Two empty values stop the lab:
 
-Twelve non-empty values. Two failures matter more than the rest, and both stop this lab dead:
-
-- **`public subnet b` empty** means Lab 2's Step 11 "Your turn" was skipped. Go and do it now. An
-  Application Load Balancer requires subnets in at least two Availability Zones and
-  `create-load-balancer` will refuse with `ValidationError: At least two subnets in two different
-  Availability Zones must be specified`. There is no workaround, and no other step in this lab can
-  proceed without it.
-- **`enrolment sg` empty** means `configs/lab-04.env` was never written or is incomplete. Re-run Lab 04
-  Step 20 before continuing.
-
-If `public subnet b` is missing, the shortest correct fix is Lab 2's own command, with Lab 2's CIDR and
-Availability Zone. Do not invent a new one, and do not put it in the same AZ as subnet a - that would
-satisfy `describe-subnets` and still fail `create-load-balancer`, which checks the zones and not the
-count.
+- **`public subnet b` empty**: Lab 2 Step 11 "Your turn" was skipped. Do it now with Lab 2's own CIDR and AZ (not the same AZ as subnet a; `create-load-balancer` checks zones, not count). Otherwise Step 5 fails with `ValidationError: At least two subnets in two different Availability Zones must be specified`.
+- **`enrolment sg` empty**: `configs/lab-04.env` is missing or incomplete. Re-run Lab 04 Step 20.
 
 ---
 
 ### Step 2 - Confirm Labs 2, 3 and 04 are still intact
 
-**Purpose**
-
-This lab modifies a security group that Lab 04 created and attaches a load balancer to a service Lab 04
-created. Confirm both are exactly as Lab 04 left them **before** you change anything, because after
-Step 13 one of these scripts is expected to fail and you need to know that the failure is yours and
-deliberate rather than pre-existing.
-
-**Run from**
-
-```text
-aws-floci-course/
-```
-
-**Command**
+This lab changes Lab 04's security group and service. Confirm they are intact first, so the expected failure after Step 13 is clearly yours and deliberate.
 
 ```bash
 ./scripts/utilities/verify-lab-02.sh | tail -3
@@ -593,14 +337,7 @@ aws-floci-course/
 ./scripts/utilities/verify-lab-04.sh | tee outputs/lab-05-pre-verify-04.txt | tail -3
 ```
 
-**What the command does**
-
-Each script checks its own lab's resources and, first, the shared environment. All three were written in
-their own labs; you are only running them. `tail -3` keeps the output readable - if a count is wrong,
-re-run the script without the pipe and read all of it.
-
-The third one is captured into `outputs/` on purpose. After Step 13 you will run it again, and having
-the "before" alongside the "after" is what turns a failing check into evidence rather than a worry.
+The third result is saved to `outputs/` as the "before" to compare with after Step 13. If a count is wrong, re-run without `| tail -3`.
 
 **Expected result**
 
@@ -612,36 +349,13 @@ PASS=49  FAIL=0
 
 > Example output - the counts are the ones those labs stated.
 
-**Verify**
-
-`FAIL=0` three times. If the third one is not `FAIL=0`, **do not start this lab**: fix Lab 04 first,
-because every check that fails now will fail again at the end and you will not be able to tell which
-failures you caused.
-
-If a failure appears under `== Environment ==` in any of the three, that is the real problem and the
-resource failures below it are usually consequences. Fix the environment first with
-`./scripts/utilities/floci-storage-check.sh`.
+**Verify:** `FAIL=0` three times. If Lab 04's is not `FAIL=0`, **do not start this lab**; fix Lab 04 first. A failure under `== Environment ==` is the real problem; fix it with `./scripts/utilities/floci-storage-check.sh`.
 
 ---
 
 ### Step 3 - Probe what this Floci build supports for Elastic Load Balancing
 
-**Purpose**
-
-Find out now which parts of ELBv2 your build implements, rather than at Step 10 with a load balancer
-half-built. This is the same principle as Lab 04's Step 3 and Lab 1's storage check: **name the
-limitation before it costs you an hour.**
-
-Elastic Load Balancing is the least reliably emulated service this course has touched. Take this step
-seriously.
-
-**Run from**
-
-```text
-aws-floci-course/
-```
-
-**Command**
+ELBv2 is the least reliably emulated service in this course. Find out now which parts your build implements, not at Step 10 with a half-built load balancer.
 
 ```bash
 probe() {
@@ -666,18 +380,8 @@ probe "ec2 describe-security-groups"          "aws ec2 describe-security-groups 
 probe "ec2 describe-subnets"                  "aws ec2 describe-subnets --subnet-ids $USMS_PUBLIC_SUBNET_A"
 ```
 
-**What the command does**
-
-`probe` runs a harmless read, or generates a request skeleton, and reports whether the CLI got an answer
-at all. Read the result as "the service responded to me", not "the call succeeded" - one of these is
-*expected* to fail on its argument. `describe-listeners --load-balancer-arn probe` passes a string that
-is not an ARN, and a `ValidationError` about the ARN format means ELBv2 is very much present. A
-completely unsupported service produces a connection error or `InvalidAction`, which is a different
-failure and reads differently.
-
-`describe-account-limits` is worth one look on a real account: it is where the per-region caps on load
-balancers, target groups, listeners and rules live, and running out of listener rules is a real and
-annoying production limit.
+- Read each result as "the service answered", not "the call succeeded". `describe-listeners --load-balancer-arn probe` passes a non-ARN on purpose: a `ValidationError` about the ARN means ELBv2 is present. An unsupported service gives a connection error or `InvalidAction`.
+- `describe-account-limits` shows the per-region caps on load balancers, target groups, listeners and rules.
 
 **Expected result**
 
@@ -700,31 +404,20 @@ ec2 describe-subnets                             SUPPORTED
 > Example output - this is the best case. Yours may well differ, and that is exactly why the probe
 > exists.
 
-**Verify**
-
-Work out which path you are on and write it at the top of `notes/lab-05-notes.md`, because your lab
-report and the in-class assessment both require you to state it.
+**Verify:** decide which path you are on and write it at the top of `notes/lab-05-notes.md`; the lab report and the assessment both ask for it.
 
 | Path | If | What changes |
 | --- | --- | --- |
 | **A - full** | `describe-load-balancers` and both skeletons answer, and Step 5 later returns an ARN | Do every step as written |
 | **B - control plane only** | Objects are created and describable, but targets never become `healthy` and Step 12's `curl` does not connect | Everything in this lab still works. Every proof here is built on control-plane fields, not on a served request. Record where target health stayed `initial` or `unused` and continue |
-| **C - no ELBv2** | `describe-load-balancers` does not answer, or `create-load-balancer` fails with `InvalidAction` | Stop and tell your instructor. Do Section 8's interludes, Exercise 4 and Section 14.1 Task C, which need no emulator, and record the whole lab as conceptual |
+| **C - no ELBv2** | `describe-load-balancers` does not answer, or `create-load-balancer` fails with `InvalidAction` | Stop and tell your instructor. Do the concept reading in Section 1, Exercise 4 and Section 13.1 Task C, which need no emulator, and record the whole lab as conceptual |
 
 !!! note "Floci Limitation - Elastic Load Balancing is the least reliably emulated service in this course"
-    Depending on your build, ELBv2 may be fully modelled, modelled as a control plane with no data
-    path, or absent entirely. A load balancer that exists as an object but forwards no packets is the
-    most likely outcome, and it is the one this lab is written for.
+    Depending on the build, ELBv2 is fully modelled, a control plane with no data path (the most likely case, and the one this lab is written for), or absent.
 
-    Real AWS provisions load balancer nodes in each subnet within two to four minutes, publishes a DNS
-    name that resolves to their addresses, begins health checking each registered target on the
-    interval you set, and forwards real requests to the targets that pass.
+    Real AWS provisions nodes in each subnet in two to four minutes, publishes a resolving DNS name, health checks each target and forwards real requests.
 
-    Take this away regardless: nothing this lab asks you to prove depends on a request being served.
-    The load balancer, its listener, its rule, its target group, its health check configuration, the
-    service's `loadBalancers` entry and the security group chain are all control-plane facts, and every
-    one of them is observable. Step 12 tries the data path, tells you honestly that it may not work,
-    and gives you the control-plane proof to record instead.
+    Nothing this lab asks you to prove depends on a served request: every object, the service's `loadBalancers` entry and the security group chain are observable control-plane facts. Step 12 tries the data path and gives a control-plane proof to record instead.
 
 **Checkpoint 1**
 
@@ -740,139 +433,33 @@ Ready to build
 
 ---
 
-### Interlude - what a load balancer actually is, in four objects
+!!! info "Four objects, two health checks - read before Step 4"
+    See [north-south traffic in 2.2](../unit2/topic2.md#north-south-getting-traffic-in) for the full explanation. The facts the next steps rely on:
 
-Four nouns again. Keeping them apart makes the rest of this lab easy, and conflating them is what makes
-Elastic Load Balancing feel like it has too many ARNs.
+    - **Load balancer** (DNS name, subnets, security group) → **listener** (one port and protocol, exactly one **default action**) → **rules** (condition + action, lowest priority number wins, first match) → **target group** (targets plus the **health check** - the health check lives here, not on the load balancer).
+    - An ALB is layer 7 and has security groups; it terminates the connection, so the target sees the load balancer's address (hence `X-Forwarded-For`).
+    - Fargate tasks use `awsvpc` and have no instance ID, so the target group **must** be `--target-type ip`. `instance` is accepted at creation and fails only at Step 10.
+    - The container health check (Lab 04 revision 2, run inside the task) and the target group health check (run by the load balancer over the network) can disagree. ECS `HEALTHY` plus target `unhealthy` means the application is fine and the network path (usually Step 9's rule) is not.
 
-**A load balancer** is the thing with a DNS name. It has a scheme (`internet-facing` or `internal`), a
-type (`application`, `network` or `gateway`), a list of subnets - one node per subnet - and, for an ALB,
-a list of security groups. It has no idea what your application is. It listens for nothing until you
-give it a listener.
-
-**A listener** is one port and one protocol on that load balancer: HTTP on 80, HTTPS on 443. A listener
-has exactly **one default action**, which is what happens to a request that matches no rule. Most
-listeners have exactly one action and no rules, and that is a perfectly good configuration.
-
-**A rule** is a condition plus an action, attached to a listener, with a numeric **priority**. Rules are
-evaluated in priority order, lowest number first, and the first match wins; if none match, the
-listener's default action runs. Conditions match on path, host header, HTTP method, query string, source
-IP or an arbitrary header. Actions forward to a target group, redirect, return a fixed response, or
-authenticate. This is what "layer 7" means in practice: the load balancer can read the request before
-deciding where it goes.
-
-**A target group** is a set of targets plus a health check. It has a protocol, a port, a VPC and a
-target type. Crucially, **the health check lives here** - not on the load balancer, not on the listener.
-One target group can be used by several listeners and several load balancers, and it keeps one opinion
-about whether each of its targets is healthy.
-
-```text
-usms-enrolment-alb                     the DNS name, the subnets, the security group
-  └── listener  HTTP:80                the port a client connects to
-        ├── rule priority 10           path /alb-health  -> fixed-response 200
-        └── DEFAULT ACTION             -> forward to usms-enrolment-tg
-                                             |
-                        usms-enrolment-tg    |    the health check lives HERE
-                          target-type ip     |
-                          HTTP:80            |
-                          GET / every 30s    |
-                            targets:  10.0.3.x:80   <- registered BY THE ECS SERVICE
-                                      10.0.4.x:80   <- deregistered BY THE ECS SERVICE
-```
-
-That last line is the one to hold on to. Every other target group you will ever meet is populated by
-something: an EC2 Auto Scaling group, an ECS service, or a human running `register-targets`. For a
-Fargate service it is the service, and it does it every time a task starts, stops, or is replaced during
-a deployment. You supply the target group; the service supplies the targets.
-
-### Interlude - three load balancer types, and how to choose in one sentence
-
-| Type | Layer | Chooses on | Use when |
-| --- | --- | --- | --- |
-| **Application** (`application`) | 7 - HTTP | Path, host, header, method, query, source IP | The traffic is HTTP or HTTPS and you want to route on its content. This is almost always the answer for a web API |
-| **Network** (`network`) | 4 - TCP/UDP/TLS | Nothing about the payload; flow hashing only | You need raw TCP or UDP, extreme throughput, static IP addresses per zone, or protocols an ALB cannot parse |
-| **Gateway** (`gateway`) | 3 - IP | Nothing; it transparently inserts appliances | You are inserting a firewall or inspection appliance into the packet path |
-
-The USMS enrolment API speaks HTTP and will eventually want to route `/enrolment` and `/transcripts` to
-different services from one hostname. That is an ALB, and it is the type this lab builds.
-
-Two differences from a Network Load Balancer are worth remembering because they change your design:
-
-- An ALB **has security groups**; a classic NLB configuration does not, which means the target's own
-  security group must admit the client's address range rather than a group.
-- An ALB **terminates the connection** and opens a new one to the target. The target therefore sees the
-  load balancer's private address as the source, not the client's - which is why
-  `X-Forwarded-For` exists and why "my access logs show one IP address" is a question rather than a bug.
-
-### Interlude - target types, and why Fargate has no choice
-
-| `--target-type` | A target is identified by | Works with |
-| --- | --- | --- |
-| `instance` | An EC2 instance ID and a port | EC2 instances; ECS tasks in `bridge` or `host` network mode |
-| `ip` | An IP address and a port, inside the VPC or a peered range | `awsvpc` tasks, including **every Fargate task**; on-premises servers reached over Direct Connect |
-| `lambda` | A Lambda function ARN | A function invoked directly by the load balancer |
-| `alb` | Another Application Load Balancer | An NLB fronting an ALB |
-
-Lab 04's task definition set `networkMode` to `awsvpc`, because Fargate requires it. An `awsvpc` task
-has **no instance ID** - there is no instance. It has an elastic network interface with an address, and
-an address is what `ip` registers.
-
-Getting this wrong is a slow failure rather than a fast one, which is why it is worth stating plainly:
-`create-target-group --target-type instance` succeeds. The target group is created and looks fine. The
-error arrives at Step 10, when `update-service` refuses the attachment, and the message names the
-network mode rather than the target type. Choose `ip`.
-
-### Interlude - the two health checks, which are not the same health check
-
-This is the most-confused pair in this lab, exactly as the two IAM roles were in Lab 04. Learn the
-distinction here rather than at Step 11.
-
-| | Container health check | Target group health check |
-| --- | --- | --- |
-| Added in | Lab 04 Step 11, revision 2 | This lab, Step 6 |
-| Configured in | The task definition's `healthCheck` block | The target group |
-| Run by | The container runtime, **inside** the task | The load balancer, **from outside**, across the network |
-| Command or request | A shell command in the container (`wget ... \|\| exit 1`) | An HTTP request to a path (`GET /`) |
-| Reports into | `healthStatus` on the task: `HEALTHY`, `UNHEALTHY`, `UNKNOWN` | Target health: `initial`, `healthy`, `unhealthy`, `draining`, `unused` |
-| Consequence of failing | ECS stops and replaces the task | The load balancer stops sending it requests; ECS also replaces it, after the grace period |
-| Sees | Whether the process is alive and answering itself | Whether the process is reachable **through the security group and the network** |
-
-The last row is the one that earns its place. A task can be `HEALTHY` to ECS and `unhealthy` to the load
-balancer at the same time, and the combination has exactly one meaning: **the application is fine and
-the network path is not.** In this lab that would mean Step 9's security group rule is missing or wrong.
-On a real account it is one of the two or three most common production incidents, and being able to read
-those two fields together is what shortens it from an hour to a minute.
-
-The reverse combination - `UNKNOWN` to ECS and `healthy` to the load balancer - is not a fault at all.
-It is simply a task definition with no container health check, which is what Lab 04's revision 1 was.
+    ```text
+    usms-enrolment-alb                     the DNS name, the subnets, the security group
+      └── listener  HTTP:80                the port a client connects to
+            ├── rule priority 10           path /alb-health  -> fixed-response 200
+            └── DEFAULT ACTION             -> forward to usms-enrolment-tg
+                                                 |
+                            usms-enrolment-tg    |    the health check lives HERE
+                              target-type ip     |
+                              HTTP:80            |
+                              GET / every 30s    |
+                                targets:  10.0.3.x:80   <- registered BY THE ECS SERVICE
+                                          10.0.4.x:80   <- deregistered BY THE ECS SERVICE
+    ```
 
 ---
 
 ### Step 4 - Create the load balancer's security group
 
-**Purpose**
-
-An Application Load Balancer has its own security group, separate from anything else in the
-architecture. It is the boundary between the internet and everything you built in Lab 04, and it is the
-only object in this course that will deliberately admit `0.0.0.0/0`.
-
-**Run from**
-
-```text
-aws-floci-course/
-```
-
-**Concept first - why the load balancer needs a group of its own**
-
-You could, in principle, put the load balancer in `usms-app-sg` and save yourself an object. Do not. A
-security group is the unit in which you express "who may talk to this tier", and the load balancer is
-its own tier: the only thing in the architecture that the internet may reach, and the only thing that
-may reach the enrolment tasks. Sharing a group with the web instance would mean that any rule you ever
-add for one silently applies to the other, and that the reverse lookup in Step 17 would give an
-ambiguous answer.
-
-One group per tier. Three tiers, three groups, and each group's ingress names the group above it -
-which is the pattern Lab 2 started with `usms-db-sg` and this lab completes.
+The load balancer is its own tier, so it gets its own group: the only thing the internet may reach and the only thing that may reach the tasks. One group per tier, each sourced from the tier above.
 
 **Command - part 1, the group**
 
@@ -916,32 +503,13 @@ aws ec2 authorize-security-group-ingress \
   --output text
 ```
 
-**What the command does**
-
-This heredoc is `<< 'EOF'`, **quoted**, because the document contains no variables and must reach disk
-exactly as written. Compare it with Step 9's document three steps from now, which contains
-`$ALB_SG` and therefore **must** use the unquoted `<< EOF`. Two nearly identical files, opposite
-quoting, for opposite reasons - and this is the third lab in a row in which that distinction has been
-the most common silent bug. The rule is always the same question: *do I want this expanded now, or
-later?*
-
-`Tier=edge` is a new tag value. Lab 04 used `Tier=app` for everything in the cluster; the load balancer
-is not part of the application tier, it is in front of it, and tagging it accordingly is how a cost
-report or a security review can separate "things exposed to the internet" from "things that are not".
+- Quoted `<< 'EOF'`: this document has no variables. Step 9's document contains `$ALB_SG` and must use unquoted `<< EOF`. Ask: expand now, or never?
+- `Tier=edge` separates internet-exposed resources from the `Tier=app` cluster in cost and security reviews.
 
 !!! warning "This is the only `0.0.0.0/0` ingress rule in the whole course, and it is deliberate"
-    Every other security group in this architecture is sourced from another group. This one is not,
-    because an internet-facing load balancer that only admits a named group is a load balancer nobody
-    can use.
+    An internet-facing load balancer that admits only a named group is useless. It is acceptable because of what is behind it: the load balancer terminates connections and forwards only to your target group, and the tasks admit only this group.
 
-    What makes it acceptable is everything *behind* it: the load balancer terminates the connection,
-    only forwards to the one target group you configured, and the tasks themselves admit nothing but
-    this group. The blast radius of `0.0.0.0/0` here is "somebody can send an HTTP request to a
-    listener", not "somebody can reach a task".
-
-    On a real account you would narrow it anyway where you can - to a CDN's published address ranges,
-    or to your campus network for an internal tool - and you would put HTTPS on 443 in front of it. The
-    "Your turn" below is the first half of that.
+    On a real account, narrow it where you can (CDN ranges, campus network) and add HTTPS on 443.
 
 **Expected result**
 
@@ -961,13 +529,7 @@ aws ec2 describe-security-groups --group-ids "$ALB_SG" \
   --output json
 ```
 
-**What to look for:** exactly one inbound rule, on port 80, whose `CIDR` is `0.0.0.0/0` and whose
-`FromGroup` is `null`. This is the one place in this course where those two values are the right way
-round; everywhere else the reverse is true.
-
-`OutboundRules` is `1` - the allow-all egress rule AWS created for you and you never wrote. That is what
-lets the load balancer open connections *to* the targets, and Step 9 is the other half of the same
-conversation.
+Exactly one inbound rule on port 80 with `CIDR` `0.0.0.0/0` and `FromGroup` `null`. `OutboundRules` is `1`: the default allow-all egress that lets the load balancer connect to targets.
 
 ✏️ **Your turn**
 
@@ -984,44 +546,13 @@ that are missing, and say which of the two AWS can give you for free and which o
 you have to obtain from somewhere.
 ```
 
-Hint: a security group rule opens a port on the firewall; it does not make anything listen on it.
-Re-read the interlude's description of a listener, and then think about what an HTTPS listener needs
-that an HTTP one does not. The AWS Certificate Manager documentation answers the second half in its
-first paragraph.
+Hint: a security group rule opens a port; it does not make anything listen on it. Think about what an HTTPS listener needs that an HTTP one does not.
 
 ---
 
 ### Step 5 - Create the Application Load Balancer
 
-**Purpose**
-
-The stable name. Everything after this step either points at it or is pointed at by it.
-
-**Run from**
-
-```text
-aws-floci-course/
-```
-
-**Concept first - what "internet-facing" and "two subnets" actually mean**
-
-A load balancer is not one machine. AWS places a **node** in each subnet you name, gives each node an
-address, and publishes a DNS name that resolves to all of them. A client resolves the name, gets several
-addresses, picks one, and connects to that node; the node then chooses a target and opens a second
-connection to it.
-
-Two consequences follow, and both matter:
-
-- **`--scheme internet-facing` means the nodes get public addresses**, which requires the subnets you
-  name to have a route to an internet gateway. Lab 2's `usms-public-rt` is that route. Naming a private
-  subnet here produces an error about the subnet not having an internet gateway route, which is one of
-  the clearer AWS error messages.
-- **Two Availability Zones is a hard requirement**, not a recommendation. A single-zone load balancer
-  would be a single point of failure in front of a multi-zone service, which is worse than useless.
-
-`--scheme internal` is the alternative: nodes with private addresses only, in private subnets, resolving
-to a name only things inside the VPC can reach. It is the right answer for a service that genuinely has
-no external clients, and Exercise 4 asks you to argue that USMS enrolment is such a service.
+The stable name. AWS places a **node** in each subnet you name and publishes one DNS name resolving to all of them. `internet-facing` gives the nodes public addresses, so the subnets need Lab 2's internet gateway route; two AZs is a hard requirement. (`internal` is the alternative; Exercise 4 argues for it.)
 
 **Command - part 1, create it**
 
@@ -1045,8 +576,6 @@ ALB_DNS=$(aws elbv2 describe-load-balancers --load-balancer-arns "$ALB_ARN" \
 echo "ALB_DNS = $ALB_DNS"
 ```
 
-**What the command does**
-
 ```text
 aws
  └── elbv2                        the SERVICE - Elastic Load Balancing, API version 2
@@ -1061,19 +590,8 @@ aws
            └── --tags             Key= / Value= with CAPITALS - the fourth convention in two labs
 ```
 
-**The tag syntax is capitalised here**, like IAM, unlike ECS's lower-case `key=`/`value=`, unlike EC2's
-`--tag-specifications` wrapper, unlike CloudWatch Logs' plain map. Lab 04 promised there was no rule
-connecting them and this is the fourth data point. Run `aws elbv2 create-load-balancer help` and read
-the `--tags` synopsis; that habit is more durable than memorising any of the four.
-
-Note that `--subnets` is a **space-separated list**, not comma-separated, and not the `awsvpcConfiguration=
-{subnets=[a,b]}` shorthand you fought with in Lab 04. The AWS CLI has at least three ways of expressing a
-list of strings and which one applies depends on the parameter's shape in the service model. When in
-doubt, `--generate-cli-skeleton` shows you.
-
-`--name` has a real 32-character limit and this course's naming convention gets close to it.
-`usms-enrolment-alb` is 18 characters. `usms-enrolment-application-load-balancer` would be rejected, and
-the error names the constraint clearly, which is more than can be said for many.
+- `--tags` uses capitalised `Key=`/`Value=` (unlike ECS's `key=`/`value=` and EC2's `--tag-specifications`). Check with `aws elbv2 create-load-balancer help`.
+- `--subnets` is space-separated, not comma-separated; `--generate-cli-skeleton` shows a parameter's shape.
 
 **Expected result**
 
@@ -1086,12 +604,7 @@ ALB_DNS = usms-enrolment-alb-1234567890.us-east-1.elb.amazonaws.com
 > different form entirely, such as one ending in `elb.localhost.localstack.cloud`. Record whichever you
 > get.
 
-Look hard at the shape of that ARN. The part after `loadbalancer/` is `app/usms-enrolment-alb/<id>` -
-the type, the name and a generated identifier. That three-part suffix is not decoration: Exercise 5
-needs it verbatim to build the `ResourceLabel` string that Lab 06's request-count scaling policy
-consumes. This is the same lesson as Lab 04's `service/<cluster>/<service>` composite: AWS builds
-resource identifiers out of ARN fragments in more than one place, and knowing where the fragments come
-from is the difference between constructing one and guessing at one.
+The ARN suffix after `loadbalancer/` is `app/usms-enrolment-alb/<id>`. Exercise 5 needs it verbatim for Lab 06's `ResourceLabel`.
 
 **Command - part 2, wait for it, then read it back**
 
@@ -1109,17 +622,7 @@ for i in $(seq 1 10); do
 done
 ```
 
-**What the command does**
-
-`aws elbv2 wait load-balancer-available` is a **waiter**, the same mechanism as Lab 3's `aws ec2 wait`
-and Lab 04's `aws ecs wait`. It polls until `State.Code` is `active` or it gives up.
-
-On real AWS a load balancer moves from `provisioning` to `active` in two to four minutes, which is
-genuinely slow and worth knowing: it is far slower than anything else in this architecture, and it is
-why nobody creates a load balancer as part of a deployment. On Floci it is usually instant, or the state
-is `active` from the moment of creation.
-
-If the waiter hangs for more than a minute, interrupt it with ++ctrl+c++ and use the manual loop.
+A waiter polls until `State.Code` is `active`. Real AWS takes two to four minutes (`provisioning` to `active`); Floci is usually instant. If the waiter hangs over a minute, press ++ctrl+c++ and use the loop.
 
 **Verify**
 
@@ -1129,17 +632,12 @@ aws elbv2 describe-load-balancers --load-balancer-arns "$ALB_ARN" \
   --output json
 ```
 
-**What to look for:** four things, in this order of importance.
+Check, in order:
 
-1. `AZs` has **two** entries, with **two different** `Zone` values. If both say `us-east-1a`, you named
-   two subnets in the same zone and the load balancer is not fault tolerant. On real AWS the API would
-   have refused; if your build accepted it, record it as a limitation and fix the subnets.
-2. `Scheme` is `internet-facing` and `Type` is `application`. Neither can be changed after creation -
-   both would require deleting and recreating the load balancer, which is why they are worth checking
-   now.
-3. `SGs` contains your `$ALB_SG`. This one *can* be changed later, with `set-security-groups`.
-4. `State` is `active`. `provisioning` is fine and will resolve; `failed` means something about the
-   subnets is wrong and the `State.Reason` field says what.
+1. `AZs` has **two** entries in **two different** zones. Same zone twice means real AWS would have refused; record it as a limitation and fix the subnets.
+2. `Scheme` is `internet-facing`, `Type` is `application`. Neither can change after creation.
+3. `SGs` contains `$ALB_SG` (changeable later with `set-security-groups`).
+4. `State` is `active` (`provisioning` resolves; `failed` means check `State.Reason`).
 
 **Command - part 3, a load balancer attribute worth setting deliberately**
 
@@ -1154,19 +652,8 @@ aws elbv2 modify-load-balancer-attributes \
   || echo "attribute modification not supported on this build - record it and continue"
 ```
 
-**What the command does**
-
-`idle_timeout.timeout_seconds` is how long the load balancer holds a connection open with no data
-flowing before closing it. The default is 60 seconds and that is usually right. It matters when it is
-wrong in either direction: an application whose responses take longer than the idle timeout returns a
-`504` from the load balancer even though the target was working, and a client that keeps connections
-open longer than the target's own keep-alive gets intermittent `502`s. The rule of thumb worth
-remembering is that **the target's keep-alive timeout should be longer than the load balancer's idle
-timeout**, and getting that backwards is the cause of a famous class of intermittent 502 errors.
-
-`routing.http.drop_invalid_header_fields.enabled` discards headers whose names are not valid HTTP. It
-defaults to `false` for backward compatibility and should be `true` on anything new; leaving it off is
-the kind of default that shows up in a security review.
+- `idle_timeout.timeout_seconds`: how long an idle connection stays open. Responses slower than this get a `504`; keep the target's keep-alive **longer** than this or you get intermittent `502`s.
+- `routing.http.drop_invalid_header_fields.enabled`: drops headers with invalid names; defaults to `false`, should be `true` on anything new.
 
 **Checkpoint 2**
 
@@ -1181,30 +668,15 @@ usms-enrolment-alb   active
  └── listeners       NONE YET - this load balancer currently answers nothing
 ```
 
-That last line is not a mistake. A load balancer with no listener is reachable and silent: the DNS name
-resolves, the nodes are up, and every connection is refused because nothing is listening on any port.
-Step 8 fixes it.
+No listener yet means every connection is refused. Step 8 fixes it.
 
 ---
 
 ### Step 6 - Create the target group
 
-**Purpose**
+The targets and the health check that decides which receive traffic. Lab 06's scaling policy names this object.
 
-The set of things traffic goes to, and the health check that decides which of them are eligible. This is
-the object Lab 06's request-count scaling policy will eventually name, so its configuration outlives
-this lab.
-
-**Run from**
-
-```text
-aws-floci-course/
-```
-
-**Concept first - the five health check numbers, in the only terms that matter**
-
-A target group health check has five numbers, and every one of them is really an answer to the question
-*how long does a broken task keep receiving traffic?*
+The five health check numbers all answer *how long does a broken task keep receiving traffic?*
 
 | Field | Value here | What it means |
 | --- | --- | --- |
@@ -1214,23 +686,7 @@ A target group health check has five numbers, and every one of them is really an
 | `--healthy-threshold-count` | 2 | How many consecutive successful probes before it is put back |
 | `--matcher HttpCode=200` | 200 | Which response codes count as success |
 
-Multiply the first and third: **a task that dies keeps receiving requests for up to 60 seconds.** That
-is the number you actually care about, and it is the number to quote when somebody asks why the outage
-lasted a minute after the process died.
-
-You can make it faster - interval 10, unhealthy threshold 2, and a broken target is out in 20 seconds -
-and the cost is more probe traffic and a much higher chance of taking out a healthy target during a
-transient blip. Aggressive health checks cause outages of their own. This is a genuine trade-off with no
-correct answer, which is why the in-class assessment asks you to justify a different set of numbers for
-a different service.
-
-The `matcher` is worth one sentence on its own. `HttpCode=200` means *only* 200 is healthy. A target
-returning `301` or `403` on the health check path is unhealthy, which is usually what you want and
-occasionally infuriating - an application that redirects `/` to `/login` will fail this check forever
-while working perfectly. `HttpCode=200-399` is the pragmatic widening, and choosing it deliberately is
-different from choosing it because the strict one failed.
-
-**Command**
+Interval times unhealthy threshold: **a dead task keeps receiving requests for up to 60 seconds.** Faster checks remove broken targets sooner but risk removing healthy ones during a blip. `HttpCode=200` treats a redirect (`301`) as unhealthy; `200-399` is the deliberate widening. See [target group health settings](../unit7/topic1.md#target-group-health-settings).
 
 ```bash
 TG_ARN=$(aws elbv2 create-target-group \
@@ -1254,27 +710,10 @@ TG_ARN=$(aws elbv2 create-target-group \
 echo "TG_ARN = $TG_ARN"
 ```
 
-**What the command does**
-
-Four of those flags are decisions rather than boilerplate.
-
-**`--target-type ip`** is mandatory, for the reason the interlude gave: an `awsvpc` task has no instance
-ID. This is the single most important flag in the command.
-
-**`--vpc-id`** binds the target group to `usms-vpc` permanently. A target group cannot be moved between
-VPCs, and `ip` targets must be addresses inside that VPC or a range reachable from it. Passing the wrong
-VPC here produces an error at Step 10 rather than now.
-
-**`--port 80` and `--protocol HTTP`** describe how the load balancer talks to a **target**, not how a
-client talks to the load balancer. Those are two different conversations and they do not have to use the
-same port. Here they both happen to be 80, because Lab 04's container listens on 80 and the listener in
-Step 8 will also be on 80 - but a listener on 443 forwarding to a target group on 8080 is an entirely
-ordinary configuration.
-
-**`--health-check-port traffic-port`** is a literal keyword, not a placeholder, and it means "use
-whatever port this target is registered on". The alternative is a fixed number, for an application that
-serves its health endpoint on a separate management port. `traffic-port` is right here and is the
-default; stating it makes the intent explicit.
+- `--target-type ip`: mandatory for `awsvpc` tasks. The most important flag here.
+- `--vpc-id`: binds the target group to `usms-vpc` permanently.
+- `--port 80 --protocol HTTP`: how the load balancer talks to a **target**, independent of the listener's port.
+- `--health-check-port traffic-port`: a literal keyword meaning "the port the target is registered on".
 
 **Expected result**
 
@@ -1284,8 +723,7 @@ TG_ARN = arn:aws:elasticloadbalancing:us-east-1:000000000000:targetgroup/usms-en
 
 > Example output - your ARN suffix will differ.
 
-That suffix, `targetgroup/usms-enrolment-tg/73e2d6bc24d8a067`, is the second half of Exercise 5's
-`ResourceLabel`. Two ARNs, two suffixes, one composite string.
+The suffix `targetgroup/usms-enrolment-tg/<id>` is the second half of Exercise 5's `ResourceLabel`.
 
 **Verify**
 
@@ -1318,9 +756,7 @@ aws elbv2 describe-target-groups --target-group-arns "$TG_ARN" \
 
 > Example output.
 
-**What to look for:** `Type` is `ip` - check this one before anything else, because it is the flag that
-cannot be changed later and the one whose error arrives four steps away. `LBs` is `0`, because no
-listener forwards to this target group yet; Step 8 makes it `1`.
+`Type` must be `ip` (it cannot change later). `LBs` is `0` until Step 8.
 
 Confirm the target group is empty, which it should be and will remain until Step 10:
 
@@ -1329,10 +765,7 @@ aws elbv2 describe-target-health --target-group-arn "$TG_ARN" \
   --query 'TargetHealthDescriptions' --output json
 ```
 
-An empty list, `[]`, is correct. **Do not populate it by hand.** If you are tempted to run
-`register-targets` with a task's address, re-read the last paragraph of the first interlude: the ECS
-service does this, and anything you register manually will be deregistered by the service the next time
-it reconciles.
+`[]` is correct. **Do not populate it by hand** with `register-targets`: the ECS service will deregister anything you add.
 
 ✏️ **Your turn**
 
@@ -1347,35 +780,18 @@ anything.
 Then answer in one sentence each in notes/lab-05-notes.md:
 (a) Name one realistic application for which the strict 200 matcher would report a
     perfectly working service as unhealthy forever.
-(b) Section 9's verification script asserts the matcher is 200. If you had left it at
+(b) Section 8's verification script asserts the matcher is 200. If you had left it at
     200-399, would that failure be a bug in your work or a bug in the script? Justify
     your answer in terms of what a verification script is FOR.
 ```
 
-Hint: `aws elbv2 modify-target-group help` lists everything about a target group that can be changed
-after creation. The list is short, and comparing it with `create-target-group`'s list of flags tells you
-exactly which decisions in this step were permanent - which is a more useful thing to know than the
-answer to (a).
+Hint: `aws elbv2 modify-target-group help` lists what can change after creation; compare it with `create-target-group`'s flags.
 
 ---
 
 ### Step 7 - Set the target group attribute that governs how a task dies
 
-**Purpose**
-
-`deregistration_delay.timeout_seconds` is the number that decides what happens to a request already in
-flight when ECS decides to stop a task. It is the load balancer half of a conversation whose ECS half
-you configured in Lab 04, and the two halves are usually set by different people who have never spoken.
-
-**Run from**
-
-```text
-aws-floci-course/
-```
-
-**Concept first - the sequence when a task goes away**
-
-Whether the cause is a deployment, a scale-in or a failed health check, the sequence is the same:
+`deregistration_delay.timeout_seconds` decides what happens to in-flight requests when ECS stops a task. It is the load balancer half of a sequence whose ECS half you set in Lab 04:
 
 ```text
 1. ECS decides to stop task T
@@ -1390,23 +806,13 @@ Whether the cause is a deployment, a scale-in or a failed health check, the sequ
 7. ECS sends SIGKILL
 ```
 
-Three separate timers, in three different places, describing one event:
-
 | Timer | Where it is set | What it protects |
 | --- | --- | --- |
 | `deregistration_delay.timeout_seconds` | The target group, here | Requests already in flight from the load balancer |
 | `stopTimeout` | The task definition, Lab 04 | The container's own graceful shutdown |
 | `minimumHealthyPercent` | The service, Lab 04 Step 13 | Total capacity during a deployment |
 
-The default deregistration delay is **300 seconds**, and it is far too long for most web services. Five
-minutes per task, times two tasks, is a ten-minute deployment for an application whose requests finish in
-milliseconds. Shortening it is one of the highest-value changes you can make to a slow deployment
-pipeline, and the correct value is *slightly longer than your slowest legitimate request*.
-
-Thirty seconds is right for this service. A file upload endpoint might justify 300. A WebSocket service
-justifies a conversation about whether draining is the right model at all.
-
-**Command**
+The default is 300 seconds, far too long for a millisecond API. Set it slightly longer than the slowest legitimate request: 30 seconds here.
 
 ```bash
 aws elbv2 modify-target-group-attributes \
@@ -1421,23 +827,13 @@ aws elbv2 describe-target-group-attributes --target-group-arn "$TG_ARN" \
   --query 'Attributes[].[Key,Value]' --output table
 ```
 
-**What the command does**
-
-`load_balancing.algorithm.type` chooses how the load balancer picks a target for each request:
-
 | Value | Behaviour | Suits |
 | --- | --- | --- |
 | `round_robin` | Each target in turn, regardless of what it is doing | Uniform, short requests. The default |
 | `least_outstanding_requests` | The target with fewest requests currently open | Variable request durations, and any service where one slow request should not attract more |
 
-`least_outstanding_requests` is the better default for almost any real API and is chosen here
-deliberately. Round robin has one specific pathology worth knowing: a target that is slow but not
-unhealthy keeps receiving its full share of traffic and accumulates a queue, because round robin has no
-idea it is struggling. Least-outstanding-requests routes around it automatically.
-
-Note the JMESPath in that first query. It uses `||` as a boolean **or** inside a filter expression, so
-that one call selects two named attributes, and each attribute name is written as a JMESPath literal -
-which is the form that needs backticks around it. That is a new pattern and it is in Appendix B.
+- `least_outstanding_requests` routes around a slow-but-healthy target; round robin keeps feeding it.
+- The first `--query` uses `||` (boolean or) inside a filter, with attribute names as backtick literals (Appendix).
 
 **Expected result**
 
@@ -1457,34 +853,13 @@ load_balancing.algorithm.type   least_outstanding_requests
 
 > Example output - the full attribute list is longer and varies by build.
 
-**Verify**
-
-`deregistration_delay.timeout_seconds` is `30`. If the whole call is rejected, record it as a limitation
-and continue: Section 9's script checks this attribute and lists its absence among the known benign
-failures.
-
-Two other attributes in that table are worth a moment even though this lab does not change them.
-`stickiness.enabled` being `false` means consecutive requests from one client may land on different
-tasks, which is correct for a stateless API and wrong for one that keeps session state in memory -
-and "we turned on stickiness" is usually a sign that an application should have been storing sessions
-elsewhere. `slow_start.duration_seconds` being `0` means a newly healthy target immediately receives its
-full share of traffic, which is fine for nginx and unkind to an application with a cold cache or a JIT
-compiler.
+**Verify:** `deregistration_delay.timeout_seconds` is `30`. If the call is rejected, record it as a limitation and continue; Section 8's script lists it among the known benign failures. `stickiness.enabled` `false` is correct for a stateless API; `slow_start.duration_seconds` `0` means a newly healthy target gets full traffic at once.
 
 ---
 
 ### Step 8 - Create the listener
 
-**Purpose**
-
-The port clients actually connect to, and the action that decides what happens to a request that
-arrives on it. This is the step that turns a silent load balancer into one that answers.
-
-**Run from**
-
-```text
-aws-floci-course/
-```
+The port clients connect to, and its default action. This turns a silent load balancer into one that answers.
 
 **Command - part 1, the default action, as a document**
 
@@ -1502,14 +877,7 @@ python3 -m json.tool templates/lab-05-listener-default-actions.json > /dev/null 
 grep -c '\$' templates/lab-05-listener-default-actions.json
 ```
 
-**What the command does**
-
-Unquoted heredoc - `<< EOF` - because `$TG_ARN` must become a real ARN as the file is written. The
-`grep -c '\$'` must print **`0`**; any other number means the variable was empty or the heredoc was
-quoted, and you are about to create a listener that forwards to the literal string `$TG_ARN`.
-
-That is the third time in two labs that this check has appeared, in its third context. It costs one line
-and it catches the most expensive silent bug in the course.
+Unquoted `<< EOF` so `$TG_ARN` expands at write time. `grep -c '\$'` must print **`0`**; anything else means an empty variable or a quoted heredoc.
 
 **Command - part 2, create the listener**
 
@@ -1526,17 +894,7 @@ LISTENER_ARN=$(aws elbv2 create-listener \
 echo "LISTENER_ARN = $LISTENER_ARN"
 ```
 
-**What the command does**
-
-`--default-actions` is a list of structures, so it is passed as a document with `file://` rather than as
-shorthand. You could write it inline as
-`Type=forward,TargetGroupArn=$TG_ARN` and for this simple case it would work - but actions get nested
-quickly (a weighted forward to two target groups, a redirect with a status code and a host, a
-fixed-response with a body and a content type), and the shorthand for those is close to unreadable. Step
-15 writes an action that genuinely cannot be expressed comfortably any other way.
-
-A listener has exactly **one** default action. Not zero, not two. It is what happens when no rule
-matches, and a listener without one would have nothing to do with most requests.
+`--default-actions` is a list of structures, so it is passed with `file://`; nested actions (Step 15) are unreadable as shorthand. A listener has exactly **one** default action.
 
 **Expected result**
 
@@ -1562,15 +920,7 @@ aws elbv2 describe-target-groups --target-group-arns "$TG_ARN" \
   --output json
 ```
 
-**What to look for:** the listener is on port `80`, protocol `HTTP`, its default action `Type` is
-`forward`, and `Forwards` is your `$TG_ARN`. `SSL` is `null`, because an HTTP listener has no TLS policy
-- that field is populated only on an HTTPS listener, which is what the Step 4 "Your turn" was pointing
-at.
-
-Then the second call: `AttachedToLoadBalancers` has gone from `0` to **`1`**. That is the target group
-noticing that something now forwards to it, and it is the first evidence that these two objects are
-connected. It is also, on real AWS, the moment health checking begins - the load balancer starts probing
-the target group's targets as soon as a listener uses it, and there are none yet.
+Port `80`, `HTTP`, default action `forward` to `$TG_ARN`, `SSL` `null` (only HTTPS listeners have a TLS policy). `AttachedToLoadBalancers` is now **`1`**; on real AWS health checking starts here.
 
 **Checkpoint 3**
 
@@ -1587,28 +937,13 @@ usms-enrolment-alb   active, internet-facing, application, 2 AZs
                                       └── targets       NONE YET  <- Step 10
 ```
 
-Two things are still missing, and they are the next two steps: the tasks do not admit the load balancer
-through their firewall, and the service has not been told to register anything.
+Still missing: the tasks' firewall does not admit the load balancer (Step 9), and the service registers nothing yet (Step 10).
 
 ---
 
 ### Step 9 - Let the load balancer reach the tasks
 
-**Purpose**
-
-The load balancer opens a connection *to* each target. Lab 04's `usms-enrolment-sg` admits tcp/80 from
-`usms-app-sg` and from nothing else, which does not include the load balancer. Without this step every
-target would fail its health check with a timeout, and the symptom would be a service that looks
-perfectly healthy to ECS and receives no traffic - the exact combination the health check interlude
-described.
-
-**Run from**
-
-```text
-aws-floci-course/
-```
-
-**Command**
+`usms-enrolment-sg` admits tcp/80 only from `usms-app-sg`. Without this rule every target fails its health check with a timeout while looking healthy to ECS.
 
 ```bash
 cat > policies/usms-enrolment-sg-ingress-alb.json << EOF
@@ -1637,18 +972,8 @@ aws ec2 authorize-security-group-ingress \
   --output text
 ```
 
-**What the command does**
-
-`<< EOF`, **unquoted**, because `$ALB_SG` must become a real group ID. Contrast it with Step 4's
-`policies/usms-alb-sg-ingress.json`, five steps earlier, which used `<< 'EOF'` because it contained no
-variables. Two files in the same directory, opposite quoting, and if you open one and see the literal
-text `$ALB_SG` you used the wrong one. The `grep -c '\$'` printing `0` is the check.
-
-The rule is group-referenced for the same reason every other rule in this architecture is, and now for a
-third reason on top of the two Lab 04 gave: **the load balancer's node addresses are not yours to
-know.** AWS chooses them, from within your subnets, and changes them when it scales the load balancer.
-Writing this rule against an address would produce a firewall that works today and fails silently on a
-day AWS decides to add a node.
+- Unquoted `<< EOF` because `$ALB_SG` must expand (contrast Step 4's quoted heredoc). `grep -c '\$'` must print `0`.
+- Group-referenced because AWS chooses and changes the load balancer's node addresses.
 
 **Expected result**
 
@@ -1683,36 +1008,13 @@ aws ec2 describe-security-groups --group-ids "$USMS_ENROLMENT_SG" \
 
 > Example output - your IDs will differ, and the two sources may appear in either order.
 
-**What to look for:** **two** source groups on port 80 - `usms-app-sg` from Lab 04 and `usms-alb-sg`
-from this step - and an empty `CIDRs` list. Note how they are presented: AWS has merged them into a
-single `IpPermission` entry, because they share a protocol and port range, with two entries in
-`UserIdGroupPairs`. That merging is why Lab 04's verification check, which reads
-`IpPermissions[0].UserIdGroupPairs[0].GroupId`, is now reading whichever of the two happens to be first
-in an unordered list. Hold that thought until Step 13.
-
-Both rules coexisting is the intended state right now. The web tier can still reach the tasks directly,
-*and* the load balancer can reach them. That overlap is what makes the next three steps a migration
-rather than an outage: build the new path, prove it, then remove the old one.
+**Two** source groups on port 80 (`usms-app-sg` and `usms-alb-sg`), empty `CIDRs`. AWS merges them into one `IpPermission`, so Lab 04's check reading `UserIdGroupPairs[0]` now reads whichever comes first; Step 13 returns to this. Both paths coexisting is intended: build the new path, prove it, then remove the old one.
 
 ---
 
 ### Step 10 - Attach the existing service to the target group
 
-**Purpose**
-
-Tell `usms-enrolment-svc` that its tasks are targets. From this moment the service registers every task
-it starts and deregisters every task it stops, for the rest of the service's life, without anybody
-asking it to.
-
-**Run from**
-
-```text
-aws-floci-course/
-```
-
-**Concept first - the three fields, and why two of them must match exactly**
-
-The service's `loadBalancers` entry has three fields:
+From now on `usms-enrolment-svc` registers every task it starts and deregisters every task it stops. The `loadBalancers` entry has three fields:
 
 ```text
 targetGroupArn   which target group to register into
@@ -1720,15 +1022,7 @@ containerName    WHICH CONTAINER in the task definition receives the traffic
 containerPort    WHICH PORT on that container
 ```
 
-The last two are matched against the task definition **by string**, and both must correspond to a real
-`portMappings` entry on a real container. Lab 04's `usms-enrolment:2` defines one container named
-`enrolment-api` with a `containerPort` of `80`, which is why those are the values below.
-
-Getting either wrong produces `InvalidParameterException` with a message about the container not being
-found in the task definition - which is clear, once you know that "container" here means the `name`
-field and not the image, the task, or anything you might reasonably call a container in conversation.
-This is also why a multi-container task needs you to say which one; Lab 04 Exercise 2's
-`enrolment-metrics` sidecar is exactly the case where the answer is not obvious.
+`containerName` and `containerPort` are matched **by string** against a real `portMappings` entry in `usms-enrolment:2` (`enrolment-api`, `80`). A mismatch gives `InvalidParameterException` saying the container is not in the task definition.
 
 **Command - part 1, the document**
 
@@ -1748,9 +1042,7 @@ grep -c '\$' templates/lab-05-service-load-balancers.json
 cat templates/lab-05-service-load-balancers.json
 ```
 
-**What to look for:** `0` remaining dollar signs, and `containerName` reading `enrolment-api` - not
-`$USMS_ENROLMENT_CONTAINER`, and not `usms-enrolment` (which is the task definition **family**, a
-different string that looks similar enough to cause an hour of confusion).
+`0` dollar signs, and `containerName` reads `enrolment-api` (not `usms-enrolment`, which is the task definition family).
 
 **Command - part 2, attach it**
 
@@ -1764,17 +1056,8 @@ aws ecs update-service \
   --output json
 ```
 
-**What the command does**
-
-Two flags, and the second one prevents a failure mode that is worth describing in full.
-
-**`--load-balancers`** changes the service's load balancer configuration in place. This triggers a new
-deployment, because every existing task has to be replaced by one the service has registered as a
-target - a task that was running before the attachment is not in the target group and cannot be added
-to it retroactively.
-
-**`--health-check-grace-period-seconds 60`** tells ECS to **ignore target group health results for the
-first 60 seconds of each task's life.** Without it, the loop is:
+- `--load-balancers` triggers a new deployment: existing tasks cannot be registered retroactively, so they are replaced.
+- `--health-check-grace-period-seconds 60` makes ECS ignore target health for each task's first 60 seconds. Without it, a slow-starting task is marked unhealthy and replaced, forever:
 
 ```text
 task starts -> application takes 25 seconds to be ready
@@ -1784,21 +1067,12 @@ task starts -> application takes 25 seconds to be ready
             -> ...
 ```
 
-The service never stabilises, `runningCount` oscillates, and the events list fills with tasks being
-started and stopped. It is one of the most common ECS support cases and the fix is always this flag. The
-grace period should be comfortably longer than your application's slowest cold start.
-
-Note that the flag is **only valid on a service that uses a load balancer.** Passing it before this step
-would have been rejected, which is a small piece of API design worth appreciating: the parameter cannot
-be set in a state where it would be meaningless.
+Set it longer than the slowest cold start. The flag is only valid on a service with a load balancer.
 
 !!! warning "If your build rejects `--load-balancers` on `update-service`"
-    Updating a service's load balancer configuration in place is supported for services using the
-    rolling (`ECS`) deployment controller, which is what Lab 04 Step 13 created. Some emulator builds
-    have not implemented it.
+    In-place load balancer updates are supported for the rolling (`ECS`) deployment controller Lab 04 Step 13 created, but some emulator builds lack them.
 
-    If the call fails with `InvalidParameterException` or `UnsupportedFeatureException`, use the
-    recreate path below. It is destructive and it is the reason this warning exists.
+    If the call fails with `InvalidParameterException` or `UnsupportedFeatureException`, use the destructive recreate path below.
 
     ??? danger "Fallback only - recreate the service with the load balancer attached"
         !!! danger "Read before running any delete command"
@@ -1841,9 +1115,7 @@ be set in a state where it would be meaningless.
           --query 'service.serviceArn' --output text
         ```
 
-        Every value in that command comes from Lab 04 or from `configs/lab-04.env`. Nothing is invented
-        and nothing is renamed. Record in your notes that you took the fallback path, and note that
-        `Lab=04` is deliberately preserved on the tag: the service is still Lab 04's object.
+        Every value comes from Lab 04 or `configs/lab-04.env`; nothing is renamed. Record that you took the fallback. `Lab=04` stays on the tag: the service is still Lab 04's object.
 
 **Expected result**
 
@@ -1866,29 +1138,13 @@ be set in a state where it would be meaningless.
 > Example output - `Deployments: 2` means the roll has started. On a build that starts no containers it
 > may be `1` immediately.
 
-**What to look for:** `LB` has exactly one entry, `Grace` is `60`, and `TaskDef` is **unchanged** at
-`usms-enrolment:2`. That last one is the point worth pausing on: attaching a load balancer did not
-register a new task definition revision, because where traffic comes from is a property of the
-**service**, not of the blueprint. Lab 04's four objects are still doing exactly the jobs Lab 04 gave
-them.
+`LB` has one entry, `Grace` is `60`, and `TaskDef` is **unchanged** at `usms-enrolment:2`: where traffic comes from is a property of the service, not the blueprint.
 
 ---
 
 ### Step 11 - Watch the targets register, and read target health
 
-**Purpose**
-
-The target group was empty at Step 6 and you were told not to fill it. This is where it fills itself.
-Watching it happen is the only way to believe that the ECS service, and not you, is responsible for the
-contents of a target group.
-
-**Run from**
-
-```text
-aws-floci-course/
-```
-
-**Concept first - the five target health states**
+The target group fills itself here, proving the service, not you, owns its contents.
 
 | State | Meaning | Typical cause when unexpected |
 | --- | --- | --- |
@@ -1898,12 +1154,7 @@ aws-floci-course/
 | `draining` | Deregistering; finishing in-flight requests only | A deployment or a scale-in, in progress |
 | `unused` | Registered, but nothing can send it traffic | No listener forwards to this target group, or the target group is not attached to a load balancer |
 
-`unused` is the one that confuses people, because it looks like a fault and usually is not. If you see
-it, check `LoadBalancerArns` on the target group before checking anything else.
-
-`Target.Id` for an `ip` target group is an **address**, not an instance ID and not a task ARN. That is
-the concrete evidence that a Fargate task is registered by the address its elastic network interface
-holds inside your subnet - the same address Lab 04 dug out of `attachments` in its Step 12.
+For `unused`, check the target group's `LoadBalancerArns` first. `Target.Id` for an `ip` target group is the task ENI's **address** (as in Lab 04 Step 12), not an instance ID or task ARN.
 
 **Command - part 1, watch it fill**
 
@@ -1942,10 +1193,7 @@ done
 > Example output - your addresses will differ, and on many builds the state will stay `initial` or the
 > list will remain empty. Record what you see.
 
-**What to look for:** two targets, **one in each Availability Zone**, with addresses inside
-`10.0.3.0/24` and `10.0.4.0/24`. Read those addresses against Lab 2's plan. They are your private
-subnets, which is the concrete proof that the load balancer in the public subnets is reaching tasks in
-the private ones - the whole architecture, in two rows of a table.
+Two targets, **one per AZ**, with addresses in `10.0.3.0/24` and `10.0.4.0/24`: the public load balancer reaching tasks in the private subnets.
 
 **Command - part 2, the service's own account of it**
 
@@ -1958,10 +1206,7 @@ aws ecs describe-services --cluster "$USMS_ECS_CLUSTER" --services "$USMS_ENROLM
   --query 'services[0].events[0:6].[createdAt,message]' --output text
 ```
 
-**What to look for:** on real AWS the events list narrates the whole thing -
-`registered 1 targets in target-group usms-enrolment-tg`, then `has begun draining connections on 1
-tasks`, then `has reached a steady state`. That last sentence is the one that means the deployment
-finished. On Floci the list is usually shorter and may be empty; record which.
+On real AWS the events read `registered 1 targets in target-group usms-enrolment-tg`, `has begun draining connections on 1 tasks`, then `has reached a steady state` (deployment finished). On Floci the list is shorter or empty; record which.
 
 **Command - part 3, the two health opinions, side by side**
 
@@ -1977,11 +1222,7 @@ aws elbv2 describe-target-health --target-group-arn "$TG_ARN" \
   --query 'TargetHealthDescriptions[].[Target.Id,TargetHealth.State]' --output text
 ```
 
-**What the command does**
-
-The first block asks ECS what it thinks of each task; the second asks the load balancer what it thinks
-of each address. Line them up by address. This is the practical form of the health check interlude, and
-it is the diagnostic you will reach for whenever a load-balanced service misbehaves:
+Line up ECS's opinion of each task with the load balancer's opinion of each address:
 
 | ECS `healthStatus` | Target health | Diagnosis |
 | --- | --- | --- |
@@ -1991,8 +1232,7 @@ it is the diagnostic you will reach for whenever a load-balanced service misbeha
 | `UNKNOWN` | `healthy` | Not a fault. The task definition has no container health check |
 | anything | `unused` | Nothing forwards to this target group |
 
-Write that table into `notes/lab-05-notes.md`. It is Review Question 4 and it is Task C of the in-class
-assessment.
+Copy this table into `notes/lab-05-notes.md`: it is Review Question 4 and assessment Task C.
 
 ✏️ **Your turn**
 
@@ -2010,8 +1250,7 @@ to do by hand after every single scaling event if the service did not register i
 own targets.
 ```
 
-Hint: Lab 04 Step 16 has the command for changing the desired count. Nothing else in this task requires
-a command you have not already run.
+Hint: Lab 04 Step 16 has the desired-count command.
 
 **Checkpoint 4**
 
@@ -2032,17 +1271,7 @@ usms-enrolment-svc   attached to the load balancer
 
 ### Step 12 - Prove the path, and be honest about which proof you got
 
-**Purpose**
-
-Everything so far has been configuration that reported success. Lab 04's principle applies: **a command
-that appears to succeed is not evidence that it did what you meant.** This step tries the real thing
-first, and gives you a control-plane proof to record when the real thing is not available.
-
-**Run from**
-
-```text
-aws-floci-course/
-```
+A command that appears to succeed is not proof. Try the real request first; if your build has no data path, record the control-plane proof instead.
 
 **Command - part 1, the data path**
 
@@ -2062,15 +1291,8 @@ curl -s -o /dev/null -w 'http_code=%{http_code}  time_total=%{time_total}s\n' \
   || echo "curl could not connect - expected on many builds; see part 2"
 ```
 
-**What the command does**
-
-Three probes of increasing ambition: does the name resolve, does something answer, and what does it say.
-`getent hosts` is not available everywhere, so a three-line Python fallback follows it -
-`socket.gethostbyname_ex` is in the standard library and behaves the same on macOS and Linux, which
-`getent`, `host` and `dig` do not.
-
-`curl -w` prints selected transfer variables after the request. `%{http_code}` and `%{time_total}` are
-the two worth knowing; `--max-time 10` stops a hanging connection from stalling the lab.
+- Name resolution uses `getent`, falling back to Python's `socket` (portable across macOS and Linux).
+- `curl -w` prints `%{http_code}` and `%{time_total}`; `--max-time 10` stops a hang. No `curl`? Use `wget -q -O /dev/null -T 10 "http://$ALB_DNS/" && echo ok`.
 
 **Expected result, on a build with a working data path**
 
@@ -2094,22 +1316,11 @@ curl could not connect - expected on many builds; see part 2
 > Also example output, and also a perfectly acceptable result for this lab.
 
 !!! note "Floci Limitation - the load balancer's data path"
-    An internet-facing load balancer's DNS name is a public name that AWS publishes and resolves. Floci
-    does not run public DNS, and the course's `docker-compose.yml` publishes only port `4566`. Some
-    builds serve load balancers through the `4566` gateway under a `localhost.localstack.cloud` name;
-    many serve no data path at all.
+    Floci runs no public DNS, and the course's compose file publishes only port `4566`. Some builds serve load balancers through `4566` under a `localhost.localstack.cloud` name; many serve no data path. The environment contract lists **no port range for Elastic Load Balancing**: do not invent or publish extra ports.
 
-    §5.5 of this course's environment contract lists the port ranges that may be uncommented for
-    sidecar services, and **there is no range listed for Elastic Load Balancing**. Do not invent one and
-    do not publish extra ports hoping it will help - publishing ranges you do not need makes Docker
-    Desktop crawl and causes collisions on shared machines, which is exactly why they are commented out.
+    Real AWS resolves the DNS name to the nodes' public addresses and forwards to a healthy target in milliseconds.
 
-    Real AWS resolves the DNS name to the public addresses of the load balancer's nodes, in the two
-    Availability Zones you chose, and forwards to a healthy target within milliseconds.
-
-    Take this away regardless: part 2 below proves the same wiring from the control plane, end to end,
-    without a single packet reaching a container. Record which of the two proofs you obtained. Claiming
-    a `200` you did not see is worth negative marks.
+    Part 2 proves the same wiring from the control plane. Record which proof you obtained; claiming a `200` you did not see is worth negative marks.
 
 **Command - part 2, the control-plane proof, which always works**
 
@@ -2152,9 +1363,7 @@ curl could not connect - expected on many builds; see part 2
 } | tee outputs/lab-05-path-proof.txt
 ```
 
-**Verify**
-
-Read the five blocks as one chain and satisfy yourself that each link names the next:
+**Verify:** read the five blocks as one chain, each link naming the next:
 
 ```text
 client -> listener HTTP:80        (block 1)
@@ -2165,27 +1374,13 @@ client -> listener HTTP:80        (block 1)
        -> and are reachable because usms-enrolment-sg admits usms-alb-sg (block 5)
 ```
 
-If block 3 is empty, your build did not start containers; the chain is still proven from blocks 1, 2, 4
-and 5, and you say so. If block 5 does not contain `$ALB_SG`, go back to Step 9 - that is a real fault
-and the only one in this list that would break the architecture on real AWS.
-
-`outputs/lab-05-path-proof.txt` is evidence for your lab report and for Section 14.1 Task D. Keep it.
+Empty block 3 means your build started no containers; the chain still holds from blocks 1, 2, 4 and 5, and you say so. Block 5 without `$ALB_SG` is a real fault: go back to Step 9. Keep `outputs/lab-05-path-proof.txt` for the report and Section 13.1 Task D.
 
 ---
 
 ### Step 13 - The cutover: remove the direct path
 
-**Purpose**
-
-The web tier now has two ways to reach the enrolment tasks: through the load balancer, and directly, on
-the rule Lab 04 wrote. Having proved the first, remove the second. A migration that leaves the old path
-in place is not finished; it is a system with two behaviours, one of which nobody is testing.
-
-**Run from**
-
-```text
-aws-floci-course/
-```
+Having proved the load-balanced path, remove the direct one. A migration that leaves the old path in place is a system with two behaviours, one untested.
 
 !!! danger "Read before running any delete command"
     **What will be deleted:** one inbound rule on `usms-enrolment-sg` - the tcp/80 rule sourced from
@@ -2221,25 +1416,10 @@ OLD_RULE_ID=$(aws ec2 describe-security-group-rules \
 echo "rule to remove: $OLD_RULE_ID"
 ```
 
-**What the command does**
+- `describe-security-group-rules` gives each rule its own ID, the only view where the two port-80 sources are separable.
+- The filter joins two conditions with `&&`: JSON literals (`false`) in backticks, raw strings in single quotes. The query is double-quoted so `$USMS_APP_SG` expands, so the backticks are escaped as `` \` ``.
 
-`describe-security-group-rules` returns each rule as its own object with its own ID, which is the only
-view in which the two sources on port 80 are separable - `describe-security-groups` merges them, as you
-saw at Step 9.
-
-The JMESPath filter combines two conditions with `&&`, compares a boolean literal in backticks, and
-compares a string in single quotes. Those three quoting rules in one expression are worth reading
-carefully: JMESPath wants backticks around JSON literals such as `false` and `80`, and single quotes
-around raw strings. Getting them the wrong way round is the most common JMESPath error after forgetting
-`| [0]`.
-
-The shell escaping is doing work too. The whole query is in double quotes so that `$USMS_APP_SG`
-expands, which means the backticks around `false` must be escaped as `\`` or the shell would treat them
-as command substitution.
-
-**What to look for before you go on:** `OLD_RULE_ID` is a real `sgr-` identifier and **not** `None`. If
-it is `None`, either the rule was already removed or `$USMS_APP_SG` is empty in this terminal. Check the
-variable before assuming the rule is gone.
+`OLD_RULE_ID` must be a real `sgr-` ID, **not** `None`. `None` means the rule is already gone or `$USMS_APP_SG` is empty in this terminal; check the variable first.
 
 **Command - part 2, remove it**
 
@@ -2267,13 +1447,7 @@ echo "usms-alb-sg = $ALB_SG"
 echo "usms-app-sg = $USMS_APP_SG   (must NOT appear above)"
 ```
 
-**What to look for:** exactly **one** source group on port 80, and it is `$ALB_SG`. `$USMS_APP_SG` does
-not appear. `CIDRs` is empty.
-
-The architecture now says something precise, and you should be able to say it in one sentence: *the only
-thing in this account that can open a connection to an enrolment task is the load balancer.* Not the
-internet, not the web instance, not the database instance. That sentence is what a security review is
-actually asking for, and it is now true by construction rather than by assertion.
+Exactly **one** source on port 80, `$ALB_SG`; no `$USMS_APP_SG`; empty `CIDRs`. Now *the only thing that can open a connection to an enrolment task is the load balancer*.
 
 **Command - part 3, look at what this did to Lab 04's script**
 
@@ -2303,16 +1477,7 @@ PASS=48  FAIL=1
 
 > Example output.
 
-**What to look for:** the `diff` shows **exactly one** check changing state, and the totals moving from
-`49/0` to `48/1`. Any other line in that diff is something you broke by accident and should investigate
-before continuing.
-
-That single line is worth more attention than it looks. A verification script is a written-down
-statement of what an architecture is supposed to be. When the architecture legitimately changes, the
-script becomes wrong - and it says so loudly, which is the behaviour you want. It has done its job
-correctly by failing.
-
-You have three defensible responses, and the assessment expects you to be able to name all three:
+The `diff` shows **exactly one** check changing state, `49/0` to `48/1`. Any other changed line is an accident; investigate. The script failed correctly: the architecture legitimately changed. The assessment expects you to name all three responses:
 
 | Response | When it is right |
 | --- | --- |
@@ -2320,28 +1485,13 @@ You have three defensible responses, and the assessment expects you to be able t
 | Update the check to assert the new source group | Exercise 2. This is what you would do on a real system, in the same commit as the change |
 | Delete the check | Almost never. The property still matters; only the expected value changed |
 
-From this point on, `verify-lab-05.sh` from Section 9 is the script of record for this architecture. It
-asserts both halves: that the load balancer's group is a source, and that the web tier's group is not.
+From here, `verify-lab-05.sh` (Section 8) is the script of record; it asserts the load balancer's group is a source and the web tier's is not.
 
 ---
 
 ### Step 14 - Deploy behind a load balancer, and watch a target drain
 
-**Purpose**
-
-Lab 04 taught deployments with no load balancer, so a task simply stopped. With a target group in front,
-the same deployment acquires two extra states and one extra timer, and this is the step where
-`deregistration_delay` stops being a number in a table.
-
-**Run from**
-
-```text
-aws-floci-course/
-```
-
-**Concept first - what a rolling deployment looks like now**
-
-Lab 04's sequence, with the load balancer's part written in:
+With a target group in front, a deployment gains two states and one timer:
 
 ```text
 minimumHealthyPercent 100, maximumPercent 200, desiredCount 2, deregistration delay 30
@@ -2357,14 +1507,7 @@ minimumHealthyPercent 100, maximumPercent 200, desiredCount 2, deregistration de
   step 8                  [ C ] [ D ]                             done
 ```
 
-Two things are new and both are improvements. A new task does not receive a single request until the
-load balancer has independently agreed it is healthy - the health check has become a *deployment gate*,
-not merely a monitor. And an old task is not killed the instant it is replaced; it is drained first, so
-a request in flight at step 4 gets up to thirty seconds to finish.
-
-That second property is why a load-balanced deployment can be genuinely zero-downtime and an
-unbalanced one cannot. Lab 04's deployment stopped tasks that might have been mid-request, and nothing
-in the architecture could have known.
+The health check becomes a deployment gate (no traffic until healthy), and old tasks drain before being killed. That is why a load-balanced deployment can be zero-downtime.
 
 **Command - part 1, record the state before**
 
@@ -2391,17 +1534,7 @@ aws ecs update-service \
   --output json
 ```
 
-**What the command does**
-
-`--force-new-deployment` replaces every task with an identical one, from the same task definition
-revision. Lab 04 mentioned the flag; this is the step that uses it, and the reason to use it here is that
-it isolates exactly one variable. Nothing about the blueprint changes, so anything you observe is caused
-by the deployment mechanism itself and not by a difference between two revisions.
-
-On a real system there are three routine reasons to force a deployment: the image tag now points at a
-different image, a secret has been rotated, or you want to cycle tasks that have been running long
-enough to have drifted. All three are "nothing in the configuration changed and I want new tasks
-anyway".
+`--force-new-deployment` replaces every task with an identical one from the same revision, isolating the deployment mechanism. Real uses: a moved image tag, a rotated secret, cycling drifted tasks.
 
 **Command - part 3, watch both sides at once**
 
@@ -2445,9 +1578,7 @@ PRIMARY 2   2   0   COMPLETED
 > the target list may not change at all. A single frame containing `draining` next to `healthy` is the
 > thing worth screenshotting.
 
-**What to look for:** three states visible across the polls - `initial` for a target that has just been
-registered, `healthy` once it has passed its checks, and `draining` for one on its way out. Catching all
-three is the evidence that the sequence in the concept block above is real.
+Look for `initial`, `healthy` and `draining` across the polls.
 
 **Command - part 4, confirm**
 
@@ -2463,13 +1594,7 @@ three is the evidence that the sequence in the concept block above is real.
 paste outputs/lab-05-pre-deploy.txt outputs/lab-05-post-deploy.txt
 ```
 
-**What to look for:** the task definition is identical on both sides - this was a forced deployment, not
-a revision change - the counts are identical, and the **addresses are different**. Same blueprint, same
-capacity, different tasks. That is the whole meaning of `--force-new-deployment` in three lines of
-output.
-
-If your build never changes the target list, the task ARNs will still have changed; check with
-`aws ecs list-tasks` and record that as the evidence instead.
+Same task definition and counts on both sides, **different addresses**. If your build never changes the target list, check that task ARNs changed with `aws ecs list-tasks` and record that instead.
 
 **Checkpoint 5**
 
@@ -2486,19 +1611,7 @@ Deployment behind a load balancer, observed
 
 ### Step 15 - Add a listener rule
 
-**Purpose**
-
-A listener has one default action, and everything more interesting than "send it all to one place" is a
-rule. This step adds one, with a condition and an action that is not a forward, so that the mechanism is
-clear before you need it for something that matters.
-
-**Run from**
-
-```text
-aws-floci-course/
-```
-
-**Concept first - priority, and the order things are evaluated**
+Anything beyond "send it all to one place" is a rule. This one has a non-forward action, so the mechanism is clear before you need it.
 
 ```text
 request arrives on listener HTTP:80
@@ -2510,14 +1623,7 @@ request arrives on listener HTTP:80
   +-- no rule matched    -> run the listener's DEFAULT ACTION
 ```
 
-Lowest priority number is evaluated first, and the first match wins. Priorities must be unique within a
-listener and are in the range 1 to 50000. Leaving gaps - 10, 20, 30 rather than 1, 2, 3 - is a
-convention worth adopting for the same reason it was worth adopting in BASIC: inserting a rule between
-two existing ones then needs no renumbering.
-
-The default action is not a rule and has no priority. It is the fallback, and it always runs last.
-
-**Actions** you can attach to a rule:
+Lowest number first, first match wins; priorities are unique per listener, 1 to 50000. Leave gaps (10, 20, 30) so you can insert rules later. The default action is not a rule and always runs last.
 
 | Type | What it does | Typical use |
 | --- | --- | --- |
@@ -2526,9 +1632,7 @@ The default action is not a rule and has no priority. It is the fallback, and it
 | `fixed-response` | Return a status code and body without contacting any target | Health endpoints, maintenance pages, and blocking a path outright |
 | `authenticate-oidc` / `authenticate-cognito` | Require a login before forwarding | Putting an identity provider in front of an app that has none |
 
-This step builds a `fixed-response`, because it is the one that proves the mechanism with no second
-target group and no second service: if `/alb-health` returns 200 while `/` reaches a task, the rule
-fired and the default action did not.
+A `fixed-response` proves the mechanism with no second target group: if `/alb-health` returns 200 while `/` reaches a task, the rule fired.
 
 **Command - part 1, the condition and the action**
 
@@ -2561,20 +1665,9 @@ python3 -m json.tool templates/lab-05-rule-conditions.json > /dev/null && echo "
 python3 -m json.tool templates/lab-05-rule-actions.json    > /dev/null && echo "actions valid"
 ```
 
-**What the command does**
-
-Both heredocs are `<< 'EOF'`, **quoted**, because neither document contains a variable. The action
-document also contains a literal `\n`, which must reach the file as two characters and would survive
-either form - but the habit of quoting anything with no variables in it is what keeps you from having to
-think about cases like that.
-
-`StatusCode` is a **string**, `"200"`, not the number `200`. This is the same class of trap as Lab 04's
-`"cpu": "256"`, in a different service, and the error message names a type rather than a field.
-
-The condition matches two patterns because `/alb-health` and `/alb-health/*` are different: path
-patterns are matched literally with `*` and `?` wildcards, and a pattern of `/alb-health*` would also
-match `/alb-healthcheck-internal`, which you probably did not mean. Being precise about this is the
-difference between a rule that does what you said and one that does what you typed.
+- Both heredocs are quoted `<< 'EOF'`: no variables.
+- `StatusCode` is a **string** `"200"` (like Lab 04's `"cpu": "256"`).
+- Two patterns, because `/alb-health*` would also match `/alb-healthcheck-internal`.
 
 **Command - part 2, create the rule**
 
@@ -2636,11 +1729,7 @@ aws elbv2 describe-rules --listener-arn "$LISTENER_ARN" \
 
 > Example output.
 
-**What to look for:** two entries. The rule you made, with `Default` false and a numeric priority, and
-the default action, which appears in this list with `Priority` of the literal string `"default"` and
-`IsDefault` true. That is a small piece of API design worth noticing: the default action is presented as
-a rule so that one call shows you the whole decision table, even though it is not a rule you created and
-cannot delete.
+Two entries: your rule (`Default` false, priority `10`) and the default action, listed with `Priority` `"default"` and `IsDefault` true so one call shows the whole decision table.
 
 **Command - part 3, test it if you have a data path**
 
@@ -2650,9 +1739,7 @@ curl -s -w '/alb-health  -> %{http_code}  body: %{size_download} bytes\n' --max-
      "http://$ALB_DNS/alb-health" || true
 ```
 
-If both answer, the second one returned without any task being involved at all - that is the rule firing
-ahead of the default action. If neither answers, the `describe-rules` output above is your evidence and
-the point still stands.
+If both answer, the second returned without any task: the rule fired first. If neither answers, the `describe-rules` output is your evidence.
 
 **Checkpoint 6**
 
@@ -2669,18 +1756,7 @@ usms-enrolment-alb
 
 ### Step 16 - Prove the whole thing survives a restart
 
-**Purpose**
-
-The same proof as Lab 2 Step 23, Lab 3 Step 19 and Lab 04 Step 18, applied to this lab's work. This
-lab's state spans three services - ELBv2, ECS and EC2 - and a build that persists two of them but not
-the third would leave you with a service whose `loadBalancers` entry names a target group that no longer
-exists. That failure is invisible until the next deployment.
-
-**Run from**
-
-```text
-aws-floci-course/
-```
+The create, perturb, read-back proof (as in Lab 04 Step 18), across ELBv2, ECS and EC2. A build that persisted two of the three would leave the service naming a target group that no longer exists.
 
 **Command - part 1, record the truth**
 
@@ -2717,9 +1793,7 @@ source configs/lab-02.env
 source configs/lab-04.env
 ```
 
-`floci-down.sh` is `docker compose stop`. It stops the container and keeps the state. It is not
-`docker compose down`, and it is emphatically not `docker compose down -v`, which would delete the
-volumes and with them the entire course.
+`floci-down.sh` is `docker compose stop`: state is kept. Never `docker compose down -v`.
 
 **Command - part 3, read it back, deriving every ARN from the API**
 
@@ -2759,28 +1833,10 @@ diff outputs/lab-05-pre-restart.txt outputs/lab-05-post-restart.txt \
   || echo "PERSISTENCE FAILED: read the diff above, then run ./scripts/utilities/floci-storage-check.sh"
 ```
 
-**What the command does**
-
-Part 3's first four lines are the entire point of the step. Every ARN is **re-derived from the API**
-rather than reused from the shell variables. Reusing the variables would have proved only that Bash
-remembers strings - which is exactly the mistake that made an earlier edition of this course's
-persistence test worthless, described in Lab 1 Step 14.
-
-Note how the derivation works, because it is the practical reason ELBv2 gives you `--names` on two
-read-only calls in an otherwise ARN-only API: `describe-load-balancers --names` and
-`describe-target-groups --names` are the front door back into a system whose identifiers you have lost.
-Listeners and rules have no name at all, so they are found by walking down from the load balancer's ARN
-- which is why the third line filters listeners by port.
-
-`sort_by(Listeners,&Port)` is a new JMESPath form. The `&` makes an **expression reference** - a little
-function passed to `sort_by` telling it which field to sort on. Sorting matters here because the
-comparison is a `diff`, and a list that comes back in a different order on the second run would produce
-a false failure.
-
-Seven facts across three services are compared, not one. `runningCount` is deliberately **not** in the
-list, for the same reason Lab 04 left it out: tasks are allowed to be restarted by the service after a
-restart of the emulator, and comparing a number that is legitimately allowed to move would make this
-check fail for the wrong reason. **Compare the configuration, not the weather.**
+- Every ARN is **re-derived from the API**; reusing shell variables would only prove Bash remembers strings (Lab 1 Step 14).
+- `--names` on the two read-only calls is the way back in; listeners have no name, so they are found by walking down from the load balancer and filtering by port.
+- `sort_by(Listeners,&Port)`: `&` makes an expression reference; sorting avoids a false `diff` from reordering.
+- `runningCount` is deliberately excluded: it may legitimately move. Compare configuration, not the weather.
 
 **Expected result**
 
@@ -2793,9 +1849,7 @@ re-derived:
 PERSISTENCE PROVEN: the load balancer, its two Availability Zones, its security group, the target group with its full health check configuration, the listener, the rule, the service's loadBalancers entry and the grace period are all unchanged
 ```
 
-**What to look for:** exactly that line. If you see `PERSISTENCE FAILED`, read the `diff` output **before
-doing anything else** - it names *which* of the seven facts did not survive, which is a far more useful
-finding than a general failure. Then run `./scripts/utilities/floci-storage-check.sh`.
+On `PERSISTENCE FAILED`, read the `diff` first (it names which of the seven facts was lost), then run `./scripts/utilities/floci-storage-check.sh`.
 
 **Checkpoint 7**
 
@@ -2813,19 +1867,7 @@ Persistence proven for Lab 05
 
 ### Step 17 - Close the loop, and audit what this lab created
 
-**Purpose**
-
-Step 13 changed who may call the enrolment tasks. This step resolves both ends of the new chain back to
-real objects, so that the security posture is something you have *demonstrated* rather than something
-you have *asserted*.
-
-**Run from**
-
-```text
-aws-floci-course/
-```
-
-**Command**
+Resolve both ends of the new chain to real objects, so the security posture is demonstrated, not asserted.
 
 ```bash
 source configs/lab-03.env
@@ -2874,22 +1916,9 @@ aws elbv2 describe-tags --resource-arns "$ALB_ARN" "$TG_ARN" \
   || echo "elbv2 describe-tags not supported on this build - record it and continue"
 ```
 
-**What the command does**
-
-Block 2 is the important one, and it is deliberately written as an equality test rather than a
-description. The claim "only the load balancer can reach the tasks" is either true or false, and this
-prints which.
-
-Block 3 is the piece that would be easy to skip and should not be. `usms-web-01` still carries
-`usms-app-sg`, and that group no longer grants it anything on the enrolment tasks. Nothing about the
-instance changed and everything about what it can reach did - which is the clearest possible illustration
-of what a security group actually is. It is not a property of the instance. It is a name that other
-people's rules refer to.
-
-`aws elbv2 describe-tags --resource-arns` takes **several ARNs in one call** and returns a
-`TagDescriptions` list, one entry per resource. That plural form is unusual - most `describe-tags`
-operations in AWS take filters instead - and it is worth knowing because it is the only way to audit
-ELBv2 tags in bulk.
+- Block 2 is an equality test: "only the load balancer can reach the tasks" is printed as true or false.
+- Block 3: `usms-web-01` still carries `usms-app-sg`, which no longer grants anything on the tasks. A security group is a name other rules refer to, not a property of the instance.
+- `elbv2 describe-tags --resource-arns` takes several ARNs in one call: the bulk way to audit ELBv2 tags.
 
 **Expected result**
 
@@ -2931,32 +1960,13 @@ usms-alb-sg     sg-0bb22cc33dd44ee55
 
 > Example output - your IDs will differ.
 
-**What to look for:** `CUTOVER CONFIRMED` and `LOOP CLOSED`. A `MISMATCH` in block 2 is a real fault; a
-`NOTE` in block 3 usually means Lab 3's instance was terminated and relaunched, or you did Lab 3 Step
-18's "Your turn" and there are now two instances carrying `usms-app-sg`, in which case `[0]` picked the
-other one and the mismatch is benign. Say which, in one sentence, in your report.
-
-If any ELBv2 resource shows no tags, note it: some builds accept `--tags` on create and do not store
-them. Add them afterwards with `aws elbv2 add-tags --resource-arns ... --tags Key=Lab,Value=05` and
-record the rest.
+You want `CUTOVER CONFIRMED` and `LOOP CLOSED`. `MISMATCH` is a real fault. A `NOTE` usually means Lab 3's instance was relaunched, or Lab 3 Step 18's "Your turn" left two instances with `usms-app-sg` and `[0]` picked the other (benign); say which in your report. If an ELBv2 resource shows no tags, add them with `aws elbv2 add-tags --resource-arns ... --tags Key=Lab,Value=05` and record it.
 
 ---
 
 ### Step 18 - Write `configs/lab-05.env`
 
-**Purpose**
-
-Every shell variable in this terminal dies when you close it, and this lab created six things whose ARNs
-matter. Lab 06 needs three of them. Record them **by lookup, not from the variables**, so that a
-populated value in the file is evidence the resource actually exists.
-
-**Run from**
-
-```text
-aws-floci-course/
-```
-
-**Command**
+Lab 06 needs three of this lab's ARNs. Record them **by lookup, not from variables**, so a populated value proves the resource exists.
 
 ```bash
 cat > configs/lab-05.env << EOF
@@ -3008,24 +2018,9 @@ EOF
 grep -n 'export .*=$\|None' configs/lab-05.env || echo "all values populated"
 ```
 
-**What the command does**
-
-Unquoted heredoc - `<< EOF`, not `<< 'EOF'` - for the same reason as Lab 2 Step 24, Lab 3 Step 22 and
-Lab 04 Step 20: every `$(...)` must run **now** and the resulting value must land on disk. Had this
-been quoted, the file would contain the text of thirteen API calls, and `source configs/lab-05.env`
-would re-run all of them in every new terminal you ever open.
-
-The listener line is the awkward one and repays a close look. Two things are happening:
-
-- It contains a **nested** command substitution, because there is no `describe-listeners --names`: you
-  can only find a listener by walking down from its load balancer's ARN.
-- The backticks around `80` inside the JMESPath filter are escaped as ``\` ``, because the whole heredoc
-  is unquoted and an unescaped backtick would be read by the shell as command substitution. Get this
-  wrong and the shell tries to run `80` as a command, which produces `80: command not found` and an
-  empty variable - a genuinely confusing failure whose message names neither JMESPath nor the listener.
-
-`USMS_SVC_GRACE_PERIOD` is read back from the service rather than hard-coded as `60`, so that if the
-attachment silently failed the file records `None` and the check below catches it.
+- Unquoted `<< EOF` so every `$(...)` runs now; quoted, the file would re-run thirteen API calls in every new terminal (contrast the quoted policy heredocs).
+- The listener line nests a command substitution (no `describe-listeners --names`), and escapes the JMESPath backticks as ``\` ``; unescaped, the shell runs `80` as a command and the variable is empty.
+- `USMS_SVC_GRACE_PERIOD` is read back, not hard-coded, so a failed attachment shows as `None`.
 
 **Verify**
 
@@ -3048,26 +2043,13 @@ printf '%-26s %s\n' \
 grep -c '^export' configs/lab-05.env
 ```
 
-**What to look for:** `all values populated`, eleven non-empty lines, and a count of **15** exported
-variables. `target type` must read `ip`; `lb container` must read `enrolment-api`; `grace period` must
-read `60`.
-
-A `None` anywhere means a resource does not exist or a step did not take. Find which, because catching it
-here is worth ten troubleshooting entries in Lab 06.
+You want `all values populated`, eleven non-empty lines and **15** exports; `target type` `ip`, `lb container` `enrolment-api`, `grace period` `60`. A `None` means a resource is missing or a step did not take; find it now.
 
 ---
 
 ### Step 19 - Commit
 
-**Purpose**
-
-Same discipline as every lab: look first, stage explicitly, then commit.
-
-**Run from**
-
-```text
-aws-floci-course/
-```
+Look first, stage explicitly, then commit.
 
 **Command - part 1, look before you add**
 
@@ -3078,14 +2060,11 @@ git check-ignore -v outputs/lab-05-path-proof.txt
 git ls-files outputs/
 ```
 
-**What to look for, before typing anything else:**
+Before typing anything else:
 
-- No path under `outputs/` appears in `git status --short`.
-- No `.env` at the repository root appears.
-- `configs/lab-05.env` **does** appear. It holds names, ARNs and a DNS name - no secrets.
-- `git check-ignore -v` names the file, the rule and the line number. **Silence there means the file is
-  not ignored** - stop and fix `.gitignore` before committing anything at all.
-- `git ls-files outputs/` lists `outputs/.gitkeep` and nothing else.
+- Nothing under `outputs/` and no root `.env` in `git status --short`; `configs/lab-05.env` **does** appear (no secrets).
+- `git check-ignore -v` names the rule and line. **Silence means the file is not ignored**: fix `.gitignore` before committing anything.
+- `git ls-files outputs/` lists only `outputs/.gitkeep`.
 
 **Expected result**
 
@@ -3096,9 +2075,7 @@ outputs/.gitkeep
 
 > Example output - your line number may differ.
 
-If `check-ignore` prints nothing, the rule is wrong. It must be `outputs/*` with `!outputs/.gitkeep`,
-never `outputs/` with `!outputs/.gitkeep` - Git cannot re-include a file whose parent directory is
-excluded, so the negation silently does nothing.
+The rule must be `outputs/*` with `!outputs/.gitkeep`, never `outputs/` (Git cannot re-include a file under an excluded directory).
 
 **Command - part 2, commit**
 
@@ -3121,12 +2098,7 @@ git commit -m "Lab 05: USMS enrolment service behind an Application Load Balance
 git log --oneline -6
 ```
 
-The `git add` names paths explicitly rather than using `git add -A`. That is not fussiness: `git add -A`
-stages whatever happens to be in the working tree, which is exactly how an un-ignored secret reaches a
-commit and, from there, a remote.
-
-The two script paths only exist after Section 9. If you commit before building them, drop those two
-lines and add them in a second commit.
+Name paths explicitly; `git add -A` is how an un-ignored secret reaches a remote. The two script paths exist only after Section 8; if you commit first, drop them and add them in a second commit.
 
 **Expected result**
 
@@ -3152,40 +2124,11 @@ Lab 05 recorded
 
 ---
 
-## 9. Verification
+## 8. Verification
 
-### 9.1 What this script checks that a naive one would not
+### 8.1 Build `scripts/utilities/verify-lab-05.sh`
 
-Seven of the checks below are the ones worth having, and they are why "does the load balancer exist" is
-not enough:
-
-- **`target type is ip`** - the flag that cannot be changed after creation and whose error surfaces four
-  steps away, in a message about network modes rather than about target types.
-- **`the two public subnets are in TWO different AZs`** - a single-zone load balancer in front of a
-  two-zone service is a fault that no amount of testing in one zone will reveal.
-- **`usms-enrolment-sg no longer admits usms-app-sg`** - this asserts that the Step 13 cutover actually
-  happened. Without it, a student who skipped Step 13 has a working system with two paths, one of which
-  is undocumented, which is strictly worse than either alternative.
-- **`containerName is enrolment-api`** - catches the single most common attachment error, and catches it
-  as a string comparison rather than as a support case three weeks later.
-- **`healthCheckGracePeriodSeconds is set`** - catches the restart loop described in Step 10, which
-  presents as "my service will not stabilise" and has nothing to do with the application.
-- **`exactly ONE deployment`** - a service with two deployments has one stuck mid-roll. Nothing else in
-  the script would notice, and it will still be stuck next week.
-- **`no template contains an unexpanded variable`** - catches a quoted heredoc where an unquoted one was
-  needed, which is the most common silent bug in this course and has now had four opportunities to
-  appear in two labs.
-
-And, as in every lab, the environment block comes first: a script that verifies only its own resources
-passes right up until the restart that deletes them.
-
-### 9.2 Build `scripts/utilities/verify-lab-05.sh`
-
-**Run from**
-
-```text
-aws-floci-course/
-```
+Beyond existence, the script checks the properties that fail silently: target type `ip`, public subnets in two different AZs, the Step 13 cutover (`usms-app-sg` no longer a source), `containerName` `enrolment-api`, a non-zero grace period, exactly one deployment (nothing stuck mid-roll), and no unexpanded `$` in any template. The environment block comes first, as in every lab.
 
 {% raw %}```bash
 cat > scripts/utilities/verify-lab-05.sh << 'EOF'
@@ -3406,13 +2349,13 @@ Known benign failures, which you record rather than fight:
 | `load balancer state is active` | Some builds leave the state at `provisioning` indefinitely. Confirm with `describe-load-balancers --query 'LoadBalancers[0].State'` and record it |
 | `the non-default rule returns a fixed-response 200` | Some builds do not implement `create-rule`. If Step 15 failed outright, record it; the listener's default action still works |
 | `healthCheckGracePeriodSeconds is set` | Some builds accept the flag on `update-service` and do not store it. Confirm with `describe-services --output json` and record it |
-| `the two public subnets are in TWO different AZs` | Lab 2's Step 11 "Your turn" was skipped, or both subnets were made in one zone. This one is **not** benign - the load balancer is a single point of failure, and Section 14.1 Task D marks it as a fault |
+| `the two public subnets are in TWO different AZs` | Lab 2's Step 11 "Your turn" was skipped, or both subnets were made in one zone. This one is **not** benign - the load balancer is a single point of failure, and Section 13.1 Task D marks it as a fault |
 | `cutover done: usms-enrolment-sg no longer admits usms-app-sg` | Step 13 was skipped. Also **not** benign - go and do it |
 | `exactly ONE deployment` | Some builds report zero deployments rather than one. Check with `--query 'services[0].deployments'` and record which it is |
 
 Everything else failing is a real problem with your work.
 
-### 9.3 Build the end-of-course cleanup script
+### 8.2 Build the end-of-course cleanup script
 
 !!! danger "DO NOT RUN THIS SCRIPT NOW"
     **What will be deleted:** the ECS service `usms-enrolment-svc`, the listener rule, the listener, the
@@ -3437,17 +2380,7 @@ Everything else failing is a real problem with your work.
     scripts/cleanup/lab-02-cleanup.sh
     ```
 
-    Inside-out, every time. This script refuses to run while a scalable target still exists, because
-    deleting the service out from under one leaves an orphan that is easy to forget and impossible to
-    explain later.
-
-    It requires you to type `DELETE USMS LOAD BALANCER` in full before it does anything.
-
-**Run from**
-
-```text
-aws-floci-course/
-```
+    Inside-out, every time. The script refuses to run while a scalable target still exists, and requires you to type `DELETE USMS LOAD BALANCER` in full.
 
 ````bash
 cat > scripts/cleanup/lab-05-cleanup.sh << 'EOF'
@@ -3533,27 +2466,16 @@ chmod +x scripts/cleanup/lab-05-cleanup.sh
 bash -n scripts/cleanup/lab-05-cleanup.sh && echo "syntax OK - do NOT run it"
 ````
 
-**What to look for:** the words `syntax OK - do NOT run it`. `bash -n` parses a script without executing
-a single command, and it is the only safe way to check a destructive one.
+You want `syntax OK - do NOT run it`; `bash -n` parses without executing. The order follows the API's dependencies:
 
-The order is the lesson, and every step of it is a dependency the APIs enforce:
-
-1. **The service first.** While it exists it keeps registering targets, and a target group with
-   registered targets is a target group something is using.
-2. **Rules before the listener.** Deleting a listener removes its rules anyway, but doing it explicitly
-   means the script's output tells you what went away.
-3. **The listener before the load balancer.** Same reasoning, same enforcement.
-4. **The load balancer before the target group.** `delete-target-group` fails with
-   `ResourceInUseException` while any listener forwards to it, and the error names the listener rather
-   than explaining the dependency.
-5. **Wait for the load balancer to be gone before the security group.** An ALB's elastic network
-   interfaces hold its security group for a short while after the load balancer object disappears, and
-   `delete-security-group` fails with `DependencyViolation` until they are released - an error that does
-   not tell you which interface is holding it.
+1. **Service first**: while it exists it keeps registering targets.
+2. **Rules, then listener**: explicit, so the output shows what went away.
+3. **Load balancer before target group**: `delete-target-group` fails with `ResourceInUseException` while a listener forwards to it.
+4. **Wait for the load balancer before the security group**: its ENIs hold the group briefly, giving `DependencyViolation`.
 
 ---
 
-## 10. Checkpoints
+## 9. Checkpoints
 
 | # | After step | What must be true |
 | --- | --- | --- |
@@ -3568,39 +2490,33 @@ The order is the lesson, and every step of it is a dependency the APIs enforce:
 
 ---
 
-## 11. Troubleshooting
+## 10. Troubleshooting
+
+!!! warning "Known issue on Floci 2.0.1"
+    On Floci 2.0.1, the ECS service does not retain its load-balancer attachment. Diagnose first, then use the alternative in [Known Issues - Lab 05](known-issues.md#lab-05-alb). It states what the alternative does and does not prove.
 
 ??? danger "`ValidationError: At least two subnets in two different Availability Zones must be specified`"
-    The single most common failure in this lab, and it happens at Step 5 before anything else exists.
+    The most common failure in this lab, at Step 5.
 
     ```bash
     aws ec2 describe-subnets --subnet-ids "$USMS_PUBLIC_SUBNET_A" "$USMS_PUBLIC_SUBNET_B" \
       --query 'Subnets[].{Id:SubnetId,AZ:AvailabilityZone,CIDR:CidrBlock}' --output table
     ```
 
-    Two rows with **two different** `AZ` values is what you need. One row means
-    `$USMS_PUBLIC_SUBNET_B` is empty and Lab 2's Step 11 "Your turn" was skipped. Two rows with the same
-    AZ means the second subnet was created in the wrong zone.
-
-    Neither is fixable from this lab. Go back to Lab 2, create the subnet in `us-east-1b` with Lab 2's
-    CIDR, regenerate `configs/lab-02.env` with Lab 2 Step 24, and start this lab again from Step 1.
+    You need two rows with **different** `AZ` values. One row: `$USMS_PUBLIC_SUBNET_B` is empty (Lab 2 Step 11 "Your turn" skipped). Same AZ twice: wrong zone. Fix it in Lab 2 (`us-east-1b`, Lab 2's CIDR), regenerate `configs/lab-02.env` with Lab 2 Step 24, and restart this lab from Step 1.
 
 ??? danger "`ValidationError` about the subnet having no internet gateway route, on create-load-balancer"
-    You passed private subnets to an `internet-facing` load balancer. The scheme and the subnets have to
-    agree: `internet-facing` needs subnets whose route table has a default route to an internet gateway,
-    and `internal` needs the opposite.
+    You passed private subnets to an `internet-facing` load balancer; it needs subnets with a default route to an internet gateway.
 
     ```bash
     aws ec2 describe-route-tables --filters "Name=association.subnet-id,Values=$USMS_PUBLIC_SUBNET_A" \
       --query 'RouteTables[0].Routes[].[DestinationCidrBlock,GatewayId]' --output text
     ```
 
-    You want a line reading `0.0.0.0/0` and an `igw-` identifier. If it says `nat-` instead, you are
-    looking at `usms-private-rt` and the subnet variable is wrong.
+    You want `0.0.0.0/0` with an `igw-` ID. `nat-` means you are looking at `usms-private-rt` and the subnet variable is wrong.
 
 ??? danger "`InvalidParameterException: The container enrolment-api does not exist in the task definition`"
-    Step 10's `containerName` does not match a container in `usms-enrolment:2`. Ask the task definition
-    what its containers are actually called:
+    Step 10's `containerName` does not match a container in `usms-enrolment:2`:
 
     ```bash
     aws ecs describe-task-definition --task-definition usms-enrolment \
@@ -3608,30 +2524,20 @@ The order is the lesson, and every step of it is a dependency the APIs enforce:
       --output table
     ```
 
-    The `Name` column is what `containerName` must equal. Common confusions, in order of frequency: the
-    task definition **family** `usms-enrolment`, the service name `usms-enrolment-svc`, and the image
-    name. None of those is the container name.
-
-    If the container is right and the port is wrong, the error names the port instead, and the same
-    table answers it.
+    `containerName` must equal the `Name` column, not the family `usms-enrolment`, the service name or the image. A wrong port gives a port error; the same table answers it.
 
 ??? danger "`InvalidParameterException` mentioning the network mode, when attaching the service"
-    The target group's `TargetType` is `instance`, and Fargate tasks use `awsvpc`, which has no instance
-    to register.
+    The target group is `instance`, and `awsvpc` tasks have no instance to register.
 
     ```bash
     aws elbv2 describe-target-groups --names usms-enrolment-tg \
       --query 'TargetGroups[0].TargetType' --output text
     ```
 
-    `TargetType` cannot be changed after creation. Delete the target group and create it again with
-    `--target-type ip`, then redo Steps 7, 8 and 10 - the listener's default action names the old ARN and
-    has to be updated with `aws elbv2 modify-listener`, or the listener recreated.
-
-    This is the reason Step 6's **Verify** tells you to check `Type` before anything else.
+    `TargetType` cannot change. Recreate the target group with `--target-type ip`, then redo Steps 7, 8 and 10 (update the listener's default action with `aws elbv2 modify-listener`, or recreate the listener).
 
 ??? danger "Targets stay `initial` forever, or go straight to `unhealthy`"
-    Work through these four in order. They account for almost every case.
+    Check these four in order:
 
     1. **The security group.** Does `usms-enrolment-sg` admit tcp/80 from `usms-alb-sg`?
 
@@ -3641,11 +2547,9 @@ The order is the lesson, and every step of it is a dependency the APIs enforce:
         echo "usms-alb-sg = $USMS_ALB_SG"
         ```
 
-    2. **The health check path.** Does the application actually serve `/` with a `200`? An app that
-       redirects `/` to `/login` returns `302` and fails a matcher of `200`.
-    3. **The port.** The target group's `Port`, the container's `containerPort` and the port the
-       application listens on must all agree.
-    4. **The reason field**, which usually names the answer:
+    2. **The health check path.** Does `/` return `200`? A redirect to `/login` returns `302` and fails.
+    3. **The port.** Target group `Port`, `containerPort` and the application's port must agree.
+    4. **The reason field**:
 
         ```bash
         aws elbv2 describe-target-health --target-group-arn "$USMS_TG_ARN" \
@@ -3653,29 +2557,22 @@ The order is the lesson, and every step of it is a dependency the APIs enforce:
           --output text
         ```
 
-    `Target.FailedHealthChecks` means the probe ran and failed - the application or the matcher.
-    `Target.Timeout` means the probe got no answer at all - the security group or the port.
-    `Elb.InitialHealthChecking` means it has not finished deciding and you should wait.
+    `Target.FailedHealthChecks`: the probe ran and failed (application or matcher). `Target.Timeout`: no answer (security group or port). `Elb.InitialHealthChecking`: wait.
 
-    On Floci, targets that never leave `initial` are the expected behaviour on support path B. Record it
-    and continue.
+    On Floci support path B, targets that never leave `initial` are expected. Record it and continue.
 
 ??? danger "Target health says `unused`"
-    Nothing forwards to this target group. It is registered and reachable and no traffic can be sent to
-    it.
+    Nothing forwards to this target group.
 
     ```bash
     aws elbv2 describe-target-groups --names usms-enrolment-tg \
       --query 'TargetGroups[0].LoadBalancerArns' --output text
     ```
 
-    An empty result means Step 8 did not run, or the listener's default action names a different target
-    group. Check with `describe-listeners` and fix with `modify-listener` rather than recreating
-    anything.
+    Empty means Step 8 did not run or the listener names another target group. Check with `describe-listeners`; fix with `modify-listener`.
 
 ??? danger "The service will not stabilise: tasks start and stop in a loop"
-    The classic symptom of a missing or too-short health check grace period. The load balancer marks a
-    still-starting task unhealthy, ECS replaces it, and the replacement suffers the same fate.
+    A missing or too-short grace period: still-starting tasks are marked unhealthy and replaced.
 
     ```bash
     aws ecs describe-services --cluster "$USMS_ECS_CLUSTER" --services "$USMS_ENROLMENT_SERVICE" \
@@ -3689,98 +2586,64 @@ The order is the lesson, and every step of it is a dependency the APIs enforce:
       --health-check-grace-period-seconds 60 --query 'service.healthCheckGracePeriodSeconds' --output text
     ```
 
-    If it is already 60 and the loop continues, the application genuinely takes longer than 60 seconds to
-    start, and the grace period should be raised rather than the health check loosened.
+    If it is 60 and the loop continues, raise the grace period rather than loosening the health check.
 
 ??? danger "`verify-lab-04.sh` reports a failure after Step 13"
-    Expected. Exactly one check fails -
-    `usms-enrolment-sg is sourced from usms-app-sg (not a CIDR)` - because Step 13 deliberately replaced
-    that source with `usms-alb-sg`.
-
-    Confirm that it is the only one:
+    Expected: exactly one check, `usms-enrolment-sg is sourced from usms-app-sg (not a CIDR)`, because Step 13 replaced that source.
 
     ```bash
     ./scripts/utilities/verify-lab-04.sh | grep FAIL
     ```
 
-    One line, plus the `PASS=48  FAIL=1` summary. Any other failing line is something else and should be
-    investigated.
-
-    Do **not** silence it by putting the old rule back. Either document the expected failure, or do
-    Exercise 2 and update the check to assert the new source group. `verify-lab-05.sh` is the script of
-    record from Step 13 onwards.
+    One line plus `PASS=48  FAIL=1`; anything else needs investigating. Do **not** put the old rule back: document the failure, or do Exercise 2. `verify-lab-05.sh` is the script of record from Step 13.
 
 ??? danger "`ResourceInUseException` on `delete-target-group`"
-    A listener still forwards to it. Find the listener, and either delete it or point its default action
-    somewhere else:
+    A listener still forwards to it; delete it or repoint its default action:
 
     ```bash
     aws elbv2 describe-target-groups --names usms-enrolment-tg \
       --query 'TargetGroups[0].LoadBalancerArns' --output text
     ```
 
-    The dependency chain is always service, then rules, then listener, then load balancer, then target
-    group - which is exactly the order `scripts/cleanup/lab-05-cleanup.sh` uses.
+    Order: service, rules, listener, load balancer, target group (as `scripts/cleanup/lab-05-cleanup.sh` does).
 
 ??? danger "`DependencyViolation` on `delete-security-group` for usms-alb-sg"
-    The load balancer's elastic network interfaces still hold the group. They are released a short while
-    after the load balancer is deleted, and `aws elbv2 wait load-balancers-deleted` is the polite way to
-    wait for it. Find what is holding the group if the wait does not help:
+    The load balancer's ENIs still hold the group; `aws elbv2 wait load-balancers-deleted` waits for release. If that does not help:
 
     ```bash
     aws ec2 describe-network-interfaces --filters "Name=group-id,Values=$USMS_ALB_SG" \
       --query 'NetworkInterfaces[].{Id:NetworkInterfaceId,Desc:Description,Status:Status}' --output table
     ```
 
-    An interface described as `ELB app/usms-enrolment-alb/...` is the load balancer's. Wait; do not try
-    to delete it.
+    An interface described `ELB app/usms-enrolment-alb/...` belongs to the load balancer. Wait; do not delete it.
 
 ??? danger "`aws elbv2 wait load-balancer-available` never returns"
-    The waiter polls until `State.Code` is `active`. On a build that leaves load balancers in
-    `provisioning`, that never happens.
-
-    Interrupt it with ++ctrl+c++ and use the manual polling loop in Step 5 part 2. Record the state you
-    observed. Nothing later in this lab requires the state to be `active`; Section 9's script checks it
-    and lists the failure among the known benign ones.
+    The build leaves the load balancer in `provisioning`. Press ++ctrl+c++, use the polling loop in Step 5 part 2, and record the state. Nothing later requires `active`; Section 8's script lists it as benign.
 
 ??? danger "`curl` returns 503 Service Temporarily Unavailable from the load balancer"
-    A `503` from an ALB means the listener worked and there were **no healthy targets** to send the
-    request to. This is a good error: it tells you the load balancer, the listener and the rule are all
-    fine, and the problem is entirely on the target side.
+    The listener worked and there were **no healthy targets**. Work through the `Targets stay initial forever` entry.
 
-    Go to the `Targets stay initial forever` entry above and work through its four causes.
-
-    Distinguish it from `502 Bad Gateway`, which means a target *was* chosen and gave an invalid
-    response, and from a connection refused or timeout, which means nothing was listening on the load
-    balancer at all - the Step 5 Checkpoint's last line.
+    `502 Bad Gateway` means a target was chosen and gave an invalid response; connection refused or timeout means nothing listens on the load balancer (Checkpoint 2's last line).
 
 ??? danger "`An error occurred (NoCredentials)` or a suggestion to run `aws login`"
-    Do **not** run `aws login`. It begins an interactive sign-in to **real AWS**, and this course's
-    entire safety model rests on never touching a real account.
-
-    In this terminal, right now:
+    Do **not** run `aws login`: it signs in to **real AWS**.
 
     ```bash
     cd ~/aws-floci-course && source configs/course.env && ./scripts/utilities/whoami.sh
     ```
 
-    Permanently: this is Errata 01, and the loader belongs in the startup file your **login** shell
-    reads.
+    Permanently: apply Errata 01 (the loader belongs in your **login** shell's startup file).
 
 ??? danger "Everything is gone after a restart"
-    Storage mode, as always.
-
     ```bash
     ./scripts/utilities/floci-storage-check.sh
     ```
 
-    If it reports `FLOCI_STORAGE_MODE=memory`, a stray `floci start` has replaced the Compose container.
-    The work is not recoverable - restore from the snapshot you took at the end of Lab 04, and this time
-    confirm the storage check before building anything.
+    `FLOCI_STORAGE_MODE=memory` means a stray `floci start` replaced the Compose container. Restore from your end-of-Lab-04 snapshot and confirm the storage check before rebuilding.
 
 ---
 
-## 12. Floci vs Real AWS
+## 11. Floci vs Real AWS
 
 | Feature | Real AWS | Floci | Status |
 | --- | --- | --- | --- |
@@ -3811,88 +2674,21 @@ The order is the lesson, and every step of it is a dependency the APIs enforce:
 | Cost - per load balancer hour plus per LCU hour | Real, and a load balancer costs money while idle | Free | Conceptual / Real AWS |
 | Service quotas (load balancers, target groups, rules per listener) | Enforced, and rules per listener bites first | Not enforced | Conceptual / Real AWS |
 
-### 12.1 What you actually observed in this lab
+**Observed versus reasoned about.** Every object, the 0 to 1 attachment count, service-registered targets in the private CIDRs, the forced deployment, the rule ordering, the cutover and the restart proof are observable on any build. A served request, real health probes, draining, rule evaluation and HTTPS are conceptual unless you were on support path A. Say in your report which items you actually observed; claiming to have observed something you reasoned about is worth negative marks (Section 13.1 Task D checks it).
 
-```text
-OBSERVABLE - you saw this happen
-  a security group created that deliberately admits 0.0.0.0/0, and nothing behind it that does
-  a load balancer created across two subnets in two Availability Zones
-  a load balancer with no listener, answering nothing
-  a target group created with target-type ip, and refusing to be anything else afterwards
-  a target group attached to a listener, its LoadBalancerArns count going 0 -> 1
-  an ECS service attached to a target group without registering a single target by hand
-  target addresses that are inside Lab 02's private subnet CIDRs
-  a forced deployment producing new addresses and an unchanged configuration
-  a listener rule ordered ahead of a default action
-  a security cutover, and the exact moment Lab 04's verification script became wrong
-  all of it surviving a container restart, with every ARN re-derived from the API
+**Where Floci is nicer than reality (traps on real AWS):** load balancers appear instantly (real ones take 2 to 4 minutes, so they are created by infrastructure code, never per deployment); health checks never run, so nothing is ever `unhealthy` and the four causes in Section 10 must be learned from the table; no cost (an idle ALB bills hourly plus LCUs); no quotas (`TooManyRulesException` on rules per listener bites first); security groups are not enforced, which is why Section 8's script asserts Step 9's rule rather than testing it.
 
-CONCEPTUAL - you reasoned about it, and may not have seen it
-  a request travelling from a client to a task and back      (unless you got a 200 at Step 12)
-  a health check probe actually being sent
-  a target moving from initial to healthy because it passed two checks
-  a target draining while requests already in flight completed
-  the load balancer choosing least_outstanding_requests over round robin
-  a rule's path condition being evaluated against a real URL
-  the 2-to-4-minute provisioning time that stops anyone creating a load balancer per deployment
-  HTTPS, certificates, and everything the Step 4 "Your turn" pointed at
-  the cost of any of it
-```
-
-If your build put you on support path A, several lines move from the second list to the first. Say in
-your report which list each item ended up in **for you**. Claiming to have observed something you
-reasoned about is worth negative marks, and Section 14.1 Task D checks it.
-
-### 12.2 Where Floci is nicer than reality, which makes it a trap
-
-- **The load balancer appears instantly.** Real provisioning takes two to four minutes, which is why load
-  balancers are created by infrastructure code long before a deployment and never as part of one.
-- **Health checks always pass, because they never run.** On real AWS the health check is the most common
-  reason a correct deployment fails, and the four causes in Section 11 are the four you will actually
-  meet.
-- **No cost.** An Application Load Balancer bills per hour whether or not anything uses it, plus a
-  capacity-unit charge for traffic. An idle load balancer left running is one of the classic
-  surprise line items on an AWS bill, and Exercise 4 asks you to quote the current figure with a
-  citation.
-- **No quotas.** Rules per listener is the one that bites first on a real account, and the failure is a
-  `TooManyRulesException` in the middle of a deployment rather than at design time.
-- **Security groups are not enforced.** Step 9's rule is what makes the health check work on real AWS.
-  Here you could delete it and nothing would change, which is exactly why Section 9's script asserts it
-  rather than testing it.
-- **Nothing is ever `unhealthy`.** So the most valuable diagnostic in this lab - comparing ECS
-  `healthStatus` with target health - is one you have to learn from the table in Step 11 rather than
-  from experience.
-
-### 12.3 One thing this lab is *not*
-
-Nothing in this lab is auto scaling. The service's `desiredCount` is still 2 and still moves only when
-you type a number.
-
-What changed is that the *signal* for moving it is now available. `AWS/ApplicationELB` publishes
-`RequestCount` and `TargetResponseTime` per target group, and Application Auto Scaling has a predefined
-metric, `ALBRequestCountPerTarget`, that reads exactly that. Lab 06 was written before this target group
-existed and therefore scales on CPU while explaining why requests would be the better signal. Exercise 5
-builds the string that closes that gap.
-
-If you can state, in one sentence, why requests per target is a better scaling signal than CPU for a web
-API, you are ready for Lab 06.
+This lab is not auto scaling: `desiredCount` still moves only when you type it. What it adds is the signal: a target group makes `ALBRequestCountPerTarget` possible, and Exercise 5 builds the `ResourceLabel` it needs.
 
 ---
 
-## 13. Independent Lab Exercises
+## 12. Independent Lab Exercises
 
-Record commands and output in `labs/lab-05-ecs-alb/exercises.md`. Take screenshots into `screenshots/`
-where an exercise asks for evidence.
+Record commands and output in `labs/lab-05-ecs-alb/exercises.md`; screenshots go in `screenshots/`.
 
 ### Exercise 1 - Basic: a second path through the same load balancer
 
-**Requirements**
-
-The USMS results service publishes exam results. It is a separate concern from enrolment and will
-eventually be a separate ECS service, but it will share one hostname with enrolment because students
-should not have to remember two.
-
-Add a second target group and a listener rule that sends `/results` and everything under it to it:
+**Requirements:** the USMS results service will be a separate ECS service sharing enrolment's hostname. Route `/results` to it:
 
 1. Create `usms-results-tg` with the same target type, protocol and port as `usms-enrolment-tg`, a
    health check path of `/`, a matcher of `200-399`, and a deregistration delay of 15 seconds.
@@ -3902,39 +2698,19 @@ Add a second target group and a listener rule that sends `/results` and everythi
 
 **Constraints**
 
-- Every ARN captured with `$(...)` and `--query`. Nothing copied by hand.
+- Every ARN captured with `$(...)` and `--query`.
 - Tag both objects `Project=USMS`, `Tier=app`, `Lab=05`, `Service=results`.
-- Use JSON documents in `templates/` for the rule's conditions and actions, as Step 15 did. Do not use
-  the inline shorthand.
-- Do **not** create a second ECS service, and do **not** register any target. The target group will be
-  empty, and that is the correct state for a target group whose service does not exist yet.
-- Do **not** record either object in `configs/lab-05.env`. Exercise 4 removes them.
+- Conditions and actions as JSON documents in `templates/`, as in Step 15; no inline shorthand.
+- Do **not** create a second ECS service or register any target; an empty target group is correct here.
+- Do **not** record either object in `configs/lab-05.env`; Exercise 4 removes them.
 
-**Expected outcome**
+**Expected outcome:** `describe-rules` shows three entries: priority 20, priority 10 (`/alb-health`) and the default. `describe-target-health` on `usms-results-tg` is empty, and it is attached to one load balancer.
 
-`describe-rules` on the listener shows three entries: your new rule at priority 20, the `/alb-health`
-rule at priority 10, and the default action. `describe-target-health` on `usms-results-tg` returns an
-empty list, and `describe-target-groups` shows it attached to one load balancer.
-
-**Hints**
-
-Steps 6 and 15 contain every command you need; the only question is which values change. For the
-ordering, note that `describe-rules` does not necessarily return rules in priority order - Step 16 used
-`sort_by` with an expression reference for exactly this reason, and `Priority` is a string, which makes
-sorting it interesting.
-
-An empty target group attached to a listener will report its targets as neither healthy nor unhealthy,
-because there are none. Say in one sentence what a request to `/results` would receive in that state, and
-which of the status codes in Section 11's `curl` entry it would be.
-
----
+**Hints:** Steps 6 and 15. `describe-rules` may not return priority order, and `Priority` is a string (Step 16 used `sort_by`). Say in one sentence what a request to `/results` would receive with no targets, and which status code from Section 10's `curl` entry it would be.
 
 ### Exercise 2 - Intermediate: repair the verification script you broke
 
-**Requirements**
-
-Step 13 left `verify-lab-04.sh` asserting something that is no longer true. Fix it properly - which
-means understanding what the check was for before changing what it says.
+**Requirements:** Step 13 left `verify-lab-04.sh` asserting something no longer true. Fix it properly.
 
 1. Read the failing check in `scripts/utilities/verify-lab-04.sh` and write down, in one sentence, the
    property it was asserting. Not the command: the property.
@@ -3951,38 +2727,18 @@ means understanding what the check was for before changing what it says.
 
 **Constraints**
 
-- The script must keep working from any directory. Do not break its `${BASH_SOURCE[0]}` resolution.
-- `set -u` is in force. A missing `USMS_ALB_SG` must produce a failed check with a readable name, not an
-  unbound-variable abort before any output.
-- The `PASS` count changes. State the new expected count in a comment at the top of the script and in
-  your `exercises.md`, and say why an undocumented count is worse than no count.
-- Do not delete the original check. Change what it asserts.
+- Keep the `${BASH_SOURCE[0]}` resolution; it must work from any directory.
+- Under `set -u`, a missing `USMS_ALB_SG` must give a readable failed check, not an unbound-variable abort.
+- State the new `PASS` count in a comment at the top and in `exercises.md`, and say why an undocumented count is worse than none.
+- Do not delete the original check; change what it asserts.
 
-**Expected outcome**
+**Expected outcome:** both scripts `FAIL=0`, a commit message explaining an architectural change, and two sentences in `exercises.md` on when updating a verification script is right and when it hides a regression.
 
-Both verification scripts reporting `FAIL=0`, a commit whose message explains an architectural change,
-and a two-sentence note in `exercises.md` on when it is right to update a verification script and when
-updating one is how you hide a regression.
-
-**Hints**
-
-The distinction in point 1 is the whole exercise. "The enrolment tasks accept traffic only from a named
-group, never from an address range" is a property; `IpPermissions[0].UserIdGroupPairs[0].GroupId equals
-$USMS_APP_SG` was one expression of it, tied to one architecture. Write the check against the property
-and it will survive the next change too.
-
-For point 4, Lab 04's script already uses the `: "${VAR:=default}"` idiom near the top. That is the
-pattern.
-
----
+**Hints:** point 1 is the whole exercise: write the check against the property ("accepts traffic only from a named group"), not one expression of it. For point 4, Lab 04's script already uses `: "${VAR:=default}"`.
 
 ### Exercise 3 - Problem solving: a load balancer report tool
 
-**Requirements**
-
-Write `scripts/utilities/usms-lb-report.sh`. Given no arguments, it walks every Application Load Balancer
-in the account whose name starts with `usms-` and prints its complete decision table, one line per
-routing outcome:
+**Requirements:** write `scripts/utilities/usms-lb-report.sh`. With no arguments, it walks every ALB whose name starts with `usms-` and prints its decision table:
 
 ```text
 usms-enrolment-alb   internet-facing  application  active  AZs=2  SGs=1
@@ -3994,42 +2750,21 @@ usms-enrolment-alb   internet-facing  application  active  AZs=2  SGs=1
 
 **Constraints**
 
-- Runs correctly from any directory. Resolve `configs/` from `${BASH_SOURCE[0]}`, as Section 9's script
-  does.
-- Takes no arguments and hard-codes no ARN, no listener, no target group and no load balancer name
-  beyond the `usms-` prefix. Everything is discovered.
-- Must handle a load balancer with no listeners, a listener with no non-default rules, and a target group
-  with no targets, without crashing or printing an empty line where a row should be.
-- Rules must be printed in evaluation order, with the default action last. `Priority` is a string, and
-  the default action's priority is the literal word `default`, so a naive sort puts it in the wrong
-  place. Handle it and say in a comment how.
-- An action that is not a `forward` must print its own summary rather than an empty target group column.
-- `set -uo pipefail`. Decide about `-e` and justify your decision in a comment.
-- Also write the machine-readable form to `outputs/lab-05-lb-report.json`.
+- Runs from any directory (resolve `configs/` from `${BASH_SOURCE[0]}`, as Section 8's script does).
+- No arguments; no hard-coded ARN or name beyond the `usms-` prefix.
+- Handles a load balancer with no listeners, a listener with no non-default rules, and an empty target group without crashing or blank rows.
+- Rules in evaluation order, default last. `Priority` is a string and the default's is `default`; handle it and comment how.
+- Non-forward actions print their own summary.
+- `set -uo pipefail`; justify your `-e` decision in a comment.
+- Also write `outputs/lab-05-lb-report.json`.
 
-**Expected outcome**
+**Expected outcome:** identical output from `~` and from `~/aws-floci-course/labs/lab-05-ecs-alb/`; correct before and after Exercise 1, and with the `/alb-health` rule temporarily deleted.
 
-Identical output when run from `~` and from `~/aws-floci-course/labs/lab-05-ecs-alb/`. Correct output
-before and after Exercise 1 adds a second target group, and correct output if you temporarily delete the
-`/alb-health` rule.
-
-**Hints**
-
-`describe-load-balancers` with a `--query` filter using `starts_with` finds the load balancers;
-`describe-listeners` needs one call per load balancer; `describe-rules` needs one call per listener;
-`describe-target-health` needs one call per target group. That is four levels of nesting, and the
-interesting design question is where to stop shelling out and start processing JSON in `python3`.
-
-The healthy-target count is `length(TargetHealthDescriptions[?TargetHealth.State=='healthy'])`, which is
-a filter, a comparison against a raw string, and a `length()` in one expression.
-
----
+**Hints:** four levels of calls (load balancers via `starts_with`, listeners, rules, target health); decide where to switch to `python3`. Healthy count: `length(TargetHealthDescriptions[?TargetHealth.State=='healthy'])`.
 
 ### Exercise 4 - Challenge: the exposure review
 
-**Requirements**
-
-The university's information security officer writes:
+**Requirements:** the university's information security officer writes:
 
 > I have been told the student enrolment API is now on the public internet. Two weeks ago I was told it
 > was internal and only reachable from the portal. Please explain what changed, tell me whether I should
@@ -4042,71 +2777,30 @@ The university's information security officer writes:
 >
 > Also, somebody has left two practice objects in the account from an exercise. Please tidy them up.
 
-Produce a written analysis in `labs/lab-05-ecs-alb/exercises.md` covering:
+Write in `labs/lab-05-ecs-alb/exercises.md`:
 
-- **What changed, in exactly two sentences**, one for the network path and one for the security groups.
-  An answer longer than two sentences has not been thought about enough.
-- **The internal-versus-internet-facing recommendation.** Make the case for `--scheme internal`
-  properly: what would change in Step 5's command, what would change about the DNS name, what would
-  *not* change at all, and which of the two you would actually recommend for USMS enrolment given that
-  the portal is the only known client. Then argue the other side in two sentences, because there is a
-  real case for either.
-- **The exposure delta, as a table.** Two columns: before this lab and after it. Three rows: what can
-  reach the load balancer, what can reach the tasks, and what can reach the tasks *directly*. The third
-  row is the one the security officer actually asked about.
-- **A monthly cost estimate**, **with a citation**, covering: the Application Load Balancer's hourly
-  charge, its capacity-unit charge, and - for comparison - the cost of the two Fargate tasks it fronts.
-  State the assumptions for "under load" explicitly. An idle load balancer's monthly cost is a specific
-  number and you should quote it.
-- **The HTTPS plan.** Name every object that would have to exist, in order, and say which of them AWS
-  provides at no charge and which requires something from outside AWS. You have not been taught any of
-  this - name each service, say what it provides, and cite the documentation page. Include the listener
-  rule you would add on port 80 and what its action type would be.
-- **The tidy-up**, with exact commands in the correct dependency order, each preceded by the four-line
-  danger admonition used throughout this lab: the `usms-results-tg` target group and the priority-20
-  rule from Exercise 1.
+- **What changed, in exactly two sentences**: one for the network path, one for the security groups.
+- **Internal versus internet-facing.** Make the case for `--scheme internal`: what changes in Step 5's command and the DNS name, what does not, and which you recommend given the portal is the only client. Then argue the other side in two sentences.
+- **The exposure delta, as a table**: before and after; rows for what can reach the load balancer, the tasks, and the tasks *directly*.
+- **A monthly cost estimate with a citation**: ALB hourly charge, LCU charge, and the two Fargate tasks for comparison, with explicit "under load" assumptions and the idle figure.
+- **The HTTPS plan**: every object needed, in order, which AWS provides free and which needs something outside AWS, with documentation citations, plus the port-80 rule you would add and its action type.
+- **The tidy-up**: exact commands in dependency order, each preceded by the four-line danger admonition, for `usms-results-tg` and the priority-20 rule from Exercise 1.
 
-Then execute only the deletions, and confirm `./scripts/utilities/verify-lab-05.sh` reports `FAIL=0`
-afterwards.
+Then execute only the deletions and confirm `./scripts/utilities/verify-lab-05.sh` reports `FAIL=0`.
 
 **Constraints**
 
-- Do not delete anything in Section 16's KEEP column. In particular, do not delete the `/alb-health`
-  rule: Section 9's script asserts it.
-- Every number must have a source or a derivation. "A few dollars" earns nothing; "an ALB at the
-  published per-hour rate for 730 hours, plus N LCU-hours derived from the following assumption" earns
-  full marks.
-- The HTTPS plan must distinguish between what makes the port *open* and what makes something *listen*
-  on it. The Step 4 "Your turn" is the first half of that answer and is not the whole of it.
+- Delete nothing in Section 15's KEEP column, in particular not the `/alb-health` rule (Section 8's script asserts it).
+- Every number needs a source or derivation ("730 hours at the published rate plus N LCU-hours from this assumption").
+- The HTTPS plan must separate what makes the port *open* from what makes something *listen* on it.
 
-**Expected outcome**
+**Expected outcome:** an analysis a security officer could act on and a finance team could check; practice objects gone; verification passes.
 
-An analysis a security officer could act on and a finance team could check, plus a repository in which
-the practice objects are gone and the verification still passes.
-
-**Hints**
-
-For the cost bullet, the Elastic Load Balancing pricing page defines a Load Balancer Capacity Unit in
-terms of four dimensions and bills on the largest; you need to say which one dominates for a low-traffic
-internal API, and it is not the one most people guess.
-
-For the HTTPS plan, search the AWS documentation for requesting a public certificate. The answer
-involves one service you have not met, one DNS record you would have to create, and a fact about the
-price of the certificate that surprises people.
-
----
+**Hints:** the pricing page bills LCUs on the largest of four dimensions; say which dominates for a low-traffic API (not the one most people guess). For HTTPS, search the AWS docs for requesting a public certificate: one new service, one DNS record, and a surprising fact about the certificate's price.
 
 ### Exercise 5 - Integration: the ResourceLabel hand-off to Lab 06
 
-**Requirements**
-
-Lab 06 scales this service on CPU, and its own Step 14 explains that requests per target would be the
-better signal and that it cannot use one because the course has no load balancer. It does now. Build the
-string that unlocks it.
-
-Application Auto Scaling's `ALBRequestCountPerTarget` predefined metric requires a `ResourceLabel`: a
-single string identifying one target group behind one load balancer, built by concatenating two ARN
-fragments:
+**Requirements:** Lab 06 scales on CPU because, when written, the course had no load balancer. Build the string that unlocks `ALBRequestCountPerTarget`. Its `ResourceLabel` concatenates two ARN fragments:
 
 ```text
 <load-balancer-arn-suffix>/<target-group-arn-suffix>
@@ -4139,56 +2833,30 @@ app/usms-enrolment-alb/50dc6c495c0c9188/targetgroup/usms-enrolment-tg/73e2d6bc24
 
 **Constraints**
 
-- The script must work from any directory and must not read `configs/lab-05.env` for the ARNs - the
-  point is deriving them, and a script that reads the answer from a file it helped write is proving
-  nothing.
-- Use shell parameter expansion, not `awk`, for at least one of the two suffixes, and say in a comment
-  why the two suffixes need slightly different treatment. They do, and the difference is instructive.
-- The elapsed-time measurement must use `python3` for timestamps, not `date -d` or `date -v`, for the
-  reason given in the Prerequisites.
-- No script you write here may contain, read or reference an access key.
+- Works from any directory; must **not** read `configs/lab-05.env` for the ARNs.
+- Use shell parameter expansion (not `awk`) for at least one suffix, and comment why the two suffixes need different treatment.
+- Timestamps via `python3`, not `date -d` or `date -v`.
+- No script may contain, read or reference an access key.
 
-**Expected outcome**
+**Expected outcome:** a committed script Lab 06 and the CloudFormation lab can call unchanged, a readiness file from which a reader could write Lab 06's `put-scaling-policy` call, and a measured capacity-replacement time.
 
-A committed script Lab 06 and the CloudFormation lab can both call unchanged, a readiness file from
-which a Lab 06 reader could write the `put-scaling-policy` call without opening this document, and a
-measured figure for how long a capacity replacement takes in your environment.
+**Lab 06 uses this:** its Step 14 table has an empty third row; this exercise fills it in.
 
-**This is what Lab 06 will use.** Its Step 14 table has an empty third row; Exercise 5 fills it in.
-
-**Hints**
-
-Both ARNs end with the fragment you want, but they start differently: the load balancer's suffix begins
-after `:loadbalancer/` and the target group's suffix **includes** the word `targetgroup`. That asymmetry
-is not a mistake in the AWS documentation - read the `ResourceLabel` description in the Application Auto
-Scaling `PredefinedMetricSpecification` reference and you will see it is exactly as specified. Lab 04's
-`"${TASK_ARN##*/}"` is the parameter-expansion form; you want a different one from the same family.
-
-For point 5, six segments: `app`, the load balancer name, its id, `targetgroup`, the target group name,
-its id.
+**Hints:** the load balancer suffix starts after `:loadbalancer/`; the target group suffix **includes** `targetgroup` (see the `ResourceLabel` description in the `PredefinedMetricSpecification` reference). Lab 04's `"${TASK_ARN##*/}"` is from the right family; you want a different member. Six segments: `app`, LB name, LB id, `targetgroup`, TG name, TG id.
 
 ---
 
-## 14. Lab Assessment Checklist
+## 13. Lab Assessment Checklist
 
-### 14.1 In-class assessment
+### 13.1 In-class assessment
 
-**Format.** Individual, at the machine, in the laboratory session. **75 minutes.** Marked out of 100,
-from your own repository and your own `exercises.md`.
+**Format:** individual, at the machine, **75 minutes**, out of 100, marked from your repository and `exercises.md`.
 
-**When.** After you have completed Sections 8 and 9 and `verify-lab-05.sh` reports `FAIL=0`. If your
-build put you on support path C, tell your instructor before the session starts: Tasks A and B will be
-replaced by written equivalents.
+**When:** after Sections 7 and 8, with `verify-lab-05.sh` at `FAIL=0`. On support path C, tell your instructor beforehand: Tasks A and B become written equivalents.
 
-**Permitted:** the AWS documentation, this laboratory document, Lab 04, your own `notes/` and
-`exercises.md`, `aws <service> <operation> help`, and the shell history in your own terminal.
+**Permitted:** AWS documentation, this document, Lab 04, your `notes/` and `exercises.md`, `aws <service> <operation> help`, your shell history. **Not permitted:** messaging, shared terminals, another student's repository, AI assistants.
 
-**Not permitted:** messaging of any kind, shared terminals, another student's repository, and AI
-assistants. The tasks are designed so that the documentation is genuinely enough; two of them are
-faster with `help` than with a search engine.
-
-**What to hand in.** Everything is read from your repository, plus these three files, which you create
-during the session:
+**Hand in** (created during the session; git-ignored, collected directly, do not commit):
 
 ```text
 outputs/lab-05-assessment-a.txt     Task A - commands and their output
@@ -4196,16 +2864,9 @@ outputs/lab-05-assessment-b.txt     Task B - your diagnosis, in the format below
 outputs/lab-05-assessment-c.md      Task C - four written answers
 ```
 
-Those files are git-ignored, as everything under `outputs/` is. Your instructor collects them directly;
-do not attempt to commit them.
-
----
-
 #### Task A - Build from requirements (30 marks, about 30 minutes)
 
-No commands are given. The requirements are the specification.
-
-The USMS transcripts API needs its own path through the existing load balancer. Build:
+No commands are given. The USMS transcripts API needs its own path through the existing load balancer. Build:
 
 1. A target group named `usms-transcripts-tg`, in `usms-vpc`, serving HTTP on port 8080, registering
    targets **by address**, with a health check on `/transcripts/health` every 15 seconds, a 4-second
@@ -4220,8 +2881,6 @@ The USMS transcripts API needs its own path through the existing load balancer. 
 5. Written into `outputs/lab-05-assessment-a.txt`: the commands you ran, their output, and a
    `describe-rules` listing that shows all four rules plus the default in evaluation order.
 
-**Marks**
-
 | | Marks |
 | --- | --- |
 | Target group created with the correct target type, port, VPC and all five health check values | 10 |
@@ -4231,20 +2890,11 @@ The USMS transcripts API needs its own path through the existing load balancer. 
 | Every ARN captured with `$(...)` and `--query`; nothing copied by hand | 3 |
 | Output file complete and legible | 2 |
 
-**One deliberate trap, stated openly:** requirement 4 says the `/admin` rule must be evaluated before
-everything else. Getting a rule to be evaluated first is a property of its priority number, and priority
-numbers do not have to be assigned in the order you create rules. If you find yourself wanting to
-renumber an existing rule, read Step 15's concept block again before you do.
-
----
+**One deliberate trap:** "evaluated first" is a property of the priority number, not of creation order. If you want to renumber an existing rule, re-read Step 15 first.
 
 #### Task B - Diagnose (25 marks, about 20 minutes)
 
-Before the session your instructor injects **one** fault into your Lab 05 configuration. It is a single
-change to a single object, it is reversible, and it is not in Task A's objects. You are not told what it
-is or which service it is in.
-
-Find it, and write into `outputs/lab-05-assessment-b.txt`, in this order:
+Your instructor injects **one** reversible fault: a single change to a single object, not in Task A's objects. Find it and write into `outputs/lab-05-assessment-b.txt`, in this order:
 
 ```text
 SYMPTOM     what you observed, and the exact command that showed it to you
@@ -4255,8 +2905,6 @@ FIX         the command you ran
 PROOF       the command and output showing the configuration is correct again
 ```
 
-**Marks**
-
 | | Marks |
 | --- | --- |
 | Symptom stated precisely, with the command that revealed it | 4 |
@@ -4265,21 +2913,11 @@ PROOF       the command and output showing the configuration is correct again
 | Correct cause identified, naming the object and the field | 4 |
 | Fix applied and proven | 3 |
 
-**Read the mark distribution.** Eight marks for hypotheses you wrote before you knew the answer and six
-for choosing one test is 14 of 25 for the *method*, and only 7 for being right. A student who finds the
-fault in ninety seconds by luck and writes nothing down scores lower than one who does not find it at
-all but reasons well. That is deliberate: on a real system you will not recognise the fault, and the
-method is the only thing that transfers.
-
-Section 11 is permitted and is designed for exactly this. So is `verify-lab-05.sh`, which will point at
-a region of the configuration without telling you the value.
-
----
+14 of 25 marks are for the method, 7 for being right: a lucky find with nothing written scores lower than good reasoning that misses. Section 10 and `verify-lab-05.sh` are permitted.
 
 #### Task C - Explain (25 marks, about 15 minutes)
 
-Answer in `outputs/lab-05-assessment-c.md`. Prose, no command output. Two to four sentences each; a
-long answer is not a better one.
+Answer in `outputs/lab-05-assessment-c.md`, in prose, two to four sentences each.
 
 1. **(7 marks)** A colleague says the target group is empty and asks whether they should run
    `aws elbv2 register-targets` with the tasks' addresses. Explain why not, and say what would happen if
@@ -4294,8 +2932,6 @@ long answer is not a better one.
    alternative would have been, and at what point in the lab the wrong choice would first have produced
    an error.
 
----
-
 #### Task D - Evidence and hygiene (20 marks, about 10 minutes)
 
 | | Marks |
@@ -4303,13 +2939,10 @@ long answer is not a better one.
 | `./scripts/utilities/verify-lab-05.sh` reports `FAIL=0`, or its failures are each named and explained as benign in `notes/lab-05-notes.md` | 6 |
 | `configs/lab-05.env` exists, is committed, has 15 exports (16 after Exercise 5), and contains no empty value and no `None` | 4 |
 | `git status --short` shows nothing under `outputs/` and no root `.env`; `git check-ignore -v` demonstrated on one assessment output file | 4 |
-| Your Step 3 support path is stated at the top of `notes/lab-05-notes.md`, and Section 12.1's observable-versus-conceptual split is annotated for **your** build | 4 |
+| Your Step 3 support path is stated at the top of `notes/lab-05-notes.md`, and Section 11's observed-versus-reasoned split is annotated for **your** build | 4 |
 | A commit exists for this session, with a message that describes the change rather than the files | 2 |
 
-**Negative marking applies to one thing only:** claiming to have observed something your build did not
-do. A recorded limitation is worth full marks; an invented `200` is worth minus five.
-
----
+**Negative marking applies to one thing only:** claiming to have observed something your build did not do. A recorded limitation earns full marks; an invented `200` is minus five.
 
 #### Marking bands
 
@@ -4320,11 +2953,7 @@ do. A recorded limitation is worth full marks; an invented `200` is worth minus 
 | Pass | 50–64 | The build works, possibly after several attempts; the written answers are correct but describe rather than explain |
 | Fail | below 50 | The build does not work and the written work does not show why |
 
----
-
-### 14.2 Submission checklist
-
-Tick these off before you submit. Every one is checkable from your own repository.
+### 13.2 Submission checklist
 
 **Environment**
 
@@ -4375,7 +3004,7 @@ Tick these off before you submit. Every one is checkable from your own repositor
 - [ ] `labs/lab-05-ecs-alb/exercises.md` contains all five exercises
 - [ ] Every Floci limitation you hit is recorded, with what real AWS would have done
 
-**Understanding - answer these out loud before you submit**
+**Understanding**
 
 - [ ] I can name the four Elastic Load Balancing objects and say which one holds the health check
 - [ ] I can say why a Fargate target group must be `ip` and what breaks if it is not
@@ -4386,85 +3015,21 @@ Tick these off before you submit. Every one is checkable from your own repositor
 
 ---
 
-## 15. Review Questions
+## 14. Review Questions
 
-Answer in prose, in your own words, in `notes/lab-05-notes.md`. No command output - these ask whether
-you understood, not whether you typed.
+Answer in prose in `notes/lab-05-notes.md`.
 
-1. Lab 04 wrote a security group rule sourced from a group rather than an address, and gave as its
-   reason that the tasks have no stable addresses. This lab put a load balancer in front of them for what
-   is arguably the same reason. Explain, in a full paragraph, what these two things have in common, what
-   general problem they are both solutions to, and name a third solution to the same problem that appears
-   elsewhere in computing.
-
-2. A colleague says "the load balancer's health check says the task is unhealthy, so the application is
-   broken". Explain why that inference is unsound. Describe the two states the target group health check
-   cannot distinguish between, name which other field distinguishes them, and give the diagnostic
-   sequence you would follow.
-
-3. There is no `update-target-group-target-type`. Explain what that tells you about how AWS thinks about
-   the difference between a target group's *configuration* and its *identity*, and connect it to Lab
-   04's claim that a task definition revision is immutable. Then name two other fields in this lab that
-   behave the same way, and one that looks like it should and does not.
-
-4. Walk through what happens to a single HTTP request that arrives at the load balancer at the exact
-   moment ECS decides to stop the task that would have served it. Name every timer involved, where each
-   one is configured, and state whether the request succeeds. Then say what would change if
-   `deregistration_delay.timeout_seconds` were left at its default of 300.
-
-5. Step 13 removed a rule and Lab 04's verification script began to fail. Argue both sides: make the case
-   that the script should be updated immediately, and the case that it should be left failing and
-   documented. Say which you would do on a system with four other engineers on it, and why the answer
-   might be different on a system with one.
-
-6. This lab's load balancer is `internet-facing`, and the tasks it forwards to have no public address at
-   all. Explain how both of those can be true at once, naming every Lab 2 resource that makes it work.
-   Then explain what an attacker who compromised the load balancer's configuration could and could not
-   reach, and what would have been different had the tasks been given public addresses instead.
-
-7. Lab 06 scales this service on CPU utilisation and its own text says requests per target would be
-   better. Explain why requests per target is a better scaling signal for a web API, name the one
-   situation in which CPU is the better of the two, and say what would have to be true about the
-   enrolment application for `ALBRequestCountPerTarget` to scale it badly.
+1. Lab 04 sourced a security group rule from a group because the tasks have no stable addresses; this lab put a load balancer in front of them for arguably the same reason. In a paragraph, say what the two have in common, what general problem both solve, and name a third solution to it elsewhere in computing.
+2. "The load balancer's health check says the task is unhealthy, so the application is broken." Why is that unsound? Which two states can the target group health check not distinguish, which field does, and what diagnostic sequence would you follow?
+3. There is no `update-target-group-target-type`. What does that say about a target group's *configuration* versus its *identity*? Connect it to Lab 04's immutable task definition revisions, name two other fields in this lab that behave the same way, and one that looks like it should but does not.
+4. A request arrives at the exact moment ECS decides to stop the task that would serve it. Name every timer involved and where it is configured, and say whether the request succeeds. What changes if `deregistration_delay.timeout_seconds` were left at 300?
+5. Step 13 made Lab 04's verification script fail. Argue for updating it immediately, then for leaving it failing and documented. Which would you do with four other engineers on the system, and why might one engineer change the answer?
+6. The load balancer is `internet-facing` and the tasks have no public address. Explain how both are true, naming every Lab 2 resource involved. What could an attacker who compromised the load balancer's configuration reach, and what would differ had the tasks had public addresses?
+7. Why is requests per target a better scaling signal than CPU for a web API? Name the one situation where CPU is better, and what would have to be true of the enrolment application for `ALBRequestCountPerTarget` to scale it badly.
 
 ---
 
-## 16. What We Built
-
-### 16.1 Reflection
-
-Lab 04 built something correct that nothing could reach. This lab put a name in front of it, and almost
-everything interesting about the lab follows from the fact that the name is stable and the things behind
-it are not.
-
-The idea to keep is **indirection with an owner**. A target group is a list of addresses, and a list of
-addresses is worthless unless something keeps it true. The whole design rests on giving that job to the
-ECS service, which already knows every time a task starts or stops because it is the thing starting and
-stopping them. You never registered a target; you attached a service, and the service has been
-maintaining the list ever since, through a forced deployment, a scale to three and back, and a restart of
-the emulator. Ask yourself what you would have had to do at each of those moments if it had not.
-
-The second idea is that **health is a distributed opinion**. Lab 04's container health check asks the
-process whether it is alive. This lab's target group health check asks the network whether the process is
-reachable. They are different questions with different answers, and the most valuable table in this
-document is the four-row one in Step 11 that says what each combination means. Systems that only ask one
-of those two questions are systems that will one day be entirely healthy and entirely unreachable.
-
-The third is an operational habit rather than an idea. Steps 9, 12 and 13 are a cutover, in that order:
-add the new path, prove the new path, remove the old one. It would have been shorter to revoke the old
-rule at Step 9 and add the new one in the same breath, and the lab would have worked. It would also have
-been a change with a window during which nothing was reachable, made without evidence that the
-replacement worked. The order is the whole lesson, and it costs one extra step.
-
-And a smaller thing worth noticing. Every command in Steps 4 to 15 reported success, and almost none of
-that was evidence. Step 6 proved the target group was empty and told you not to fill it. Step 11 proved
-something else had filled it. Step 12 proved the chain link by link when the data path could not be
-tested. Step 14 proved a deployment by catching a `draining` target next to a `healthy` one. Step 16
-proved persistence by re-deriving every ARN after a restart. **A command that appears to succeed is still
-not evidence that it did what you meant** - three labs in, that sentence should be starting to feel less
-like a rule and more like a reflex.
-
-### 16.2 KEEP vs CLEAN UP
+## 15. KEEP vs CLEAN UP
 
 ```text
 ╔═══════════════════════ KEEP ════════════════════════╗    ╔═════════════ CLEAN UP ══════════════╗
@@ -4472,7 +3037,7 @@ like a rule and more like a reflex.
 ║ usms-enrolment-alb        the stable name           ║    ║   - Exercise 1 practice;            ║
 ║ usms-enrolment-tg         Lab 06's metric names it ║    ║   removed in Exercise 4             ║
 ║ the HTTP:80 listener      and its default action    ║    ║                                     ║
-║ the /alb-health rule      Section 9 asserts it      ║    ║ the priority-20 listener rule       ║
+║ the /alb-health rule      Section 8 asserts it      ║    ║ the priority-20 listener rule       ║
 ║ usms-enrolment-svc        now load balanced         ║    ║   - same exercise, same removal     ║
 ║ usms-enrolment-sg         cut over to usms-alb-sg   ║    ║                                     ║
 ║ configs/lab-05.env       Lab 06 sources it        ║    ║ outputs/lab-05-pre/post-*.txt      ║
@@ -4485,7 +3050,7 @@ like a rule and more like a reflex.
 ╚═════════════════════════════════════════════════════╝    ╚═════════════════════════════════════╝
 ```
 
-Clean up the right-hand column once your report is submitted and your assessment has been collected:
+Once your report is submitted and the assessment collected:
 
 ```bash
 rm -f outputs/lab-05-pre-restart.txt  outputs/lab-05-post-restart.txt
@@ -4495,10 +3060,7 @@ git status --short
 ./scripts/utilities/verify-lab-05.sh | tail -2
 ```
 
-Do **not** run `scripts/cleanup/lab-05-cleanup.sh`, `lab-04-cleanup.sh`, `lab-03-cleanup.sh` or
-`lab-02-cleanup.sh`. They are for the end of the course, in the order given in Section 9.3.
-
-### 16.3 The architecture you now have
+Do **not** run `scripts/cleanup/lab-05-cleanup.sh`, `lab-04-cleanup.sh`, `lab-03-cleanup.sh` or `lab-02-cleanup.sh`; they are for the end of the course, in the order given in Section 8.2.
 
 ```text
 Lab 01  IAM
@@ -4553,12 +3115,9 @@ Lab 10  Lambda
 
 ---
 
-## 17. Preparation for the Next Lab
+## 16. Preparation for the Next Lab
 
-Lab 06 takes the service you just put
-behind a load balancer and hands its `desiredCount` to Application Auto Scaling. It creates no new
-compute, renames nothing, and is unaffected by everything in this lab except that it now has a better
-metric available to it.
+Lab 06 hands this service's `desiredCount` to Application Auto Scaling. It creates no new compute and renames nothing.
 
 | From `configs/lab-05.env` | Lab 06 uses it for |
 | --- | --- |
@@ -4574,11 +3133,7 @@ metric available to it.
 | Lab 02 `usms-private-subnet-a` and `-b` | Where new tasks appear when a policy scales out |
 | Lab 05 `usms-enrolment-tg` | Where those new tasks are registered, automatically, with no scaling policy involved |
 
-That last row is the connection worth stating out loud before the next session. When Lab 06's policy
-raises `desiredCount` from 2 to 5, three things happen that nobody configures: three tasks start, three
-elastic network interfaces appear in the private subnets, and three addresses are registered into this
-lab's target group and begin receiving traffic once they pass their health checks. **Auto scaling still
-only writes one integer.** Everything else is machinery you have already built.
+When Lab 06 raises `desiredCount` from 2 to 5, three tasks start and are registered into this target group with nothing else configured: **auto scaling only writes one integer.**
 
 **Before the next session, confirm all five of these:**
 
@@ -4593,26 +3148,15 @@ aws elbv2 describe-target-groups --names usms-enrolment-tg \
   --query 'TargetGroups[0].[TargetType,length(LoadBalancerArns)]' --output text
 ```
 
-You want: `FAIL=1` from the first (with the one expected failure) or `FAIL=0` if you did Exercise 2;
-`FAIL=0` from the second; a count of **15** (or 16 after Exercise 5); a desired count of **2** with
-exactly **1** load balancer entry and **1** deployment; and `ip` with **1** attached load balancer.
+You want: `FAIL=1` from the first (the one expected failure) or `FAIL=0` after Exercise 2; `FAIL=0` from the second; **15** (or 16 after Exercise 5); desired count **2** with **1** load balancer entry and **1** deployment; and `ip` with **1** attached load balancer. Lab 06 Step 12 sets a minimum of 2, so arrive at the baseline.
 
-Lab 06's Step 12 registers a scalable target with a minimum of 2 and will raise the capacity immediately
-if it finds the service below that, so arriving at the baseline is not cosmetic.
-
-**Read ahead, five minutes:** find out what a *scalable target* is in Application Auto Scaling, and why
-its resource ID for ECS is a constructed string rather than an ARN. You have now built two such
-constructed strings - `service/<cluster>/<service>` in Lab 04 and the `ResourceLabel` in Exercise 5 - so
-the third will be familiar.
-
-Finally, take a snapshot so that a mistake in Lab 06 is recoverable:
+Take a snapshot so a Lab 06 mistake is recoverable:
 
 ```bash
 floci snapshot save lab-05-complete
 ```
 
-If `floci snapshot` is not available on your build, use the filesystem fallback. Stop Floci first -
-archiving a live data directory can capture a half-written file:
+If `floci snapshot` is unavailable, stop Floci first and archive outside the repository:
 
 ```bash
 ./scripts/setup/floci-down.sh
@@ -4621,92 +3165,9 @@ tar -czf ~/floci-data-lab-05.tar.gz -C ~ floci-data
 ls -lh ~/floci-data-lab-05.tar.gz
 ```
 
-The archive lives in your home directory, **outside** the repository, so it is never a commit candidate.
-
 ---
 
-## Appendix A - Command Reference
-
-Every command this lab used, grouped by service.
-
-### Elastic Load Balancing v2 - load balancers
-
-| Command | What it does |
-| --- | --- |
-| `aws elbv2 create-load-balancer` | Create one. `--type`, `--scheme`, `--subnets` (space separated, two minimum), `--security-groups`, `--ip-address-type` |
-| `aws elbv2 describe-load-balancers` | Read them. `--names` or `--load-balancer-arns`. One of only two ELBv2 reads that accept a name |
-| `aws elbv2 modify-load-balancer-attributes` | Idle timeout, header handling, access logs, deletion protection |
-| `aws elbv2 set-security-groups` | Change an ALB's security groups after creation |
-| `aws elbv2 delete-load-balancer` | Delete one. Its listeners and rules go with it |
-| `aws elbv2 wait load-balancer-available` | Block until `State.Code` is `active` |
-| `aws elbv2 wait load-balancers-deleted` | Block until it is gone, which the security group deletion depends on |
-| `aws elbv2 describe-account-limits` | Per-region caps on load balancers, target groups, listeners and rules |
-
-### Elastic Load Balancing v2 - target groups
-
-| Command | What it does |
-| --- | --- |
-| `aws elbv2 create-target-group` | Create one. `--target-type`, `--protocol`, `--port`, `--vpc-id`, and the five health check flags |
-| `aws elbv2 describe-target-groups` | Read them. `--names`, `--target-group-arns`, or `--load-balancer-arn` for everything one balancer uses |
-| `aws elbv2 modify-target-group` | Change the health check after creation. **Cannot** change the target type, port protocol or VPC |
-| `aws elbv2 describe-target-group-attributes` | Deregistration delay, stickiness, algorithm, slow start |
-| `aws elbv2 modify-target-group-attributes` | Set any of those |
-| `aws elbv2 describe-target-health` | The targets and their states. The most-used call in this lab |
-| `aws elbv2 register-targets` / `deregister-targets` | Manual registration. **Not used in this lab**, and not to be used for an ECS service |
-| `aws elbv2 delete-target-group` | Delete one. Fails while a listener forwards to it |
-
-### Elastic Load Balancing v2 - listeners, rules and tags
-
-| Command | What it does |
-| --- | --- |
-| `aws elbv2 create-listener` | `--protocol`, `--port`, `--default-actions`. Exactly one default action |
-| `aws elbv2 describe-listeners` | By `--load-balancer-arn` or `--listener-arns`. Listeners have no names |
-| `aws elbv2 modify-listener` | Change the default action, port, protocol or certificate |
-| `aws elbv2 delete-listener` | Delete one, and its rules with it |
-| `aws elbv2 create-rule` | `--priority`, `--conditions`, `--actions`. Lowest priority is evaluated first |
-| `aws elbv2 describe-rules` | By `--listener-arn`. Includes the default action, shown with priority `default` |
-| `aws elbv2 modify-rule` / `set-rule-priorities` | Change a rule's conditions and actions, or renumber several at once |
-| `aws elbv2 delete-rule` | Delete one non-default rule |
-| `aws elbv2 add-tags` / `remove-tags` / `describe-tags` | `--resource-arns` takes **several** ARNs in one call |
-
-### Amazon ECS used in this lab
-
-| Command | What it does |
-| --- | --- |
-| `aws ecs update-service --load-balancers` | Attach or change the target group a service registers into. Triggers a deployment |
-| `aws ecs update-service --health-check-grace-period-seconds` | Ignore target health for the first N seconds of a task's life. Valid only on a load-balanced service |
-| `aws ecs update-service --force-new-deployment` | Replace every task with an identical one, from the same revision |
-| `aws ecs describe-services` | `loadBalancers`, `healthCheckGracePeriodSeconds`, `deployments`, `events` |
-| `aws ecs describe-tasks` | `healthStatus`, and the private address in `attachments` |
-| `aws ecs delete-service --force` | Only in the cleanup script, and only after scaling to zero |
-
-### Amazon EC2 used in this lab
-
-| Command | What it does |
-| --- | --- |
-| `aws ec2 create-security-group` | The load balancer's own group |
-| `aws ec2 authorize-security-group-ingress` | `--ip-permissions file://...` for both a CIDR rule and a group-referenced one |
-| `aws ec2 describe-security-group-rules` | One object per rule, with its own ID. The only view in which merged rules are separable |
-| `aws ec2 revoke-security-group-ingress --security-group-rule-ids` | Remove one specific rule by ID, not by re-describing the permission |
-| `aws ec2 describe-instances --filters Name=instance.group-id` | Reverse lookup: which instances carry this group |
-| `aws ec2 describe-network-interfaces --filters Name=group-id` | Which interfaces hold a group, when a deletion is refused |
-
-**Five tag conventions now, across five services, and no rule connects them:**
-
-| Service | Syntax |
-| --- | --- |
-| EC2 | `--tag-specifications 'ResourceType=x,Tags=[{Key=K,Value=V}]'` |
-| ECS | `--tags key=K,value=V` (lower case) |
-| IAM | `--tags Key=K,Value=V` (capitals, no `ResourceType`) |
-| CloudWatch Logs | `--tags K=V` (a plain map) |
-| Elastic Load Balancing | `--tags Key=K,Value=V` (capitals, like IAM) |
-
-Run `aws <service> <operation> help` and read the `--tags` synopsis. That habit is more durable than
-memorising any of the five.
-
----
-
-## Appendix B - New JMESPath and CLI patterns introduced
+## Appendix - New CLI and JMESPath patterns
 
 Labs 1 to 04 taught `Key[*].Field`, `[A,B]`, `{X:A}`, `[?filter]`, `| [0]`, `sort_by()`, `length()`,
 `contains()`, `starts_with()`, `@`, slices, flattening with `[]`, `--filters`,
@@ -4715,11 +3176,11 @@ adds:
 
 | Pattern | Meaning | Where it appeared |
 | --- | --- | --- |
-| `Attributes[?Key=='x'].Value` then `\| [0]` | A raw string literal in single quotes inside a filter - the counterpart to the backtick form for JSON literals | Step 7, Section 9 |
+| `Attributes[?Key=='x'].Value` then `\| [0]` | A raw string literal in single quotes inside a filter - the counterpart to the backtick form for JSON literals | Step 7, Section 8 |
 | A filter with `\|\|` | Boolean **or** inside a filter expression, to select two named attributes in one call | Step 7 |
 | A filter with `&&` | Boolean **and**, combining a boolean literal in backticks with a string in single quotes | Step 13 |
 | `sort_by(Listeners,&Port)` | An **expression reference** with `&`, telling `sort_by` which field to order on | Step 16 |
-| `Listeners[?Port==` + backtick + `80` + backtick + `]` then `\| [0]` | A numeric JSON literal in backticks, which must be escaped as a backslash-backtick inside an unquoted heredoc or a double-quoted shell string | Steps 16, 18, Section 9 |
+| `Listeners[?Port==` + backtick + `80` + backtick + `]` then `\| [0]` | A numeric JSON literal in backticks, which must be escaped as a backslash-backtick inside an unquoted heredoc or a double-quoted shell string | Steps 16, 18, Section 8 |
 | `describe-tags --resource-arns A B` | Several ARNs in one call, returning a `TagDescriptions` list - unusual for an AWS `describe-tags` | Step 17 |
 | `--subnets a b` | A space-separated list of strings, which is a **third** CLI list convention alongside `--tags Key=,Value=` and `awsvpcConfiguration={subnets=[a,b]}` | Step 5 |
 | `--attributes Key=k,Value=v Key=k2,Value=v2` | A list of key-value structures, repeated, space separated | Steps 5, 7 |
@@ -4730,22 +3191,7 @@ adds:
 | `curl -w '%{http_code} %{time_total}'` | Print selected transfer variables after a request | Steps 12, 15 |
 | `case "$ip" in 10.0.3.*)` | Classifying an address against a known CIDR in pure shell, with no tooling | Step 12 |
 
-### The distinction to keep straight
-
-Elastic Load Balancing is an **ARN-first API**, and it has exactly two doors that accept a name:
-
-```text
-describe-load-balancers --names usms-enrolment-alb      <- accepts a name
-describe-target-groups  --names usms-enrolment-tg       <- accepts a name
-everything else                                          <- ARN only
-listeners and rules                                      <- have no name at all
-```
-
-That is why Step 16's persistence proof re-derives the load balancer and the target group **by name** and
-then walks **down** to the listener and the rule. It is also why `configs/lab-05.env` records four ARNs
-rather than four names: a name you cannot pass to the call you need is not an identifier.
-
-Compare with the three identifier styles you have now met for one ECS service:
+ELBv2 is **ARN-first**: only `describe-load-balancers --names` and `describe-target-groups --names` accept a name, and listeners and rules have no name at all. That is why Step 16 re-derives by name and walks down to the listener, and why `configs/lab-05.env` records ARNs.
 
 ```text
 ECS control-plane calls     --cluster usms-ecs-cluster --service usms-enrolment-svc
@@ -4754,8 +3200,7 @@ Application Auto Scaling    --resource-id service/usms-ecs-cluster/usms-enrolmen
 ELB request-count metric    ResourceLabel app/<lb-name>/<lb-id>/targetgroup/<tg-name>/<tg-id>
 ```
 
-Four ways of naming things that all live in the same architecture. The fourth is Exercise 5, and it is
-the only one built from fragments of two different ARNs.
+Four identifier styles for one architecture; the last (Exercise 5) is built from fragments of two ARNs.
 
 ---
 
@@ -4782,11 +3227,3 @@ the only one built from fragments of two different ARNs.
 - [`aws elbv2` CLI reference](https://docs.aws.amazon.com/cli/latest/reference/elbv2/)
 - [`aws ecs` CLI reference](https://docs.aws.amazon.com/cli/latest/reference/ecs/)
 - [JMESPath specification](https://jmespath.org/specification.html)
-
----
-
-*Lab 05 complete. Lab 06
-hands this service's `desiredCount` to Application Auto Scaling and changes nothing else about what you
-have built. Start at its Step 1 and follow it through in order,
-which you have already finished. When you reach its Step 14, look at the third row of the predefined
-metric table, and then look at what Exercise 5 left in `configs/lab-05.env`.*

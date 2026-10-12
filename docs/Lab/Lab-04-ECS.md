@@ -1,92 +1,37 @@
 # Lab 04 - Amazon ECS
 
-## 1. Lab Overview
+## 1. Objectives
 
-Lab 3 gave USMS two servers. They are exactly the size you made them and they will stay that size
-until somebody logs in and changes them. That is fine for a portal that serves a steady trickle of
-requests. It is not fine for **enrolment week**, when four thousand students try to register for
-modules in the first twenty minutes of a Monday morning and then nothing happens for six days.
+- Containerise the USMS enrolment service onto Amazon ECS on Fargate, inside Lab 2's private subnets.
+- Build a cluster, a log group, a task definition and a service that holds a fixed `desiredCount` of 2 across two Availability Zones.
+- Separate the task **execution** role (pulls the image, writes logs) from the task **role** (the application's identity), and reuse Lab 1's `USMSStudentDataReadWrite` on the task role.
+- Source the service's security group from the web tier's `usms-app-sg`, and explain how a private-subnet task pulls its image.
+- Record every name and ARN in `configs/lab-04.env` for Labs 05 and 06.
 
-This laboratory builds the layer that solves that. You will containerise the USMS enrolment service
-onto **Amazon ECS**, running on **Fargate**, inside the private subnets Lab 2 built: a cluster, a task
-definition with the two IAM roles a task actually needs, a security group sourced from the web tier's
-own group, and a service that keeps the right number of tasks running across two Availability Zones.
-
-The single most important idea in this lab is the separation between the four ECS objects - **cluster,
-task definition, task, and service** - and the fact that only the service's `desiredCount` is a moving
-target at all. That separation is also what makes the next two labs possible: Lab 05 puts this service
-behind a load balancer, and Lab 06 hands `desiredCount` over to Application Auto Scaling so the service
-grows and shrinks on its own. Neither of those is this lab's job - this lab's job is to get a correctly
-built, correctly networked, correctly permissioned service standing still.
-
-**Time:** roughly 2.5 hours, including the exercises.
-
-** Where this sits in the course**
-
-```text
-Lab 01  IAM ..................... roles, policies, instance profile
-Lab 02  VPC ..................... the network: subnets, NAT, route tables, security groups
-Lab 03  EC2 .................... usms-web-01 and usms-db-01 in that network
-Lab 04  ECS ..................... THIS LAB - the enrolment service, deployed and standing still
-Lab 05  ALB ..................... the same service, reachable through a load balancer
-Lab 06  Autoscaling ............. the same service, growing and shrinking on its own
-
-```
-
-!!! info "A note on the numbering"
-    An earlier roadmap pointed Lab 3 at "S3" next. This lab takes the Lab 04 slot instead, because
-    ECS depends on nothing that S3 or Lambda would have built - it needs Lab 1's IAM and Lab 2's
-    network, and both exist. Lambda is Lab 10; the S3 configuration lab was never written as its own
-    document. Nothing already created changes name, and no file already committed is rewritten.
-
-    Two forward references from Lab 3 now land here rather than where they said they would: the
-    "golden AMI in a launch template" promise (Lab 3 Step 20) belongs to **EC2** Auto Scaling, which
-    is a different service from the one in this lab, and is still ahead of you. Section 12.3 explains
-    the difference so that you do not conflate them.
-
----
-
-## 2. Learning Objectives
-
-After completing this laboratory you will be able to:
-
-1. Explain what a cluster, a task definition, a task and a service are in ECS, and say which of the
-   four is the thing that, in a later lab, gets scaled.
-2. Explain what Fargate removes from the EC2 model, and what it does not remove.
-3. Write and register a task definition, including `awsvpc` network mode, CPU and memory sizing, an
-   execution role, a task role and an `awslogs` log configuration.
-4. Distinguish an ECS **task execution role** from an ECS **task role**, and say which one pulls the
-   image and which one the application code uses.
-5. Create a service in a private subnet and explain, from Lab 2's route table, how it pulls its
-   container image at all.
-6. Read the four numbers that describe a service's health - `desiredCount`, `runningCount`,
-   `pendingCount` and `status` - and say what a mismatch between the first two means.
-7. Record every ARN and name this lab created into `configs/lab-04.env`, and explain why it is looked
-   up from the API rather than copied from a shell variable.
+!!! info "Concepts used in this lab"
+    Read these first if a term is new: [clusters](../unit2/topic2.md#the-cluster) ·
+    [task definitions](../unit2/topic1.md#ecs-task-definitions) ·
+    [tasks, services and the reconciliation loop](../unit2/topic2.md#tasks-services-and-the-reconciliation-loop) ·
+    [Fargate](../unit2/topic2.md#aws-fargate) ·
+    [task network modes](../unit2/topic2.md#task-network-modes) ·
+    [ECS roles](../unit2/topic2.md#security-considerations) ·
+    [service roles](../unit8/topic1.md#service-roles-instance-profiles-and-service-linked-roles) ·
+    [security group referencing](../unit1/topic6.md#security-group-referencing-the-cloud-native-idiom) ·
+    [NAT gateway](../unit1/topic6.md#nat-gateway) ·
+    [log retention](../unit7/topic2.md#retention)
 
 !!! info "Auto scaling is not this lab"
-    Registering a scalable target, target tracking, step scaling, scheduled actions and the
-    persistence proof for all of it are **Lab 06's** learning objectives, not this lab's. This lab
-    hands Lab 06 a service that stands still at a fixed `desiredCount` of 2; Lab 06 is the one that
-    makes that number move on its own.
+    Scalable targets, target tracking, step and scheduled scaling are Lab 06. This lab hands Lab 06 a service that stands still at `desiredCount` 2.
 
 ---
 
-## 3. Prerequisites
+## 2. Prerequisites
 
-- **Lab 1 complete.** `usms-developer-role`, `USMSStudentDataReadWrite` and the rest of the IAM
-  foundation.
-- **Lab 2 complete**, including Exercise 5, so that both private subnets exist. This lab puts tasks
-  in two Availability Zones.
-- **Lab 3 complete.** `usms-app-sg` must be attached to a running `usms-web-01`, because Step 8's
-  security group rule references that group by ID.
-- `./scripts/utilities/verify-lab-02.sh` and `./scripts/utilities/verify-lab-03.sh` both report
-  `FAIL=0`.
-- Floci running under Docker Compose with `FLOCI_STORAGE_MODE` set to `hybrid`.
-- `jq` and `python3` available. `jq` parses the JSON several commands return; `python3` validates
-  every policy and template document this lab writes with `python3 -m json.tool`.
-
-Check all of that in one go:
+- Labs 1, 2 and 3 complete, including Lab 2 Exercise 5 (both private subnets must exist).
+- `usms-app-sg` attached to a running `usms-web-01` (Step 8 references that group by ID).
+- `./scripts/utilities/verify-lab-02.sh` and `./scripts/utilities/verify-lab-03.sh` both report `FAIL=0`.
+- Floci running under Docker Compose with `FLOCI_STORAGE_MODE=hybrid`.
+- `jq` and `python3` installed (`python3 -m json.tool` validates every JSON document this lab writes).
 
 ```bash
 cd ~/aws-floci-course
@@ -103,31 +48,30 @@ docker     /usr/bin/docker
 aws-cli/2.17.42 Python/3.11.9 Linux/6.5.0 exe/x86_64.ubuntu.22
 ```
 
+If any tool prints `MISSING`, install it before starting.
+
 ---
 
-## 4. Connection to Previous Labs
+## 3. What This Lab Reuses
 
-### 4.1 Current Environment
+From Lab 1:
+
+- `usms-developer-role`: Step 4 creates the cluster while holding it, then restores your identity.
+- `USMSStudentDataReadWrite`: Step 7 attaches it to `usms-ecs-task-role`, the same policy Lab 3's instance uses.
+- `configs/course.env` names (`$COURSE_ROOT`, `$AWS_REGION_COURSE`, `$ACCOUNT_ID`, `$PROJECT`): used, never redeclared.
+
+From Lab 2:
+
+- `usms-private-subnet-a` and `-b`: Step 10 places the tasks in both, by ID from `configs/lab-02.env`.
+- `usms-nat` and `usms-private-rt`: the only reason a private-subnet task can pull its image (Steps 10 and 11).
+- `usms-s3-endpoint`: image layers are stored in S3, so the endpoint is on the pull path (Step 10).
+- `usms-app-sg`: Step 8 makes it the only source of the enrolment service's inbound rule.
+
+From Lab 3:
+
+- `usms-web-01`: Exercise 5 resolves Step 8's group reference back to this instance.
 
 ```text
-Created in previous labs:
-- Lab 01: Floci under Compose, hybrid storage, persistence proven
-- Lab 01: groups usms-admins / usms-developers / usms-auditors; three users
-- Lab 01: roles  usms-ec2-app-role, usms-lambda-exec-role, usms-developer-role
-- Lab 01: policies USMSDeveloperBase (v2), USMSStudentDataReadWrite, USMSAssumeAppRoles,
-                   USMSLambdaBasic, USMSSelfManageCredentials (inline)
-- Lab 01: instance profile usms-ec2-app-profile
-- Lab 01: configs/course.env, configs/lab-01.env
-- Lab 02: usms-vpc 10.0.0.0/16, DNS support and hostnames enabled
-- Lab 02: usms-public-subnet-a / -b, usms-private-subnet-a / -b
-- Lab 02: usms-igw, usms-nat (+ Elastic IP), usms-public-rt, usms-private-rt
-- Lab 02: usms-app-sg, usms-db-sg, usms-private-nacl, usms-s3-endpoint
-- Lab 02: configs/lab-02.env, scripts/utilities/verify-lab-02.sh
-- Lab 03: usms-web-01 (public subnet a, usms-app-sg, usms-ec2-app-profile, usms-web-eip)
-- Lab 03: usms-db-01 (private subnet a, usms-db-sg, no public address)
-- Lab 03: usms-web-data-vol, usms-web-golden, usms-app-key
-- Lab 03: configs/lab-03.env, scripts/utilities/verify-lab-03.sh
-
 Created in this lab:
 - usms-ecs-cluster              ECS cluster, Container Insights requested
 - /usms/ecs/enrolment           CloudWatch Logs log group, 7-day retention
@@ -151,68 +95,17 @@ Required for future labs:
 - usms-ecs-task-role            -> Lab 10 creates the bucket its policy already names
 ```
 
-### 4.2 What this lab genuinely reuses
-
-Not mentions - uses.
-
-| From | Used here how |
-| --- | --- |
-| Lab 2 `usms-private-subnet-a` and `-b` | Step 10 places the service's tasks in both, by ID from `configs/lab-02.env` |
-| Lab 2 `usms-nat` and `usms-private-rt` | Step 10 explains, and Step 11 verifies, that this is the only reason a task in a private subnet can pull a container image |
-| Lab 2 `usms-s3-endpoint` | Step 10 names it: container image layers are stored in S3, so the endpoint is on the path too |
-| Lab 2 `usms-app-sg` | Step 8 makes it the *source* of the enrolment service's only inbound rule - the web tier is the only thing allowed to call the enrolment API |
-| Lab 3 `usms-web-01` | Exercise 5 resolves the group reference from Step 8 back to the instance that carries it, closing the loop |
-| Lab 1 `USMSStudentDataReadWrite` | Step 7 attaches it to `usms-ecs-task-role`, so the container gets the same bucket permissions the EC2 instance has |
-| Lab 1 `usms-developer-role` | Step 4 creates the cluster while holding it, then restores your normal identity |
-| `configs/course.env` names | `$COURSE_ROOT`, `$AWS_REGION_COURSE`, `$ACCOUNT_ID`, `$PROJECT` used, never redeclared |
-
-### 4.3 The moment three labs meet
-
-Lab 1 wrote `USMSStudentDataReadWrite` describing a bucket that does not exist. Lab 3 attached it to
-an EC2 instance and traced the chain. This lab attaches **the same policy** to a completely different
-kind of compute - a container task - and the chain is the same shape: task → task role → policy →
-bucket ARN.
-
-That is the point worth pausing on when you reach Step 7. The instance profile in Lab 3 and the task
-role here are two different mechanisms for delivering the same thing: **temporary credentials to code
-that never sees a key.** When Lab 10 finally runs `create-bucket`, *both* of them start working at the
-same moment, and neither one needed to be changed.
-
-Say that out loud before you continue. It is a review question, and it is the single most useful
-sentence about IAM in the whole course.
+- **The moment three labs meet:** Lab 3 delivered `USMSStudentDataReadWrite` to an EC2 instance through an instance profile; Step 7 delivers the same policy to a container through a task role. Both are temporary credentials to code that never sees a key, and both start working the moment Lab 10 creates the bucket.
 
 ---
 
-## 5. What We Are Building
+## 4. What We Are Building
 
-The USMS enrolment service. It is the endpoint the student portal calls when somebody clicks
-"Register for this module". Today it runs as a single EC2 instance with no failover and no way to
-add capacity except by hand. This lab moves it onto Amazon ECS: an immutable task definition, a
-service controller whose entire job is to keep `runningCount` equal to `desiredCount`, and a cluster
-that can restart a failed task without you noticing at 3am.
-
-### 5.1 Why ECS instead of another EC2 instance
-
-An EC2 instance is a pet. If it dies, someone has to notice, log in, and fix it. A task in an ECS
-service is cattle: the service controller notices before you do and replaces it. The task definition
-is versioned and immutable, so a bad deploy is a `describe-task-definition` away from a rollback, not
-an SSH session and a guess.
-
-None of that requires scaling. Capacity planning - how many tasks, and how that number changes with
-load - is a separate concern, and Lab 06 owns it once this lab has given it a `desiredCount` to move.
-This lab's job is narrower: get the service running correctly, behind the right IAM roles, in the
-right subnets, with its logs going somewhere.
-
-### 5.2 What this lab deliberately does not do
-
-No scalable target, no target tracking, no step scaling, no scheduled scaling. `desiredCount` is set
-once, by hand, and stays fixed for the rest of this lab. That is not an oversight; teaching capacity
-planning properly needs its own document, and Lab 06 is that document. Trying to do both here would
-mean either rushing scaling or padding out a deploy lab that should be able to stand on its own.
+The USMS enrolment service: the endpoint the student portal calls when someone clicks "Register for this module". This lab moves it from a single hand-managed EC2 instance onto Amazon ECS: an immutable task definition, a service controller that keeps `runningCount` equal to `desiredCount`, and a cluster that replaces a failed task without anyone logging in. `desiredCount` is set once, by hand, and stays fixed; Lab 05 adds a load balancer and Lab 06 makes the count move.
 
 ---
 
-## 6. Architecture
+## 5. Architecture
 
 ```text
                                 Internet
@@ -260,7 +153,7 @@ own.
 
 ---
 
-## 7. Directory Structure
+## 6. Directory Structure
 
 This lab adds the following. It restructures nothing and needs no new top-level folder.
 
@@ -269,7 +162,7 @@ aws-floci-course/
 ├── labs/
 │   └── lab-04-ecs/
 │       ├── README.md                              # this document
-│       └── exercises.md                           # Section 13
+│       └── exercises.md                           # Section 12
 ├── policies/
 │   ├── trust-ecs-tasks.json                       # NEW - trust policy for both ECS roles
 │   └── usms-ecs-task-execution-policy.json        # NEW - USMSECSTaskExecution document
@@ -279,7 +172,7 @@ aws-floci-course/
 │   └── lab-04.env                                 # NEW
 ├── scripts/
 │   ├── utilities/
-│   │   └── verify-lab-04.sh                       # NEW - Section 9
+│   │   └── verify-lab-04.sh                       # NEW - Section 8
 │   └── cleanup/
 │       └── lab-04-cleanup.sh                      # NEW - end of course only
 └── outputs/
@@ -306,32 +199,18 @@ labs/lab-01-iam  labs/lab-02-vpc  labs/lab-03-ec2  labs/lab-04-ecs
 ```
 
 ---
-## 8. Step-by-Step Implementation
 
-!!! info "Where to run every command in this lab"
-    Unless a step says otherwise, run everything from the repository root:
+## 7. Step-by-Step Implementation
 
-    ```text
-    aws-floci-course/
-    ```
+!!! info "Run every command from `aws-floci-course/`"
+    All paths (`configs/...`, `policies/...`, `templates/...`, `scripts/...`) are relative to the repository root. If a command reports `No such file or directory`, check `pwd`.
 
-    Every path below (`configs/...`, `policies/...`, `templates/...`, `scripts/...`) is relative to
-    that directory. If a command reports `No such file or directory`, check `pwd` first.
+!!! tip "Shell variables die with the terminal"
+    Every name and ARN below is captured into a variable. Step 12 writes them to `configs/lab-04.env` so Labs 05 and 06 can use them.
 
 ### Step 1 - Resume the environment and load three env files
 
-**Purpose**
-
-Bring Floci up and load everything the previous three labs recorded. This lab reads eight values from
-`configs/lab-02.env` and `configs/lab-03.env`; loading them is the standard opening from here on.
-
-**Run from**
-
-```text
-aws-floci-course/
-```
-
-**Command**
+Bring Floci up and load what the previous three labs recorded; this lab reads eight values from them.
 
 ```bash
 cd ~/aws-floci-course
@@ -355,12 +234,6 @@ printf '%-26s %s\n' \
   "account"             "$ACCOUNT_ID"
 ```
 
-**What the command does**
-
-`floci-up.sh` is idempotent - it starts the container if it is stopped, says so if it is already
-running, and refuses to adopt a container that Compose did not create. `whoami.sh` exits 1 if the
-account is not `000000000000`, which is the guard that stops a course command reaching a real account.
-
 **Expected result**
 
 ```text
@@ -383,28 +256,13 @@ account                    000000000000
 
 > Example output - your IDs will differ.
 
-**Verify**
-
-Eight non-empty values. `private subnet b` empty means Lab 2 Exercise 5 was skipped - go and do it,
-because Step 10 places tasks across two Availability Zones and a service with one subnet cannot
-survive an AZ failure, which is half of why the minimum capacity in this lab is 2.
+Eight non-empty values. An empty `private subnet b` means Lab 2 Exercise 5 was skipped; do it first, because Step 10 places tasks across two Availability Zones.
 
 ---
 
 ### Step 2 - Confirm Labs 2 and 3 are still intact
 
-**Purpose**
-
-A week may have passed. This lab builds on top of nine resources from two previous labs; check they
-are there and still configured correctly before adding anything.
-
-**Run from**
-
-```text
-aws-floci-course/
-```
-
-**Command**
+This lab builds on resources from two previous labs; check they still exist and are configured correctly.
 
 ```bash
 ./scripts/utilities/verify-lab-02.sh
@@ -420,37 +278,16 @@ PASS=33  FAIL=0
 PASS=36  FAIL=0
 ```
 
-**Verify**
+`FAIL=0` twice. Fix failures under `== Environment ==` first; resource failures below them are usually a consequence. Two failures would break this lab silently:
 
-`FAIL=0` twice. Anything else stops this lab, and the order matters: failures under the
-`== Environment ==` heading are the real problem, and every resource failure below them is a
-consequence. Fix the environment first.
-
-Two specific failures would ruin this lab silently rather than loudly:
-
-- **`private rt has NO route to an internet gateway`** failing would mean the private subnets are not
-  private, and Step 10's whole argument collapses.
-- **`usms-web-01 carries usms-app-sg`** failing would mean Step 8's group reference points at a group
-  nothing uses, and Exercise 5's loop-closing check would be meaningless.
+- **`private rt has NO route to an internet gateway`**: the private subnets would not be private, and Step 10's argument collapses.
+- **`usms-web-01 carries usms-app-sg`**: Step 8's group reference would point at a group nothing uses.
 
 ---
 
 ### Step 3 - Probe what this Floci build actually supports
 
-**Purpose**
-
-Application Auto Scaling - the service Lab 06 puts this service under - may be absent from your build
-entirely. Rather than discovering that in Lab 06, find out now, and find out which of three paths you
-are on. This is the same principle as Lab 1's storage check: name the limitation before it costs you an
-hour, not afterwards.
-
-**Run from**
-
-```text
-aws-floci-course/
-```
-
-**Command**
+Find out now, not in Lab 06, whether your build supports ECS and Application Auto Scaling.
 
 ```bash
 probe() {
@@ -477,18 +314,8 @@ echo "== CloudWatch Logs =="
 probe "logs describe-log-groups"         "aws logs describe-log-groups"
 ```
 
-**What the command does**
-
-`probe` runs a harmless read or a skeleton generation and reports whether the CLI got an answer.
-Two of the commands are expected to fail on their *arguments* rather than on support -
-`describe-services --cluster probe` names a cluster that does not exist - so read the result as
-"the service answered me at all", not "the call succeeded". A completely unsupported service returns
-a connection or `InvalidAction` error, which is a different failure from `ClusterNotFoundException`.
-
-`--max-items 1` is new here. It is the AWS CLI's client-side pagination control: the CLI keeps calling
-the API until it has that many items and then stops, returning a `NextToken` you can pass back as
-`--starting-token`. On a real account with 4,000 alarms this is the difference between a two-second
-command and a two-minute one.
+- `probe` runs a harmless read and reports whether the service answered at all. `describe-services --cluster probe` names a cluster that does not exist; `ClusterNotFoundException` still counts as "answered". An unsupported service returns a connection or `InvalidAction` error.
+- `--max-items 1` is new: client-side pagination. The CLI stops after that many items and returns a `NextToken` you can pass back as `--starting-token`.
 
 **Expected result**
 
@@ -511,29 +338,20 @@ logs describe-log-groups                       SUPPORTED
 
 > Example output - this is the best case. Yours may differ, and that is the point of running it.
 
-**Verify**
-
-Work out which path you are on and write it at the top of `notes/lab-04-notes.md`, because your lab
-report needs to say so:
+Write your path at the top of `notes/lab-04-notes.md`:
 
 | Path | If | What changes |
 | --- | --- | --- |
-| **A - full** | ECS and Application Auto Scaling both supported | Do every step in this lab as written; Lab 06 will also have full support for its scaling policies |
-| **B - ECS only** | ECS supported, Application Auto Scaling not | Every step in this lab is ECS-only and is unaffected - the limitation does not surface until Lab 06. Record it here anyway, because Lab 06 reads this exact recording and gives you a documented fallback for exactly this situation |
-| **C - neither** | ECS not supported | Stop and tell your instructor. Do the paper capacity-plan design in Exercise 4 instead, which is the part of this lab that does not need an emulator |
+| **A - full** | ECS and Application Auto Scaling both supported | Do every step as written; Lab 06 has full support too |
+| **B - ECS only** | ECS supported, Application Auto Scaling not | Nothing in this lab changes. Record it anyway: Lab 06 reads this recording and gives a documented fallback |
+| **C - neither** | ECS not supported | Stop and tell your instructor. Do the paper capacity plan in Exercise 4 instead |
 
 !!! note "Floci Limitation - Application Auto Scaling support is build-dependent"
-    Some Floci builds implement the ECS API but not `application-autoscaling`, and some implement
-    `register-scalable-target` but never actually evaluate a policy - the objects are stored and
-    returned correctly, and nothing ever changes a desired count.
+    Some Floci builds implement ECS but not `application-autoscaling`, or store scaling objects without ever evaluating a policy.
 
-    Real AWS runs Application Auto Scaling as a continuously evaluating control loop: alarms are
-    assessed every period, policies fire, and `describe-scaling-activities` accumulates a genuine
-    audit trail of every capacity change with its cause.
+    Real AWS runs Application Auto Scaling as a continuously evaluating control loop, with an audit trail in `describe-scaling-activities`.
 
-    Take this away regardless, and carry it into Lab 06: the **shape** of a scaling configuration is
-    what you are being assessed on there, and the shape is fully observable even when a policy never
-    fires. A policy you can read and defend is worth more than a policy that happened to fire once.
+    Carry this into Lab 06: the **shape** of a scaling configuration is what you are assessed on, and it is observable even when a policy never fires.
 
 **Checkpoint 1**
 
@@ -547,87 +365,24 @@ Ready to build
 
 ---
 
-### Interlude - what ECS actually is, in four objects
+!!! info "ECS in four objects, and Fargate sizing"
+    A **cluster** is a namespace, not a machine. A **task definition** is an immutable, versioned blueprint (`usms-enrolment:1`, `:2`); you never edit a revision, you register a new one. A **task** is one running copy of it. A **service** keeps `runningCount` equal to `desiredCount`. **Auto scaling only ever changes `desiredCount`**; the service does the rest. See [tasks, services and the reconciliation loop](../unit2/topic2.md#tasks-services-and-the-reconciliation-loop) and [Fargate](../unit2/topic2.md#aws-fargate).
 
-Four nouns, and keeping them apart makes the rest of this lab, and Lab 06 after it, easy. Students who
-conflate them get stuck in Lab 06 asking why they cannot scale a task definition.
+    Fargate removes the instances, not the network: an `awsvpc` task gets its own network interface in your subnet, with your security group, obeying your route tables. CPU and memory must be a valid pair, written as **strings** in the JSON:
 
-**A cluster** is a namespace. That is very nearly all it is. On Fargate it holds no servers, has no
-capacity of its own, and costs nothing. It exists so that services and tasks have somewhere to be
-grouped, and so that IAM policies and metrics can be scoped to a group. A cluster is not a machine.
+    | CPU | Valid memory |
+    | --- | --- |
+    | 256 (.25 vCPU) | 512, 1024, 2048 MiB |
+    | 512 (.5 vCPU) | 1024 to 4096 MiB, in 1024 steps |
+    | 1024 (1 vCPU) | 2048 to 8192 MiB, in 1024 steps |
+    | 2048 (2 vCPU) | 4096 to 16384 MiB, in 1024 steps |
+    | 4096 (4 vCPU) | 8192 to 30720 MiB, in 1024 steps |
 
-**A task definition** is a versioned, immutable blueprint: which container images to run, how much CPU
-and memory to give them, which ports they expose, which roles they assume, where their logs go. It is
-registered as a **family** with **revisions** - `usms-enrolment:1`, `usms-enrolment:2` - and you can
-never edit a revision, only register a new one. It is the direct analogue of an AMI in Lab 3: a
-template, not a running thing.
-
-**A task** is one running instantiation of a task definition. It has an ID, a status, an elastic
-network interface with a private address from your subnet, and a lifetime. If it exits, it is gone -
-nothing brings it back.
-
-**A service** is the thing that brings it back. A service is a controller with one job: keep
-`runningCount` equal to `desiredCount`. If a task dies, the service starts another. If you change
-`desiredCount`, the service starts or stops tasks until reality matches.
-
-That last sentence is the whole reason this lab exists. **Auto scaling changes `desiredCount`. It does
-nothing else.** It does not start tasks, it does not talk to containers, it does not know what your
-application does. It moves one integer, and the service does the rest.
-
-```text
-task definition   usms-enrolment:1        the blueprint      (immutable, versioned)
-       |
-       | service instantiates it N times
-       v
-service  usms-enrolment-svc               the controller
-       |   desiredCount = 2   <---------- auto scaling writes HERE, and nowhere else
-       |   runningCount = 2   <---------- the service makes this catch up
-       v
-tasks    a1b2c3...  d4e5f6...             the running containers
-```
-
-### Fargate, and what it does and does not remove
-
-The other launch type is `EC2`, where you run a fleet of EC2 instances with the ECS agent on them and
-ECS places tasks onto whichever instance has room. That is a real and common choice, and it means you
-patch, scale and pay for those instances.
-
-`FARGATE` removes the instances. You state CPU and memory per task, AWS finds somewhere to run it, and
-you pay per task per second. What Fargate **does not** remove is everything in Lab 2: a Fargate task
-in `awsvpc` mode gets its own elastic network interface, in your subnet, with your security group, and
-it obeys your route tables exactly as an EC2 instance does. That is why this lab needs Lab 2 and
-cannot skip it.
-
-The valid Fargate CPU and memory combinations are constrained, not arbitrary:
-
-| CPU | Valid memory |
-| --- | --- |
-| 256 (.25 vCPU) | 512, 1024, 2048 MiB |
-| 512 (.5 vCPU) | 1024 to 4096 MiB, in 1024 steps |
-| 1024 (1 vCPU) | 2048 to 8192 MiB, in 1024 steps |
-| 2048 (2 vCPU) | 4096 to 16384 MiB, in 1024 steps |
-| 4096 (4 vCPU) | 8192 to 30720 MiB, in 1024 steps |
-
-We use `256`/`512`, the smallest, because a scaling lab wants many small tasks rather than a few large
-ones. Note that the values are **strings** in the task definition JSON, not numbers. Passing `256`
-unquoted is a validation error that names a type rather than the field, and it is a five-minute
-mistake to find.
-
----
+    This lab uses `256`/`512`, the smallest pair.
 
 ### Step 4 - Create the ECS cluster, as the developer role
 
-**Purpose**
-
-Create the namespace everything else in this lab lives in. We do it while holding
-`usms-developer-role`, exactly as Lab 2 Step 3 did, because doing the first build action of a lab as
-the least-privileged identity is the habit this course wants you to leave with.
-
-**Run from**
-
-```text
-aws-floci-course/
-```
+Create the namespace everything else lives in, while holding `usms-developer-role` as Lab 2 Step 3 did.
 
 **Command - part 1, assume the role**
 
@@ -650,10 +405,7 @@ aws sts get-caller-identity --no-cli-pager
 ```
 
 !!! warning "These three variables now outrank your profile"
-    Environment credentials sit above named profiles in the AWS CLI's resolution order. Until part 3
-    unsets them, every `aws` command in this terminal runs as the assumed role whatever `--profile`
-    you pass - and the role's session is one hour, so leaving them set means `ExpiredToken` errors
-    later in this session that look nothing like their cause.
+    Environment credentials sit above named profiles in the CLI's resolution order. Until part 3 unsets them, every `aws` command runs as the assumed role, and after the one-hour session you get `ExpiredToken` errors that look nothing like their cause.
 
 **Expected result**
 
@@ -682,28 +434,8 @@ CLUSTER_ARN=$(aws ecs create-cluster \
 echo "CLUSTER_ARN = $CLUSTER_ARN"
 ```
 
-**What the command does**
-
-```text
-aws
- └── ecs                     the SERVICE - Elastic Container Service
-      └── create-cluster     the OPERATION
-           ├── --cluster-name   the name; also the last part of the cluster's ARN
-           ├── --settings       account-or-cluster level switches; containerInsights is the one
-           │                    that matters, because it produces the CPU metric this lab scales on
-           └── --tags           NOTE THE CASE
-```
-
-**Read `--tags` carefully, because ECS is inconsistent with EC2.** Every EC2 call in Labs 2 and 3
-used `Key=Name,Value=x` with capitals. ECS uses `key=Name,value=x` in lower case. CloudWatch Logs uses
-a plain map, `Project=USMS`. Application Auto Scaling uses a map too. There is no rule to derive; the
-services were built by different teams at different times. The lesson is not to memorise four
-conventions - it is to run `aws <service> <operation> help` and read the `--tags` synopsis whenever you
-tag something in a service you have not tagged before.
-
-`containerInsights` is what makes ECS publish per-service CPU and memory utilisation into the
-`AWS/ECS` CloudWatch namespace. Lab 06's target tracking policy consumes exactly that metric, so
-turning it on now is not decoration - that later policy has nothing to read without it.
+- `--settings name=containerInsights,value=enabled` publishes per-service CPU and memory to the `AWS/ECS` namespace; Lab 06's target tracking policy reads that metric.
+- `--tags` is **lower case** (`key=`, `value=`) in ECS, unlike EC2's `Key=`/`Value=`. Services differ; when tagging in a new service, read the `--tags` synopsis in `aws <service> <operation> help`.
 
 **Expected result**
 
@@ -730,29 +462,13 @@ aws ecs describe-clusters \
   --output json
 ```
 
-**What to look for:** `Status` is `ACTIVE`, `Services` and `Tasks` are both `0`, and `Settings`
-contains `containerInsights` with value `enabled`. If `Settings` is empty or absent, note it as a
-limitation - Lab 06's target tracking policy will then have no CPU metric to track, and a custom
-metric becomes the only working scaling signal, which is a genuinely useful thing to have discovered.
+`Status` is `ACTIVE`, `Services` and `Tasks` are `0`, and `Settings` contains `containerInsights` = `enabled`. If `Settings` is empty, record it as a limitation: Lab 06 would then need a custom metric.
 
 ---
 
 ### Step 5 - Create the log group the tasks will write to
 
-**Purpose**
-
-A container's stdout goes nowhere unless you tell it where. The `awslogs` driver in Step 9's task
-definition names a log group, and **the group must exist first** - ECS does not create it for you, and
-a task whose log group is missing fails to start with a message about the log driver rather than about
-the group. Creating it now avoids that.
-
-**Run from**
-
-```text
-aws-floci-course/
-```
-
-**Command**
+The `awslogs` driver in Step 9 names a log group, and ECS does not create it: a missing group makes the task fail to start with a log-driver error.
 
 ```bash
 LOG_GROUP="/usms/ecs/enrolment"
@@ -771,19 +487,9 @@ aws logs describe-log-groups \
   --output table
 ```
 
-**What the command does**
-
-Log group names conventionally start with a slash and use slashes as a hierarchy -
-`/usms/ecs/enrolment`, `/aws/lambda/<function>`. It is only a convention, but every tool that groups
-log groups relies on it, so follow it.
-
-`put-retention-policy` is a separate call because `create-log-group` has no retention parameter. **A
-log group with no retention policy keeps its data forever and bills forever.** On real AWS this is the
-most common quiet cost in an account: nobody notices ten years of debug logs. Seven days is right for
-a course; production values are usually 30 to 90 for application logs and much longer for audit logs.
-
-`--tags` here is a **map**, comma-separated `key=value` pairs with no `Key=`/`Value=` wrappers. Third
-convention, third service, as promised in Step 4.
+- Log group names use slashes as a hierarchy by convention (`/usms/ecs/enrolment`).
+- `put-retention-policy` is a separate call; without it a group keeps (and bills for) data forever. See [retention](../unit7/topic2.md#retention).
+- CloudWatch Logs `--tags` is a plain map (`Project=USMS`), a third tag convention.
 
 **Expected result**
 
@@ -799,48 +505,23 @@ convention, third service, as promised in Step 4.
 
 > Example output - `Bytes` is 0 because nothing has logged yet.
 
-**Verify**
-
-One row, `Retention` exactly `7`. If `Retention` is `None`, `put-retention-policy` did not take -
-re-run it. A `None` here is not fatal for the lab but it is a finding for your report, because the
-lesson of this step is that the retention is a separate decision that is easy to forget.
+One row, `Retention` exactly `7`. If it is `None`, re-run `put-retention-policy`; if it still shows `None`, record it as a finding.
 
 ---
 
-### Interlude - two ECS roles, and which is which
+!!! info "Two ECS roles, and which is which"
+    Both trust `ecs-tasks.amazonaws.com`; the difference is who uses them and when.
 
-This is the single most-confused pair of objects in ECS, and getting them backwards produces errors
-that point at the wrong thing. Learn the distinction here rather than at Step 9.
+    | | Task **execution** role (`executionRoleArn`) | Task role (`taskRoleArn`) |
+    | --- | --- | --- |
+    | Used by | ECS/Fargate, **before** your container starts: image pull, log stream, secrets | Your application code, **inside** the container: S3, DynamoDB, SQS |
+    | Symptom if wrong | The task **never starts**; `stoppedReason` mentions the image pull or logs | The task starts, then the code gets `AccessDenied` |
 
-| | Task **execution** role | Task role |
-| --- | --- | --- |
-| Assumed by | The ECS agent / Fargate infrastructure, **before** your container starts | Your application code, **inside** the running container |
-| Used for | Pulling the container image, writing the log stream, reading secrets named in the task definition | Whatever the application does: S3, DynamoDB, SQS |
-| Trust principal | `ecs-tasks.amazonaws.com` | `ecs-tasks.amazonaws.com` - the same |
-| Field in the task definition | `executionRoleArn` | `taskRoleArn` |
-| Failure symptom if missing or wrong | The task **never starts**; `stoppedReason` mentions the image pull or the logs | The task starts fine and the application gets `AccessDenied` at runtime |
-
-The trust policy is identical for both, which is exactly why they get conflated. The difference is
-not who may assume them - it is *who does* and *when*.
-
-The failure-symptom row is the practical value of the table. "My task will not start" points at the
-execution role. "My task started and then my code got AccessDenied" points at the task role. Being
-able to say which one from the symptom alone saves you half an hour every time.
-
----
+    See [ECS security considerations](../unit2/topic2.md#security-considerations).
 
 ### Step 6 - Create the task execution role
 
-**Purpose**
-
-Fargate needs an identity to pull the image and open the log stream before your code exists. This is
-that identity.
-
-**Run from**
-
-```text
-aws-floci-course/
-```
+Fargate needs an identity to pull the image and open the log stream before your code exists.
 
 **Command - part 1, the trust policy**
 
@@ -862,18 +543,8 @@ EOF
 python3 -m json.tool policies/trust-ecs-tasks.json > /dev/null && echo "valid JSON"
 ```
 
-!!! warning "Heredoc quoting - the rule restated because this is where it matters"
-    This heredoc is `<< 'EOF'`, **quoted**, because the document must reach disk exactly as written.
-    Nothing in it should be expanded by your shell. Every policy document in this course is written
-    this way.
-
-    Contrast Step 9, where the task definition **must** be written with an unquoted `<< EOF` because
-    it contains `$EXEC_ROLE_ARN` and three other variables that have to become real values at write
-    time.
-
-    The rule is always the same question: *do I want this expanded now, or later?* Getting it
-    backwards fails silently in one direction and loudly in the other, which is why the loud direction
-    is the safer mistake.
+!!! warning "Heredoc quoting"
+    `<< 'EOF'` (quoted) writes the policy exactly as shown, with no expansion. Step 9's task definition uses unquoted `<< EOF` because its variables must become real values at write time. Ask: *do I want this expanded now, or later?*
 
 **Command - part 2, create the role**
 
@@ -938,23 +609,9 @@ aws iam attach-role-policy \
 echo "EXEC_POLICY_ARN = $EXEC_POLICY_ARN"
 ```
 
-**What the command does**
-
-Two things in that document are worth arguing about, and you should be able to argue both.
-
-`ecr:GetAuthorizationToken` has `"Resource": "*"` because it genuinely takes no resource - it is an
-account-level call that returns a registry credential. Some actions are like this, and writing a
-narrower ARN for them produces a policy that denies everything with no error message. Check the
-service authorization reference before assuming an action is resource-scoped.
-
-The `logs` statement, by contrast, is scoped to **exactly one log group**, with a trailing `:*` to
-cover the log streams inside it. AWS's own managed
-`AmazonECSTaskExecutionRolePolicy` uses `"Resource": "*"` for logs - which means any task using it can
-write into any log group in the account, including one holding audit data. Writing it out yourself
-costs four lines and is the correct choice. The `us-east-1` and `000000000000` in the ARN are hard
-coded here because a quoted heredoc cannot expand variables; both values are fixed by
-`configs/course.env` for the whole course, and Exercise 3 asks you to build the same document with the
-variables substituted properly.
+- `ecr:GetAuthorizationToken` takes no resource, so `"Resource": "*"` is correct for it; a narrower ARN would silently deny.
+- The `logs` statement is scoped to **one log group** (`:*` covers its streams). AWS's managed `AmazonECSTaskExecutionRolePolicy` allows writing to any log group.
+- Region and account are hard-coded because a quoted heredoc cannot expand variables; Exercise 3 asks you to build it with variables.
 
 **Expected result**
 
@@ -975,27 +632,13 @@ aws iam list-attached-role-policies --role-name "$EXEC_ROLE_NAME" \
   --query 'AttachedPolicies[].PolicyName' --output text
 ```
 
-**What to look for:** the principal is `{"Service": "ecs-tasks.amazonaws.com"}` - not
-`ecs.amazonaws.com`, which is a different service principal for a different purpose and is the single
-most common typo in ECS. The attached policy list contains `USMSECSTaskExecution`.
+The principal is `{"Service": "ecs-tasks.amazonaws.com"}` (not `ecs.amazonaws.com`, the most common ECS typo), and the attached list contains `USMSECSTaskExecution`.
 
 ---
 
 ### Step 7 - Create the task role, and reuse Lab 1's policy on it
 
-**Purpose**
-
-This is the container's own identity - the one the application code uses. And it is the moment the
-policy Lab 1 wrote for an EC2 instance turns out to work, unchanged, for a completely different kind
-of compute.
-
-**Run from**
-
-```text
-aws-floci-course/
-```
-
-**Command**
+The container's own identity, holding the policy Lab 1 wrote for an EC2 instance, unchanged.
 
 ```bash
 TASK_ROLE_NAME="usms-ecs-task-role"
@@ -1018,11 +661,7 @@ aws iam list-attached-role-policies --role-name "$TASK_ROLE_NAME" \
   --query 'AttachedPolicies[].{Policy:PolicyName,Arn:PolicyArn}' --output table
 ```
 
-**What the command does**
-
-`$USMS_POLICY_S3_RW` comes from `configs/lab-01.env` and holds `USMSStudentDataReadWrite`. The same
-trust policy file is reused from Step 6, because both ECS roles are assumed by the same service
-principal - that is not laziness, it is the correct document for both.
+`$USMS_POLICY_S3_RW` comes from `configs/lab-01.env` (`USMSStudentDataReadWrite`). The trust file from Step 6 is reused because both roles trust the same principal.
 
 **Expected result**
 
@@ -1037,7 +676,7 @@ TASK_ROLE_ARN = arn:aws:iam::000000000000:role/usms-ecs-task-role
 +----------------------------------------------+-------------------------+
 ```
 
-**Verify - and read the policy, because this is the teaching moment**
+**Verify - and read the policy**
 
 ```bash
 POLICY_ARN="arn:aws:iam::${ACCOUNT_ID}:policy/${USMS_POLICY_S3_RW}"
@@ -1048,12 +687,7 @@ aws iam get-policy-version --policy-arn "$POLICY_ARN" --version-id "$DEFAULT_VER
   --query 'PolicyVersion.Document' --output json | tee outputs/lab-04-task-role-policy.json
 ```
 
-Now compare that with what Lab 3 Step 11 printed. It is the same document. It grants `s3:GetObject`,
-`s3:PutObject` and `s3:ListBucket` on `arn:aws:s3:::usms-student-data` and its objects, and denies
-`s3:DeleteBucket`.
-
-Two entirely different compute services - an EC2 instance and a Fargate task - now hold the same
-permission, delivered by two different mechanisms:
+It is the same document Lab 3 Step 11 printed: `s3:GetObject`, `s3:PutObject` and `s3:ListBucket` on `arn:aws:s3:::usms-student-data` and its objects, and a deny on `s3:DeleteBucket`. Two kinds of compute now hold it through two mechanisms:
 
 ```text
 Lab 03   usms-web-01 ── instance profile ── usms-ec2-app-role ──┐
@@ -1064,22 +698,12 @@ Lab 04   task         ── taskRoleArn      ── usms-ecs-task-role ─┘
                                                               (does not exist yet - Lab 09)
 ```
 
-Neither of them has a key on disk. Neither of them needed the policy changed. Both of them start
-working at the same instant Lab 10 runs `create-bucket`. Write that into `notes/lab-04-notes.md` now -
-it is Review Question 2.
+Neither has a key on disk, and both start working when Lab 10 runs `create-bucket`. Write that in `notes/lab-04-notes.md`; it is Review Question 2.
 
 !!! note "Floci Limitation - the container cannot fetch its own credentials"
-    On real AWS, a Fargate task gets temporary credentials from a link-local endpoint whose address is
-    injected into the container as `AWS_CONTAINER_CREDENTIALS_RELATIVE_URI`. Every AWS SDK looks for
-    that variable with no configuration at all, which is the container equivalent of Lab 3's instance
-    metadata service. Credentials rotate automatically.
+    On real AWS a Fargate task gets rotating temporary credentials from an endpoint named in `AWS_CONTAINER_CREDENTIALS_RELATIVE_URI`, which every SDK finds automatically. Floci does not serve that endpoint to containers.
 
-    Floci does not serve that endpoint to task containers, so application code inside a task would not
-    find credentials.
-
-    The association you just built is nonetheless real and is what you are assessed on: the task
-    definition names the role, the role trusts the ECS service principal, and the role holds the
-    policy. That chain is fully observable through `describe-task-definition` and `iam get-role`.
+    The association is still real and is what you are assessed on: the task definition names the role, the role trusts the ECS principal, and the role holds the policy, all visible through `describe-task-definition` and `iam get-role`.
 
 **Checkpoint 2**
 
@@ -1096,19 +720,7 @@ usms-ecs-cluster  (ACTIVE, 0 services, 0 tasks)
 
 ### Step 8 - Create the enrolment security group, sourced from the web tier's group
 
-**Purpose**
-
-A Fargate task in `awsvpc` mode has its own network interface and its own security group, exactly like
-an EC2 instance. The enrolment API must accept calls from the student portal and from nothing else -
-not from the internet, and not even from the rest of the VPC.
-
-**Run from**
-
-```text
-aws-floci-course/
-```
-
-**Command**
+An `awsvpc` task has its own security group. The enrolment API accepts calls from the web tier only.
 
 ```bash
 ENROLMENT_SG=$(aws ec2 create-security-group \
@@ -1144,20 +756,8 @@ aws ec2 authorize-security-group-ingress \
   --output text
 ```
 
-**What the command does**
-
-`<< EOF`, unquoted, because `$USMS_APP_SG` must become a real group ID as the file is written. If you
-see the literal text `$USMS_APP_SG` in the file, you used the wrong form and the API will reject it
-with a message about an invalid group ID that says nothing about quoting.
-
-The rule names `usms-app-sg` as the source rather than `10.0.1.0/24`, for the reasons Lab 2 Step 15
-gave - and here there is a second reason that did not apply then. **The tasks have no stable
-addresses.** Auto scaling will create and destroy network interfaces in two subnets throughout this
-lab, so a CIDR-based rule on the *caller* side would have to be rewritten every time capacity changed.
-A group reference is the only expression of this requirement that survives scaling at all.
-
-That is worth stating plainly: group-referenced security group rules are not merely tidier in an
-auto-scaling system, they are close to mandatory.
+- `<< EOF`, unquoted, so `$USMS_APP_SG` becomes a real ID. A literal `$USMS_APP_SG` in the file means the wrong form; the API then reports an invalid group ID.
+- The source is a group, not `10.0.1.0/24` (Lab 2 Step 15), and tasks have no stable addresses, so group references are close to mandatory once task counts change. See [security group referencing](../unit1/topic6.md#security-group-referencing-the-cloud-native-idiom).
 
 **Expected result**
 
@@ -1176,25 +776,13 @@ aws ec2 describe-security-groups --group-ids "$ENROLMENT_SG" \
   --output json
 ```
 
-**What to look for:** one inbound rule on port 80 whose `FromGroup` is your `$USMS_APP_SG` and whose
-`FromCIDR` is `null`. If `FromCIDR` has a value you wrote an address-based rule and the point of the
-step was missed. `OutboundRules` is `1` - the allow-all-outbound rule you never wrote, and which is
-about to matter a great deal in Step 10.
+One inbound rule on port 80, `FromGroup` = `$USMS_APP_SG`, `FromCIDR` = `null`. `OutboundRules` is `1`: the default allow-all egress, which Step 10 relies on.
 
 ---
 
 ### Step 9 - Write and register the task definition
 
-**Purpose**
-
-The blueprint. Everything the two previous steps produced gets referenced here, and this is the
-document a code reviewer would actually read to understand what the enrolment service is.
-
-**Run from**
-
-```text
-aws-floci-course/
-```
+The blueprint that references everything Steps 5 to 8 produced.
 
 **Command - part 1, write the document**
 
@@ -1246,42 +834,25 @@ python3 -m json.tool templates/lab-04-taskdef.json > /dev/null \
 grep -c '\$' templates/lab-04-taskdef.json
 ```
 
-**What the command does**
-
-Unquoted heredoc, five variables substituted. The `grep -c '\$'` at the end counts remaining dollar
-signs and **must print `0`**. Any other number means a variable was empty or the heredoc was quoted,
-and you are about to register a task definition that names a role ARN of `$EXEC_ROLE_ARN`.
-
-Field by field, because most of these are decisions:
+Unquoted heredoc, so the variables are substituted. `grep -c '\$'` **must print `0`**; anything else means a variable was empty or the heredoc was quoted.
 
 | Field | Why this value |
 | --- | --- |
-| `family` | The name without a revision. Registering again produces `usms-enrolment:2`, and revision 1 remains readable forever |
-| `networkMode` | `awsvpc` is **required** for Fargate. It gives the task its own ENI, private address, and security group - which is what lets Step 8's rule apply to it at all |
-| `requiresCompatibilities` | Declares the launch types this definition is valid for. Getting it wrong produces a validation error at registration, which is the right time |
-| `cpu` / `memory` | **Strings, not numbers.** One of the valid Fargate pairs from the interlude |
+| `family` | The name without a revision. Registering again produces `usms-enrolment:2`; revision 1 stays readable |
+| `networkMode` | `awsvpc` is **required** for Fargate: own ENI, private address and security group (Step 8) |
+| `requiresCompatibilities` | Launch types this definition is valid for; wrong values fail at registration |
+| `cpu` / `memory` | **Strings, not numbers.** A valid Fargate pair from the box before Step 4 |
 | `executionRoleArn` | Step 6's role. Pulls the image, opens the log stream |
 | `taskRoleArn` | Step 7's role. What the application code is |
 | `image` | A public registry reference. See the note below |
-| `essential` | `true` means: if this container exits, stop the whole task. With one container it is always `true`; with a sidecar, the sidecar is usually `false` |
-| `logConfiguration` | `awslogs` sends stdout and stderr to the group from Step 5. `awslogs-stream-prefix` is what makes each task's stream identifiable |
-| `tags` | Lower-case `key`/`value`, because this is the ECS API - the third convention from Step 4 |
+| `essential` | `true`: if this container exits, the whole task stops |
+| `logConfiguration` | `awslogs` sends stdout and stderr to Step 5's group; `awslogs-stream-prefix` identifies each task's stream |
+| `tags` | Lower-case `key`/`value`, because this is the ECS API |
 
 !!! note "Floci Limitation - the container image is a stand-in"
-    The real USMS enrolment service would be your own application, built into an image and pushed to
-    a private ECR repository - which would mean uncommenting the `5100-5104` port range in
-    `docker-compose.yml` and re-running `floci-up.sh`. This lab deliberately does not, because
-    publishing ports you do not need makes Docker Desktop crawl and this lab is about scaling, not
-    about registries.
+    The real service would be your own image in a private ECR repository, which would need the `5100-5104` port range uncommented. This lab does not need it, so `public.ecr.aws/nginx/nginx:stable-alpine` is a small real placeholder; nothing sends it a request.
 
-    `public.ecr.aws/nginx/nginx:stable-alpine` is therefore a placeholder: a real, small, public image
-    that a real Fargate task could genuinely pull. What it serves is irrelevant - nothing in this lab
-    sends it a request.
-
-    Depending on your Floci build, the image may be pulled and run as a Docker container, or the task
-    may never leave `PROVISIONING`. Both are fine. Every proof in this lab is built on
-    `desiredCount`, which is a control-plane number, so nothing here depends on a container actually
-    running.
+    Depending on your build, the task may run as a Docker container or never leave `PROVISIONING`. Both are fine: every proof here uses `desiredCount`, a control-plane number.
 
 **Command - part 2, register it**
 
@@ -1319,14 +890,7 @@ aws ecs describe-task-definition --task-definition usms-enrolment \
   --output json
 ```
 
-**What to look for:** `Status` is `ACTIVE`, `Network` is `awsvpc`, and `Exec` and `Task` are two
-**different** ARNs. If they are the same, you assigned one role to both fields - the task would start
-(the execution role's permissions cover the pull) and then the application would get `AccessDenied` on
-S3, which is precisely the failure the interlude's table predicts.
-
-Note the quoting in that query: `options."awslogs-group"` needs double quotes inside the JMESPath
-expression because the key contains a hyphen, which JMESPath would otherwise read as subtraction. That
-is a genuinely new pattern and it appears in Appendix B.
+`Status` is `ACTIVE`, `Network` is `awsvpc`, and `Exec` and `Task` are two **different** ARNs (the same ARN in both means the code would get `AccessDenied` on S3). `options."awslogs-group"` needs double quotes because a hyphen would otherwise be read as subtraction (see the Appendix).
 
 **Checkpoint 3**
 
@@ -1343,19 +907,7 @@ usms-enrolment:1   ACTIVE
 
 ### Step 10 - Create the service in Lab 2's private subnets
 
-**Purpose**
-
-The service is the controller that keeps `runningCount` matching `desiredCount`, and `desiredCount` is
-the only thing auto scaling will ever touch. Creating it is also the moment Lab 2's NAT gateway stops
-being an object and becomes load-bearing.
-
-**Run from**
-
-```text
-aws-floci-course/
-```
-
-**Command**
+The service keeps `runningCount` matching `desiredCount`, and its tasks make Lab 2's NAT gateway load-bearing.
 
 ```bash
 SERVICE_NAME="usms-enrolment-svc"
@@ -1376,35 +928,22 @@ SERVICE_ARN=$(aws ecs create-service \
 echo "SERVICE_ARN = $SERVICE_ARN"
 ```
 
-**What the command does**
-
-`--network-configuration` is the awkward part. It is shorthand for a nested structure, and the shape
-is unforgiving:
+`--network-configuration` is shorthand for a nested structure: no spaces, square brackets for lists, **no quotes around IDs**:
 
 ```text
 awsvpcConfiguration={subnets=[<id>,<id>],securityGroups=[<id>],assignPublicIp=DISABLED}
 ```
 
-No spaces anywhere. Square brackets for the lists, and **no quotes around the individual IDs** -
-adding them is a parse error. If it fights you, generate the skeleton and use a document instead:
+If it fights you, generate a skeleton and use a document instead:
 
 ```bash
 aws ecs create-service --generate-cli-skeleton > outputs/lab-04-create-service-skeleton.json
 ```
 
-`assignPublicIp=DISABLED` is the correct value for a private subnet, and it is also the default. State
-it explicitly anyway: this is a security-relevant setting, and a reader should not have to know the
-default to know what you meant. Setting it to `ENABLED` in a private subnet gives the task a public
-address it cannot use, and on real AWS bills you for it.
+- `assignPublicIp=DISABLED` is the default, stated explicitly because it is security-relevant.
+- `--enable-ecs-managed-tags --propagate-tags SERVICE` copies the service's tags onto every task it launches, including tasks created later by auto scaling.
 
-`--enable-ecs-managed-tags --propagate-tags SERVICE` makes ECS copy the service's tags onto every
-task it launches. Without it, tasks created by auto scaling are untagged - and untagged resources that
-appear and disappear on their own are exactly the ones you most want tagged, because they are the ones
-nobody created by hand.
-
-**Now the part worth stopping on.** The tasks are in `usms-private-subnet-a` and
-`usms-private-subnet-b`. Those subnets have no route to `usms-igw`. The task must nonetheless reach
-`public.ecr.aws` to pull its image. How?
+The tasks are in private subnets with no route to `usms-igw`, yet must reach `public.ecr.aws`:
 
 ```text
 Fargate task in usms-private-subnet-a
@@ -1417,15 +956,7 @@ Fargate task in usms-private-subnet-a
   -> public.ecr.aws
 ```
 
-Three Lab 2 resources are on that path, and the lab that created them could not demonstrate that any
-of them mattered. This is where they matter. If Lab 2's NAT gateway did not exist, or the private route
-table's default route pointed nowhere, this service would create successfully and every task would fail
-to start with an image-pull timeout - a failure whose cause is four steps and one lab away from its
-symptom.
-
-That is also the practical answer to "why would anyone use a VPC endpoint": the alternative on real AWS
-is paying NAT data-processing charges to pull the same image layers on every scale-out event, for the
-lifetime of the service.
+Without the NAT gateway or the private default route, the service would create successfully and every task would fail with an image-pull timeout. The S3 endpoint also avoids NAT data charges on layer pulls. See [NAT gateway](../unit1/topic6.md#nat-gateway) and [VPC endpoints](../unit1/topic6.md#vpc-endpoints).
 
 **Expected result**
 
@@ -1456,27 +987,13 @@ for i in $(seq 1 12); do
 done
 ```
 
-`services-stable` polls until `runningCount` equals `desiredCount` and no deployment is in progress.
-On real AWS that is 40 seconds or so for two small Fargate tasks. On Floci it is immediate, or never -
-if `runningCount` stays at 0 while `desiredCount` is 2, that is the "no containers behind the API"
-limitation and it does not block anything in this lab.
+`services-stable` waits until `runningCount` equals `desiredCount` with no deployment in progress (about 40 seconds on real AWS). On Floci it is immediate or never; `runningCount` stuck at 0 is the container limitation and does not block this lab.
 
 ---
 
 ### Step 11 - Read the service back, and learn the four numbers
 
-**Purpose**
-
-Four fields on a service tell you everything about its health, and knowing which is which is how you
-read a scaling event later. Learn them now, while they are all equal and boring.
-
-**Run from**
-
-```text
-aws-floci-course/
-```
-
-**Command**
+Four fields describe a service's health; learn them while they are all equal.
 
 ```bash
 aws ecs describe-services \
@@ -1497,16 +1014,12 @@ aws ecs describe-services \
   --output json
 ```
 
-**What the command does**
-
-The four numbers, and what each one being wrong means:
-
 | Field | Meaning | If it is not what you expect |
 | --- | --- | --- |
-| `desiredCount` | What you (or auto scaling) asked for | This is the **only** field auto scaling writes. If it is not moving, the policy is not firing |
-| `runningCount` | How many tasks are actually up | Lower than desired for a long time means tasks are failing to start - look at `stoppedReason` on a stopped task |
-| `pendingCount` | Tasks starting right now | Stuck above 0 means capacity or networking trouble; on real AWS, usually the image pull or the subnet's addresses |
-| `status` | `ACTIVE`, `DRAINING` or `INACTIVE` | `INACTIVE` means the service is deleted; it stays visible for a while afterwards |
+| `desiredCount` | What you (or auto scaling) asked for | The **only** field auto scaling writes. Not moving means the policy is not firing |
+| `runningCount` | Tasks actually up | Low for a long time means tasks fail to start; read `stoppedReason` |
+| `pendingCount` | Tasks starting now | Stuck above 0 means capacity or networking trouble (image pull, subnet addresses) |
+| `status` | `ACTIVE`, `DRAINING` or `INACTIVE` | `INACTIVE` means deleted; it stays visible for a while |
 
 **Expected result**
 
@@ -1543,12 +1056,7 @@ aws ecs describe-services --cluster "$CLUSTER_NAME" --services "$SERVICE_NAME" \
   --query 'services[0].events[0:3].[createdAt,message]' --output text
 ```
 
-**What to look for:** `Subnets` contains **two** subnet IDs, both private, and they match
-`$USMS_PRIVATE_SUBNET_A` and `$USMS_PRIVATE_SUBNET_B`. `PublicIP` is `DISABLED`. The `events` list is
-the service's own narration of what it has been doing, and it is the first place to look when
-`runningCount` will not rise - on real AWS the message names the reason directly.
-
-If `length(taskArns)` is 0 while `Desired` is 2, record it as the container limitation and continue.
+`Subnets` lists **two** private subnet IDs matching `$USMS_PRIVATE_SUBNET_A` and `$USMS_PRIVATE_SUBNET_B`, and `PublicIP` is `DISABLED`. The `events` list is the service's own narration and the first place to look when `runningCount` will not rise. If `length(taskArns)` is 0 while `Desired` is 2, record the container limitation and continue.
 
 ✏️ **Your turn**
 
@@ -1563,8 +1071,7 @@ you have just done by hand exactly what a scaling policy will do for you, so you
 what to look for when it happens on its own.
 ```
 
-Hint: `aws ecs update-service help` and look for `--desired-count`. The cluster and service must be
-named on every ECS call; there is no default cluster in this course's configuration.
+Hint: `aws ecs update-service help` and look for `--desired-count`; name the cluster and service on every call.
 
 **Checkpoint 4**
 
@@ -1583,22 +1090,7 @@ usms-ecs-cluster
 
 ### Step 12 - Write `configs/lab-04.env`
 
-**Purpose**
-
-Every shell variable in this terminal dies when you close it, and this lab created eleven things worth
-naming. Lab 05 needs the cluster, the service, the enrolment security group and the container name to
-attach a load balancer; Lab 06 needs the baseline desired count as the floor for the scalable target it
-registers; a later lab needs the task role to add a second principal to the bucket policy Lab 1 already
-wrote. Record all of it by lookup, not from the shell variables above, so that a populated value in the
-file is evidence the resource actually exists.
-
-**Run from**
-
-```text
-aws-floci-course/
-```
-
-**Command**
+Record every name and ARN by lookup, not from shell variables, so a populated value is evidence the resource exists. Lab 05 and Lab 06 source this file.
 
 ```bash
 cat > configs/lab-04.env << EOF
@@ -1650,18 +1142,8 @@ EOF
 grep -n 'export .*=$\|None' configs/lab-04.env || echo "all values populated"
 ```
 
-**What the command does**
-
-Unquoted heredoc - `<< EOF`, not `<< 'EOF'` - for the same reason as Lab 2 Step 24 and Lab 3 Step 22:
-every `$(...)` must run **now** and the resulting value must land on disk. Had this been quoted, the
-file would contain the text of nine API calls, and `source configs/lab-04.env` would re-run all of them
-in every new terminal you open.
-
-`USMS_ECS_DESIRED_BASELINE` is read back from the service rather than hard-coded as `2`, for the same
-reason Lab 05 reads back `USMS_SVC_GRACE_PERIOD` instead of hard-coding it: if Step 10 or the Step 11
-"Your turn" task left the count somewhere other than 2, the file records what is actually true rather
-than what the lab intended, and Lab 06 reads this exact value as the floor for the scalable target it
-registers.
+- Unquoted `<< EOF` so every `$(...)` runs now and the value lands on disk; quoted, `source` would re-run nine API calls in every new terminal.
+- `USMS_ECS_DESIRED_BASELINE` is read back, not hard-coded, so the file records what is true; Lab 06 uses it as the scalable target's floor.
 
 **Verify**
 
@@ -1681,25 +1163,13 @@ printf '%-26s %s\n' \
 grep -c '^export' configs/lab-04.env
 ```
 
-**What to look for:** `all values populated`, eight non-empty lines, and a count of **17** exported
-variables. `baseline desired` must read `2` - anything else means the Step 11 "Your turn" task left the
-count somewhere it should not have, and Lab 06 would then inherit the wrong floor. A `None` anywhere
-means a resource does not exist or a step did not take; find which, because catching it here is worth
-ten troubleshooting entries in Lab 05.
+`all values populated`, eight non-empty lines, and **17** exports. `baseline desired` must read `2`; anything else means the Step 11 "Your turn" left the count wrong. A `None` means a resource does not exist; find which before continuing.
 
 ---
 
 ### Step 13 - Commit
 
-**Purpose**
-
-Same discipline as every lab: look first, stage explicitly, then commit.
-
-**Run from**
-
-```text
-aws-floci-course/
-```
+Look first, stage explicitly, then commit.
 
 **Command - part 1, look before you add**
 
@@ -1710,14 +1180,12 @@ git check-ignore -v outputs/lab-04-assumed-role.json
 git ls-files outputs/
 ```
 
-**What to look for, before typing anything else:**
+Before typing anything else:
 
-- No path under `outputs/` appears in `git status --short`.
-- No `.env` at the repository root appears.
-- `configs/lab-04.env` **does** appear. It holds names and ARNs, not secrets.
-- `git check-ignore -v` names the file, the rule and the line number. **Silence there means the file is
-  not ignored** - stop and fix `.gitignore` before committing anything.
-- `git ls-files outputs/` lists `outputs/.gitkeep` and nothing else.
+- No path under `outputs/` and no root `.env` appears in `git status --short`.
+- `configs/lab-04.env` **does** appear (names and ARNs, not secrets).
+- `git check-ignore -v` names the file, rule and line. **Silence means the file is not ignored**; fix `.gitignore` first.
+- `git ls-files outputs/` lists only `outputs/.gitkeep`.
 
 **Expected result**
 
@@ -1747,12 +1215,7 @@ git commit -m "Lab 04: USMS enrolment service deployed on ECS Fargate - cluster,
 git log --oneline -5
 ```
 
-The `git add` names paths explicitly rather than using `git add -A`. That is not fussiness: `git add -A`
-stages whatever happens to be in the working tree, which is exactly how an un-ignored secret reaches a
-commit.
-
-The two script paths only exist after Section 9. If you commit before that, drop them from the
-`git add` line and add them in a second commit.
+Name paths explicitly rather than `git add -A`, which stages whatever is in the tree, including an un-ignored secret. The two script paths only exist after Section 8; if you commit before that, drop them and add them in a second commit.
 
 **Expected result**
 
@@ -1776,33 +1239,11 @@ Lab 04 recorded
 
 ---
 
-## 9. Verification
+## 8. Verification
 
-### 9.1 What this script checks that a naive one would not
+### 8.1 Build `scripts/utilities/verify-lab-04.sh`
 
-Four of the checks below are the ones worth having, and they are the reason a "does the service exist"
-script is not enough:
-
-- **`exec role and task role are DIFFERENT`** - the failure this catches produces a task that starts
-  correctly and then gets `AccessDenied` at runtime, hours later.
-- **`service spans TWO subnets`** - a service quietly narrowed to one subnet looks identical to a
-  healthy one until the Availability Zone it lives in has a bad day.
-- **`usms-enrolment-sg is sourced from usms-app-sg (not a CIDR)`** - a rule rewritten as a CIDR block
-  during a rushed fix would still pass a "does traffic flow" test and would already be wrong the moment
-  Lab 06 lets the task count change.
-- **`log group has a retention policy set`** - a log group with no retention policy looks identical to
-  one with a sensible policy until it has been running for a year.
-
-And, as in every lab, the environment block comes first: a script that verifies only its own resources
-passes right up until the restart that deletes them.
-
-### 9.2 Build `scripts/utilities/verify-lab-04.sh`
-
-**Run from**
-
-```text
-aws-floci-course/
-```
+Beyond existence, the script checks the configuration that matters: exec and task roles are **different**, the service spans **two** subnets, the enrolment group is sourced from `usms-app-sg` (not a CIDR), and the log group has retention. The environment block comes first, because a script that checks only its own resources passes right up until the restart that deletes them.
 
 {% raw %}```bash
 cat > scripts/utilities/verify-lab-04.sh << 'EOF'
@@ -1959,13 +1400,13 @@ Known benign failures, which you record rather than fight:
 
 | Check | Benign cause |
 | --- | --- |
-| `service $USMS_ENROLMENT_SERVICE is ACTIVE` / any Lab 04 ECS check with `Running` at 0 | Some Floci builds never start a Fargate container; `runningCount` stays 0 while `desiredCount` is correct. Confirm with `describe-services --output json` and record it - it does not affect any check above, all of which read `desiredCount` or static configuration |
+| `service $USMS_ENROLMENT_SERVICE is ACTIVE` / any Lab 04 ECS check with `Running` at 0 | Some Floci builds never start a Fargate container; `runningCount` stays 0 while `desiredCount` is correct. Confirm with `describe-services --output json` and record it |
 | `log group has a retention policy set` | Some builds ignore `put-retention-policy`. Confirm and record |
 | `service spans TWO subnets` | Lab 2 Exercise 5 was skipped, so `usms-private-subnet-b` does not exist. This one is **not** benign - go and do it |
 
 Everything else failing is a real problem with your work.
 
-### 9.3 Build the end-of-course cleanup script
+### 8.2 Build the end-of-course cleanup script
 
 !!! danger "DO NOT RUN THIS SCRIPT NOW"
     **What will be deleted:** the ECS service, the cluster, every task definition revision in the
@@ -1984,12 +1425,6 @@ Everything else failing is a real problem with your work.
     group in use cannot be deleted.
 
     It requires you to type `DELETE USMS ECS` in full before it does anything.
-
-**Run from**
-
-```text
-aws-floci-course/
-```
 
 ````bash
 cat > scripts/cleanup/lab-04-cleanup.sh << 'EOF'
@@ -2064,28 +1499,17 @@ chmod +x scripts/cleanup/lab-04-cleanup.sh
 bash -n scripts/cleanup/lab-04-cleanup.sh && echo "syntax OK - do NOT run it"
 ````
 
-**What to look for:** the words `syntax OK - do NOT run it`. `bash -n` parses the script without
-executing a single command, which is the only safe way to check a destructive one.
+You should see `syntax OK - do NOT run it`; `bash -n` parses without executing. The order matters:
 
-The order is the lesson, and it is different from Labs 2 and 3 because the dependencies are different:
-
-1. **`--desired-count 0` before `delete-service`.** ECS refuses to delete a service with running tasks
-   unless you pass `--force`, and `--force` kills tasks without draining them. Scaling to zero and
-   waiting is the graceful version, and it is what you would do in production.
-2. **Task definitions before the cluster.** Deregistering leaves them in `INACTIVE` state; they are
-   never truly deleted, and that is by design so that a service referencing an old revision can still
-   be described.
-3. **IAM detach before delete.** `delete-role` fails with `DeleteConflict` while a policy is attached,
-   and the error does not name the policy.
-4. **The security group after the service.** A group in use by a task's network interface cannot be
-   deleted, and `DependencyViolation` does not say which interface is holding it.
-5. **This script after Lab 06's and Lab 05's own cleanup scripts.** Lab 06 registered a scalable target
-   against this service and Lab 05 attached a load balancer to it; both must be torn down first, or
-   their delete calls fail against a service that no longer exists.
+1. **`--desired-count 0` before `delete-service`**: `--force` alone kills tasks without draining.
+2. **Task definitions before the cluster**: deregistered revisions stay `INACTIVE`, never fully deleted.
+3. **IAM detach before delete**: `delete-role` fails with `DeleteConflict` without naming the policy.
+4. **The security group after the service**: a group on a task's interface gives `DependencyViolation`.
+5. **After Lab 06's and Lab 05's cleanup scripts**: their scalable target and load balancer depend on this service.
 
 ---
 
-## 10. Checkpoints
+## 9. Checkpoints
 
 | # | After step | What must be true |
 | --- | --- | --- |
@@ -2097,18 +1521,16 @@ The order is the lesson, and it is different from Labs 2 and 3 because the depen
 
 ---
 
-## 11. Troubleshooting
+## 10. Troubleshooting
 
 ??? danger "`ClusterNotFoundException` on a call that names a cluster you can see"
-    ECS has no default cluster in this course's configuration, and the name is case-sensitive. Confirm
-    what actually exists:
+    ECS has no default cluster in this course, and names are case-sensitive. Confirm what exists:
 
     ```bash
     aws ecs list-clusters --query 'clusterArns[]' --output text
     ```
 
-    If the cluster is there, the usual cause is that `$CLUSTER_NAME` is empty in this terminal. Source
-    the env file:
+    If the cluster is there, `$CLUSTER_NAME` is probably empty in this terminal. Source the env file:
 
     ```bash
     source configs/lab-04.env
@@ -2116,26 +1538,21 @@ The order is the lesson, and it is different from Labs 2 and 3 because the depen
     ```
 
 ??? danger "`InvalidParameterException: Task definition does not support launch type FARGATE`"
-    `requiresCompatibilities` in `templates/lab-04-taskdef.json` does not list `FARGATE`, or
-    `networkMode` is not `awsvpc`. Both are required together, and Fargate rejects `bridge` and `host`.
+    `requiresCompatibilities` does not list `FARGATE`, or `networkMode` is not `awsvpc`. Fargate needs both, and rejects `bridge` and `host`.
 
     ```bash
     aws ecs describe-task-definition --task-definition usms-enrolment \
       --query 'taskDefinition.{Net:networkMode,Compat:requiresCompatibilities}' --output json
     ```
 
-    Fix the document and register again. You cannot edit revision 1 - you register revision 2, then
-    update the service to use it with
+    Fix the document and register revision 2 (revision 1 cannot be edited), then
     `aws ecs update-service --cluster ... --service ... --task-definition usms-enrolment:2`.
 
 ??? danger "`ClientException: Invalid 'cpu' setting for task`"
-    `cpu` and `memory` must be one of the valid Fargate pairs from the interlude before Step 4, and
-    both must be **strings** in the JSON. `"cpu": 256` with no quotes, or `"cpu": "256"` with
-    `"memory": "768"`, are both rejected. 256 CPU allows only 512, 1024 or 2048 MiB.
+    `cpu` and `memory` must be a valid Fargate pair (the box before Step 4), both as **strings**. `"cpu": 256` unquoted, or `"cpu": "256"` with `"memory": "768"`, are both rejected. 256 CPU allows only 512, 1024 or 2048 MiB.
 
 ??? danger "The service is created but `runningCount` stays at 0"
-    On real AWS this is nearly always the image pull or the network path. Look at what the service
-    itself says, which is the first thing to check and the thing most people skip:
+    On real AWS this is nearly always the image pull or the network path. Read what the service says first:
 
     ```bash
     aws ecs describe-services --cluster "$USMS_ECS_CLUSTER" --services "$USMS_ENROLMENT_SERVICE" \
@@ -2147,20 +1564,15 @@ The order is the lesson, and it is different from Labs 2 and 3 because the depen
       --query 'tasks[0].{Stopped:stoppedReason,Containers:containers[].reason}' --output json
     ```
 
-    `stoppedReason` naming the image or the registry means the execution role or the route to the
-    internet. `stoppedReason` naming the log driver means the log group from Step 5 does not exist.
+    `stoppedReason` naming the image or registry points at the execution role or the route out. Naming the log driver means Step 5's log group is missing.
 
-    On Floci, `runningCount` of 0 is expected on builds that do not start containers, and nothing in
-    this lab depends on it. Record it and continue.
+    On Floci, `runningCount` 0 is expected on builds that do not start containers. Record it and continue.
 
 ??? danger "`ResourceInUseException` when deleting the service or the cluster"
-    A service with running tasks cannot be deleted without `--force`, and a cluster with an active
-    service cannot be deleted at all. The graceful order is in `scripts/cleanup/lab-04-cleanup.sh`:
-    scale to zero, wait for stable, delete the service, then the cluster.
+    A service with running tasks needs `--force`, and a cluster with an active service cannot be deleted. The graceful order is in `scripts/cleanup/lab-04-cleanup.sh`: scale to zero, wait, delete the service, then the cluster.
 
 ??? danger "`DeleteConflict` when deleting one of the ECS roles"
-    A role with an attached managed policy cannot be deleted, and the error does not name the policy.
-    List and detach first:
+    A role with an attached managed policy cannot be deleted, and the error does not name the policy. List and detach first:
 
     ```bash
     aws iam list-attached-role-policies --role-name usms-ecs-task-role \
@@ -2176,18 +1588,14 @@ The order is the lesson, and it is different from Labs 2 and 3 because the depen
     curl -s http://localhost:4566/_localstack/health | head -c 300
     ```
 
-    The health output also tells you which services this build has started, which is a faster second
-    opinion on Step 3's probe than re-running the probe.
+    The health output also lists which services this build started, a quick second opinion on Step 3's probe.
 
 ??? danger "Everything is gone after a restart"
-    Storage mode, as always. `./scripts/utilities/floci-storage-check.sh`. If it reports
-    `FLOCI_STORAGE_MODE=memory`, a stray `floci start` replaced the Compose container. The work is not
-    recoverable - restore from the snapshot you took at the end of Practical 1, and this time confirm
-    the storage check before building.
+    Run `./scripts/utilities/floci-storage-check.sh`. `FLOCI_STORAGE_MODE=memory` means a stray `floci start` replaced the Compose container. The work is not recoverable; restore from the snapshot you took at the end of Practical 1 and confirm the storage check before building.
 
 ---
 
-## 12. Floci vs Real AWS
+## 11. Floci vs Real AWS
 
 | Feature | Real AWS | Floci | Status |
 | --- | --- | --- | --- |
@@ -2206,75 +1614,24 @@ The order is the lesson, and it is different from Labs 2 and 3 because the depen
 | Service quotas (tasks per service, services per cluster) | Enforced | Not enforced | Conceptual / Real AWS |
 | Capacity providers, Fargate Spot, capacity provider strategies | Full | Not available | Conceptual / Real AWS |
 
-### 12.1 What you actually observed in this lab
+In your report, say which items you observed (cluster, task definition revision, service placement, both roles, the group-referenced rule, `desiredCount` changed by hand) and which you only reasoned about (a running container, Container Insights metrics, start latency, cost). Path A builds may move items into the first list.
 
-```text
-OBSERVABLE - you saw this happen
-  a cluster, a task definition family with an immutable revision, and a service
-  a service placed in two private subnets with a security group and no public IP
-  two ECS roles with the same trust policy and different attached permissions
-  Lab 01's USMSStudentDataReadWrite attached to a second, different kind of compute
-  a group-referenced security group rule
-  desiredCount changed by hand with update-service, and the service's events narrating it
+**Where Floci is nicer than reality (traps on real AWS):** tasks start instantly or never (real Fargate takes 20 to 60 seconds, which Lab 06's cooldowns are sized around); no cost (two `256`/`512` tasks are roughly USD 15 per month at us-east-1 list prices; check the pricing page, Exercise 4 asks you to cite it); no quotas on tasks per service or services per cluster.
 
-CONCEPTUAL - you reasoned about it, you may not have seen it
-  a container actually running, serving, or logging
-  Container Insights CPU utilisation existing as a number at all
-  the 20-to-60-second task start latency that Lab 06's cooldowns are sized around
-  the cost of running this service continuously
-```
-
-If your build put you on support path A from Step 3, several lines may move from the second list to
-the first. Say in your report which list each item ended up in for you. Being precise about that is
-worth marks; claiming to have observed something you reasoned about is worth negative marks.
-
-### 12.2 Where Floci is nicer than reality, which makes it a trap
-
-- **Tasks start instantly, or not at all.** A real Fargate task takes 20 to 60 seconds from
-  `desiredCount` changing to serving traffic. Lab 06's cooldowns are sized around that latency, and a
-  system tuned on an emulator where capacity appears instantly will be tuned wrongly.
-- **No cost.** Two `256`/`512` Fargate tasks running continuously are roughly USD 15 per month at
-  us-east-1 list prices. Check current numbers on the AWS pricing pages before quoting any of this;
-  Exercise 4 asks you to cite a source.
-- **No quotas.** Real accounts have limits on tasks per service and services per cluster, and hitting
-  one fails in a way that looks like something else is broken.
-
-### 12.3 ECS Service Auto Scaling is not EC2 Auto Scaling
-
-These are two different services with similar names, and conflating them is the most common confusion in
-this area. Lab 3 Step 20 built `usms-web-golden` for the *other* one, and Lab 06 is where this lab's
-service meets the first of the two.
-
-| | **Application Auto Scaling** (Lab 06) | **EC2 Auto Scaling** |
-| --- | --- | --- |
-| Scales | ECS services, DynamoDB, Aurora, Lambda concurrency, and more | EC2 instances, and nothing else |
-| The unit | A task, or a capacity unit | An instance |
-| Configuration object | A scalable target plus policies | An Auto Scaling group plus policies |
-| Needs a launch template or AMI | No - a task definition, which this lab registered | Yes |
-| CLI command family | `aws application-autoscaling` | `aws autoscaling` |
-| Health checks and instance replacement | Handled by the ECS service, which this lab created | Handled by the Auto Scaling group |
-| Predictive scaling | Not available | Available |
-| The ECS `EC2` launch type | Scales the **tasks** | Scales the **instances the tasks land on** |
-
-The last row is the one worth remembering, because on ECS with the `EC2` launch type you need **both**:
-Application Auto Scaling to add tasks, and EC2 Auto Scaling (or a capacity provider) to add the
-instances for them to run on. Fargate removes the second problem entirely, which is a large part of why
-this lab uses it.
+!!! info "ECS Service Auto Scaling is not EC2 Auto Scaling"
+    Lab 06 uses **Application Auto Scaling** (`aws application-autoscaling`), which changes a service's `desiredCount` and needs only the task definition. **EC2 Auto Scaling** (`aws autoscaling`) scales instances from a launch template, which is what Lab 3 Step 20's `usms-web-golden` AMI is for. With the ECS `EC2` launch type you need both (tasks and the instances they land on); Fargate removes the second. See [the two scaling layers](../unit2/topic3.md#the-two-scaling-layers-revisited).
 
 ---
 
-## 13. Independent Lab Exercises
+## 12. Independent Lab Exercises
 
-Record commands and output in `labs/lab-04-ecs/exercises.md`. Take screenshots into
-`screenshots/` where an exercise asks for evidence.
+Record commands and output in `labs/lab-04-ecs/exercises.md`, with screenshots in `screenshots/` where asked.
 
 ### Exercise 1 - Basic: a second service, deployed
 
 **Requirements**
 
-The USMS results service publishes exam results. It has the same blueprint as the enrolment service but
-a lower floor. Create `usms-results-svc` in `usms-ecs-cluster` from the existing `usms-enrolment` task
-definition family, with a desired count of 1, in both private subnets, carrying `usms-enrolment-sg`.
+Create `usms-results-svc` (the exam results service) in `usms-ecs-cluster` from the existing `usms-enrolment` task definition family, with a desired count of 1, in both private subnets, carrying `usms-enrolment-sg`.
 
 **Constraints**
 
@@ -2289,9 +1646,7 @@ returns **two** `ACTIVE` services, with different names and different desired co
 
 **Hints**
 
-Step 10 contains every command. The only interesting question is which values change and which must
-not - and note that the verification script from Section 9 does not check for the *absence* of extra
-services, so this exercise will not make it fail.
+Step 10 contains every command; decide which values change. The Section 8 script does not check for extra services, so this will not make it fail.
 
 ---
 
@@ -2299,17 +1654,11 @@ services, so this exercise will not make it fail.
 
 **Requirements**
 
-The enrolment service needs more headroom per task before Lab 06 puts it under load-based scaling.
-Register `usms-enrolment:2` from a copy of `templates/lab-04-taskdef.json` with `memory` raised from
-`512` to `1024` MiB (still a valid pair for `cpu: 256`) and a new environment variable
-`USMS_LOG_LEVEL=info` added to the container. Update `usms-enrolment-svc` to run the new revision, wait
-for it to stabilise, and confirm revision 1 is still describable even though nothing is running it.
+Register `usms-enrolment:2` from a copy of `templates/lab-04-taskdef.json` with `memory` raised from `512` to `1024` MiB (still valid for `cpu: 256`) and a new environment variable `USMS_LOG_LEVEL=info`. Update `usms-enrolment-svc` to run it, wait for it to stabilise, and confirm revision 1 is still describable.
 
 **Constraints**
 
-- Do not edit `templates/lab-04-taskdef.json` in place without keeping a copy of the version that
-  produced revision 1 - task definitions are immutable for a reason, and your own template file should
-  behave the same way.
+- Keep a copy of the template that produced revision 1; do not edit it in place.
 - Use `aws ecs wait services-stable` or the manual polling loop from Step 10, not a fixed `sleep`.
 - State, in one sentence, what `taskDefinition` field on the service changes and what does not.
 
@@ -2321,10 +1670,8 @@ this exercise does not take.
 
 **Hints**
 
-Step 9 is the template for writing and registering a revision. The service update itself is one call:
-`aws ecs update-service --cluster ... --service ... --task-definition usms-enrolment:2`. The genuinely
-new thinking is in the one-sentence answer: a task definition revision is immutable, but a service's
-*pointer* to one is not.
+Step 9 shows how to write and register a revision. The update is one call:
+`aws ecs update-service --cluster ... --service ... --task-definition usms-enrolment:2`. A revision is immutable; the service's *pointer* to one is not.
 
 ---
 
@@ -2352,25 +1699,19 @@ The verdicts must be **computed**, never taken from a name or a tag:
 
 **Constraints**
 
-- Runs correctly from any directory. Resolve `configs/` from `${BASH_SOURCE[0]}`, as the Section 9
-  script does.
+- Runs correctly from any directory. Resolve `configs/` from `${BASH_SOURCE[0]}`, as the Section 8 script does.
 - No hard-coded service name anywhere - list services from the cluster, then describe each one.
-- Must not crash when a service has no `networkConfiguration` (an `EC2` launch type service, for
-  example). Print `publicip=N/A` rather than an error.
+- Must not crash when a service has no `networkConfiguration` (an `EC2` launch type service, for example). Print `publicip=N/A` rather than an error.
 - `set -uo pipefail`. Decide about `-e` and justify your decision in a comment.
 - Also write the same data as JSON to `outputs/lab-04-ecs-inventory.json`.
 
 **Expected outcome**
 
-Identical output when run from `~` and from `~/aws-floci-course/labs/lab-04-ecs/`,
-correctly classifying `usms-enrolment-svc` and every service created by earlier exercises.
+Identical output when run from `~` and from `~/aws-floci-course/labs/lab-04-ecs/`, correctly classifying `usms-enrolment-svc` and every service created by earlier exercises.
 
 **Hints**
 
-`aws ecs list-services --cluster ... --query 'serviceArns[]'` gives you the list to iterate. The awkward
-part is not the shell, it is deciding what "no data" means for each column and printing something
-explicit rather than an empty field - an inventory that silently omits a risky service is worse than
-one that never ran.
+`aws ecs list-services --cluster ... --query 'serviceArns[]'` gives the list to iterate. Decide what "no data" means for each column and print something explicit, never an empty field.
 
 ---
 
@@ -2391,25 +1732,17 @@ The USMS project lead writes:
 
 Produce a written analysis in `labs/lab-04-ecs/exercises.md` covering:
 
-- **Why a fixed `desiredCount` of 2 cannot answer the 08:03 problem**, in terms of what this lab
-  actually built: `usms-enrolment-svc` has no mechanism that reads a metric or a clock, so the only way
-  its capacity ever changes is a human running `update-service`.
-- **A proposed plan** with concrete numbers for a minimum, a maximum, and a rough shape for a scheduled
-  floor around the enrolment window - and for each number, one sentence saying what it costs you if it
-  is too high and what it costs you if it is too low. You are not implementing any of this; you are
-  handing it to whoever does Lab 06.
-- **A monthly cost comparison** of at least two options: fixed at your proposed peak capacity, versus
-  fixed at today's 2. Use current Fargate per-vCPU-hour and per-GB-hour prices, and **cite where you got
-  them**.
-- **What to switch off**, with the exact commands in the correct dependency order, each preceded by the
-  four-line danger admonition used throughout this lab: the Exercise 1 results service.
+- **Why a fixed `desiredCount` of 2 cannot answer the 08:03 problem**: `usms-enrolment-svc` reads no metric or clock, so only a human running `update-service` changes its capacity.
+- **A proposed plan** with concrete numbers for a minimum, a maximum and a scheduled floor around the enrolment window, each with one sentence on the cost of too high and too low. You are handing this to Lab 06, not implementing it.
+- **A monthly cost comparison** of at least two options: fixed at your proposed peak, versus fixed at today's 2. Use current Fargate per-vCPU-hour and per-GB-hour prices, and **cite where you got them**.
+- **What to switch off**, with the exact commands in dependency order, each preceded by the four-line danger admonition: the Exercise 1 results service.
 
 Then execute only the deletion, and confirm `./scripts/utilities/verify-lab-04.sh` reports `FAIL=0`
 afterwards.
 
 **Constraints**
 
-- Do not delete anything in Section 16's KEEP column.
+- Do not delete anything in Section 15's KEEP column.
 - Every number must have a source or a derivation. "About 10 tasks" earns nothing; "10 tasks, because
   200 requests per second at 25 requests per task per second plus one task of headroom" earns full marks.
 
@@ -2420,9 +1753,7 @@ Exercise 1 practice resource is gone and the verification still passes.
 
 **Hints**
 
-You will not have a policy or a scalable target to point at, and that is deliberate - the exercise asks
-for the reasoning Lab 06 will later encode into numbers, not for the encoding itself. Section 5.2's
-capacity plan and Section 12.2's cost figures are your starting point.
+There is no policy to point at; the exercise asks for the reasoning Lab 06 will encode. Section 11's cost figures are your starting point.
 
 ---
 
@@ -2430,31 +1761,19 @@ capacity plan and Section 12.2's cost figures are your starting point.
 
 **Requirements**
 
-Step 8 wrote a security group rule whose source is a *group*, not an address. This exercise resolves
-that group reference back to the instance that carries it - the only way to show that the rule grants
-access to something real rather than to a group nobody uses - and records the result somewhere Lab 05
-can read it, because Lab 05's cutover step removes this exact rule and should not do so blind.
+Resolve Step 8's group reference back to the instance that carries it, and record the result for Lab 05, whose cutover step removes this rule.
 
-1. Resolve `usms-enrolment-sg`'s only inbound source group back to the running instance that carries it,
-   the same reverse lookup Lab 3 Step 11 and this lab's own security groups depend on:
+1. Resolve `usms-enrolment-sg`'s only inbound source group back to the running instance that carries it:
    `aws ec2 describe-instances --filters "Name=instance.group-id,Values=<group>"
    "Name=instance-state-name,Values=running"`.
-2. Confirm that instance matches `$USMS_WEB_INSTANCE` from `configs/lab-03.env`. If it does not, work
-   out why (a relaunch, or a second instance carrying the group from an earlier "Your turn" task) and say
-   so rather than treating a mismatch as success.
-3. Write `outputs/lab-04-lab03-linkage.txt` containing: the source group ID, the instance it resolves to,
-   the `LOOP CLOSED` or `MISMATCH` verdict, and one sentence stating that this rule is temporary - Lab 05
-   removes it once the load balancer becomes the only caller.
-4. Audit everything this lab tagged `Project=USMS`, using `aws ecs list-tags-for-resource` against the
-   cluster ARN and the service ARN from `configs/lab-04.env`, and append the result to the same file.
+2. Confirm that instance matches `$USMS_WEB_INSTANCE` from `configs/lab-03.env`. If not, explain why (a relaunch, or a second instance carrying the group) rather than treating a mismatch as success.
+3. Write `outputs/lab-04-lab03-linkage.txt` containing: the source group ID, the instance it resolves to, the `LOOP CLOSED` or `MISMATCH` verdict, and one sentence stating that this rule is temporary - Lab 05 removes it once the load balancer becomes the only caller.
+4. Audit everything this lab tagged `Project=USMS`, using `aws ecs list-tags-for-resource` against the cluster ARN and the service ARN from `configs/lab-04.env`, and append the result to the same file.
 
 **Constraints**
 
-- `aws ecs list-tags-for-resource` takes an **ARN**, not a name - unlike almost every other ECS call in
-  this lab, which take `--cluster` and `--service` names.
-- If any ECS resource shows no tags at all, note it: some Floci builds accept `--tags` on
-  `create-cluster` and `create-service` and do not store them. Fix what you can with
-  `aws ecs tag-resource --resource-arn <arn> --tags key=Project,value=USMS` and record the rest.
+- `aws ecs list-tags-for-resource` takes an **ARN**, not a name, unlike most ECS calls in this lab.
+- If any ECS resource shows no tags, note it (some builds accept `--tags` without storing them). Fix what you can with `aws ecs tag-resource --resource-arn <arn> --tags key=Project,value=USMS` and record the rest.
 
 **Expected outcome**
 
@@ -2463,14 +1782,11 @@ exactly what is about to change and why it is safe to change it.
 
 **Hints**
 
-`--filters "Name=instance.group-id,Values=..."` is a reverse lookup you will use again whenever you are
-about to change or delete a group and need to know what would be affected. The whole point of this
-exercise is that Lab 05 is about to delete the very rule you are documenting here - read Lab 05's
-Section 1 before you start, and you will see why this file matters to someone other than you.
+`--filters "Name=instance.group-id,Values=..."` is the reverse lookup to run before changing or deleting any group. Read Lab 05's Section 1 to see why this file matters.
 
 ---
 
-## 14. Lab Assessment Checklist
+## 13. Lab Assessment Checklist
 
 Tick these off before you submit. Every one is checkable from your own repository.
 
@@ -2517,7 +1833,7 @@ Tick these off before you submit. Every one is checkable from your own repositor
 
 - [ ] I can name ECS's four objects and say which one a scaling policy will change, without this lab
       having built a scaling policy
-- [ ] I can say, from the interlude before Step 6, which failure symptom points at the execution role
+- [ ] I can say, from the box before Step 6, which failure symptom points at the execution role
       and which points at the task role
 - [ ] I can explain why the enrolment security group's rule names a group and not a CIDR block, and why
       that choice matters even before Lab 06 exists
@@ -2525,76 +1841,25 @@ Tick these off before you submit. Every one is checkable from your own repositor
 
 ---
 
-## 15. Review Questions
+## 14. Review Questions
 
-Answer in prose, in your own words, in `notes/lab-04-notes.md`. No command output - these ask whether
-you understood, not whether you typed.
+Answer in prose, in your own words, in `notes/lab-04-notes.md`.
 
-1. A colleague says "I put auto scaling on the task definition." Explain, in three or four sentences,
-   every way that sentence is wrong: name what auto scaling will actually be attached to in Lab 06, what
-   it actually modifies, and which of ECS's four objects does the work of making reality match. Then say
-   what observable consequence follows from the fact that ECS itself will know nothing about the
-   scalable target.
+1. A colleague says "I put auto scaling on the task definition." Explain every way that is wrong: what auto scaling will be attached to in Lab 06, what it modifies, and which ECS object makes reality match. What observable consequence follows from ECS itself knowing nothing about the scalable target?
 
-2. Lab 1 wrote `USMSStudentDataReadWrite` for a bucket that did not exist. Lab 3 attached it to an EC2
-   instance via an instance profile. This lab attached the same policy, unchanged, to a Fargate task via
-   a task role. Explain in a full paragraph what each of the two delivery mechanisms actually does at
-   runtime, why neither needs a key on disk, and precisely what changes for **both** the moment a bucket
-   finally exists at that ARN. This is the most important connection in the course; answer it properly.
+2. Lab 1 wrote `USMSStudentDataReadWrite` for a bucket that did not exist; Lab 3 attached it to an EC2 instance via an instance profile; this lab attached it, unchanged, to a Fargate task via a task role. In a full paragraph, explain what each delivery mechanism does at runtime, why neither needs a key on disk, and what changes for **both** the moment the bucket exists.
 
-3. The interlude before Step 6 distinguishes the task **execution** role from the task **role**. Give a
-   one-sentence failure symptom for each that a colleague could use to tell them apart without reading
-   any documentation, and explain why both roles share an identical trust policy despite doing
-   completely different jobs.
+3. Give a one-sentence failure symptom for the task **execution** role and for the task **role** that a colleague could use to tell them apart, and explain why both share an identical trust policy despite doing different jobs.
 
-4. Step 8 sources the enrolment security group's only inbound rule from `usms-app-sg`, not from a CIDR
-   block. Explain why this choice would still be correct even if this service's task count never
-   changed, and then explain the additional reason it becomes close to mandatory once Lab 06 lets the
-   task count change on its own.
+4. Step 8 sources the enrolment group's only inbound rule from `usms-app-sg`, not a CIDR block. Explain why this is correct even if the task count never changed, and the additional reason it becomes close to mandatory once Lab 06 lets the count change.
 
-5. Explain what Fargate removes from the EC2 model this course used in Lab 3, and what it explicitly does
-   not remove. Use the fact that a Fargate task in `awsvpc` mode still has its own security group and
-   still obeys Lab 2's route tables to make the second half of the answer concrete.
+5. What does Fargate remove from Lab 3's EC2 model, and what does it not remove? Use the fact that an `awsvpc` task still has its own security group and obeys Lab 2's route tables.
 
-6. Lab 1 Step 14 proved that "the account identity is unchanged after a restart" is not evidence of
-   persistence, because the root ARN is a constant regardless of storage mode. Apply the same scepticism
-   here: name one command against this lab's own resources that would look identical whether Floci is
-   running in `memory` mode or `hybrid` mode, and one command that would not, and explain the difference.
+6. Lab 1 Step 14 showed that an unchanged account identity after a restart is not evidence of persistence. Name one command against this lab's resources that would look identical in `memory` and `hybrid` mode, one that would not, and explain the difference.
 
 ---
 
-## 16. What We Built
-
-### 16.1 Reflection
-
-Three labs built things of a fixed size. This one built the first thing whose size is a *number a
-service tracks* rather than a fact about a machine - and the interesting part is how little of the work
-was about containers.
-
-The idea to keep is the separation between ECS's four objects. A cluster is a namespace. A task
-definition is an immutable blueprint. A task is one running instance of that blueprint. A service is the
-controller that keeps a count of tasks matching `desiredCount`. Every later scaling mechanism in this
-course, starting with Lab 06, does exactly one thing to exactly one of those four objects: it writes a
-number into the service. Nothing about that indirection needed a scaling policy to exist in order to be
-true, which is why it belongs in this lab and not the next one.
-
-The second idea is the IAM chain that keeps reappearing. Lab 1 wrote a policy for a bucket that did not
-exist. Lab 3 attached it to an EC2 instance. This lab attached the same policy, unchanged, to a Fargate
-task through a completely different mechanism - a task role instead of an instance profile - and neither
-mechanism needed a key on disk. The chain is the lesson, not the bucket.
-
-The third is a discipline this course keeps returning to. Every command in this lab reported success,
-and success alone was never the evidence that mattered: Step 9's verify step distinguished a task
-definition with two different role ARNs from one that accidentally reused the same role for both, and
-Step 11 taught you to read `desiredCount`, `runningCount` and `pendingCount` as three separate facts
-rather than one. **A command that appears to succeed is still not evidence that it did what you meant.**
-
-And one connection worth naming out loud. Lab 2 built a NAT gateway and could not demonstrate that it
-mattered. This lab put tasks in a private subnet and needed it - three Lab 2 resources sit on the path
-between a Fargate task and the container registry, and had any of them been wrong, the failure would
-have surfaced here, a lab and a fortnight away from its cause.
-
-### 16.2 KEEP vs CLEAN UP
+## 15. KEEP vs CLEAN UP
 
 ```text
 ╔═══════════════════════ KEEP ══════════════════════════╗    ╔════════════ CLEAN UP ═══════════════╗
@@ -2624,7 +1889,7 @@ git status --short
 Do **not** run `scripts/cleanup/lab-04-cleanup.sh`, `lab-03-cleanup.sh` or `lab-02-cleanup.sh`. They are
 for the end of the course, and in reverse dependency order.
 
-### 16.3 The architecture you now have
+**The architecture you now have**
 
 ```text
 Lab 01  IAM
@@ -2643,7 +1908,7 @@ Lab 02  NETWORK
 Lab 03  COMPUTE - fixed size
   usms-web-01   public subnet a   usms-app-sg   usms-ec2-app-profile   usms-web-eip
   usms-db-01    private subnet a  usms-db-sg
-  usms-web-golden  AMI -> the EC2 Auto Scaling lab, which is NOT this lab (see 12.3)
+  usms-web-golden  AMI -> the EC2 Auto Scaling lab, which is NOT this lab (see Section 11)
 
 Lab 04  COMPUTE - deployed, standing still                       <-- you are here
   usms-ecs-cluster
@@ -2656,13 +1921,9 @@ Lab 06  (after that)  Application Auto Scaling on usms-enrolment-svc
 
 ---
 
-## 17. Preparation for the Next Lab
+## 16. Preparation for the Next Lab
 
-Lab 05 is next, and it is the lab where `usms-enrolment-svc` stops being unreachable. Right now the
-service runs two tasks with no stable address and no name a client could ever be given; Lab 05 puts an
-Application Load Balancer and a target group in front of it, and the ECS service itself keeps that
-target group's membership up to date as tasks come and go. Lab 06, immediately after, is the one that
-finally lets `desiredCount` move on its own.
+Lab 05 puts an Application Load Balancer and target group in front of `usms-enrolment-svc`, and the service keeps the target group's membership current as tasks come and go. Lab 06 then lets `desiredCount` move on its own.
 
 | From `configs/lab-04.env` | Lab 05 uses it for |
 | --- | --- |
@@ -2672,7 +1933,7 @@ finally lets `desiredCount` move on its own.
 
 | From `configs/lab-04.env` | Lab 06 uses it for |
 | --- | --- |
-| `USMS_ECS_DESIRED_BASELINE` | The floor of the scalable target Lab 06 registers - see Section 12.3 |
+| `USMS_ECS_DESIRED_BASELINE` | The floor of the scalable target Lab 06 registers - see Section 11 |
 | `USMS_ECS_TASK_CPU` / `USMS_ECS_TASK_MEMORY` | Sizing the arithmetic behind Lab 06's target tracking policy |
 
 | From earlier labs | Lab 05 uses it for |
@@ -2692,11 +1953,7 @@ aws ecs describe-services --cluster usms-ecs-cluster --services usms-enrolment-s
 ```
 
 You want `FAIL=0`, a count of **17**, and `Desired` equal to `Running` (or the container-start
-limitation from Section 12, recorded rather than fought).
-
-**Read ahead, five minutes:** find out what an Application Load Balancer's *target type* means for a
-Fargate service, and why it cannot be `instance`. Lab 05 Step 6 explains it in full; knowing the shape
-of the answer before you get there will save you re-reading the step twice.
+limitation from Section 11, recorded rather than fought).
 
 Finally, take a snapshot so that a mistake in Lab 05 is recoverable:
 
@@ -2718,69 +1975,7 @@ The archive lives in your home directory, outside the repository, so it is never
 
 ---
 
-## Appendix A - Command Reference
-
-Every command this lab used, grouped by service.
-
-### Amazon ECS
-
-| Command | What it does |
-| --- | --- |
-| `aws ecs create-cluster` | Create a cluster; `--settings name=containerInsights,value=enabled` |
-| `aws ecs describe-clusters` | Read clusters; `--include SETTINGS` to see the settings |
-| `aws ecs list-clusters` | List cluster ARNs; there is no server-side filter, so filter with `--query` |
-| `aws ecs delete-cluster` | Delete a cluster; refuses while an active service exists |
-| `aws ecs register-task-definition` | Register a new revision of a family |
-| `aws ecs describe-task-definition` | Read a revision, or the latest in a family |
-| `aws ecs list-task-definitions` | List revisions; `--family-prefix` narrows it |
-| `aws ecs deregister-task-definition` | Move a revision to `INACTIVE`; it is never fully deleted |
-| `aws ecs create-service` | Create a service; `--network-configuration` for `awsvpc` |
-| `aws ecs describe-services` | Read a service, its four counts and its `events` list |
-| `aws ecs list-services` | List service ARNs in a cluster |
-| `aws ecs update-service` | Change `--desired-count`, `--task-definition` and more |
-| `aws ecs delete-service` | Delete a service; needs `--force` if tasks are running |
-| `aws ecs wait services-stable` | Block until `runningCount` equals `desiredCount` |
-| `aws ecs list-tasks` | List task ARNs; `--service-name`, `--desired-status STOPPED` |
-| `aws ecs describe-tasks` | Read tasks, including `stoppedReason` - the first place to look |
-| `aws ecs list-tags-for-resource` | Read tags; takes an **ARN**, not a name |
-| `aws ecs tag-resource` | Add tags to an existing ECS resource |
-
-### Amazon CloudWatch Logs
-
-| Command | What it does |
-| --- | --- |
-| `aws logs create-log-group` | Create a log group; `--tags` is a **map** |
-| `aws logs put-retention-policy` | Set retention; a separate call, and easy to forget |
-| `aws logs describe-log-groups` | Read log groups; `--log-group-name-prefix` |
-| `aws logs delete-log-group` | Delete a group and everything in it |
-
-### IAM and EC2 used in this lab
-
-| Command | What it does |
-| --- | --- |
-| `aws iam create-role` | Create a role from a trust policy document |
-| `aws iam create-policy` | Create a customer managed policy |
-| `aws iam attach-role-policy` / `detach-role-policy` | Attach and detach; detach before `delete-role` |
-| `aws iam list-attached-role-policies` | What a role actually carries |
-| `aws ec2 create-security-group` | Create the task security group |
-| `aws ec2 authorize-security-group-ingress` | `--ip-permissions file://...` for a group-referenced rule |
-| `aws ec2 describe-instances --filters Name=instance.group-id` | Reverse lookup: who carries this group |
-
-**Three tag conventions in one lab, and no rule connects them:**
-
-| Service | Syntax |
-| --- | --- |
-| EC2 | `--tag-specifications 'ResourceType=x,Tags=[{Key=K,Value=V}]'` |
-| ECS | `--tags key=K,value=V` (lower case) |
-| IAM | `--tags Key=K,Value=V` (capitals, no `ResourceType`) |
-| CloudWatch Logs | `--tags K=V` (a plain map) |
-
-Run `aws <service> <operation> help` and read the `--tags` synopsis. That habit is more durable than any
-of the four.
-
----
-
-## Appendix B - New JMESPath and CLI patterns introduced
+## Appendix - New CLI and JMESPath patterns
 
 Labs 1 to 3 taught `Key[*].Field`, `[A,B]`, `{X:A}`, `[?filter]`, `| [0]`, `sort_by()`, `length()`,
 `contains()`, `Tags[?Key==...]|[0].Value`, `--filters`, `--generate-cli-skeleton`, `--cli-input-json`
@@ -2793,6 +1988,15 @@ and `aws <service> wait`. This lab adds:
 | `--starting-token` | Resume a paginated call from a previous `NextToken` | Step 3 note |
 | `--filters "Name=instance.group-id,Values=..."` | EC2 reverse lookup: which instances carry a security group | Exercise 5 |
 | `awsvpcConfiguration={subnets=[a,b],securityGroups=[c],assignPublicIp=DISABLED}` | Nested shorthand: no spaces, no quotes around the IDs | Step 10 |
+
+**Tag syntax differs by service:**
+
+| Service | Syntax |
+| --- | --- |
+| EC2 | `--tag-specifications 'ResourceType=x,Tags=[{Key=K,Value=V}]'` |
+| ECS | `--tags key=K,value=V` (lower case) |
+| IAM | `--tags Key=K,Value=V` (capitals, no `ResourceType`) |
+| CloudWatch Logs | `--tags K=V` (a plain map) |
 
 ---
 
@@ -2811,9 +2015,3 @@ and `aws <service> wait`. This lab adds:
 - [AWS Fargate pricing](https://aws.amazon.com/fargate/pricing/)
 - [`aws ecs` CLI reference](https://docs.aws.amazon.com/cli/latest/reference/ecs/)
 - [JMESPath specification](https://jmespath.org/specification.html)
-
----
-
-*Lab 04 complete. Lab 05 puts `usms-enrolment-svc` behind an Application Load Balancer; Lab 06, right
-after it, hands `desiredCount` over to Application Auto Scaling.*
-

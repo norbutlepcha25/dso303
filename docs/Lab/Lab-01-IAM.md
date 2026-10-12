@@ -1,54 +1,42 @@
 # Lab 01 - Identity and Access Management
 
-## Lab Objective
+## 1. Objectives
 
-By the end of this laboratory you should be able to:
+- Bootstrap the course environment: Docker Compose, the Floci emulator with durable storage, AWS CLI v2 and a `floci` profile, in a Git repository that cannot leak secrets.
+- Prove two separate properties: commands never reach real AWS, and data survives a restart.
+- Learn the AWS CLI basics every later lab assumes: command grammar, output formats, `--query`, `file://`, exit codes.
+- Build the USMS IAM foundation: groups, users, customer managed and inline policies, roles with trust policies, an instance profile, STS temporary credentials and safely stored access keys.
+- Save every ARN to `configs/lab-01.env` for Lab 2.
 
-**Environment**
-
-1. Verify that Docker and Docker Compose are installed and running.
-2. Install the **Floci** local AWS emulator and explain its four storage modes.
-3. Run Floci **reproducibly** with Docker Compose, so that state survives every stop and restart.
-4. Install AWS CLI v2 and confirm its version.
-5. Create and use a named **AWS CLI profile** that points at Floci.
-6. **Prove** two separate things: that your commands reach Floci and never touch real AWS, and that your data actually persists.
-7. Create and explain a clean, version-controlled project directory structure that cannot leak secrets.
-
-**AWS CLI**
-
-8. Read the `aws <service> <command> [options]` grammar and use `help`.
-9. Switch between `--output json`, `--output table` and `--output text`.
-10. Extract a single value with `--query` (JMESPath) and store it in a shell variable.
-11. Pass a JSON file to a command with `file://` and generate a template with `--generate-cli-skeleton`.
-12. Interpret AWS CLI exit codes and error messages.
-
-**IAM**
-
-13. Explain the structure of an ARN and read one correctly.
-14. Create IAM users, groups and roles using the CLI.
-15. Write a valid IAM policy document (Version, Statement, Effect, Action, Resource, Condition).
-16. Distinguish AWS managed, customer managed and inline policies, and choose between them.
-17. Distinguish a **permissions policy** from a **trust policy**.
-18. Create an instance profile and understand why EC2 needs one.
-19. Obtain temporary credentials with `sts assume-role` and use them.
-20. Create access keys and store them without ever committing them to Git.
-21. Apply the principle of **least privilege** and diagnose an `AccessDenied` error.
+!!! info "Concepts used in this lab"
+    Read these first if a term is new: [regions](../unit1/topic1.md#region) ·
+    [global, regional and zonal services](../unit1/topic1.md#global-regional-and-zonal-services) ·
+    [users, groups and roles](../unit8/topic1.md#iam-users-groups-and-roles) ·
+    [principals and ARNs](../unit8/topic1.md#principals-identities-and-arns) ·
+    [role sessions and temporary credentials](../unit8/topic1.md#role-sessions-and-temporary-credentials) ·
+    [instance profiles](../unit8/topic1.md#service-roles-instance-profiles-and-service-linked-roles) ·
+    [access key hygiene](../unit8/topic1.md#access-keys-and-their-hygiene) ·
+    [policy grammar](../unit8/topic1.md#policy-grammar) ·
+    [policy types](../unit8/topic1.md#policy-types) ·
+    [policy evaluation logic](../unit8/topic1.md#the-policy-evaluation-logic)
 
 ---
 
-## 1. Intro
+## 2. Prerequisites
 
-Lab 1 is the first laboratory of the course. It therefore has a double job:
+- No earlier lab. This lab builds the environment every later lab uses.
+- macOS, Linux, or Windows with WSL2 (run everything from the Ubuntu terminal, not PowerShell).
+- Internet access for the installs in Steps 2, 3 and 10.
 
-1. **Bootstrap** the entire working environment (Part A).
-2. **Build the IAM foundation** that every later lab depends on (Part B).
+Steps 1 to 4 check and install everything else. If a check there fails, fix it before Step 5.
 
-### Current Environment
+---
+
+## 3. What This Lab Reuses
+
+Nothing: this is Lab 1.
 
 ```text
-Created in previous labs:
-- (nothing - this is Lab 1)
-
 Created in this lab:
 - Project directory ~/aws-floci-course with full folder structure
 - A Git repository, initialised BEFORE any secret exists
@@ -74,11 +62,11 @@ Required for future labs:
 - docker-compose.yml       → starts the environment for every later lab
 ```
 
-## 2. What We Are Building
+---
 
-### 2.1 The identity model
+## 4. What We Are Building
 
-Three human-shaped identities and three machine-shaped identities:
+Part A (Steps 1 to 15) builds a reproducible local AWS environment whose state survives restarts. Part B (Steps 16 to 33) builds three human identities and three machine identities for USMS. Permissions attach to groups and roles, never directly to users; Step 25 is the one deliberate exception, to teach inline policies.
 
 | Identity | Type | Who/what uses it | Permissions |
 | --- | --- | --- | --- |
@@ -89,24 +77,9 @@ Three human-shaped identities and three machine-shaped identities:
 | `usms-lambda-exec-role` | role | Notification functions (Lab 05) | Logs + messaging |
 | `usms-developer-role` | role | Assumed *temporarily* by developers | Elevated build permissions |
 
-### 2.2 Why groups instead of attaching policies to users?
+---
 
-Attaching a policy to each user does not scale. When your team grows from 3 to 30 engineers, you
-would have to remember to attach five policies to each new person, and remove them one by one when
-somebody leaves.
-
-```text
-BAD                              GOOD
-policy ─→ user1                  policy ─→ group ─→ user1
-policy ─→ user2                                 ─→ user2
-policy ─→ user3                                 ─→ user3
-(3 attachments per policy)       (1 attachment; membership is the only change)
-```
-
-Rule for the whole course: **permissions attach to groups and roles, never directly to users**
-(with one deliberate exception in Step 25, which exists to teach inline policies).
-
-### 2.3 The environment we build first
+## 5. Architecture
 
 ```text
    Your machine
@@ -131,9 +104,9 @@ arrow to `~/floci-data/` exists but almost nothing durable travels along it.
 
 ---
 
-## 3. Directory Structure
+## 6. Directory Structure
 
-### 3.1 The structure you will create
+### 6.1 The structure you will create
 
 ```text
 aws-floci-course/
@@ -180,7 +153,7 @@ aws-floci-course/
     └── lab-01-notes.md
 ```
 
-### 3.2 Why each folder exists
+### 6.2 Why each folder exists
 
 | Folder | Purpose | Who creates the files | Commit to Git? |
 | --- | --- | --- | --- |
@@ -208,27 +181,26 @@ Two files sit at the root and are easy to overlook:
     Publishing AWS access keys to a public Git repository is one of the most common causes of
     real-world cloud breaches:  bots scan GitHub for them within seconds of a push.
 
-## 4. Step-by-Step Implementation
+---
 
-The lab has two parts:
+## 7. Step-by-Step Implementation
 
-- **Part A - Steps 1 to 15**: build the environment.
-- **Part B - Steps 16 to 33**: build the IAM foundation for USMS.
+!!! info "Where to run commands"
+    Steps 1 to 4 run from anywhere; Step 5 creates `~/aws-floci-course`. From Step 6 on, run every
+    command from `aws-floci-course/` unless a step's **Run from** says otherwise.
 
-Part A is longer than it used to be, because it now includes the configuration that makes your work
-survive. Do not skip ahead - Part B is worthless if Part A is wrong.
+!!! tip "Shell variables die with the terminal"
+    Every ARN below is captured into a variable. Step 33 writes them to `configs/lab-01.env` so Lab 2 can use them.
 
 ## PART A - Environment Setup (Steps 1–15)
 
+Do not skip ahead: Part B is worthless if Part A is wrong.
+
 ### Step 1 - Open a terminal and identify your system (**OPTIONAL**)
 
-**Purpose**
+Every later step depends on knowing your operating system and shell.
 
-Every later step depends on knowing which operating system and shell you are using.
-
-**Run from** : anywhere
-
-**Command**
+**Run from:** anywhere
 
 ```bash
 uname -s -m
@@ -236,12 +208,7 @@ echo "shell = $SHELL"
 echo "home  = $HOME"
 ```
 
-**What the command does**
-
-- `uname` prints information about the system kernel.
-- `-s` prints the **s**ystem name (`Linux` or `Darwin` for macOS).
-- `-m` prints the **m**achine hardware name (`x86_64` for Intel/AMD, `arm64`/`aarch64` for Apple Silicon).
-- `$SHELL` and `$HOME` are **environment variables** - named values your shell keeps in memory.
+`-s` prints the system name (`Linux`, or `Darwin` for macOS); `-m` the hardware (`x86_64`, or `arm64`/`aarch64` on Apple Silicon).
 
 **Expected result**
 
@@ -254,8 +221,7 @@ home  = /home/student
 > Example output - yours will differ. macOS on Apple Silicon shows `Darwin arm64` and a home
 > directory like `/Users/student`.
 
-**Write your `$HOME` down.** You will need the literal, absolute value in Step 8, and a very common
-Lab-1 failure is caused by writing `~` where an absolute path is required.
+**Write your `$HOME` down.** Step 8 needs the literal absolute value; writing `~` where an absolute path is required is a common Lab 1 failure.
 
 !!! success "**Checkpoint**"
 
@@ -268,14 +234,9 @@ Lab-1 failure is caused by writing `~` where an absolute path is required.
 
 ### Step 2 - Verify Docker and Docker Compose (OPTIONAL)
 
-**Purpose**
+Floci runs as a Docker container described by Docker Compose. If either is missing, nothing else works.
 
-Floci runs as a Docker container, and from Step 8 onwards we describe that container with Docker
-Compose. If either is missing, nothing else in this course works.
-
-**Run from** : anywhere
-
-**Command**
+**Run from:** anywhere
 
 {% raw %}```bash
 docker --version
@@ -283,18 +244,11 @@ docker info --format '{{.ServerVersion}}'
 docker compose version
 ```{% endraw %}
 
-**What the command does**
+- `docker --version` asks the client; it succeeds even when Docker is not running.
+{% raw %}- `docker info` talks to the daemon, so it is the real test. `--format '{{.ServerVersion}}'` prints one field instead of 60 lines.{% endraw %}
+- `docker compose` (v2, a plugin) is not `docker-compose` (v1, retired). This course requires v2.
 
-- `docker --version` asks the **Docker client** (the command-line program) its version. This succeeds
-  even if Docker itself is not running.
-- `docker info` talks to the **Docker daemon** (the background service that actually runs containers).
-{% raw %}  This is the real test. `--format '{{.ServerVersion}}'` prints just one field instead of 60 lines.{% endraw %}
-- `docker compose version` checks the **Compose v2 plugin**, which is what reads
-  `docker-compose.yml`. Note the space: `docker compose` (v2, a plugin) is not the same program as
-  `docker-compose` (v1, a separate Python tool, now retired). This course requires v2.
-
-Understanding the client/daemon split matters: the most common Docker error in this course is
-"client works, daemon is not running".
+The most common Docker error in this course is "client works, daemon is not running".
 
 **Expected result**
 
@@ -316,9 +270,8 @@ Docker Compose version v2.29.7
     newgrp docker
     ```
 
-    `usermod -aG docker $USER` adds you to the `docker` group so you don't need `sudo` for every
-    command. `newgrp docker` applies the new group in the current shell without logging out.
-    The `get.docker.com` script installs the Compose v2 plugin as well.
+    The group change lets you run `docker` without `sudo`; `newgrp` applies it without logging out.
+    The script installs the Compose v2 plugin too.
 
 === "macOS"
 
@@ -332,9 +285,7 @@ Docker Compose version v2.29.7
     *Settings → Resources → WSL Integration → Ubuntu*. Verify from the **Ubuntu** terminal, not
     PowerShell.
 
-**If `docker compose version` fails but `docker --version` works**
-
-You have Docker without the Compose plugin:
+**If `docker compose version` fails but `docker --version` works**, the Compose plugin is missing:
 
 ```bash
 sudo apt-get update && sudo apt-get install -y docker-compose-plugin   # Debian/Ubuntu
@@ -346,7 +297,7 @@ sudo apt-get update && sudo apt-get install -y docker-compose-plugin   # Debian/
 docker run --rm hello-world
 ```
 
-`--rm` deletes the container as soon as it finishes, so it leaves nothing behind.
+`--rm` deletes the container when it finishes.
 
 !!! success "**Checkpoint 1**"
 
@@ -362,36 +313,13 @@ docker run --rm hello-world
 
 ### Step 3 - Install the Floci CLI (SKIP IF ALREADY DONE)
 
-**Purpose**
-
-Floci is the **local AWS emulator** this course uses instead of a real AWS account. The Floci CLI is a
-small program that inspects and manages the emulator.
-
-**What Floci is**
-
-Floci is an open-source, MIT-licensed local cloud emulator. It listens on a port on your machine and
-answers AWS API calls exactly as the real AWS endpoints would, so the **AWS CLI cannot tell the
-difference**. It supports around 69 AWS services, including all of IAM and STS.
-
-**Why we use it**
-
-| Real AWS | Floci |
-| --- | --- |
-| Requires an account + credit card | Requires nothing |
-| Mistakes can cost money | Mistakes cost nothing |
-| Requires internet | Runs offline |
-| Deleting resources takes minutes | Reset in seconds |
-| Shared classroom account = chaos | Every student has a private "cloud" |
+Floci is an open-source local AWS emulator (about 69 services, including all of IAM and STS). It answers AWS API calls on a local port, so the AWS CLI cannot tell the difference, and mistakes cost nothing.
 
 !!! note "We install the CLI, but we will not use `floci start`"
-    From Step 9 onwards, the container is started by Docker Compose, not by `floci start`.
-    Step 7 explains why. The CLI is still worth installing: `floci status`, `floci logs`,
-    `floci services`, `floci doctor` and `floci snapshot` all work perfectly well against a
-    Compose-managed container, and you will use them throughout the course.
+    From Step 9 the container is started by Docker Compose; Step 7 explains why. `floci status`,
+    `logs`, `services`, `doctor` and `snapshot` still work against the Compose container.
 
-**Run from** : anywhere
-
-**Command**
+**Run from:** anywhere
 
 === "Linux / macOS (install script)"
 
@@ -414,15 +342,11 @@ difference**. It supports around 69 AWS services, including all of IAM and STS.
     Preferably, install inside **WSL Ubuntu** using the Linux install script instead, so the CLI and
     your labs share one filesystem.
 
-**What the command does**
-
-- `curl` downloads a file from a URL. `-f` fail silently on HTTP errors, `-s` silent,
-  `-S` still show errors, `-L` follow redirects.
-- `| sh` pipes the downloaded script into the shell to execute it.
+`curl -fsSL` downloads quietly, failing on HTTP errors and following redirects; `| sh` runs the script.
 
 !!! warning "Piping a script from the internet into your shell"
-    `curl ... | sh` runs code you have not read. In this course it is acceptable because Floci is a
-    known open-source project, but in professional work you should download first, read, then run:
+    `curl ... | sh` runs code you have not read. Acceptable here for a known open-source project;
+    professionally, download, read, then run:
     ```bash
     curl -fsSL https://floci.io/install.sh -o floci-install.sh
     less floci-install.sh          # read it
@@ -445,37 +369,26 @@ server     not running
 > Example output - versions will differ. `server` reporting "not running" is expected: we have not
 > started the container yet.
 
-**Troubleshoot: `floci: command not found`**
-
-The installer put the binary in a directory that is not in your `PATH` (the list of folders your
-shell searches for programs). Fix it:
+**Troubleshoot: `floci: command not found`.** The binary's directory is not on your `PATH`:
 
 ```bash
 export PATH="$HOME/.local/bin:$PATH"
 echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc
 ```
 
-The first line fixes the current terminal; the second makes it permanent for new terminals.
-(If your shell is `zsh`, use `~/.zshrc` instead of `~/.bashrc`.)
+The first line fixes this terminal, the second makes it permanent (use `~/.zshrc` on zsh).
 
 ---
 
 ### Step 4 - Run Floci's environment diagnostics
 
-**Purpose**
-
-Catch problems *before* they turn into confusing AWS CLI errors.
-
-**Command**
+Catch problems before they turn into confusing AWS CLI errors.
 
 ```bash
 floci doctor
 ```
 
-**What the command does**
-
-`doctor` checks the things Floci needs: Docker present, Docker daemon reachable, port 4566 free,
-enough disk, correct architecture image available.
+`doctor` checks Docker, the daemon, port 4566, disk space and the image.
 
 **Expected result**
 
@@ -495,27 +408,19 @@ enough disk, correct architecture image available.
 sudo lsof -i :4566          # macOS / Linux
 ```
 
-Either stop that program, or change the port in `docker-compose.yml` in Step 8 - and if you do,
-change it in `configs/course.env` too. Because both live in one file each, that is a two-line change
-rather than a hunt through every command in the course. That is exactly why we are about to build
-the project structure *before* starting anything.
+Stop that program, or change the port in `docker-compose.yml` (Step 8) **and** in `configs/course.env`: a two-line change, because each value lives in one file.
 
 ---
 
 ### Step 5 - Create the course directory structure (Important)
 
-**Purpose**
-
-Create the folder tree from Section 7 **before** starting Floci, so that the emulator's configuration
-is a committed file from the very first run.
+Create the folder tree from Section 6 **before** starting Floci, so the emulator's configuration is a committed file from the first run.
 
 **Run from**
 
 ```text
 your home directory
 ```
-
-**Command**
 
 ```bash
 cd ~
@@ -525,14 +430,8 @@ cd aws-floci-course
 pwd
 ```
 
-**What the command does**
-
-- `cd ~` moves to your home directory (`~` is shorthand for it).
-- `mkdir -p` creates directories including parents, and does not error if they already exist -
-  which makes the command safe to run twice.
-- `{a,b,c}` is **brace expansion**: the shell expands it into several arguments, so one `mkdir`
-  creates seven folders. Note there must be **no spaces** inside the braces.
-- `pwd` prints the working directory, confirming where you are.
+- `mkdir -p` creates parents and does not fail if a folder exists, so it is safe to re-run.
+- `{a,b,c}` is brace expansion: one `mkdir`, seven folders. No spaces inside the braces.
 
 **Verify**
 
@@ -561,23 +460,13 @@ find . -type d | sort
 !!! tip "Install `tree` for a nicer view"
     `sudo apt install tree` (Linux) or `brew install tree` (macOS), then run `tree -d`.
 
-**From here to the end of Part A, stay in `~/aws-floci-course`.** Every command below assumes it.
+**From here to the end of Part A, stay in `~/aws-floci-course`.**
 
 ---
 
 ### Step 6 - Write `.gitignore` and initialise Git - before any secret exists
 
-**Purpose**
-
-A secret that is never committed cannot be leaked. The only reliable way to guarantee that is to
-write the ignore rules **before** the repository contains anything, and before any command has
-produced a credential.
-
-**Run from**
-
-```text
-aws-floci-course/
-```
+A secret that is never committed cannot be leaked. Write the ignore rules before the repository contains anything and before any command has produced a credential.
 
 #### 6.1 Write the ignore rules
 
@@ -621,20 +510,15 @@ touch outputs/.gitkeep
 ```
 
 !!! bug "`outputs/` vs `outputs/*` - a real bug, not a style preference"
-    It is tempting to write:
-
     ```text
     outputs/
     !outputs/.gitkeep
     ```
 
-    **This does not work.** Git's rule is explicit: *it is not possible to re-include a file if a
-    parent directory of that file is excluded.* Once `outputs/` excludes the whole directory, Git
-    never even looks inside it, so the `!outputs/.gitkeep` line has no effect and the folder
-    silently disappears from your repository.
-
-    Writing `outputs/*` excludes the directory's **contents** while leaving the directory itself
-    visible to Git, so the negation works. You will verify this in the next command - do not skip it.
+    **This does not work.** Git cannot re-include a file whose parent directory is excluded, so the
+    negation does nothing and the folder silently disappears from the repository. `outputs/*`
+    excludes the **contents** and leaves the directory visible, so the negation works. The next
+    command proves it.
 
 #### 6.2 Initialise the repository and prove the rules work
 
@@ -651,8 +535,7 @@ A  .gitignore
 A  outputs/.gitkeep
 ```
 
-Both files staged. If `outputs/.gitkeep` is **missing** from that list, your `.gitignore` has the
-`outputs/` form rather than `outputs/*` - fix it before continuing.
+If `outputs/.gitkeep` is **missing**, your `.gitignore` has `outputs/` instead of `outputs/*`. Fix it before continuing.
 
 **Now prove a secret would be blocked**
 
@@ -671,9 +554,7 @@ A  outputs/.gitkeep
 .gitignore:8:outputs/*	outputs/fake-key.json
 ```
 
-The fake key does **not** appear in `git status`, and `git check-ignore -v` names the exact file and
-line number of the rule that blocked it. Seeing the rule named is far more convincing than seeing
-nothing happen.
+The fake key is absent from `git status`, and `git check-ignore -v` names the file and line of the rule that blocked it.
 
 ```bash
 git commit -q -m "chore: ignore secrets before the repo can hold any"
@@ -694,13 +575,7 @@ git log --oneline
 
 ### Step 7 - Understand Floci storage modes (read this before you start anything)
 
-**Purpose**
-
-This is the single most important concept in Part A.
-
-#### 7.1 The four storage modes
-
-Floci decides how durable its state is from one environment variable, `FLOCI_STORAGE_MODE`:
+The single most important concept in Part A. Floci's durability is set by one variable, `FLOCI_STORAGE_MODE`:
 
 | Mode | Behaviour | Good for |
 | --- | --- | --- |
@@ -709,34 +584,13 @@ Floci decides how durable its state is from one environment variable, `FLOCI_STO
 | `persistent` | Synchronous disk write on every change | Maximum safety, slower |
 | `wal` | Append-only write-ahead log with compaction | High-write workloads |
 
-**The default is `memory`.** 
+**The default is `memory`.** That is why `floci start --persist ~/floci-data` is not enough:
 
-#### 7.2 Why `floci start --persist ~/floci-data` is not enough
+- **Cause 1 - a directory is not a mode.** `--persist` mounts a host directory at `/app/data` but leaves the mode at `memory`. Floci writes almost nothing durable there, and deletes the Docker volumes it created on teardown: the "new volume on every restart" symptom.
+- **Cause 2 - sidecar services use a different variable.** RDS, OpenSearch, MSK, ECR, ElastiCache, Lambda, ECS and EKS run as child containers and need `FLOCI_STORAGE_HOST_PERSISTENT_PATH`, which must be **absolute**. Nothing expands `~`; a literal `~/floci-data` creates a directory named `~`.
+- **Cause 3 - CLI flags are not remembered.** Any plain `floci start`, `floci restart` or Docker Desktop restart brings the container back on defaults (memory mode, no bind mount), silently.
 
-Three separate mechanisms are involved, and the `--persist` flag only touches part of one of them.
-
-**Cause 1 - a directory is not a mode.**
-`--persist` gives Floci a host directory to mount at `/app/data`. It does not change
-`FLOCI_STORAGE_MODE`. In `memory` mode Floci writes almost nothing durable into that directory -
-and, because it correctly assumes its own state is disposable, it also **deletes the Docker volumes
-it created** on teardown. That is why students see a brand-new volume appear on every restart and
-conclude "Docker is ignoring my volume". Docker is not ignoring anything; Floci is cleaning up after
-itself exactly as designed.
-
-**Cause 2 - sidecar services use a different variable entirely.**
-Some AWS services run as *child containers* that Floci launches: RDS, OpenSearch, MSK, ECR,
-ElastiCache, Lambda, ECS, EKS. Their data does **not** travel through `--persist`. By default they
-get named Docker volumes labelled `floci=true`. Pointing them at your disk needs a different
-variable, `FLOCI_STORAGE_HOST_PERSISTENT_PATH`, and that variable requires an **absolute** path -
-Floci rejects relative paths, and neither Docker nor Floci expands `~`. A literal `~/floci-data`
-written into a config file creates a directory actually named `~`.
-
-**Cause 3 - CLI flags are not remembered.**
-`floci start` stores nothing about a previous run. A plain `floci start`, a `floci restart`, a Docker
-Desktop restart, or a `floci stop --remove` all bring the container back on **defaults** - memory
-mode, no bind mount. One such restart silently wipes everything, and nothing warns you.
-
-#### 7.3 The three settings that actually matter
+The three settings that actually matter:
 
 ```yaml
 FLOCI_STORAGE_MODE: hybrid                        # 1. durability ON (default is memory)
@@ -744,27 +598,11 @@ FLOCI_STORAGE_PERSISTENT_PATH: /app/data          # 2. where Floci writes, conta
 FLOCI_STORAGE_HOST_PERSISTENT_PATH: /home/you/floci-data   # 3. sidecars, host side, ABSOLUTE
 ```
 
-Plus one setting that makes debugging far easier, by giving Floci's child containers and volumes
-stable, greppable names instead of effectively random ones:
+Plus one that gives child containers and volumes stable, greppable names:
 
 ```yaml
 FLOCI_DOCKER_RESOURCE_NAMESPACE: floci-course
 ```
-<!-- 
-#### 7.3 Why Docker Compose, and not the CLI
-
-Cause 3 above is not solved by typing the right flags - it is solved by not typing flags at all.
-A committed `docker-compose.yml` cannot drift, is reviewable by your instructor, is identical on
-every student's machine, and is itself a piece of coursework evidence.
-
-```text
-floci start --persist ...          docker compose up -d
- ├── flags typed by hand            ├── configuration is a committed file
- ├── forgotten on every restart     ├── identical on every restart
- ├── differs between students       ├── identical for every student
- └── invisible in your repo         └── reviewable in your repo
-``` 
--->
 
 !!! question "**Think about it**"
 
@@ -775,15 +613,7 @@ floci start --persist ...          docker compose up -d
 
 ### Step 8 - Write `docker-compose.yml` and `configs/course.env`
 
-**Purpose**
-
-Capture the configuration from Step 7 in two committed files.
-
-**Run from**
-
-```text
-aws-floci-course/
-```
+Capture Step 7's configuration in two committed files.
 
 #### 8.1 `configs/course.env` - values every lab needs
 
@@ -824,15 +654,12 @@ EOF
 ```
 
 !!! note "Why a naming convention matters"
-    Every resource in this course is prefixed `usms-`. In a real shared AWS account this is how you
-    find, filter, bill and safely delete *your* resources without touching anybody else's. You will
-    use it in Lab 2 with `--filters`, and in cleanup scripts.
+    The `usms-` prefix is how you find, filter, bill and safely delete *your* resources in a shared
+    account. Lab 2 uses it with `--filters`.
 
 !!! warning "This file exports `AWS_PROFILE` and nothing else AWS-related"
-    It deliberately does **not** export `AWS_ENDPOINT_URL`, `AWS_ACCESS_KEY_ID` or
-    `AWS_SECRET_ACCESS_KEY`. Step 11 explains the credential resolution order and why mixing
-    environment variables with profiles makes failures very hard to diagnose. This course uses
-    profiles.
+    No `AWS_ENDPOINT_URL`, `AWS_ACCESS_KEY_ID` or `AWS_SECRET_ACCESS_KEY`. This course uses profiles;
+    Step 11 explains why mixing them with environment variables makes failures hard to diagnose.
 
 #### 8.2 `docker-compose.yml` 
 
@@ -923,14 +750,10 @@ services:
 EOF
 ```
 
-**Read the file before you run it**
-
-Four things are worth understanding, because you will be asked about them:
-
 | Line | Why it is there |
 | --- | --- |
 | `FLOCI_STORAGE_MODE: hybrid` | Turns durability on. Without it the rest is decoration |
-| `${FLOCI_HOST_DATA_DIR:?...}` | The `:?` form makes Compose **fail with your error message** rather than mount something wrong. Try `docker compose config` right now to see it fire |
+| `${FLOCI_HOST_DATA_DIR:?...}` | The `:?` form makes Compose **fail with your error message** rather than mount something wrong |
 | `/var/run/docker.sock` | Lets Floci launch sidecar containers. Needed from Lab 05 |
 | `container_name: floci` | Makes a stray `floci start` collide loudly instead of failing silently |
 
@@ -948,24 +771,13 @@ FLOCI_HOST_DATA_DIR is missing a value: run ./scripts/setup/floci-up.sh
 instead of docker compose directly
 ```
 
-That error is **correct and expected** - it is the `:?` guard working. `.env` does not exist yet;
-Step 9 writes it. If instead you saw `compose file is valid`, you have a stale `.env` from an earlier
-attempt; delete it with `rm -f .env` and re-run.
+That error is **correct**: the `:?` guard working, because Step 9 has not written `.env` yet. If you saw `compose file is valid`, a stale `.env` exists; run `rm -f .env` and re-run.
 
 ---
 
 ### Step 9 - Write the start/stop scripts and bring Floci up
 
-**Purpose**
-
-Wrap Compose in two short scripts, so starting the course environment is one command that also
-checks its own work.
-
-**Run from**
-
-```text
-aws-floci-course/
-```
+Wrap Compose in two short scripts, so starting the environment is one command that checks its own work.
 
 #### 9.1 `scripts/setup/floci-up.sh`
 
@@ -1047,17 +859,9 @@ EOF
 chmod +x scripts/setup/floci-up.sh
 ```{% endraw %}
 
-**What the script does**
-
-- `#!/usr/bin/env bash` - the **shebang**: tells the OS which interpreter to use.
-- `set -E` propagate error traps; `-e` exit immediately on any failing command; `-u` error on
-  undefined variables; `-o pipefail` make a pipeline fail if any stage fails. Together they stop a
-  broken script from quietly continuing.
-- `${BASH_SOURCE[0]}` is the script's own path. Combined with `cd ... && pwd` it resolves the repo
-  root no matter which directory you invoke the script from - more reliable than `$0`.
-- Section 2 is the guard that turns the *silent* failure of Step 7's Cause 3 into a loud one.
-- Section 7 is not decoration: it asks Docker what is actually mounted and fails if the answer is
-  not a host bind mount. A script that verifies its own work is worth ten that assume.
+- `set -Eeuo pipefail` stops on any error, undefined variable or failed pipeline stage.
+- `${BASH_SOURCE[0]}` resolves the repo root wherever you run the script from.
+- Script section 2 turns Step 7's silent Cause 3 into a loud failure; script section 7 asks Docker what is actually mounted and fails if it is not a host bind mount.
 
 #### 9.2 `scripts/setup/floci-down.sh`
 
@@ -1111,9 +915,7 @@ floci status
 curl -s http://localhost:4566/_floci/health | head -c 300 ; echo
 ```
 
-The third is the most convincing: it is a raw HTTP request that involves neither Docker nor the Floci
-CLI. If JSON comes back, something really is listening on port 4566. Floci also serves
-`/_localstack/health` for LocalStack compatibility, so either path works.
+The `curl` check involves neither Docker nor the Floci CLI: JSON back means something really listens on 4566. `/_localstack/health` also works.
 
 **Useful lifecycle commands (learn these now)**
 
@@ -1149,23 +951,9 @@ floci services                  # which AWS services are enabled
 
 ### Step 10 - Install the AWS CLI (version 2)
 
-**Purpose**
+The AWS CLI is a client, not AWS: it builds each API request, signs it, sends it to whatever endpoint it is told, and prints the JSON response. That is how it can talk to Floci.
 
-The AWS CLI is the program that turns your typed command into a signed HTTPS request to an AWS API.
-
-**Concept: what the AWS CLI actually is**
-
-The AWS CLI is **not** AWS. It is a client. It knows the shape of every AWS API, builds the request,
-signs it with your credentials, sends it, and pretty-prints the JSON response. It will happily send
-that request to any endpoint you tell it to - which is precisely how it can talk to Floci.
-
-**Run from**
-
-```text
-anywhere
-```
-
-**Command**
+**Run from:** anywhere
 
 === "Linux (x86_64)"
 
@@ -1210,12 +998,9 @@ aws-cli/2.28.4 Python/3.13.4 Linux/6.8.0 exe/x86_64
 > Example output - versions differ.
 
 !!! danger "It must say `aws-cli/2.x`, and ideally 2.13 or newer"
-    If it says `aws-cli/1.x`, you have AWS CLI v1. This course requires **v2**, because only v2
-    supports the `endpoint_url` profile setting that redirects the CLI to Floci cleanly. Uninstall v1
-    (`pip uninstall awscli`) and install v2.
-
-    `endpoint_url` as a *profile* setting arrived in AWS CLI **2.13**. On an older 2.x you will have
-    to pass `--endpoint-url http://localhost:4566` on every command. Step 12 shows how to check.
+    `aws-cli/1.x` is v1: uninstall it (`pip uninstall awscli`) and install v2. The `endpoint_url`
+    profile setting arrived in **2.13**; on an older 2.x you must pass
+    `--endpoint-url http://localhost:4566` on every command. Step 12 shows how to check.
 
 **Explore the CLI's own help**
 
@@ -1225,18 +1010,13 @@ aws iam help
 aws iam create-user help
 ```
 
-Press `q` to quit the help pager. This built-in help is the authoritative reference - you will use it
-constantly. It shows every option, its type, and examples.
+Press `q` to quit. This built-in help is the authoritative reference for every option.
 
 ---
 
 ### Step 11 - Understand AWS credentials, regions and profiles
 
-**Purpose**
-
-Before configuring anything, understand the four values every AWS CLI command needs.
-
-**The four values**
+Every AWS CLI command needs four values:
 
 | Value | What it is | Our value (Floci) |
 | --- | --- | --- |
@@ -1245,34 +1025,20 @@ Before configuring anything, understand the four values every AWS CLI command ne
 | **Region** | Which geographic AWS "copy" you are talking to | `us-east-1` |
 | **Endpoint URL** | Which server to send the request to | `http://localhost:4566` |
 
-**Concept: regions**
+!!! info "Regions and global services"
+    Resources are region-scoped, and each region has several Availability Zones (Lab 2 uses them).
+    IAM is one of the few **global** services: you still pass a region, but IAM resources appear in
+    every region. See [regions](../unit1/topic1.md#region) and
+    [global, regional and zonal services](../unit1/topic1.md#global-regional-and-zonal-services).
 
-Real AWS runs in isolated **regions** (`us-east-1` = N. Virginia, `ap-south-1` = Mumbai,
-`ap-southeast-1` = Singapore). Resources are region-scoped: a VPC created in Singapore does not
-exist in Mumbai. Each region contains multiple **Availability Zones** (`us-east-1a`, `us-east-1b`) -
-physically separate data centres used for redundancy. You will use AZs properly in Lab 2.
-
-!!! note "IAM is one of the few global services"
-    IAM users, groups, roles and policies are **global** - not tied to a region. You still must supply
-    a region to the CLI (the request has to go somewhere), but IAM resources appear identically in
-    every region. Real AWS routes all IAM calls to `us-east-1` internally. EC2, VPC and S3 buckets, by
-    contrast, are regional.
-
-**Concept: profiles**
-
-A **profile** is a named set of these values stored in two files in your home directory:
+A **profile** is a named set of these values, stored in two files:
 
 ```text
 ~/.aws/credentials     ← secrets  (access key id + secret)
 ~/.aws/config          ← settings (region, output format, endpoint_url)
 ```
 
-Profiles let you keep `floci` (safe, local) and, someday, `university-prod` (real, dangerous)
-separate, and choose between them per command with `--profile`.
-
-**Concept: the credential resolution order**
-
-The AWS CLI looks for credentials in this order and stops at the first hit:
+The CLI looks for credentials in this order and stops at the first hit:
 
 ```text
 1. Command-line options       (--profile, --region, --endpoint-url)
@@ -1283,35 +1049,23 @@ The AWS CLI looks for credentials in this order and stops at the first hit:
 ```
 
 !!! warning "Do not mix profiles and environment variables"
-    Floci offers `eval $(floci env)`, which exports `AWS_ENDPOINT_URL`, `AWS_ACCESS_KEY_ID`, etc. into
-    your shell. That is convenient, but if you *also* use `--profile`, it becomes very hard to reason
-    about which credentials were actually used - level 2 silently beats levels 3 and 4.
-
-    **This course uses named profiles.** If you ever ran `eval $(floci env)`, clear them:
+    `eval $(floci env)` exports `AWS_ENDPOINT_URL`, `AWS_ACCESS_KEY_ID` and so on. Level 2 then
+    silently beats levels 3 and 4, and you cannot tell which credentials were used. **This course
+    uses named profiles.** If you ever ran it, clear them:
 
     ```bash
     unset AWS_ENDPOINT_URL AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY \
           AWS_DEFAULT_REGION AWS_REGION
     ```
 
-    Note that `AWS_PROFILE` is **not** in that list - `configs/course.env` sets it deliberately, and
-    it selects a profile rather than overriding one.
+    `AWS_PROFILE` is not in that list: `configs/course.env` sets it, and it selects a profile rather
+    than overriding one.
 
 ---
 
 ### Step 12 - Create the `floci` AWS CLI profile
 
-**Purpose**
-
-Store the four values once, so you never type them again.
-
-**Run from**
-
-```text
-aws-floci-course/
-```
-
-**Command**
+Store the four values once.
 
 ```bash
 aws configure set aws_access_key_id     test                  --profile floci
@@ -1321,18 +1075,13 @@ aws configure set output                json                  --profile floci
 aws configure set endpoint_url          http://localhost:4566 --profile floci
 ```
 
-**What the command does**
-
-- `aws configure set <key> <value> --profile <name>` writes one setting into the profile files,
-  creating them if needed. Credentials go to `~/.aws/credentials`, everything else to `~/.aws/config`.
-- `endpoint_url` is the line that redirects **all** services in this profile to Floci. Without it the
-  CLI would contact real AWS.
-- `test`/`test` are dummy credentials. Floci accepts any non-empty values by default.
+- Credentials go to `~/.aws/credentials`, everything else to `~/.aws/config`.
+- `endpoint_url` redirects **all** services in this profile to Floci. Without it the CLI contacts real AWS.
+- `test`/`test` are dummies; Floci accepts any non-empty values.
 
 !!! danger "Why `test`/`test` is safe here and never elsewhere"
-    These are meaningless strings accepted by a local emulator. **Never** put real AWS credentials
-    into a command like this on a shared machine or in a script - your shell history file
-    (`~/.bash_history`) records everything you type.
+    Never type real credentials into a command like this: your shell history (`~/.bash_history`)
+    records everything.
 
 **Verify**
 
@@ -1363,18 +1112,12 @@ aws_secret_access_key = test
 
 **Make `floci` the default profile for this course**
 
-`configs/course.env` already exports `AWS_PROFILE=floci`. Source it, and make new terminals do the
-same automatically:
-
 ```bash
 source configs/course.env
 echo 'source ~/aws-floci-course/configs/course.env' >> ~/.bashrc
 ```
 
-(Use `~/.zshrc` if your shell is zsh - Step 1 told you which.)
-
-Now you can omit `--profile floci` from every command. This document still shows `--profile floci`
-explicitly in the next two steps so you can see where it belongs, then relies on `AWS_PROFILE`.
+(Use `~/.zshrc` on zsh.) `course.env` exports `AWS_PROFILE=floci`, so `--profile floci` becomes optional. The next two steps still show it so you see where it belongs.
 
 **If your AWS CLI is older than 2.13**
 
@@ -1382,8 +1125,7 @@ explicitly in the next two steps so you can see where it belongs, then relies on
 aws configure get endpoint_url --profile floci
 ```
 
-If that prints the URL but commands still try to reach `amazonaws.com` (you will test this in
-Step 14), your CLI ignores the profile setting. Upgrade the CLI, or add this to `course.env`:
+If that prints the URL but commands still reach `amazonaws.com` (Step 14 tests this), upgrade the CLI, or add this to `course.env`:
 
 ```bash
 # ONLY if your AWS CLI predates 2.13 and ignores the profile's endpoint_url
@@ -1399,26 +1141,11 @@ export AWS_ENDPOINT_URL=http://localhost:4566
 
 ### Step 13 - Your first AWS CLI command, and the `whoami` helper
 
-**Purpose**
-
-Ask the emulator "who am I?" - the single most useful diagnostic command in AWS - and wrap it in a
-script you will run at the start of every lab.
-
-**Run from**
-
-```text
-aws-floci-course/
-```
-
-**Command**
+Ask the emulator "who am I?", the most useful diagnostic in AWS, then wrap it in a script you run at the start of every lab.
 
 ```bash
 aws sts get-caller-identity --profile floci
 ```
-
-**What the command does**
-
-Read the command as a sentence with four parts:
 
 ```text
 aws           the CLI program
@@ -1427,10 +1154,7 @@ aws           the CLI program
            └── --profile floci  an OPTION (which credentials/endpoint to use)
 ```
 
-- **STS** is the AWS service that issues and inspects temporary credentials.
-- `get-caller-identity` returns the identity behind the credentials you just used. It requires **no
-  permissions at all** - which is why it always works and is always the first thing to run when
-  something is broken.
+`get-caller-identity` returns the identity behind your credentials and needs **no permissions**, so it is always the first thing to run when something is broken.
 
 **Expected result**
 
@@ -1444,13 +1168,7 @@ aws           the CLI program
 
 > Example output - your `UserId` may differ.
 
-**Read the output**
-
-- `Account` = `000000000000` - Floci's fixed dummy account number. Real AWS accounts are real 12-digit
-  numbers. **Seeing all zeros is your proof you are not on real AWS.**
-- `Arn` - an Amazon Resource Name, explained fully in Step 16.
-
-If you got `Could not connect to the endpoint URL`, Floci is not running: `./scripts/setup/floci-up.sh`.
+`Account` `000000000000` is Floci's fixed dummy account: **proof you are not on real AWS.** Step 16 explains the `Arn`. `Could not connect to the endpoint URL` means Floci is not running: `./scripts/setup/floci-up.sh`.
 
 **Now wrap it in a script**
 
@@ -1485,8 +1203,7 @@ chmod +x scripts/utilities/whoami.sh
 ./scripts/utilities/whoami.sh
 ```
 
-`${VAR:-default}` means "the value of VAR, or `default` if VAR is unset" - it prevents `set -u` from
-killing the script when a variable legitimately does not exist.
+`${VAR:-default}` substitutes `default` when `VAR` is unset, so `set -u` does not kill the script.
 
 **Expected result**
 
@@ -1506,34 +1223,23 @@ configured region   = us-east-1
 [ok] Account 000000000000 - this is Floci, not real AWS.
 ```
 
-Note `--output table` - the same data as JSON, formatted for humans.
-
 !!! success "**Checkpoint 4**"
 
-  ```text
-  AWS CLI  ──→  Floci  : working
-  Account            : 000000000000
-  whoami.sh          : written and passing
-  ```
+    ```text
+    AWS CLI  ──→  Floci  : working
+    Account            : 000000000000
+    whoami.sh          : written and passing
+    ```
 
 ---
 
 ### Step 14 - Prove isolation from real AWS, and prove persistence
 
-**Purpose**
-
-Two different claims, two different proofs. Students routinely confuse them, and a passing test of
-one tells you nothing about the other.
+Two different claims need two different proofs; passing one tells you nothing about the other.
 
 ```text
 ISOLATION   "my commands never reach real AWS"
 PERSISTENCE "my data survives a restart"
-```
-
-**Run from**
-
-```text
-aws-floci-course/
 ```
 
 #### 14.1 Isolation, Test 1 - the account number
@@ -1548,12 +1254,7 @@ aws sts get-caller-identity --profile floci --debug 2>&1 \
   | head -5
 ```
 
-**What the command does**
-
-- `--debug` makes the CLI print its entire internal decision process.
-- `2>&1` redirects **stderr** (where debug output goes) into **stdout** so the pipe can see it.
-- `|` sends that text to `grep`, which prints only matching lines.
-- `head -5` keeps the first five.
+`--debug` prints the CLI's internal decisions to stderr; `2>&1` sends them into the pipe for `grep`.
 
 **Expected result**
 
@@ -1578,15 +1279,11 @@ aws sts get-caller-identity --profile floci
 Could not connect to the endpoint URL: "http://localhost:4566/"
 ```
 
-If your commands were secretly reaching real AWS, stopping a local container could not possibly break
-them. **Leave it stopped** - the persistence test starts from here.
+Stopping a local container could not break calls to real AWS. **Leave it stopped**; the persistence test starts here.
 
 #### 14.4 Persistence - the test that actually matters
 
-The old version of this lab restarted Floci and observed that `get-caller-identity` still returned
-the same root ARN. That proves **nothing**: the root identity is a constant, and it comes back
-identically even in `memory` mode with no disk at all. A real persistence test has to create
-something, restart, and look for it again.
+Restarting and seeing the same root ARN proves nothing: the root identity is a constant, even in `memory` mode. Create something, restart, and look for it again.
 
 ```bash
 # 1. Bring Floci back up
@@ -1611,9 +1308,7 @@ arn:aws:iam::000000000000:user/persistence-check
 persistence-check
 ```
 
-The second line is the whole point of Part A. If step 4 instead prints
-`An error occurred (NoSuchEntity)`, your storage configuration is wrong - run
-`./scripts/utilities/floci-storage-check.sh` (written in Step 15) and re-read Step 7.
+The second line is the whole point of Part A. `NoSuchEntity` instead means your storage configuration is wrong: run `./scripts/utilities/floci-storage-check.sh` (Step 15) and re-read Step 7.
 
 **Look at the data on disk**
 
@@ -1622,8 +1317,7 @@ ls -la ~/floci-data
 du -sh ~/floci-data
 ```
 
-You should see real files and a non-zero size. An **empty** `~/floci-data` alongside a surviving user
-means Floci is persisting somewhere else - also a misconfiguration.
+You want real files and a non-zero size. An **empty** directory alongside a surviving user means Floci persists somewhere else, also a misconfiguration.
 
 **Clean up the marker**
 
@@ -1648,14 +1342,14 @@ exit code = 0
 exit code = 254
 ```
 
-`$?` holds the exit status of the last command: `0` = success, non-zero = failure. AWS CLI v2 uses
-`254` for a service error such as `NoSuchEntity` and `255` for a client-side or connection error.
-Scripts use this to decide whether to continue - the verification script in Section 9 is built on it.
+`$?` is the last command's exit status: `0` success, `254` service error (such as `NoSuchEntity`), `255` client or connection error. The verification script in Section 8 is built on this.
 
 !!! note "Floci Limitation - identity is not really authenticated"
-    Real AWS verifies your signature cryptographically and rejects wrong credentials. Floci accepts
-    any non-empty credentials by default, and reports you as the account `root` user. So
-    `get-caller-identity` in Floci confirms **connectivity**, not **authentication**.
+    Floci accepts any non-empty credentials and reports you as the account `root` user.
+
+    Real AWS verifies your signature cryptographically and rejects wrong credentials.
+
+    In Floci, `get-caller-identity` confirms **connectivity**, not **authentication**.
 
 !!! success "**Checkpoint 5**"
 
@@ -1674,16 +1368,7 @@ Scripts use this to decide whether to continue - the verification script in Sect
 
 ### Step 15 - Storage diagnostics, README, and commit Part A
 
-**Purpose**
-
-Write the tool you will reach for when persistence looks wrong, finish the project front page, and
-commit a clean environment.
-
-**Run from**
-
-```text
-aws-floci-course/
-```
+Write the tool you reach for when persistence looks wrong, write the project front page, and commit.
 
 #### 15.1 `scripts/utilities/floci-storage-check.sh`
 
@@ -1784,15 +1469,11 @@ chmod +x scripts/utilities/floci-storage-check.sh
 ./scripts/utilities/floci-storage-check.sh
 ```{% endraw %}
 
-**Expected result** - six sections, all `[ok]`, with section 5 reporting no dangling volumes.
-
-Keep this output. It is good evidence for your lab report, and it is the first thing to run in
-Section 11 troubleshooting.
+**Expected result** - six sections, all `[ok]`, with section 5 reporting no dangling volumes. Keep the output as report evidence; it is the first thing to run in Section 10 troubleshooting.
 
 #### 15.2 A cleanup script for stray volumes
 
-If you experimented with `floci start` before reading Step 7, you may have orphaned volumes. This
-removes only volumes labelled `floci=true` that no container is using.
+If you experimented with `floci start` before reading Step 7, you may have orphaned volumes. This removes only dangling volumes labelled `floci=true`, and is a dry run unless you pass `--yes`.
 
 ```bash
 cat > scripts/cleanup/floci-prune-volumes.sh << 'EOF'
@@ -1886,7 +1567,7 @@ EOF
 git status --short
 ```
 
-Confirm that **no file under `outputs/`** and **no `.env`** appears. Then:
+Confirm **no file under `outputs/`** and **no `.env`** appears. Then:
 
 ```bash
 git add .
@@ -1917,38 +1598,21 @@ git log --oneline
 ---
 ## PART B - Building the IAM Foundation (Steps 16–33)
 
-Everything below assumes Part A is complete and verified. If you skipped Step 14's persistence
-proof, go back and do it - otherwise you may be about to build an IAM foundation that evaporates.
+Part B assumes Part A is complete. If you skipped Step 14's persistence proof, go back: otherwise the IAM foundation may evaporate.
 
 ---
 
 ### Step 16 - IAM concepts and the anatomy of an ARN
 
-**Purpose**
+!!! info "IAM in brief"
+    A **user** has permanent credentials; a **group** is a container of users (not an identity, cannot
+    be nested); a **role** has no permanent credentials and is *assumed* for temporary ones; a
+    **policy** is JSON that allows or denies actions on resources under conditions. Full treatment:
+    [users, groups and roles](../unit8/topic1.md#iam-users-groups-and-roles),
+    [policy grammar](../unit8/topic1.md#policy-grammar),
+    [policy types](../unit8/topic1.md#policy-types).
 
-Understand the vocabulary before typing commands. Five minutes here saves an hour of confusion later.
-
-#### 16.1 The four IAM building blocks
-
-```text
-┌───────────┐   an identity for a PERSON or a long-lived program.
-│   USER    │   Has permanent credentials (password and/or access keys).
-└───────────┘
-
-┌───────────┐   a container for USERS. Policies attached here apply to
-│   GROUP   │   every member. Groups cannot be nested and are not identities
-└───────────┘   (a group cannot be "assumed" and has no credentials).
-
-┌───────────┐   an identity for a SERVICE, an application, or a temporarily
-│   ROLE    │   elevated human. NO permanent credentials - it is ASSUMED,
-└───────────┘   which mints temporary credentials that expire.
-
-┌───────────┐   a JSON document that says ALLOW or DENY for
-│  POLICY   │   (actions) on (resources) under (conditions).
-└───────────┘
-```
-
-#### 16.2 Two kinds of policy - the distinction students most often miss
+The distinction students most often miss:
 
 | | **Permissions policy** | **Trust policy** |
 | --- | --- | --- |
@@ -1957,20 +1621,11 @@ Understand the vocabulary before typing commands. Five minutes here saves an hou
 | Key element | `Action` + `Resource` | `Principal` + `sts:AssumeRole` |
 | CLI flag | `--policy-document` on `create-policy` | `--assume-role-policy-document` on `create-role` |
 
-Every role needs **both**. Forgetting the trust policy is why a role "exists but nobody can use it".
+Every role needs **both**. A missing trust policy is why a role "exists but nobody can use it".
 
-#### 16.3 Three ways a policy can be attached
+Policies come in three kinds: **AWS managed** (maintained by AWS, broad), **customer managed** (yours, with its own ARN and versions; the default choice) and **inline** (embedded in one identity, dies with it).
 
-| Type | Lives where | Reusable? | Use when |
-| --- | --- | --- | --- |
-| **AWS managed** | Created and maintained by AWS | Yes, by everyone | Common broad cases (`ReadOnlyAccess`) |
-| **Customer managed** | Created by you, standalone object with its own ARN and versions | Yes, attach to many identities | **Default choice.** Your organisation's rules |
-| **Inline** | Embedded inside one user/group/role; dies with it | No | A one-off permission that must never be reused |
-
-#### 16.4 Anatomy of an ARN
-
-An **ARN** (Amazon Resource Name) is the globally unique address of an AWS resource. You will read
-hundreds of them.
+An **ARN** is the globally unique address of a resource:
 
 ```text
 arn:aws:iam::000000000000:user/usms-dev-01
@@ -2001,7 +1656,7 @@ arn:aws:ec2:us-east-1:000000000000:instance/i-0abc123
     A policy that lists only the first will fail every `GetObject` call. You will write both in
     Step 23.
 
-#### 16.5 Anatomy of a policy document
+A policy document:
 
 ```json
 {
@@ -2018,51 +1673,17 @@ arn:aws:ec2:us-east-1:000000000000:instance/i-0abc123
 }
 ```
 
-| Field | Meaning |
-| --- | --- |
-| `Version` | The **policy language** version. Always `"2012-10-17"`. It is *not* a date you choose - using anything else silently disables variables like `${aws:username}` |
-| `Statement` | A list of rules. Evaluated together |
-| `Sid` | Statement ID - an optional human label. Extremely useful when debugging |
-| `Effect` | `Allow` or `Deny` |
-| `Action` | The API operations, in `service:Operation` form. Wildcards allowed (`s3:Get*`) |
-| `Resource` | Which ARNs the actions apply to. `"*"` means all |
-| `Condition` | Optional extra tests (region, MFA, source IP, tags) |
+`Version` is always `"2012-10-17"`: it is the policy language version, and anything else silently disables variables such as `${aws:username}`. `Sid` is an optional label that helps debugging.
 
-#### 16.6 How AWS decides: policy evaluation logic
-
-```text
-                For every request
-                       |
-                       v
-        Is there an explicit DENY anywhere?
-              /                    \
-           YES                      NO
-            |                        |
-        ✗ DENIED          Is there an explicit ALLOW?
-                              /              \
-                            NO               YES
-                             |                 |
-                    ✗ DENIED (default)     ✓ ALLOWED
-```
-
-Two rules to memorise:
-
-1. **Default deny.** No policy = no access. Permissions are never implicit.
-2. **Explicit deny always wins.** A `Deny` beats any number of `Allow`s. This is how organisations
-   place absolute guardrails (e.g. "nobody may ever delete audit logs").
+[Evaluation](../unit8/topic1.md#the-policy-evaluation-logic) follows two rules: **default deny** (no policy, no access) and **explicit deny always wins** over any number of allows.
 
 !!! note "Floci Limitation - policies are stored, not enforced (by default)"
-    This is the most important Floci caveat in this lab.
+    Floci accepts any non-empty credentials and does not authorize requests against your IAM policies
+    unless stricter authentication is enabled. Everything you write is stored and validated, but a
+    too-narrow policy will not produce `AccessDenied`.
 
-    Real AWS evaluates every request against IAM policies and returns `AccessDenied` when they do not
-    permit it. Floci, by default, **accepts any non-empty credentials and does not authorize requests
-    against your IAM policies** unless stricter authentication is explicitly enabled.
-
-    **What this means for you:** everything you write in this lab is stored, retrievable and
-    syntactically validated - you are learning real IAM authoring. But you generally will **not** see
-    an `AccessDenied` in Floci simply because a policy was too narrow. Step 32 shows the
-    policy *simulator* as the closest available substitute, and Section 12 lists exactly which parts
-    of this lab are "conceptual / real AWS" rather than "enforced by Floci".
+    Real AWS evaluates every request and returns `AccessDenied`. Step 32 shows the policy simulator
+    as the closest substitute; Section 11 lists what is conceptual only.
 
     Write every policy as if it *were* enforced. In a real account it will be.
 
@@ -2070,9 +1691,7 @@ Two rules to memorise:
 
 ### Step 17 - Inspect the empty IAM account
 
-**Purpose**
-
-See the "before" state, and learn the three output formats.
+See the "before" state and the three output formats.
 
 **Run from**
 
@@ -2084,16 +1703,11 @@ aws-floci-course/labs/lab-01-iam/
 cd ~/aws-floci-course/labs/lab-01-iam
 ```
 
-**Command**
-
 ```bash
 aws iam list-users
 ```
 
-**What the command does**
-
-- `iam` - the IAM service.
-- `list-users` - returns every IAM user in the account. Read-only and harmless.
+`list-users` returns every IAM user in the account; read-only and harmless.
 
 **Expected result**
 
@@ -2103,10 +1717,7 @@ aws iam list-users
 }
 ```
 
-An empty list, not an error. Your account exists; it just has no users yet.
-
-(If you see `persistence-check` here, you skipped the cleanup at the end of Step 14. Run
-`aws iam delete-user --user-name persistence-check` now.)
+An empty list, not an error. If `persistence-check` appears, you skipped Step 14's cleanup: run `aws iam delete-user --user-name persistence-check`.
 
 **Now the same data in three formats**
 
@@ -2131,10 +1742,7 @@ aws iam list-users --output text
 
 ### Step 18 - Create the IAM groups
 
-**Purpose**
-
-Create the three permission containers before creating any user, so users can be placed correctly
-from birth.
+Create the three permission containers before any user, so users are placed correctly from birth.
 
 **Run from**
 
@@ -2142,18 +1750,13 @@ from birth.
 aws-floci-course/labs/lab-01-iam/
 ```
 
-**Command**
-
 ```bash
 aws iam create-group --group-name usms-admins
 aws iam create-group --group-name usms-developers
 aws iam create-group --group-name usms-auditors
 ```
 
-**What the command does**
-
-`create-group` creates an empty IAM group. A group has **no permissions and no members** at birth -
-it is purely a container. Note there is no `--region`: IAM is global.
+A new group has no permissions and no members. There is no `--region`: IAM is global.
 
 **Expected result**
 
@@ -2171,8 +1774,7 @@ it is purely a container. Note there is no `--region`: IAM is global.
 
 > Example output - your `GroupId` and `CreateDate` will differ.
 
-Notice `"Path": "/"`. Paths are an organisational feature (`/engineering/backend/`) that lets you
-group identities hierarchically and match them with wildcards in policies. We keep `/` for simplicity.
+`"Path": "/"` is an optional hierarchy (`/engineering/backend/`); we keep `/`.
 
 **Verify**
 
@@ -2180,10 +1782,7 @@ group identities hierarchically and match them with wildcards in policies. We ke
 aws iam list-groups --query 'Groups[*].[GroupName,Arn]' --output table
 ```
 
-**Introducing `--query`**
-
-`--query` filters the JSON response **on your machine**, using a language called **JMESPath**. Read
-`Groups[*].[GroupName,Arn]` as:
+`--query` filters the response on your machine using **JMESPath**:
 
 ```text
 Groups          take the "Groups" key from the response
@@ -2216,22 +1815,13 @@ Groups          take the "Groups" key from the response
 
 ### Step 19 - Create the IAM users and capture their ARNs
 
-**Purpose**
-
-Create three users, and learn the single most important AWS CLI habit: **never copy an ID by hand**.
-
-**Concept: why capture output into variables**
-
-Copying `arn:aws:iam::000000000000:user/usms-dev-01` by hand from the screen into the next command is
-slow and error-prone. Instead, ask the CLI for exactly one value and store it in a **shell variable**.
+Create three users, and learn the most important CLI habit: **never copy an ID by hand**. Ask the CLI for one value and store it in a shell variable.
 
 **Run from**
 
 ```text
 aws-floci-course/labs/lab-01-iam/
 ```
-
-**Command**
 
 ```bash
 ADMIN_ARN=$(aws iam create-user \
@@ -2257,16 +1847,10 @@ echo "$DEV_ARN"
 echo "$AUDIT_ARN"
 ```
 
-**What the command does**
-
-- `VAR=$(command)` is **command substitution**: run the command, capture its standard output, assign
-  it to `VAR`. No spaces around `=` - `VAR = value` is a different (broken) command.
-- `\` at the end of a line continues the command on the next line. There must be **nothing** after the
-  backslash, not even a space.
-- `--tags Key=...,Value=...` attaches key/value labels. Tags are how real organisations track cost,
-  ownership and environment. Tag everything, always.
-- `--query 'User.Arn'` walks into the response object and picks one field.
-- `--output text` strips the JSON quotes so the variable holds a clean string. **`--query` + `--output text` is the standard idiom for capturing an ID.**
+- `VAR=$(command)` captures the command's output. No spaces around `=`.
+- A trailing `\` continues the line; nothing may follow it, not even a space.
+- `--tags` labels the resource for cost, ownership and environment. Tag everything.
+- **`--query` + `--output text` is the standard idiom for capturing an ID**: one field, no JSON quotes.
 
 **Expected result**
 
@@ -2277,11 +1861,8 @@ arn:aws:iam::000000000000:user/usms-audit-01
 ```
 
 !!! warning "Shell variables die with the terminal"
-    If you close this terminal, `$DEV_ARN` is gone. That is why Step 33 writes these values to
-    `configs/lab-01.env` - a file that survives, and that Lab 2 will simply `source`.
-
-    Note the difference from Part A: your *IAM users* now survive a restart (you proved that in
-    Step 14), but your *shell variables* never will. Two different kinds of impermanence.
+    Close this terminal and `$DEV_ARN` is gone; Step 33 writes these values to `configs/lab-01.env`.
+    Your IAM users survive a restart (Step 14), your shell variables never do.
 
 **Verify**
 
@@ -2291,8 +1872,7 @@ aws iam list-users \
   --output table
 ```
 
-`{Name:Field}` in JMESPath builds an object with **renamed keys** - which become the table's column
-headers. Compare this to Step 18's `[Field1,Field2]`, which produced an unlabelled list.
+`{Name:Field}` builds an object with renamed keys, which become table column headers (compare Step 18's unlabelled `[Field1,Field2]`).
 
 **Inspect a single user and its tags**
 
@@ -2316,9 +1896,7 @@ aws iam list-user-tags --user-name usms-dev-01 --output table
 
 ### Step 20 - Add users to groups
 
-**Purpose**
-
-Connect identity to permission container.
+Connect each identity to its permission container.
 
 **Run from**
 
@@ -2326,18 +1904,13 @@ Connect identity to permission container.
 aws-floci-course/labs/lab-01-iam/
 ```
 
-**Command**
-
 ```bash
 aws iam add-user-to-group --group-name usms-admins     --user-name usms-admin-01
 aws iam add-user-to-group --group-name usms-developers --user-name usms-dev-01
 aws iam add-user-to-group --group-name usms-auditors   --user-name usms-audit-01
 ```
 
-**What the command does**
-
-Creates the membership link. Note it produces **no output at all** on success - many AWS "action"
-commands are silent. Silence is success; check `$?` if unsure.
+No output on success; many AWS action commands are silent. Check `$?` if unsure.
 
 **Verify - from both directions**
 
@@ -2358,8 +1931,7 @@ usms-dev-01
 usms-developers
 ```
 
-Being able to answer the question from both directions is exactly what you need during an access
-investigation.
+Answering from both directions is what an access investigation needs.
 
 !!! question "**Your turn**"
 
@@ -2370,22 +1942,13 @@ investigation.
 
 ### Step 21 - Explore and attach an AWS managed policy
 
-**Purpose**
-
-Use a policy AWS wrote for you before writing your own.
-
-**Concept**
-
-**AWS managed policies** are maintained by AWS, shared across every account, and identified by ARNs
-where the account field is the literal word `aws`:
+Use a policy AWS wrote before writing your own. AWS managed policy ARNs have the literal account `aws`:
 
 ```text
 arn:aws:iam::aws:policy/ReadOnlyAccess
 ```
 
-They are convenient but usually **too broad** for least privilege. `ReadOnlyAccess` is one of the rare
-cases where a managed policy is genuinely the right answer - an auditor really should be able to read
-everything and change nothing.
+They are usually too broad for least privilege; `ReadOnlyAccess` for an auditor is one of the rare right fits.
 
 **Explore what is available**
 
@@ -2394,15 +1957,14 @@ aws iam list-policies --scope AWS --max-items 10 \
   --query 'Policies[*].[PolicyName,Arn]' --output table
 ```
 
-- `--scope AWS` shows only AWS-managed policies (`--scope Local` shows yours).
-- `--max-items 10` limits output. Real AWS has 1,000+ managed policies.
+`--scope AWS` shows AWS managed policies (`--scope Local` shows yours); `--max-items 10` limits output.
 
-!!! note "Floci Limitation"
-    Floci ships a subset of AWS managed policies. If `ReadOnlyAccess` is missing on your version, the
-    attach below fails with `NoSuchEntity`. That is expected - use the workaround and continue;
-    nothing later in this lab depends on which of the two you used.
+!!! note "Floci Limitation - only a subset of AWS managed policies"
+    Floci ships a subset. If `ReadOnlyAccess` is missing, the attach below fails with `NoSuchEntity`.
 
-**Command**
+    Real AWS has 1,000+ managed policies.
+
+    Use the workaround and continue; nothing later depends on which of the two you used.
 
 ```bash
 aws iam attach-group-policy \
@@ -2411,8 +1973,6 @@ aws iam attach-group-policy \
 ```
 
 **Workaround if `ReadOnlyAccess` does not exist in your Floci build**
-
-Create your own equivalent - which is also better practice anyway:
 
 ```bash
 cat > ~/aws-floci-course/policies/usms-readonly-policy.json << 'EOF'
@@ -2465,11 +2025,7 @@ aws iam list-attached-group-policies --group-name usms-auditors --output table
 
 ### Step 22 - Write your first customer managed policy
 
-**Purpose**
-
-Write a real policy document from scratch, and learn `file://`.
-
-**The requirement, in plain English**
+Write a policy from scratch and learn `file://`. The requirement:
 
 > A USMS developer must be able to **look at** the infrastructure (IAM, EC2, VPC, S3, CloudWatch), and
 > **build networking** - because Lab 2 is the VPC lab. They must **not** be able to create IAM users,
@@ -2485,7 +2041,7 @@ aws-floci-course/policies/
 cd ~/aws-floci-course/policies
 ```
 
-**Command - create the file**
+**Create the file**
 
 ```bash
 cat > usms-developer-base-policy.json << 'EOF'
@@ -2549,17 +2105,9 @@ cat > usms-developer-base-policy.json << 'EOF'
 EOF
 ```
 
-**Read the policy**
-
-- **Statement 1 `ReadInfrastructure`** - broad read access. Wildcards on the *action* (`ec2:Describe*`)
-  are normal for read operations; wildcards on *write* actions are not.
-- **Statement 2 `BuildNetworkingForLab02`** - write permissions, but only the specific EC2/VPC
-  operations Lab 2 needs, and only in `us-east-1`. This is least privilege in practice: enumerate the
-  actions instead of writing `ec2:*`.
-- **Statement 3 `DenyDangerousIdentityChanges`** - an explicit `Deny`. Because explicit deny always
-  wins, this holds even if somebody later attaches `AdministratorAccess` to this group by mistake. This
-  is the **privilege-escalation guardrail**: without it, a developer with `iam:AttachUserPolicy` could
-  simply grant themselves admin.
+- `ReadInfrastructure`: wildcards on *read* actions (`ec2:Describe*`) are normal; on write actions they are not.
+- `BuildNetworkingForLab02`: only the EC2/VPC writes Lab 2 needs, only in `us-east-1`. Least privilege means enumerating actions instead of `ec2:*`.
+- `DenyDangerousIdentityChanges`: the privilege-escalation guardrail. Explicit deny wins even if someone later attaches `AdministratorAccess` to the group.
 
 **Validate the JSON before sending it**
 
@@ -2567,10 +2115,9 @@ EOF
 python3 -m json.tool usms-developer-base-policy.json > /dev/null && echo "Valid JSON"
 ```
 
-Malformed JSON produces a confusing `MalformedPolicyDocument` error from AWS. Checking locally first
-tells you the exact line number instead.
+A local check reports the exact line, instead of AWS's vague `MalformedPolicyDocument`.
 
-**Command - create the policy in IAM**
+**Create the policy in IAM**
 
 ```bash
 DEV_POLICY_ARN=$(aws iam create-policy \
@@ -2583,16 +2130,7 @@ DEV_POLICY_ARN=$(aws iam create-policy \
 echo "$DEV_POLICY_ARN"
 ```
 
-**What `file://` means**
-
-`file://usms-developer-base-policy.json` tells the AWS CLI: *read the value of this parameter from
-that file*. It is relative to your current directory.
-
-- `file://name.json` - relative path
-- `file:///home/you/name.json` - absolute path (three slashes: `file://` + `/home/...`)
-
-Using a file rather than inline JSON means the policy is version-controlled, reviewable, and reusable
-in Lab 4 - which is why `policies/` sits at the project root, not inside `labs/lab-01-iam/`.
+`file://name.json` reads the parameter from a file relative to the current directory; `file:///home/you/name.json` is absolute (three slashes). Keeping policies in `policies/` makes them version-controlled and reusable in Lab 4.
 
 **Expected result**
 
@@ -2607,8 +2145,7 @@ aws iam attach-group-policy --group-name usms-developers --policy-arn "$DEV_POLI
 aws iam attach-group-policy --group-name usms-admins     --policy-arn "$DEV_POLICY_ARN"
 ```
 
-One policy object, two attachments. Change the policy once and both groups update - this is the whole
-point of customer managed policies.
+One policy, two attachments: change it once and both groups update.
 
 **Verify**
 
@@ -2631,7 +2168,7 @@ aws iam get-policy --policy-arn "$DEV_POLICY_ARN" \
 +------------+-----------+---------------------+
 ```
 
-`AttachmentCount: 2` confirms both attachments. `DefaultVersionId: v1` becomes interesting in Step 27.
+`Attached` must be `2`. `Default: v1` matters in Step 27.
 
 !!! success "**Checkpoint 8**"
 
@@ -2646,18 +2183,13 @@ aws iam get-policy --policy-arn "$DEV_POLICY_ARN" \
 
 ### Step 23 - Write the S3 data policy (used for real in Lab 4)
 
-**Purpose**
-
-Write the policy that will govern student transcript storage, and get the bucket-vs-object ARN
-distinction right.
+Write the policy governing student transcript storage, with the bucket and object ARNs right.
 
 **Run from**
 
 ```text
 aws-floci-course/policies/
 ```
-
-**Command**
 
 ```bash
 cat > usms-student-data-rw-policy.json << 'EOF'
@@ -2704,20 +2236,14 @@ S3_POLICY_ARN=$(aws iam create-policy \
 echo "$S3_POLICY_ARN"
 ```
 
-**Why there are two Allow statements**
-
-Because they act on **two different ARNs**:
+Two Allow statements, because they act on two different ARNs:
 
 ```text
 arn:aws:s3:::usms-student-data      → the bucket   → s3:ListBucket
 arn:aws:s3:::usms-student-data/*    → the objects  → s3:GetObject / s3:PutObject
 ```
 
-A single statement combining `s3:ListBucket` with `arn:...:usms-student-data/*` is a no-op - you
-cannot "list" an object. This is the most frequently made S3 policy error in the industry.
-
-The bucket itself does not exist yet; it arrives in Lab 4. **Policies may reference resources that do
-not exist** - they are evaluated at request time, not at creation time.
+`s3:ListBucket` on the `/*` ARN is a no-op. The bucket arrives in Lab 4: **policies may reference resources that do not exist yet**, because they are evaluated at request time.
 
 **Verify**
 
@@ -2726,15 +2252,11 @@ aws iam list-policies --scope Local \
   --query 'Policies[*].{Name:PolicyName,Attached:AttachmentCount}' --output table
 ```
 
-`--scope Local` = policies **you** created, as opposed to AWS managed ones.
-
 ---
 
 ### Step 24 - Use `--generate-cli-skeleton` to discover parameters
 
-**Purpose**
-
-Learn how to work out a command's parameters without leaving the terminal.
+Work out a command's parameters without leaving the terminal.
 
 **Run from**
 
@@ -2746,19 +2268,12 @@ aws-floci-course/templates/
 cd ~/aws-floci-course/templates
 ```
 
-**Command**
-
 ```bash
 aws iam create-role --generate-cli-skeleton > create-role-skeleton.json
 cat create-role-skeleton.json
 ```
 
-**What the command does**
-
-`--generate-cli-skeleton` makes the CLI print an empty JSON template of every parameter the operation
-accepts, **without calling AWS at all**. It is documentation you can fill in. (Because it never
-contacts the endpoint, this is also the one command in this lab that works with Floci stopped - a
-useful thing to remember.)
+`--generate-cli-skeleton` prints an empty JSON template of every parameter **without calling AWS**, so it works even with Floci stopped.
 
 **Expected result**
 
@@ -2776,8 +2291,7 @@ useful thing to remember.)
 
 > Example output - fields vary by CLI version.
 
-You could fill this in and submit it with `--cli-input-json file://filled.json` instead of typing
-flags. That approach shines in CI/CD pipelines where the JSON is generated by a program.
+A filled-in skeleton can be submitted with `--cli-input-json file://filled.json`, which suits CI/CD pipelines.
 
 !!! question "**Your turn**"
 
@@ -2789,30 +2303,13 @@ flags. That approach shines in CI/CD pipelines where the JSON is generated by a 
 
 ### Step 25 - Add an inline policy (self-service credentials)
 
-**Purpose**
-
-Learn inline policies and IAM **policy variables** by solving a real problem: users should be able to
-rotate their own access keys without an administrator.
-
-**Concept**
-
-An **inline policy** is embedded in a single identity. It has no ARN, cannot be attached elsewhere,
-and is deleted automatically when the identity is deleted. Use it when the permission is meaningful
-for exactly one identity and must never be reused by accident.
-
-**Concept: policy variables**
-
-`${aws:username}` is substituted at evaluation time with the name of the caller. One policy document
-therefore says "your own user" for every different user - which is why it makes sense to attach this
-one to a **group**, though we attach it to a user here to demonstrate `put-user-policy`.
+Let users rotate their own access keys without an administrator, using an **inline policy** (embedded in one identity, no ARN, deleted with it) and the **policy variable** `${aws:username}`, which is replaced at evaluation time by the caller's name. See [policy variables](../unit8/topic1.md#policy-variables).
 
 **Run from**
 
 ```text
 aws-floci-course/policies/
 ```
-
-**Command**
 
 ```bash
 cd ~/aws-floci-course/policies
@@ -2860,17 +2357,12 @@ aws iam put-user-policy \
 ```
 
 !!! tip "This is why the heredoc marker is quoted"
-    `<< 'EOF'` (with quotes) stops your **shell** from trying to expand `${aws:username}` into an
-    empty string. Without the quotes you would silently create a broken policy. Verify with
-    `grep aws:username usms-self-manage-credentials.json` - the text must still be there.
+    `<< 'EOF'` stops your shell expanding `${aws:username}` to an empty string, which would silently
+    break the policy. Check with `grep aws:username usms-self-manage-credentials.json`. Every policy
+    heredoc uses the quoted form; Step 33 deliberately uses the *unquoted* form, where expansion is wanted.
 
-    Every policy heredoc in this lab uses the quoted form. The one place we deliberately use the
-    *unquoted* form is Step 33, where expansion is exactly what we want.
-
-**Note the command name**
-
-- `attach-user-policy` → attaches an **existing managed** policy by ARN.
-- `put-user-policy` → embeds an **inline** policy document. "Put" overwrites, so re-running is safe.
+- `attach-user-policy` attaches an existing **managed** policy by ARN.
+- `put-user-policy` embeds an **inline** document. "Put" overwrites, so re-running is safe.
 
 **Verify**
 
@@ -2889,24 +2381,15 @@ aws iam get-user-policy --user-name usms-dev-01 --policy-name USMSSelfManageCred
 }
 ```
 
-Compare with `aws iam list-attached-user-policies --user-name usms-dev-01`, which returns an empty
-list - **inline and attached policies are listed by different commands.** Forgetting the inline list
-is how permissions get missed during a security review.
+`aws iam list-attached-user-policies --user-name usms-dev-01` returns an empty list: **inline and attached policies are listed by different commands**, which is how permissions get missed in reviews.
 
-**Note on MFA**
-
-`iam:EnableMFADevice` appears above. **MFA (Multi-Factor Authentication)** requires a second proof
-(a phone app code) beyond the password. In real AWS every human user, especially the root user, must
-have MFA. It is meaningless in Floci (there is no console login), so it is included here as a
-**conceptual / real AWS** item and to make the policy realistic.
+MFA actions are included to make the policy realistic; MFA itself is **conceptual / real AWS** here, since Floci has no console login. See [multi-factor authentication](../unit8/topic1.md#multi-factor-authentication).
 
 ---
 
 ### Step 26 - Inspect what you have built
 
-**Purpose**
-
-Learn the "read" side of IAM - the commands you use during an access investigation.
+Learn the read side of IAM, used in access investigations.
 
 **Run from**
 
@@ -2928,9 +2411,7 @@ echo "=== inline ===";      aws iam list-user-policies          --user-name $IAM
 echo "=== access keys ==="; aws iam list-access-keys            --user-name $IAM_USER --query 'AccessKeyMetadata[*].AccessKeyId'  --output text
 ```
 
-To know a user's *effective* permissions you must check **four** places: group policies, attached user
-policies, inline user policies, and (in real AWS) permission boundaries and SCPs. Checking only one is
-the classic incomplete audit.
+Effective permissions come from group policies, attached user policies, inline user policies and, on real AWS, permission boundaries and SCPs. Checking only one is an incomplete audit.
 
 **B. Read the actual policy JSON back out**
 
@@ -2944,8 +2425,7 @@ aws iam get-policy-version \
   --query 'PolicyVersion.Document'
 ```
 
-Two calls are required: `get-policy` returns *metadata*, and only `get-policy-version` returns the
-*document*. Notice we used the output of the first call as input to the second - command chaining.
+`get-policy` returns metadata; only `get-policy-version` returns the document. The first call's output feeds the second.
 
 **C. The whole account in one call**
 
@@ -2955,9 +2435,7 @@ aws iam get-account-authorization-details > ~/aws-floci-course/outputs/lab-01-ia
 wc -l ~/aws-floci-course/outputs/lab-01-iam-snapshot.json
 ```
 
-This single API call dumps every user, group, role and policy with their documents. In real AWS it is
-the basis of most IAM audit tooling. We store it in `outputs/` - which you proved in Step 6 is
-git-ignored.
+Every user, group, role and policy with documents: the basis of most IAM audit tooling. It goes in the git-ignored `outputs/`.
 
 **D. Optional: pretty-query it with `jq`**
 
@@ -2967,9 +2445,7 @@ jq '.UserDetailList[] | {UserName, Groups: .GroupList}' \
    ~/aws-floci-course/outputs/lab-01-iam-snapshot.json
 ```
 
-`jq` is a dedicated JSON processor. `--query` runs **on the CLI's side of the response**; `jq` runs on
-files you already have. Both are worth knowing. You will need `jq` again in Steps 30 and 31, so
-install it now if you have not.
+`--query` shapes a live response; `jq` processes files you already have. Steps 30 and 31 need `jq`, so install it now.
 
 !!! success "**Checkpoint 9**"
 
@@ -2984,22 +2460,13 @@ install it now if you have not.
 ---
 ### Step 27 - Policy versions
 
-**Purpose**
-
-Change a policy safely. Customer managed policies keep up to **5 versions**, so you can roll back.
-
-**The change**
-
-Lab 2 will need `ec2:DeleteVpc` (to clean up mistakes) and `ec2:DescribeAvailabilityZones`. Rather
-than editing in place, we create a new version.
+Change a policy safely. Customer managed policies keep up to **5 versions**, so you can roll back. Lab 2 needs `ec2:DeleteVpc` and `ec2:DescribeAvailabilityZones`, so create a new version rather than editing in place.
 
 **Run from**
 
 ```text
 aws-floci-course/policies/
 ```
-
-**Command**
 
 ```bash
 cd ~/aws-floci-course/policies
@@ -3023,11 +2490,8 @@ aws iam create-policy-version \
   --set-as-default
 ```
 
-**What the command does**
-
-- The small Python block edits the JSON programmatically rather than by hand - safer and repeatable.
-- `create-policy-version` uploads a new document. `--set-as-default` makes it the version that is
-  actually evaluated. Without that flag the new version exists but is inert.
+- The Python block edits the JSON programmatically: safer and repeatable.
+- `--set-as-default` makes the new version the one evaluated; without it the version exists but is inert.
 
 **Verify**
 
@@ -3059,25 +2523,14 @@ aws iam list-policy-versions \
 ```
 
 !!! warning "The 5-version limit"
-    A policy may hold at most 5 versions. The 6th `create-policy-version` fails with
-    `LimitExceeded` until you `delete-policy-version` an old one. Real teams hit this in automated
-    pipelines constantly.
+    The 6th `create-policy-version` fails with `LimitExceeded` until you `delete-policy-version` an
+    old one. Automated pipelines hit this often.
 
 ---
 
 ### Step 28 - Create a role for EC2, with a trust policy
 
-**Purpose**
-
-Create the identity that the USMS application server will use in Lab 3 - and understand why servers
-must never hold access keys.
-
-**Concept: why roles exist**
-
-If you bake an access key into the application on your server, that key is a permanent secret sitting
-on a machine that may be compromised, imaged, or backed up. A **role** solves this: the server is
-*assigned* the role, and AWS delivers **temporary credentials that rotate automatically**. Nothing
-secret is ever stored on the machine.
+Create the identity the USMS application server uses in Lab 3. A server holding an access key keeps a permanent secret on a machine that may be compromised, imaged or backed up; a role delivers **temporary credentials that rotate automatically**.
 
 ```text
         WITHOUT a role                     WITH a role
@@ -3089,10 +2542,7 @@ secret is ever stored on the machine.
                                     └──────────────────┘
 ```
 
-**Concept: the trust policy**
-
-A role's trust policy names the **Principal** allowed to assume it. For an EC2 role the principal is
-the EC2 service itself:
+The trust policy's **Principal** for an EC2 role is the EC2 service:
 
 ```json
 "Principal": { "Service": "ec2.amazonaws.com" }
@@ -3103,8 +2553,6 @@ the EC2 service itself:
 ```text
 aws-floci-course/policies/
 ```
-
-**Command**
 
 ```bash
 cd ~/aws-floci-course/policies
@@ -3135,11 +2583,8 @@ EC2_ROLE_ARN=$(aws iam create-role \
 echo "$EC2_ROLE_ARN"
 ```
 
-**What the command does**
-
-- `--assume-role-policy-document` is the **trust policy** - the "who may become me" document. This
-  flag name is genuinely confusing; remember it is the *trust* policy, not the permissions policy.
-- The role starts with **zero permissions**. Trust and permissions are completely separate.
+- `--assume-role-policy-document` is the **trust** policy, despite its name.
+- The role starts with zero permissions; trust and permissions are separate.
 
 **Now give the role its permissions**
 
@@ -3171,9 +2616,7 @@ aws iam list-attached-role-policies --role-name usms-ec2-app-role --output table
 
 **Create the instance profile**
 
-An EC2 instance cannot be given a role directly. It is given an **instance profile**, which is a thin
-wrapper containing exactly one role. In the AWS console this happens invisibly; with the CLI you must
-do it yourself - and forgetting it is a very common Lab-3 failure.
+An EC2 instance is given an **instance profile**, a wrapper holding exactly one role, not the role directly. The console hides this; with the CLI you must do it, and forgetting it is a common Lab 3 failure.
 
 ```bash
 aws iam create-instance-profile --instance-profile-name usms-ec2-app-profile
@@ -3213,18 +2656,13 @@ aws iam get-instance-profile --instance-profile-name usms-ec2-app-profile \
 
 ### Step 29 - Create the Lambda execution role
 
-**Purpose**
-
-Create the role Lab 5's notification function will run as. Same pattern, different principal - which
-is exactly the point.
+Create the role Lab 5's notification function runs as: same pattern, different principal.
 
 **Run from**
 
 ```text
 aws-floci-course/policies/
 ```
-
-**Command**
 
 ```bash
 cat > trust-lambda.json << 'EOF'
@@ -3286,11 +2724,7 @@ aws iam attach-role-policy \
 echo "$LAMBDA_ROLE_ARN"
 ```
 
-**Why every Lambda function needs log permissions**
-
-A Lambda function writes its own logs to CloudWatch Logs. If the execution role lacks
-`logs:CreateLogStream` / `logs:PutLogEvents`, the function still runs but **produces no logs at all** -
-and you are debugging blind. This is one of the most common real-world Lambda misconfigurations.
+Without `logs:CreateLogStream` and `logs:PutLogEvents`, a function still runs but produces **no logs at all**: a common real-world misconfiguration.
 
 **Verify**
 
@@ -3300,31 +2734,19 @@ aws iam list-roles \
   --output table
 ```
 
-**Introducing JMESPath filters**
-
-``[?starts_with(RoleName, `usms-`)]`` is a **filter expression**: keep only elements where the test is
-true. The backticks are JMESPath's way of writing a literal string. This is how you find your own
-resources in an account full of other people's - and it is why the `usms-` naming convention matters.
+``[?starts_with(RoleName, `usms-`)]`` is a JMESPath **filter**: keep only matching elements. Backticks write a literal string. This is how the `usms-` prefix finds your resources in a busy account.
 
 ---
 
 ### Step 30 - A role for humans, and temporary credentials with STS
 
-**Purpose**
-
-Learn the pattern real organisations use for human access: log in with minimal permissions, then
-*assume* a role to get elevated permissions temporarily.
-
-**Concept**
+The pattern organisations use for human access: log in with minimal permissions, then *assume* a role for elevated, temporary, logged access. See [role sessions and temporary credentials](../unit8/topic1.md#role-sessions-and-temporary-credentials).
 
 ```text
 usms-dev-01                        usms-developer-role
 (few permissions,       assume →   (elevated permissions,
  permanent keys)                    temporary creds, 1 hour)
 ```
-
-Benefits: the elevated permissions are not permanently attached to anyone, every assumption is logged,
-and the credentials expire on their own.
 
 **Run from**
 
@@ -3365,14 +2787,12 @@ aws iam attach-role-policy \
 echo "$DEVROLE_ARN"
 ```
 
-- The `Principal` is now an **AWS identity ARN**, not a service. You may also use
-  `"AWS": "arn:aws:iam::000000000000:root"`, which means "any identity in this account that *also* has
-  `sts:AssumeRole` permission" - a two-sided handshake.
-- `--max-session-duration 3600` = credentials live at most 1 hour (in seconds).
+- The `Principal` is now an AWS identity ARN. `"AWS": "arn:aws:iam::000000000000:root"` would mean any identity in the account that *also* has `sts:AssumeRole` permission.
+- `--max-session-duration 3600` caps credentials at 1 hour.
 
 #### 30.2 Give the developers group permission to assume it
 
-Trust alone is not enough - both sides must agree.
+Trust alone is not enough; both sides must agree.
 
 ```bash
 cat > usms-assume-app-roles-policy.json << 'EOF'
@@ -3407,7 +2827,7 @@ aws iam attach-group-policy --group-name usms-admins     --policy-arn "$ASSUME_P
                                        ↓
                             BOTH required. Either one missing → AccessDenied.
     ```
-    In real AWS, "I set up the role but assume-role is denied" is nearly always the missing second half.
+    On real AWS, "assume-role is denied" is nearly always the missing second half.
 
 #### 30.3 Assume the role
 
@@ -3440,21 +2860,14 @@ cat ~/aws-floci-course/outputs/assumed-role.json
 
 > Example output - **never** treat these values as real; they are examples.
 
-Four things to notice:
-
-1. There are **three** values, not two - temporary credentials always include a `SessionToken`.
-2. The access key starts with `ASIA`, not `AKIA`. `ASIA` = temporary, `AKIA` = permanent. You can tell
-   at a glance what kind of credential you are looking at.
-3. `Expiration` is one hour away. After that they simply stop working.
-4. The resulting ARN is an `sts::...:assumed-role/...` ARN carrying your session name - which is what
-   makes audit logs traceable back to a person.
+1. Temporary credentials have **three** values, including a `SessionToken`.
+2. `ASIA` = temporary, `AKIA` = permanent.
+3. `Expiration` is one hour away.
+4. The `assumed-role` ARN carries your session name, which makes audit logs traceable to a person.
 
 #### 30.4 Use the temporary credentials, then put your identity back
 
-This is the one place in the course where we deliberately use environment variables instead of a
-profile - because that is how assumed-role credentials are normally injected. Note what it costs us:
-environment credentials sit at level 2 of the resolution order from Step 11, so they **bypass the
-profile entirely**, taking the profile's `endpoint_url` with them. We have to supply it by hand.
+Assumed-role credentials arrive as environment variables: the course's one deliberate use of them. They sit at level 2 of Step 11's order, **bypassing the profile and its `endpoint_url`**, so pass the endpoint by hand.
 
 ```bash
 cd ~/aws-floci-course
@@ -3473,14 +2886,15 @@ unset AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN
 ./scripts/utilities/whoami.sh
 ```
 
-`whoami.sh` should report account `000000000000` and the `root` ARN again. If it still shows the
-assumed-role ARN, the `unset` did not run - check for a typo and repeat it.
+`whoami.sh` must report account `000000000000` and the `root` ARN. An assumed-role ARN means the `unset` did not run.
 
 !!! note "Floci Limitation - assume-role always succeeds"
-    Because Floci does not authorize requests against IAM policies by default, `sts:AssumeRole` will
-    succeed even if you *remove* the trust policy or the user's permission. The credentials returned
-    are also not enforced afterwards. Treat this step as learning the **mechanics and the ARNs** -
-    the enforcement half is real-AWS behaviour you must reason about, not observe here.
+    `sts:AssumeRole` succeeds in Floci even without the trust policy or the user's permission, and the
+    returned credentials are not enforced afterwards.
+
+    Real AWS requires both halves of the handshake.
+
+    Learn the **mechanics and the ARNs** here; reason about enforcement rather than observe it.
 
 !!! success "**Checkpoint 11**"
 
@@ -3495,11 +2909,7 @@ assumed-role ARN, the `unset` did not run - check for a typo and repeat it.
 
 ### Step 31 - Access keys, handled safely
 
-**Purpose**
-
-Create programmatic credentials for `usms-dev-01` and store them without ever risking a commit.
-
-**Concept**
+Create programmatic credentials for `usms-dev-01` and store them without risking a commit. See [access keys and their hygiene](../unit8/topic1.md#access-keys-and-their-hygiene).
 
 | Credential type | Used for | Looks like |
 | --- | --- | --- |
@@ -3507,8 +2917,7 @@ Create programmatic credentials for `usms-dev-01` and store them without ever ri
 | **Access key pair** | CLI / SDK / scripts | `AKIA...` + a 40-char secret |
 | Temporary (STS) | Assumed roles, EC2 roles | `ASIA...` + secret + session token |
 
-**The secret is shown exactly once.** If you lose it, you cannot retrieve it - you delete the key and
-create a new one.
+**The secret is shown exactly once.** Lose it and you delete the key and create a new one.
 
 !!! danger "Before you run this"
     The next command creates a secret access key. In a real account:
@@ -3520,14 +2929,6 @@ create a new one.
 
     The values here are Floci dummies, but **build the habit now**.
 
-**Run from**
-
-```text
-aws-floci-course/
-```
-
-**Command**
-
 ```bash
 cd ~/aws-floci-course
 
@@ -3537,11 +2938,8 @@ aws iam create-access-key --user-name usms-dev-01 \
 chmod 600 outputs/usms-dev-01-access-key.json
 ```
 
-**What the command does**
-
-- Output is redirected straight to a file in `outputs/` - so the secret never appears on screen, in
-  your scrollback, or in a screenshot you might submit.
-- `chmod 600` makes the file readable and writable **only by you** (no group, no others).
+- Redirecting straight to `outputs/` keeps the secret off screen, scrollback and screenshots.
+- `chmod 600` makes the file readable and writable only by you.
 
 **Verify - without exposing the secret**
 
@@ -3563,11 +2961,9 @@ aws iam list-access-keys --user-name usms-dev-01 \
 +----------------------------+----------+---------------------------+
 ```
 
-Note that `list-access-keys` returns the key **ID** but never the secret. That is by design.
+`list-access-keys` returns the key ID, never the secret.
 
 **Confirm Git really is protecting you**
-
-You already proved this with a fake file in Step 6. Now prove it with the real one:
 
 ```bash
 git status --porcelain
@@ -3582,13 +2978,7 @@ ls -l outputs/usms-dev-01-access-key.json
 -rw-------  1 student  student  253 Aug 10 10:02 outputs/usms-dev-01-access-key.json
 ```
 
-Three separate confirmations: the key is absent from `git status`, `git check-ignore` names the exact
-rule and line that blocked it, and the file permissions are `600`.
-
-Note which rule fired. In Step 6 the fake file matched `outputs/*` on line 8; this real key matches
-`*-access-key.json` on line 24 instead, because **Git reports the last matching pattern**, not the
-first. Two independent rules cover this file - that redundancy is deliberate, so that a key saved to
-the wrong directory by mistake is still caught.
+The key is absent from `git status`, `git check-ignore` names the rule, and permissions are `600`. This file matches `*-access-key.json` on line 24 rather than `outputs/*` on line 8 because **Git reports the last matching pattern**. Two rules cover it deliberately, so a key saved to the wrong directory is still caught.
 
 !!! danger "If `git check-ignore` prints nothing and exits non-zero"
     Nothing is ignoring that file, and your next `git add .` will stage a credential. Stop, fix
@@ -3609,8 +2999,7 @@ aws configure set endpoint_url          http://localhost:4566 --profile usms-dev
 aws sts get-caller-identity --profile usms-dev
 ```
 
-You now have two profiles: `floci` (account root) and `usms-dev` (the developer). Switching identity
-is now a one-word change.
+You now have `floci` (account root) and `usms-dev` (the developer); switching identity is one word.
 
 **Key rotation - the real-world procedure**
 
@@ -3623,17 +3012,13 @@ is now a one-word change.
 5. Only then DELETE the old key.
 ```
 
-The two-key limit exists precisely to make zero-downtime rotation possible.
+The two-key limit exists to make zero-downtime rotation possible.
 
 ---
 
 ### Step 32 - Test permissions with the policy simulator
 
-**Purpose**
-
-Answer "is this user actually allowed to do X?" without performing X.
-
-**Command**
+Answer "is this user allowed to do X?" without doing X.
 
 ```bash
 aws iam simulate-principal-policy \
@@ -3643,10 +3028,7 @@ aws iam simulate-principal-policy \
   --output table
 ```
 
-**What the command does**
-
-`simulate-principal-policy` runs AWS's real policy evaluation engine against a hypothetical request.
-It changes nothing. It is the correct tool for testing a policy before deploying it.
+`simulate-principal-policy` runs the real evaluation engine against a hypothetical request and changes nothing.
 
 **Expected result (real AWS)**
 
@@ -3662,19 +3044,18 @@ It changes nothing. It is the correct tool for testing a policy before deploying
 +------------------+---------------------+
 ```
 
-Three decisions, three meanings:
+- `allowed`: a statement permits it (`BuildNetworkingForLab02`).
+- `explicitDeny`: a `Deny` blocks it (`DenyDangerousIdentityChanges`). Adding Allows will not help; fix the Deny.
+- `implicitDeny`: nothing mentions it, so default deny applies. Add a permission.
 
-- `allowed` - a statement permits it (our `BuildNetworkingForLab02` statement).
-- `explicitDeny` - a `Deny` statement blocks it (our `DenyDangerousIdentityChanges` guardrail).
-- `implicitDeny` - **nothing** mentions it, so the default deny applies.
-
-Being able to distinguish explicit from implicit deny is the core skill of debugging `AccessDenied`:
-implicit means "add a permission", explicit means "find and fix the Deny - adding Allows will not help".
-
-!!! note "Floci Limitation"
+!!! note "Floci Limitation - the simulator may be unsupported"
     `simulate-principal-policy` may return `UnsupportedOperation`, `InvalidAction`, or a simplified
-    result on your Floci build. If so, this step is **conceptual / real AWS**: read the table above and
-    understand the three decision types. Nothing later in the lab depends on the simulator running.
+    result on your Floci build.
+
+    Real AWS runs the full evaluation engine.
+
+    If it fails, treat this step as **conceptual / real AWS**: read the table above. Nothing later
+    depends on the simulator running.
 
 !!! question "**Your turn**"
 
@@ -3685,15 +3066,7 @@ implicit means "add a permission", explicit means "find and fix the Deny - addin
 
 ### Step 33 - Save the lab state for future labs
 
-**Purpose**
-
-Write down every ARN Lab 2 and beyond will need, snapshot the emulator, and commit.
-
-**Run from**
-
-```text
-aws-floci-course/
-```
+Record every ARN Lab 2 and beyond need, snapshot the emulator, and commit.
 
 #### 33.1 Generate `configs/lab-01.env`
 
@@ -3741,15 +3114,8 @@ EOF
 cat configs/lab-01.env
 ```
 
-**What the command does**
-
-Note this heredoc uses `<< EOF` **without quotes** - here we *want* the shell to run the
-`$(date ...)` and `$(aws ...)` substitutions and bake the real ARNs into the file. Compare with the
-policy files in Steps 22–30, which used `<< 'EOF'` precisely to prevent expansion. Choosing the right
-one is a real skill.
-
-`Policies[?PolicyName=='X'].Arn | [0]` is a JMESPath filter piped to `[0]` to take the first (only)
-match, so the variable holds a single string rather than a list.
+- This heredoc is **unquoted** (`<< EOF`) so `$(date ...)` and `$(aws ...)` run now and bake real ARNs into the file. The policy files used `<< 'EOF'` to prevent expansion. Getting this backwards fails silently.
+- `Policies[?PolicyName=='X'].Arn | [0]` filters, then takes the first match as a single string.
 
 **Check every value was filled in**
 
@@ -3757,8 +3123,7 @@ match, so the variable holds a single string rather than a list.
 grep -n 'export .*=$\|None' configs/lab-01.env || echo "all values populated"
 ```
 
-An empty value or the string `None` means the matching resource does not exist - go back and create
-it before continuing, otherwise Lab 2 will fail with a confusing error.
+An empty value or `None` means the resource does not exist. Create it now, or Lab 2 fails confusingly.
 
 **Verify - the whole thing works from a fresh shell**
 
@@ -3771,16 +3136,14 @@ echo "Dev policy: $USMS_POLICY_DEV_BASE"
 
 #### 33.2 Take a snapshot
 
-A snapshot captures the emulator's entire state. If you break something in Lab 3, you can return to
-this exact point instead of redoing Lab 1.
+A snapshot lets you return here if you break something in Lab 3.
 
 ```bash
 floci snapshot save lab-01-iam-complete
 floci snapshot list
 ```
 
-**If `floci snapshot` is unsupported on your build**, take a filesystem snapshot instead. This works
-on every version, because Part A put all state in one directory:
+**If `floci snapshot` is unsupported on your build**, take a filesystem snapshot instead:
 
 ```bash
 ./scripts/setup/floci-down.sh
@@ -3789,11 +3152,7 @@ tar -czf ~/floci-data-lab-01.tar.gz -C ~ floci-data
 ls -lh ~/floci-data-lab-01.tar.gz
 ```
 
-**Stop Floci first.** Archiving a live data directory can capture a half-written file. To restore
-later: stop Floci, `rm -rf ~/floci-data`, `tar -xzf ~/floci-data-lab-01.tar.gz -C ~`, start again.
-
-(Keep the archive outside the repository - `~`, not `~/aws-floci-course` - so it is never a candidate
-for commit.)
+**Stop Floci first**: archiving a live directory can capture a half-written file. To restore: stop Floci, `rm -rf ~/floci-data`, `tar -xzf ~/floci-data-lab-01.tar.gz -C ~`, start again. Keep the archive in `~`, outside the repository, so it is never a commit candidate.
 
 #### 33.3 Write your lab notes
 
@@ -3835,7 +3194,7 @@ EOF
 git status --short
 ```
 
-Read that output and confirm **no file from `outputs/` and no `.env` is listed**. Then:
+Confirm **no file from `outputs/` and no `.env` is listed**. Then:
 
 ```bash
 git add .
@@ -3851,8 +3210,7 @@ b2c3d4e feat(lab-01): environment bootstrap with durable Floci storage
 a1b2c3d chore: ignore secrets before the repo can hold any
 ```
 
-The oldest commit is the `.gitignore`. That ordering is not cosmetic - it is the proof that no secret
-could ever have been committed.
+The oldest commit is the `.gitignore`: proof that no secret could ever have been committed.
 
 !!! success "**Checkpoint 12 - end of Part B**"
 
@@ -3865,16 +3223,11 @@ could ever have been committed.
     ```
 
 ---
-## 5. Verification
+## 8. Verification
 
-Run this end-to-end verification script. It checks every artefact this lab was supposed to produce -
-including the environment settings that make the IAM work survive.
+### 8.1 Build `scripts/utilities/verify-lab-01.sh`
 
-**Run from**
-
-```text
-aws-floci-course/
-```
+It checks every artefact this lab produced, including the environment settings that make the IAM work survive.
 
 {% raw %}```bash
 cd ~/aws-floci-course
@@ -3984,23 +3337,51 @@ chmod +x scripts/utilities/verify-lab-01.sh
 PASS=34  FAIL=0
 ```
 
-If anything fails, the label tells you exactly which step to redo. The two checks worth reading
-carefully are **`outputs/.gitkeep IS tracked`** (proves the `.gitignore` negation from Step 6 works)
-and **`access key file is IGNORED`** (proves the secret is safe). One passing without the other means
-your ignore rules are subtly wrong.
-
-Commit the verification script:
+Each failing label names the step to redo. Read two checks together: **`outputs/.gitkeep IS tracked`** (the Step 6 negation works) and **`access key file is IGNORED`** (the secret is safe). One passing without the other means your ignore rules are subtly wrong.
 
 ```bash
 git add scripts/utilities/verify-lab-01.sh
 git commit -q -m "test(lab-01): end-to-end verification script"
 ```
 
+### 8.2 Build the end-of-course cleanup script
+
+Do not run it now.
+
+```bash
+cat > ~/aws-floci-course/scripts/cleanup/lab-01-cleanup.sh << 'EOF'
+#!/usr/bin/env bash
+# ############################################################
+# DO NOT RUN UNTIL THE COURSE IS FINISHED.
+# Deletes the entire Lab 01 IAM foundation. Labs 02+ will break.
+# ############################################################
+set -uo pipefail
+read -r -p "Delete ALL Lab 01 IAM resources? Type DELETE to confirm: " CONFIRM
+[ "$CONFIRM" = "DELETE" ] || { echo "Aborted."; exit 1; }
+
+for U in usms-admin-01 usms-dev-01 usms-audit-01; do
+  for G in $(aws iam list-groups-for-user --user-name "$U" --query 'Groups[*].GroupName' --output text); do
+    aws iam remove-user-from-group --user-name "$U" --group-name "$G"
+  done
+  for K in $(aws iam list-access-keys --user-name "$U" --query 'AccessKeyMetadata[*].AccessKeyId' --output text); do
+    aws iam delete-access-key --user-name "$U" --access-key-id "$K"
+  done
+  for P in $(aws iam list-user-policies --user-name "$U" --query 'PolicyNames' --output text); do
+    aws iam delete-user-policy --user-name "$U" --policy-name "$P"
+  done
+  aws iam delete-user --user-name "$U"
+done
+echo "Users removed. Groups, policies and roles left for manual review."
+EOF
+
+chmod +x ~/aws-floci-course/scripts/cleanup/lab-01-cleanup.sh
+```
+
+It demands typed confirmation and does **not** delete roles or policies automatically: destructive automation should be conservative.
+
 ---
 
-## 6. Checkpoints
-
-A consolidated list. Tick each one before moving to Lab 2.
+## 9. Checkpoints
 
 | # | Checkpoint | Verify with |
 | --- | --- | --- |
@@ -4019,16 +3400,15 @@ A consolidated list. Tick each one before moving to Lab 2.
 
 ---
 
-## 7. Troubleshooting
+## 10. Troubleshooting
 
-Each entry follows: **Problem → Cause → Diagnose → Fix → Verify**.
+Each entry follows: **Cause → Diagnose → Fix → Verify**.
 
 !!! tip "Start here"
-    For anything involving missing data or unexpected Docker volumes, run
-    `./scripts/utilities/floci-storage-check.sh` first. It performs six checks and names the cause
-    directly, which is faster than working through this list.
+    For missing data or unexpected Docker volumes, run `./scripts/utilities/floci-storage-check.sh`
+    first. Its six checks name the cause directly.
 
-### 7.1 `floci: command not found`
+### 10.1 `floci: command not found`
 
 - **Cause** - the binary is not in your `PATH`.
 - **Diagnose** - `ls ~/.local/bin/floci` or `which floci`.
@@ -4039,7 +3419,7 @@ Each entry follows: **Problem → Cause → Diagnose → Fix → Verify**.
   ```
 - **Verify** - `floci version`.
 
-### 7.2 `Cannot connect to the Docker daemon`
+### 10.2 `Cannot connect to the Docker daemon`
 
 - **Cause** - Docker Desktop is not started, or your user is not in the `docker` group.
 - **Diagnose** - `docker info` (fails), `groups | grep docker` (empty).
@@ -4050,24 +3430,22 @@ Each entry follows: **Problem → Cause → Diagnose → Fix → Verify**.
   ```
 - **Verify** - `docker run --rm hello-world`.
 
-### 7.3 `docker compose: 'compose' is not a docker command`
+### 10.3 `docker compose: 'compose' is not a docker command`
 
 - **Cause** - Compose v2 plugin missing. `docker-compose` (with a hyphen) is the retired v1.
 - **Diagnose** - `docker compose version` fails while `docker --version` works.
 - **Fix** - `sudo apt-get install -y docker-compose-plugin`, or update Docker Desktop.
 - **Verify** - `docker compose version` prints `v2.x`.
 
-### 7.4 `required variable FLOCI_HOST_DATA_DIR is missing a value`
+### 10.4 `required variable FLOCI_HOST_DATA_DIR is missing a value`
 
-- **Cause** - you ran `docker compose` directly instead of the start script, so `.env` was never
-  generated. This is the `:?` guard in `docker-compose.yml` working exactly as designed.
+- **Cause** - you ran `docker compose` directly, so `.env` was never generated. The `:?` guard is working.
 - **Fix** - `./scripts/setup/floci-up.sh`.
 - **Verify** - `cat .env` shows an absolute path, and `docker compose config` succeeds.
 
-### 7.5 `Refusing to continue` - a container named `floci` Compose did not create
+### 10.5 `Refusing to continue` - a container named `floci` Compose did not create
 
-- **Cause** - you (or an earlier attempt at this lab) ran `floci start`. That container has no
-  durable storage, and adopting it would lose data.
+- **Cause** - an earlier `floci start`. That container has no durable storage; adopting it would lose data.
 - **Diagnose** -
   ```bash
 {% raw %}  docker container inspect floci --format '{{ index .Config.Labels "com.docker.compose.project" }}'{% endraw %}
@@ -4080,10 +3458,9 @@ Each entry follows: **Problem → Cause → Diagnose → Fix → Verify**.
   ```
 - **Verify** - the script reaches `Verified /app/data -> ...`.
 
-### 7.6 `Bind for 0.0.0.0:4566 failed: port is already allocated`
+### 10.6 `Bind for 0.0.0.0:4566 failed: port is already allocated`
 
-- **Cause** - something else holds the port: an old Floci container, LocalStack, or another student's
-  process on a shared machine.
+- **Cause** - an old Floci container, LocalStack, or another process holds the port.
 - **Diagnose** -
   ```bash
   docker ps --filter publish=4566
@@ -4096,7 +3473,7 @@ Each entry follows: **Problem → Cause → Diagnose → Fix → Verify**.
   ```
 - **Verify** - `./scripts/setup/floci-up.sh` completes.
 
-### 7.7 `Could not connect to the endpoint URL: "http://localhost:4566/"`
+### 10.7 `Could not connect to the endpoint URL: "http://localhost:4566/"`
 
 - **Cause** - Floci is not running, crashed, or is on a different port.
 - **Diagnose** -
@@ -4108,18 +3485,16 @@ Each entry follows: **Problem → Cause → Diagnose → Fix → Verify**.
 - **Fix** - `./scripts/setup/floci-up.sh`.
 - **Verify** - `aws sts get-caller-identity`.
 
-### 7.8 Commands hang, then fail with a timeout - and the URL says `amazonaws.com`
+### 10.8 Commands hang, then fail with a timeout - and the URL says `amazonaws.com`
 
-- **Cause** - `endpoint_url` is missing or your AWS CLI is older than 2.13 and ignores it. The CLI is
-  trying to reach **real AWS**.
+- **Cause** - `endpoint_url` is missing, or your CLI is older than 2.13 and ignores it. The CLI is trying to reach **real AWS**.
 - **Diagnose** -
   ```bash
   aws --version
   aws configure get endpoint_url --profile floci      # should print the localhost URL
   aws sts get-caller-identity --debug 2>&1 | grep -m1 "'url'"
   ```
-- **Fix** - upgrade to AWS CLI 2.13+, or set the profile value again, or fall back to the
-  environment variable:
+- **Fix** - upgrade to 2.13+, set the profile value again, or fall back to the environment variable:
   ```bash
   aws configure set endpoint_url http://localhost:4566 --profile floci
   # last resort, if your CLI ignores the profile setting:
@@ -4127,9 +3502,9 @@ Each entry follows: **Problem → Cause → Diagnose → Fix → Verify**.
   ```
 - **Verify** - the debug line now shows `localhost:4566`.
 
-### 7.9 `Unable to locate credentials`
+### 10.9 `Unable to locate credentials`
 
-- **Cause** - no profile, wrong profile name, or `AWS_PROFILE` points at a profile that does not exist.
+- **Cause** - no profile, wrong profile name, or `AWS_PROFILE` points at a missing profile.
 - **Diagnose** -
   ```bash
   echo "AWS_PROFILE=$AWS_PROFILE"
@@ -4139,16 +3514,15 @@ Each entry follows: **Problem → Cause → Diagnose → Fix → Verify**.
 - **Fix** - redo Step 12, or `source configs/course.env`.
 - **Verify** - `./scripts/utilities/whoami.sh`.
 
-### 7.10 `The config profile (floci) could not be found`
+### 10.10 `The config profile (floci) could not be found`
 
-- **Cause** - the section header in `~/.aws/config` is `[floci]` instead of `[profile floci]`.
+- **Cause** - the header in `~/.aws/config` is `[floci]` instead of `[profile floci]`.
 - **Diagnose** - `cat ~/.aws/config`.
-- **Fix** - always use `aws configure set ... --profile floci` rather than editing by hand; it writes
-  the correct headers. If editing manually: `~/.aws/config` needs `[profile NAME]`,
-  `~/.aws/credentials` needs `[NAME]`.
+- **Fix** - use `aws configure set ... --profile floci`, which writes the right headers. By hand:
+  `~/.aws/config` needs `[profile NAME]`, `~/.aws/credentials` needs `[NAME]`.
 - **Verify** - `aws configure list --profile floci`.
 
-### 7.11 `MalformedPolicyDocument` / `Invalid JSON`
+### 10.11 `MalformedPolicyDocument` / `Invalid JSON`
 
 - **Cause** - a trailing comma, a missing bracket, or smart quotes pasted from a PDF or web page.
 - **Diagnose** -
@@ -4162,37 +3536,33 @@ Each entry follows: **Problem → Cause → Diagnose → Fix → Verify**.
   - `Version` written as anything other than `"2012-10-17"`.
 - **Verify** - re-run the validator, then re-run `create-policy`.
 
-### 7.12 `EntityAlreadyExists`
+### 10.12 `EntityAlreadyExists`
 
 - **Cause** - you ran a `create-*` command twice.
 - **Diagnose** - `aws iam get-user --user-name usms-dev-01` (it exists).
-- **Fix** - this is usually harmless: the resource you wanted is already there. Continue. If you truly
-  need to recreate it, delete first (see 11.16 for the dependency order).
+- **Fix** - usually harmless: continue. To recreate, delete first (10.16 gives the dependency order).
 - **Verify** - `aws iam list-users`.
 
-### 7.13 `NoSuchEntity`
+### 10.13 `NoSuchEntity`
 
-- **Cause** - a typo in a name or ARN, or the resource was never created, or **the resource was lost
-  in a restart** (see 11.17).
+- **Cause** - a typo, a resource never created, or **a resource lost in a restart** (10.17).
 - **Diagnose** -
   ```bash
   aws iam list-policies --scope Local --query 'Policies[*].PolicyName' --output text
   aws iam list-roles --query 'Roles[*].RoleName' --output text
   ```
-- **Fix** - correct the name. Watch for: `usms-developers` (plural) vs `usms-developer-role`
-  (singular), and account `000000000000` (twelve zeros - count them).
+- **Fix** - correct the name. Watch `usms-developers` (plural) vs `usms-developer-role` (singular), and twelve zeros in `000000000000`.
 - **Verify** - re-run the failing command.
 
-### 7.14 `${aws:username}` came out empty in the policy file
+### 10.14 `${aws:username}` came out empty in the policy file
 
-- **Cause** - you used `<< EOF` instead of `<< 'EOF'`, so **your shell** expanded it.
+- **Cause** - `<< EOF` instead of `<< 'EOF'`, so **your shell** expanded it.
 - **Diagnose** - `grep 'aws:username' policies/usms-self-manage-credentials.json`. No match = expanded.
-- **Fix** - rewrite the file using `<< 'EOF'` (quoted), then re-run `put-user-policy` - "put"
-  overwrites, so no deletion is needed.
+- **Fix** - rewrite the file with `<< 'EOF'`, then re-run `put-user-policy` (it overwrites).
 - **Verify** - `aws iam get-user-policy --user-name usms-dev-01 --policy-name USMSSelfManageCredentials`
   and confirm the variable is present in the document.
 
-### 7.15 `AccessDenied` on `sts:AssumeRole`
+### 10.15 `AccessDenied` on `sts:AssumeRole`
 
 - **Cause** - only one half of the handshake is in place.
 - **Diagnose** -
@@ -4205,12 +3575,11 @@ Each entry follows: **Problem → Cause → Diagnose → Fix → Verify**.
   ```
 - **Fix** - add the missing side (Step 30.1 or 30.2).
 - **Verify** - `aws sts assume-role ...` returns credentials.
-- **Note** - in Floci this error is unlikely to appear at all, because policies are not enforced by
-  default. Learn the diagnosis anyway; you will need it on real AWS.
+- **Note** - unlikely in Floci, which does not enforce policies by default. You will need the diagnosis on real AWS.
 
-### 7.16 `DeleteConflict` when deleting an IAM entity
+### 10.16 `DeleteConflict` when deleting an IAM entity
 
-- **Cause** - IAM refuses to delete something that still has dependents.
+- **Cause** - IAM refuses to delete something with dependents.
 - **Diagnose** - the error message names the dependency.
 - **Fix** - remove dependents in this order:
   ```text
@@ -4223,26 +3592,19 @@ Each entry follows: **Problem → Cause → Diagnose → Fix → Verify**.
   ```
 - **Verify** - re-run the delete.
 
-### 7.17 Floci lost all my resources after a restart
+### 10.17 Floci lost all my resources after a restart
 
-This is the failure this revision of the lab exists to prevent. There are three distinct causes and
-they need different fixes.
+Three distinct causes, three different fixes.
 
 - **Diagnose first** -
   ```bash
   ./scripts/utilities/floci-storage-check.sh
   ```
-- **Cause A - storage mode is `memory`.** Section 2 of the check reports it. Floci's default. In this
-  mode nothing survives, and Floci deletes its own volumes on teardown, which is why unfamiliar
-  volumes keep appearing.
+- **Cause A - storage mode is `memory`** (check 2). Floci's default; nothing survives, and Floci deletes its own volumes on teardown.
   **Fix:** `FLOCI_STORAGE_MODE="hybrid"` in `configs/course.env`, then `./scripts/setup/floci-up.sh`.
-- **Cause B - `/app/data` is not a host bind mount, or is bound to the wrong path.** Section 3 reports
-  it. A literal `~` in a path is the usual culprit: nothing expands it, so Docker creates a directory
-  actually named `~`.
-  **Fix:** make sure `FLOCI_HOST_DATA_DIR` is absolute, then re-run the start script.
-  Check for the stray directory with `ls -la ~/aws-floci-course` and remove it if present.
-- **Cause C - the container was started by `floci start`, not Compose.** Section 1 reports it. Its
-  flags were not remembered.
+- **Cause B - `/app/data` is not a host bind mount, or the wrong path** (check 3). Usually a literal `~`, which nothing expands, so Docker creates a directory named `~`.
+  **Fix:** make `FLOCI_HOST_DATA_DIR` absolute and re-run the start script. Look for the stray directory with `ls -la ~/aws-floci-course` and remove it.
+- **Cause C - the container was started by `floci start`, not Compose** (check 1).
   **Fix:** `floci stop --remove && ./scripts/setup/floci-up.sh`.
 - **Recover the data** - if you took a snapshot in Step 33:
   ```bash
@@ -4252,29 +3614,26 @@ they need different fixes.
   rm -rf ~/floci-data && tar -xzf ~/floci-data-lab-01.tar.gz -C ~
   ./scripts/setup/floci-up.sh
   ```
-  With no snapshot, re-run Steps 18–33. That is why Step 33 exists.
+  With no snapshot, re-run Steps 18–33.
 - **Verify** - `./scripts/utilities/verify-lab-01.sh` prints `FAIL=0`.
 
-### 7.18 `outputs/.gitkeep` is missing from Git, or a secret got staged
+### 10.18 `outputs/.gitkeep` is missing from Git, or a secret got staged
 
-- **Cause** - `.gitignore` says `outputs/` instead of `outputs/*`. Git cannot re-include a file whose
-  parent directory is excluded, so the `!outputs/.gitkeep` line does nothing.
+- **Cause** - `.gitignore` says `outputs/` instead of `outputs/*`; Git cannot re-include a file under an excluded directory.
 - **Diagnose** -
   ```bash
   git ls-files outputs/          # should list outputs/.gitkeep
   git check-ignore -v outputs/usms-dev-01-access-key.json
   ```
 - **Fix** - change the line to `outputs/*` (Step 6.1), then `git add outputs/.gitkeep`.
-- **If a secret was already committed** - removing it from the latest commit is not enough; it stays
-  in history. On a Floci-only repo the credential is worthless, so the pragmatic fix is to delete
-  `.git` and start the history again:
+- **If a secret was already committed** - it stays in history. On a Floci-only repo the credential is worthless, so restart the history:
   ```bash
   rm -rf .git && git init -q && git add . && git commit -q -m "chore: restart history without secrets"
   ```
-  On a real project you would rotate the key immediately and rewrite history with `git filter-repo`.
+  On a real project, rotate the key immediately and rewrite history with `git filter-repo`.
 - **Verify** - `./scripts/utilities/verify-lab-01.sh` passes its two Git-hygiene checks.
 
-### 7.19 Shell errors: `command not found`, `unexpected token`, empty variable
+### 10.19 Shell errors: `command not found`, `unexpected token`, empty variable
 
 | Symptom | Cause | Fix |
 | --- | --- | --- |
@@ -4286,9 +3645,9 @@ they need different fixes.
 
 ---
 
-## 8. Floci vs Real AWS
+## 11. Floci vs Real AWS
 
-### 8.1 What is genuinely the same
+### 11.1 What is genuinely the same
 
 | Aspect | Same as real AWS? |
 | --- | --- |
@@ -4301,7 +3660,7 @@ they need different fixes.
 | STS `assume-role` response shape |  Identical, including `ASIA` prefix and session token |
 | Skills you are learning |  100 % transferable |
 
-### 8.2 What differs
+### 11.2 What differs
 
 | Feature | Real AWS | Floci | Status |
 | --- | --- | --- | --- |
@@ -4325,45 +3684,17 @@ they need different fixes.
 
     Judge your policies by reading them, not by whether the command succeeded.
 
-### 8.3 Which parts of this lab were "conceptual / real AWS"?
-
-```text
-Implemented and observable in Floci:
-  users, groups, memberships, tags
-  customer managed policies + versions
-  inline policies
-  roles + trust policies
-  instance profiles
-  access keys (create / list / rotate mechanics)
-  sts assume-role (mechanics and response shape)
-  storage durability (once configured - you proved it in Step 14)
-
-Conceptual / real AWS only:
-  actual enforcement of every policy written above
-  AccessDenied vs explicitDeny vs implicitDeny in practice
-  MFA
-  permission boundaries, SCPs, IAM Access Analyzer
-  CloudTrail auditing
-  the "policies may exist before their resources" behaviour is real,
-    but you will only see it enforced on real AWS
-```
+**Observable here versus conceptual:** users, groups, tags, managed and inline policies, versions, roles, instance profiles, access key mechanics, `sts assume-role` and storage durability all behave as shown. Policy enforcement (allow, explicit and implicit deny), MFA, permission boundaries, SCPs, Access Analyzer and CloudTrail are real-AWS only.
 
 ---
 
-## 9. Independent Lab Exercises
+## 12. Independent Lab Exercises
 
-Complete these **on your own**. No full solutions are given. Record your commands
-and output in `labs/lab-01-iam/exercises.md`.
-
----
+No full solutions are given. Record commands and output in `labs/lab-01-iam/exercises.md`.
 
 ### Exercise 1 - The QA identity
 
-**Requirements**
-
-Create a new IAM group `usms-qa` and a user `usms-qa-01` inside it. Tag the user with
-`Key=Role,Value=QA` and `Key=Project,Value=USMS`. Attach the existing `USMSDeveloperBase` policy
-to the group - do **not** create a new policy.
+**Requirements:** create group `usms-qa` and user `usms-qa-01` inside it, tagged `Key=Role,Value=QA` and `Key=Project,Value=USMS`. Attach the existing `USMSDeveloperBase` to the group; do **not** create a new policy.
 
 **Constraints**
 
@@ -4378,17 +3709,11 @@ aws iam list-attached-group-policies --group-name usms-qa  →  shows USMSDevelo
 aws iam list-attached-user-policies --user-name usms-qa-01 →  empty list
 ```
 
-**Hints** - you need `create-group`, `create-user`, `add-user-to-group`, `attach-group-policy`.
-Every one of them appeared in Steps 18–22.
-
----
+**Hints:** `create-group`, `create-user`, `add-user-to-group`, `attach-group-policy`, all in Steps 18–22.
 
 ### Exercise 2 - The read-only reporting policy
 
-**Requirements**
-
-The USMS reporting service must read student transcripts but must never modify or delete them.
-Write a **new customer managed policy** called `USMSReportingReadOnly` that allows:
+**Requirements:** the USMS reporting service must read transcripts but never modify or delete them. Write a customer managed policy `USMSReportingReadOnly` that allows:
 
 - listing the `usms-student-data` bucket,
 - reading objects **only** under the prefix `transcripts/`,
@@ -4397,9 +3722,9 @@ and explicitly denies every `s3:Put*` and `s3:Delete*` action on that bucket.
 
 **Constraints**
 
-- The policy document must live in `policies/usms-reporting-readonly-policy.json` and be committed.
-- Use at least one `Sid` per statement.
-- Validate the JSON locally before calling `create-policy`.
+- The document lives in `policies/usms-reporting-readonly-policy.json` and is committed.
+- At least one `Sid` per statement.
+- Validate the JSON locally before `create-policy`.
 
 **Expected outcome**
 
@@ -4410,35 +3735,27 @@ aws iam list-policies --scope Local --query "Policies[?PolicyName=='USMSReportin
 
 **Hints**
 
-- Prefix restriction goes in the **Resource** ARN: `arn:aws:s3:::usms-student-data/transcripts/*`.
-- Re-read Step 23 on the bucket-ARN vs object-ARN distinction. You will need both.
-- Explicit `Deny` beats `Allow` - that is what makes this policy safe even if someone later attaches
-  a broader one.
-
----
+- The prefix restriction goes in the Resource ARN: `arn:aws:s3:::usms-student-data/transcripts/*`.
+- Step 23's bucket-ARN vs object-ARN distinction: you need both.
+- Explicit `Deny` keeps the policy safe even if a broader one is attached later.
 
 ### Exercise 3 - Problem solving: the third-party analytics role
 
-**The scenario, not the commands**
+**Scenario:** a partner university's analytics service must read USMS reports for **at most 30 minutes at a time**, by assuming a role (no IAM user in your account).
 
-A partner university runs an analytics service that must read USMS reports for **at most 30 minutes at
-a time**. They will not have an IAM user in your account; they will assume a role.
+**Requirements:** create `usms-analytics-partner-role` that:
 
-**Requirements**
-
-Design and create a role `usms-analytics-partner-role` that:
-
-1. can be assumed by the identity `arn:aws:iam::000000000000:user/usms-audit-01`,
+1. can be assumed by `arn:aws:iam::000000000000:user/usms-audit-01`,
 2. cannot hold a session longer than 30 minutes,
 3. can read objects under `arn:aws:s3:::usms-student-data/reports/*` and nothing else,
 4. is tagged `Key=Project,Value=USMS` and `Key=External,Value=true`.
 
-Then obtain temporary credentials for it and record the `Expiration` timestamp you receive.
+Then obtain temporary credentials and record the `Expiration` you receive.
 
 **Constraints**
 
-- Both halves of the trust handshake must be in place (Step 30 explains what that means).
-- The trust policy and the permissions policy must be separate files in `policies/`.
+- Both halves of the trust handshake in place (Step 30).
+- Trust policy and permissions policy are separate files in `policies/`.
 
 **Expected outcome**
 
@@ -4452,11 +3769,8 @@ aws sts assume-role ... → Credentials.Expiration is ~30 minutes ahead
 
 **Hints**
 
-- 30 minutes expressed in seconds is the value for `--max-session-duration`.
-- A **Condition** using `sts:ExternalId` is how real third-party access is secured - research it and
-  explain in your notes whether you should add one here.
-
----
+- 30 minutes in seconds is the `--max-session-duration` value.
+- Research the `sts:ExternalId` condition used for real third-party access, and say in your notes whether you should add one here.
 
 ### Exercise 4 - Challenge: design a least-privilege policy from a job description
 
@@ -4469,13 +3783,11 @@ aws sts assume-role ... → Credentials.Expiration is ~30 minutes ahead
 
 **Requirements**
 
-1. Decide: user, group, or role? Justify your choice in one paragraph in `notes/lab-01-notes.md`.
-2. Write the policy document(s) needed. Determine the exact action list yourself - do not use
-   wildcards on write actions.
+1. Decide: user, group, or role? Justify it in one paragraph in `notes/lab-01-notes.md`.
+2. Write the policy document(s). Determine the exact action list yourself; no wildcards on write actions.
 3. Create the identity and attach the policy.
-4. Add a `Condition` that enforces the region restriction.
-5. List, in your notes, three specific ways your policy could still be abused, and how you would
-   close each gap.
+4. Add a `Condition` enforcing the region restriction.
+5. List in your notes three ways your policy could still be abused, and how you would close each gap.
 
 **Constraints**
 
@@ -4484,29 +3796,23 @@ aws sts assume-role ... → Credentials.Expiration is ~30 minutes ahead
 
 **Hints**
 
-- `aws s3api help` and `aws logs help` list the exact action names; the IAM action is the operation
-  name prefixed by the service (`s3:CopyObject` does not exist - find out what a copy actually calls).
-- Ask yourself what permission "verify what it copied" needs, on **which** bucket.
-- The condition key you want is `aws:RequestedRegion`.
-
----
+- `aws s3api help` and `aws logs help` list exact action names (`s3:CopyObject` does not exist; find out what a copy actually calls).
+- What permission does "verify what it copied" need, on **which** bucket?
+- The condition key is `aws:RequestedRegion`.
 
 ### Exercise 5 - Integration: prepare the identity Lab 2 will use
 
 **Requirements**
 
-Lab 2 builds the VPC. Prepare for it now:
-
-1. Using `simulate-principal-policy` (or, if Floci does not support it, by carefully reading the
-   policy JSON), determine whether `usms-dev-01` currently has **every** permission Lab 2 will need:
+1. Using `simulate-principal-policy` (or by reading the policy JSON if Floci does not support it), determine whether `usms-dev-01` has **every** permission Lab 2 needs:
    `ec2:CreateVpc`, `ec2:CreateSubnet`, `ec2:CreateInternetGateway`, `ec2:AttachInternetGateway`,
    `ec2:CreateRouteTable`, `ec2:CreateRoute`, `ec2:AssociateRouteTable`,
    `ec2:DescribeAvailabilityZones`, `ec2:ModifyVpcAttribute`, `ec2:CreateNatGateway`,
    `ec2:AllocateAddress`.
-2. Identify which ones are **missing**.
-3. Create **version 3** of `USMSDeveloperBase` adding exactly the missing actions - no more.
-4. Set v3 as the default and verify that v1 and v2 still exist.
-5. Extend `configs/lab-01.env` with a variable `USMS_VPC_CIDR=10.0.0.0/16` so Lab 2 can source it.
+2. Identify which are **missing**.
+3. Create **version 3** of `USMSDeveloperBase` adding exactly the missing actions.
+4. Set v3 as default and verify v1 and v2 still exist.
+5. Add `USMS_VPC_CIDR=10.0.0.0/16` to `configs/lab-01.env` so Lab 2 can source it.
 
 **Constraints**
 
@@ -4522,18 +3828,16 @@ aws iam list-policy-versions --policy-arn <USMSDeveloperBase arn> --output table
 
 **Hints**
 
-- Step 27 shows the version workflow, including the small Python edit trick.
-- Two of the actions in the list are genuinely missing from v2. Find them by reading, not guessing.
-- Think about *why* `ec2:AllocateAddress` is needed for a NAT gateway.
-- Note that `verify-lab-01.sh` checks the default version is `v2`. After this exercise it will report
-  one failure - update the check to `v3`, and say so in your notes. A verification script that is
-  never updated is a verification script nobody trusts.
+- Step 27 shows the version workflow, including the Python edit.
+- Two actions are genuinely missing from v2. Find them by reading, not guessing.
+- Why does a NAT gateway need `ec2:AllocateAddress`?
+- `verify-lab-01.sh` checks for `v2` and will now report one failure: update the check to `v3` and say so in your notes.
 
 ---
 
-## 10. Lab Assessment Checklist
+## 13. Lab Assessment Checklist
 
-Print this and tick each box. Submit it with your lab report.
+Tick each box and submit it with your lab report.
 
 ```text
 ENVIRONMENT
@@ -4607,84 +3911,21 @@ WRAP-UP
 
 ---
 
-## 11. Review Questions
+## 14. Review Questions
 
-Answer in your own words in `notes/lab-01-notes.md`. These are conceptual - do not paste command
-output.
+Answer in prose in `notes/lab-01-notes.md`; do not paste command output.
 
-1. **Trust vs permissions.** A colleague creates a role with a perfect permissions policy attached,
-   but nobody can use it. What is almost certainly missing, and why does IAM separate these two
-   documents in the first place?
-
-2. **Explicit vs implicit deny.** `usms-dev-01` gets `AccessDenied` calling `iam:CreateUser`, and also
-   calling `dynamodb:PutItem`. Both fail identically from the user's point of view. Explain how the two
-   failures differ internally, how you would tell them apart, and why the *fix* is different in each
-   case.
-
-3. **Roles over keys.** The USMS application needs to read from S3. Explain why attaching
-   `usms-ec2-app-role` to the server is more secure than putting `usms-dev-01`'s access key in the
-   application's configuration file. Give two distinct reasons.
-
-4. **The S3 ARN trap.** A student writes a policy allowing `s3:GetObject` and `s3:ListBucket` on the
-   single resource `arn:aws:s3:::usms-student-data`. Downloads fail. Explain precisely why, and state
-   what the corrected `Resource` values must be.
-
-5. **The Floci illusion.** Every command in this lab succeeded. Explain why that is **not** evidence
-   that your policies are correct, and describe two concrete techniques you would use to gain
-   confidence in a policy before deploying it to a real AWS account.
-
-6. **The persistence trap.** A classmate ran `floci start --persist ~/floci-data --detach`, saw the
-   directory get created, and concluded persistence was working. Their IAM users vanished the next
-   morning anyway. Explain the three independent reasons this could happen, and describe the single
-   test that would have caught it in under a minute.
-
-7. **Configuration as evidence.** Argue, in one paragraph, why `docker-compose.yml` being a committed
-   file is a *security and reproducibility* property, not merely a convenience. What can an instructor
-   or a colleague verify from your repository that they could not verify from a command you typed?
+1. **Trust vs permissions.** A role has a perfect permissions policy, but nobody can use it. What is almost certainly missing, and why does IAM separate the two documents?
+2. **Explicit vs implicit deny.** `usms-dev-01` gets `AccessDenied` on `iam:CreateUser` and on `dynamodb:PutItem`. How do the two failures differ internally, how would you tell them apart, and why is the fix different?
+3. **Roles over keys.** Give two distinct reasons attaching `usms-ec2-app-role` to the server is more secure than putting `usms-dev-01`'s access key in the application's configuration file.
+4. **The S3 ARN trap.** A policy allows `s3:GetObject` and `s3:ListBucket` on the single resource `arn:aws:s3:::usms-student-data`. Downloads fail. Why, and what must the `Resource` values be?
+5. **The Floci illusion.** Every command succeeded. Why is that not evidence your policies are correct? Describe two techniques for gaining confidence in a policy before deploying it to real AWS.
+6. **The persistence trap.** A classmate ran `floci start --persist ~/floci-data --detach`, saw the directory appear, and lost their IAM users the next morning. Give the three independent reasons, and the single test that would have caught it in under a minute.
+7. **Configuration as evidence.** In one paragraph, argue why a committed `docker-compose.yml` is a security and reproducibility property, not a convenience. What can a colleague verify from your repository that they could not verify from a command you typed?
 
 ---
 
-## 12. What We Built
-
-### 12.1 Reflection
-#### AWS concepts
-
-`IAM` · users · groups · roles · policies (AWS managed / customer managed / inline) · policy documents
-(`Version`, `Statement`, `Sid`, `Effect`, `Action`, `Resource`, `Condition`) · policy variables
-(`${aws:username}`) · policy versions · trust policies vs permissions policies · principals ·
-instance profiles · STS · temporary credentials · `AKIA` vs `ASIA` · access key rotation · MFA
-(conceptual) · least privilege · explicit vs implicit deny · policy evaluation order · ARNs · regions
-and availability zones · global vs regional services · tagging · resource naming conventions
-
-#### AWS CLI skills
-
-`aws <service> <operation>` grammar · built-in `help` · `--profile` · `--region` · `--endpoint-url` ·
-`--output json|table|text` · `--query` (JMESPath: projections, renaming, `[?filters]`, `| [0]`) ·
-`file://` parameters · `--generate-cli-skeleton` · `--debug` · `--tags` · capturing values with
-`$( )` · exit codes with `$?` (0 / 254 / 255) · named profiles and credential resolution order ·
-`aws configure set` / `get` / `list-profiles`
-
-#### Floci and Docker skills
-
-Storage modes (`memory`, `hybrid`, `persistent`, `wal`) and why the default is the wrong one for a
-course · `FLOCI_STORAGE_PERSISTENT_PATH` vs `FLOCI_STORAGE_HOST_PERSISTENT_PATH` · why sidecar
-services need a separate setting · absolute paths and why `~` is never expanded ·
-`FLOCI_DOCKER_RESOURCE_NAMESPACE` · `docker compose up/stop/ps/logs/config` · bind mounts vs named
-volumes · Compose project labels · healthchecks · `${VAR:?message}` as a fail-fast guard ·
-`floci status | logs | services | doctor | snapshot | version` · redirecting the AWS CLI with
-`endpoint_url` · proving isolation from real AWS · recognising Floci limitations, especially the
-absence of IAM enforcement by default
-
-#### Shell & engineering skills
-
-Heredocs and the critical `<< 'EOF'` vs `<< EOF` distinction · `set -Eeuo pipefail` ·
-`${BASH_SOURCE[0]}` for path-independent scripts · brace expansion · `chmod 600` and `chmod +x` ·
-`.gitignore` written before secrets exist, and why `outputs/*` works where `outputs/` fails ·
-`git check-ignore -v` · validating JSON with `python3 -m json.tool` · writing idempotent setup
-scripts that verify their own work · writing a verification script that checks configuration, not
-just existence
-
-### 12.2 Resource inventory - KEEP vs CLEAN UP
+## 15. KEEP vs CLEAN UP
 
 ```text
 ╔══════════════════════════════ KEEP ══════════════════════════════╗
@@ -4709,8 +3950,6 @@ just existence
 ╚══════════════════════════════════════════════════════════════════╝
 ```
 
-**Safe cleanup of the two temporary items**
-
 !!! danger "Read before running any delete command"
     **What will be deleted:** the expired temporary-credentials file, and the practice user
     `usms-intern-01`.
@@ -4729,44 +3968,10 @@ aws iam remove-user-from-group --group-name usms-auditors --user-name usms-inter
 aws iam delete-user --user-name usms-intern-01 2>/dev/null
 ```
 
-Note the order: IAM will refuse to delete a user who is still a group member (`DeleteConflict`).
-Dependencies are always removed inside-out.
+IAM refuses to delete a user who is still a group member (`DeleteConflict`), so dependencies go inside-out. Do **not** run `scripts/cleanup/lab-01-cleanup.sh`; it is for the end of the course.
 
-**A cleanup script for the END of the course - do not run it now**
-
-```bash
-cat > ~/aws-floci-course/scripts/cleanup/lab-01-cleanup.sh << 'EOF'
-#!/usr/bin/env bash
-# ############################################################
-# DO NOT RUN UNTIL THE COURSE IS FINISHED.
-# Deletes the entire Lab 01 IAM foundation. Labs 02+ will break.
-# ############################################################
-set -uo pipefail
-read -r -p "Delete ALL Lab 01 IAM resources? Type DELETE to confirm: " CONFIRM
-[ "$CONFIRM" = "DELETE" ] || { echo "Aborted."; exit 1; }
-
-for U in usms-admin-01 usms-dev-01 usms-audit-01; do
-  for G in $(aws iam list-groups-for-user --user-name "$U" --query 'Groups[*].GroupName' --output text); do
-    aws iam remove-user-from-group --user-name "$U" --group-name "$G"
-  done
-  for K in $(aws iam list-access-keys --user-name "$U" --query 'AccessKeyMetadata[*].AccessKeyId' --output text); do
-    aws iam delete-access-key --user-name "$U" --access-key-id "$K"
-  done
-  for P in $(aws iam list-user-policies --user-name "$U" --query 'PolicyNames' --output text); do
-    aws iam delete-user-policy --user-name "$U" --policy-name "$P"
-  done
-  aws iam delete-user --user-name "$U"
-done
-echo "Users removed. Groups, policies and roles left for manual review."
-EOF
-
-chmod +x ~/aws-floci-course/scripts/cleanup/lab-01-cleanup.sh
-```
-
-Notice it demands typed confirmation and does **not** delete roles or policies automatically.
-Destructive automation should always be conservative.
 <!-- 
-### 16.3 Cumulative architecture after Lab 1
+### Cumulative architecture after Lab 1
 
 ```text
 ┌────────────────────────────────────────────────────────────────┐
@@ -4802,16 +4007,15 @@ Destructive automation should always be conservative.
         ▲
         └── all of this lives in ~/floci-data and survives restarts
 ```
+-->
 
 ---
 
-## 17. Preparation for the Next Lab
+## 16. Preparation for the Next Lab
 
-### Lab 02 - VPC (Virtual Private Cloud)
+Lab 2 (VPC) builds the USMS network while holding `usms-developer-role`, and sources `configs/course.env` and `configs/lab-01.env`. Step 33 already saved your snapshot.
 
-In the next laboratory you will build the network that every USMS server will live in: a VPC with a
-public and a private subnet, an internet gateway, route tables and security groups.
-
+<!--
 **What Lab 2 will reuse from Lab 1**
 
 | From Lab 1 | Used in Lab 2 for |
@@ -4835,135 +4039,13 @@ source configs/lab-01.env
 echo "$USMS_ROLE_DEVELOPER"              # must print an ARN
 ``` 
 -->
-**Optional pre-reading;  think about these before Lab 2**
 
-1. What is a CIDR block, and how many usable IP addresses does `10.0.0.0/16` contain?
-2. What makes a subnet "public" rather than "private"? (Hint: it is not a checkbox - it is a route.)
-3. Why do the private subnets in a real architecture still need outbound internet access, and what
-   component provides it?
-4. Why are IAM resources global, but a VPC belongs to exactly one region?
+**You may stop Floci with `./scripts/setup/floci-down.sh`.**
 
-**You may stop floci with `./scripts/setup/floci-down.sh`.**
-
-
-## Appendix A - Command Reference for Lab 1
-
-### Environment lifecycle (use these, not `floci start`)
-
-```bash
-./scripts/setup/floci-up.sh            # start or resume; idempotent; self-verifying
-./scripts/setup/floci-down.sh          # pause; state kept
-./scripts/utilities/whoami.sh          # which identity + endpoint am I using?
-./scripts/utilities/floci-storage-check.sh   # diagnose persistence problems
-./scripts/utilities/verify-lab-01.sh   # full lab verification
-./scripts/cleanup/floci-prune-volumes.sh     # remove stray floci volumes (dry run by default)
-```
-
-### Docker Compose
-
-```bash
-docker compose ps                 # container state and health
-docker compose config             # render the effective configuration
-docker compose logs -f floci      # stream logs
-docker compose stop               # pause; state kept
-docker compose restart floci      # full restart of the emulator
-docker compose down               # remove the container; bind mount kept
-# docker compose down -v          # NEVER - deletes volumes
-```
-
-### Floci CLI (works against the Compose container)
-
-```bash
-floci version
-floci status | logs | services | doctor
-floci snapshot save|list|load|delete <name>
-floci env                                     # print env vars (we use profiles instead)
-# floci start / stop --remove                 # avoid: bypasses Compose
-```
-
-### Key Floci environment variables
-
-```text
-FLOCI_STORAGE_MODE                   memory | hybrid | persistent | wal   (default: memory)
-FLOCI_STORAGE_PERSISTENT_PATH        container-side data directory        (we use /app/data)
-FLOCI_STORAGE_HOST_PERSISTENT_PATH   host-side path for sidecar services  (must be ABSOLUTE)
-FLOCI_STORAGE_PRUNE_VOLUMES_ON_DELETE  delete volumes when a resource is deleted
-FLOCI_DOCKER_RESOURCE_NAMESPACE      prefix for child container/volume names
-FLOCI_HOSTNAME                       hostname other containers use to reach Floci
-FLOCI_SERVICES_DOCKER_NETWORK        network for container-backed services
-```
-
-### AWS CLI configuration
-
-```bash
-aws --version
-aws configure set <key> <value> --profile <name>
-aws configure get <key> --profile <name>
-aws configure list --profile <name>
-aws configure list-profiles
-aws sts get-caller-identity
-```
-
-### IAM - users and groups
-
-```bash
-aws iam create-user --user-name <n> --tags Key=K,Value=V
-aws iam get-user --user-name <n>
-aws iam list-users
-aws iam list-user-tags --user-name <n>
-aws iam create-group --group-name <g>
-aws iam get-group --group-name <g>
-aws iam list-groups
-aws iam add-user-to-group --group-name <g> --user-name <n>
-aws iam remove-user-from-group --group-name <g> --user-name <n>
-aws iam list-groups-for-user --user-name <n>
-```
-
-### IAM - policies
-
-```bash
-aws iam create-policy --policy-name <p> --policy-document file://<f>.json
-aws iam list-policies --scope Local|AWS
-aws iam get-policy --policy-arn <arn>
-aws iam get-policy-version --policy-arn <arn> --version-id <v>
-aws iam create-policy-version --policy-arn <arn> --policy-document file://<f> --set-as-default
-aws iam list-policy-versions --policy-arn <arn>
-aws iam set-default-policy-version --policy-arn <arn> --version-id <v>
-aws iam attach-group-policy  --group-name <g> --policy-arn <arn>
-aws iam attach-user-policy   --user-name  <n> --policy-arn <arn>
-aws iam attach-role-policy   --role-name  <r> --policy-arn <arn>
-aws iam put-user-policy --user-name <n> --policy-name <p> --policy-document file://<f>
-aws iam list-user-policies --user-name <n>
-aws iam get-user-policy --user-name <n> --policy-name <p>
-aws iam list-attached-group-policies --group-name <g>
-aws iam simulate-principal-policy --policy-source-arn <arn> --action-names <a> ...
-aws iam get-account-authorization-details
-```
-
-### IAM - roles and instance profiles
-
-```bash
-aws iam create-role --role-name <r> --assume-role-policy-document file://trust.json
-aws iam get-role --role-name <r>
-aws iam list-roles
-aws iam create-instance-profile --instance-profile-name <ip>
-aws iam add-role-to-instance-profile --instance-profile-name <ip> --role-name <r>
-aws iam get-instance-profile --instance-profile-name <ip>
-```
-
-### IAM - access keys and STS
-
-```bash
-aws iam create-access-key --user-name <n>
-aws iam list-access-keys --user-name <n>
-aws iam update-access-key --user-name <n> --access-key-id <id> --status Active|Inactive
-aws iam delete-access-key --user-name <n> --access-key-id <id>
-aws sts assume-role --role-arn <arn> --role-session-name <s> --duration-seconds 3600
-```
 <!-- 
 ---
 
-## Appendix B - JMESPath (`--query`) patterns used in this lab
+## Appendix - New CLI and JMESPath patterns
 
 | Pattern | Meaning | Example |
 | --- | --- | --- |
@@ -5003,8 +4085,6 @@ If you are returning to this lab after starting the earlier version, this is wha
 | `verify-lab-01.sh` now checks configuration, not just existence | A lab that verifies only "the user exists" passes right up until the restart that deletes them |
 | Snapshot step gained a `tar` fallback | `floci snapshot` is not available on every build |
 | Steps renumbered: Part A is 1–15, Part B is 16–33 | Consequence of the reordering above | -->
-
-
 
 !!! success "End of Lab 01"
     **Next:** Lab 02 - VPC. Your environment is now durable: stop it or leave it running, the IAM

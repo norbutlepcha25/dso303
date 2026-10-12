@@ -1,147 +1,39 @@
 # Lab 09 - Securing the USMS Application with IAM Roles and Security Groups
 
-*Practical 5 in the delivery schedule, Practical 8 in the module descriptor - a least-privilege review
-of a system that already works, on both of its access-control axes*
+## 1. Objectives
+
+- Review the system Labs 1 to 6 built on both access-control axes: **who can call what** (IAM) and **what can reach what** (security groups and routing).
+- Inventory and audit every role and security group with read-only scripts that compute findings from documents and rules, not names.
+- Fix the identity findings: a read-only transcripts policy, confused-deputy trust conditions, a scoped `iam:PassRole`, a permissions boundary, a session policy, an access key rotation and IMDSv2.
+- Fix the network findings: written egress rules on three groups and a bastion-sourced SSH rule; then prove the data tier is unreachable by several independent controls.
+- Prove every control survives a restart and that no earlier lab's verification changed, and save the results to `configs/lab-09.env`.
+
+!!! info "Concepts used in this lab"
+    Read these first if a term is new: [IAM roles](../unit8/topic1.md#iam-roles) ·
+    [role sessions and temporary credentials](../unit8/topic1.md#role-sessions-and-temporary-credentials) ·
+    [the confused deputy problem](../unit8/topic1.md#the-confused-deputy-problem) ·
+    [access key hygiene](../unit8/topic1.md#access-keys-and-their-hygiene) ·
+    [policy evaluation logic](../unit8/topic1.md#the-policy-evaluation-logic) ·
+    [identity versus resource policies](../unit8/topic1.md#identity-based-versus-resource-based-policies) ·
+    [permissions boundaries](../unit8/topic1.md#permissions-boundaries-and-delegated-administration) ·
+    [iam:PassRole](../unit8/topic1.md#iampassrole) ·
+    [session policies](../unit8/topic1.md#session-policies) ·
+    [security group design patterns](../unit8/topic2.md#security-group-design-patterns) ·
+    [connection tracking](../unit8/topic2.md#connection-tracking-and-why-it-matters-for-security) ·
+    [egress control and data exfiltration](../unit8/topic2.md#egress-control-and-data-exfiltration) ·
+    [defence in depth for the network](../unit8/topic2.md#defence-in-depth-for-the-network-layers-from-edge-to-workload) ·
+    [IMDSv2](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/configuring-IMDS-new-instances.html)
 
 ---
 
-## 1. Lab Overview
+## 2. Prerequisites
 
-Five laboratories built a working system. Not one of them reviewed it.
-
-You have an identity layer from Lab 01, a network from Lab 02, two EC2 instances from Lab 03, a
-container platform from Lab 04, a load balancer from Lab 05 and a control loop from Lab 06. Every
-one of those labs made a security decision - a group-referenced rule here, a role instead of a key
-there, a private subnet, a cutover - and every one of them made it in isolation, at the moment it was
-needed, without ever standing back and asking the two questions a security review actually asks:
-
-```text
-WHO can call WHAT?              the identity axis      IAM roles and policies
-WHAT can reach WHAT?            the network axis       security groups and routing
-```
-
-This laboratory asks both, about the system you already have, and then fixes what the answers turn up.
-
-The single most important idea to leave with is that **those two axes are independent, and a request
-needs permission on both**. An IAM policy that allows `s3:GetObject` does nothing for a task whose
-security group will not let a packet out. A security group that permits a connection does nothing for
-a caller whose role does not allow the API action. Students who hold the two apart write precise
-controls. Students who conflate them spend an afternoon adding permissions to fix a network problem,
-which never works and occasionally makes things much worse.
-
-The second idea shapes every proof in this lab and is worth stating before you start:
-
-```text
-Floci does not enforce IAM policies.
-Floci does not enforce security groups.
-
-So NOTHING in this laboratory can be proven by watching a command fail.
-Everything in it is proven by READING CONFIGURATION and reasoning about it.
-```
-
-That is not a compromise forced on us by the emulator. It is how security review is actually done on
-real systems, because you cannot test your way to a claim like "nothing else in this account can open
-a connection to the transcripts database" - there are too many things that are not that connection.
-You assert it from configuration, and then you write a script that keeps asserting it after you have
-gone home. Section 9 is that script.
-
-**Time:** roughly 4 hours, including the exercises.
-
-**Where this sits in the course**
-
-```text
-Lab 01   IAM ................. roles, policies, instance profile        Practical 0
-Lab 02   VPC ................. subnets, NAT, route tables, groups       Practical 1
-Lab 03   EC2 ................. usms-web-01 and usms-db-01               Practical 1
-Lab 04   ECS + Fargate ....... the cluster, the blueprint, the service  Practical 2
-Lab 05   ECS + ALB ........... the front door                          Practical 2
-Lab 06   Service Auto Scaling  the control loop                        Practical 3
-Lab 07   EKS .................. the same workload, a different control plane   Practical 4
-Lab 08   EKS Scaling ......... HPA, node group scaling, exposure       Practical 4
-Lab 09   SECURITY ........... THIS LAB - a review of all of the above   Practical 5 / descriptor 8
-Lab 10   Lambda .............. creates the bucket three policies already name, and triggers
-                                functions from it
-```
-
-!!! info "This lab does not require the transcripts bucket to exist yet"
-    Nothing in this laboratory requires `usms-student-data` to exist. It is Lab 10 that creates the
-    bucket, so exactly one step here - Step 6 - reads the result of
-    `aws s3api head-bucket --bucket usms-student-data`, and expects it to fail: that is the correct
-    and only outcome at this point in the course, not a branch to accommodate.
-
-    A bucket not existing does not make the policies that name it unreviewable, and Step 6 says why.
-
-!!! warning "This lab changes rules that earlier labs wrote, and it does so deliberately"
-    Steps 13 to 16 replace the allow-all **egress** rule on four security groups, and Step 16 changes
-    the source of `usms-app-sg`'s SSH rule.
-
-    None of those changes breaks a check in `verify-lab-02.sh`, `verify-lab-03.sh`,
-    `verify-lab-04.sh` or `verify-lab-05.sh`, and Step 2 records a baseline so that you can prove
-    it. That is not luck: it is because every one of those scripts asserts **ingress** and none of
-    them ever asserted the egress rule nobody wrote.
-
-    Which is itself the finding. A control that no verification script mentions is a control nobody
-    has ever checked, and there is one on every security group in this account.
-
----
-
-## 2. Learning Objectives
-
-After completing this laboratory you will be able to:
-
-1. State the two independent axes of access control in AWS, and explain why a request needs a
-   decision on both before anything happens.
-2. Describe the order in which AWS evaluates an API request - explicit deny, organisation policy,
-   permissions boundary, identity policy, resource policy - and say which of those this course has
-   and which it does not.
-3. Read a trust policy and an identity policy and say precisely what each one decides, without
-   confusing the two.
-4. Explain the confused deputy problem for a service role, and write the `aws:SourceAccount` and
-   `aws:SourceArn` conditions that close it.
-5. Explain why `iam:PassRole` is the single most important action in an IAM policy to scope, and
-   scope one correctly with an `iam:PassedToService` condition.
-6. Create a **permissions boundary**, attach it to a role, and explain why a boundary is not a policy
-   that grants anything.
-7. Use a **session policy** to scope down an assumed role for one session, and compute the effective
-   permissions of a session as an intersection.
-8. Rotate a long-lived access key with no window in which nothing works, and explain why the
-   procedure has four steps rather than two.
-9. Require IMDSv2 on an EC2 instance and explain the class of attack that a token requirement and a
-   hop limit of one each prevent.
-10. Audit every security group in a VPC for the four findings that matter, using a script that
-    computes its verdicts from rules rather than from names or tags.
-11. Replace the default allow-all egress rule with a written one, and explain what egress control
-    protects that ingress control cannot.
-12. Write a security group **egress** rule whose destination is another security group, and one whose
-    destination is a managed prefix list.
-13. Prove a negative - that a resource is unreachable - from more than one independent control, and
-    say which of those controls would still hold if the others were removed.
-14. Explain why a policy that cannot be tested on this emulator can still be reviewed with confidence,
-    and describe the class of mistake that review catches and the class it does not.
-15. Prove that every control this lab configured survives a restart of the emulator, deriving every
-    identifier from the API.
-
----
-
-## 3. Prerequisites
-
-- **Labs 01, 02, 03, 04, 05 and 06 complete**, with `verify-lab-02.sh`, `verify-lab-03.sh`,
-  `verify-lab-05.sh` and `verify-lab-06.sh` each reporting `FAIL=0` **before you start**. Run them
-  now, not at the end.
-- **`verify-lab-04.sh` reporting either `FAIL=0` or exactly the one documented failure** on the
-  `usms-app-sg` source check. Lab 05 Step 13 caused that failure deliberately and Lab 05's
-  Exercise 2 repairs it; either state is acceptable here, and any *other* failure is not.
-- **`outputs/usms-app-key.pem` still present and `chmod 600`**, and the `usms-dev` AWS CLI profile
-  still working. Step 10 rotates the key behind that profile, and it cannot rotate a key it cannot
-  find. Check with `aws sts get-caller-identity --profile usms-dev`.
-- **Errata 01 applied.** If `echo "$AWS_PROFILE"` in a brand-new terminal prints nothing, stop and
-  apply Errata 01 first - every command in this lab would otherwise fail with a credentials error
-  that names the wrong cause.
-- Floci running under Docker Compose with `FLOCI_STORAGE_MODE` set to `hybrid`.
-- `jq` and `python3` available. `python3` does every timestamp and every JSON comparison in this lab,
-  because GNU `date` and BSD `date` disagree about every flag that matters.
-
-Check all of that in one go:
+- Labs 1 to 6 complete, with `verify-lab-02.sh`, `verify-lab-03.sh`, `verify-lab-05.sh` and `verify-lab-06.sh` each at `FAIL=0` **before you start**.
+- `verify-lab-04.sh` at `FAIL=0` or exactly the one documented failure on the `usms-app-sg` source check (caused by Lab 5 Step 13, repaired by Lab 5 Exercise 2). Any other failure is not acceptable.
+- `outputs/usms-app-key.pem` present and `chmod 600`, and the `usms-dev` profile working; Step 10 rotates the key behind it.
+- Errata 01 applied: `echo "$AWS_PROFILE"` in a new terminal must print something.
+- Floci under Docker Compose with `FLOCI_STORAGE_MODE=hybrid`; `jq` and `python3` installed (`python3` does every timestamp, because GNU and BSD `date` differ).
+- `usms-student-data` does **not** need to exist; Lab 10 creates it. Step 6 expects `head-bucket` to fail.
 
 ```bash
 cd ~/aws-floci-course
@@ -164,68 +56,27 @@ arn:aws:iam::000000000000:user/usms-dev-01
 -rw------- 1 student student 1704 Aug 15 10:22 outputs/usms-app-key.pem
 ```
 
-**What to look for:** three tools found, `PASS=16  FAIL=0` from the storage check, an ARN ending
-`user/usms-dev-01` from the `usms-dev` profile, and permissions of `-rw-------` on the private key. A
-failure in the storage check's `shell and profile` block is the real problem and everything below it
-is a consequence - fix that block before starting.
-
-If the `usms-dev` profile does not answer, Step 10 cannot run as written. Its **Verify** block tells
-you what to do instead, and the rest of the lab is unaffected.
-
-!!! tip "One habit to bring with you, because this lab depends on it more than any other"
-    Every claim in this document is a claim about a **document** - a policy, a trust policy, a rule.
-    Read the documents. Do not infer a policy's contents from its name, and do not infer a security
-    group's effect from its description.
-
-    Lab 02 Step 15 named a group `usms-db-sg` and gave it a rule sourced from `usms-app-sg`. Both of
-    those are true today. Neither is true because of the name.
+Fix a storage-check failure before starting. If the `usms-dev` profile does not answer, Step 10's **Verify** block says what to do instead; the rest of the lab is unaffected.
 
 ---
 
-## 4. Connection to Previous Labs
+## 3. What This Lab Reuses
 
-### 4.1 Current Environment
+- Lab 1 `USMSStudentDataReadWrite`: read in Step 6; the read-only policy is derived from it in Step 7.
+- Lab 1 `usms-ec2-app-role`, `usms-lambda-exec-role`, `usms-developer-role`: inventoried in Step 4; Step 9 assumes `usms-developer-role` with a session policy.
+- Lab 1 `usms-dev-01` and its access key: rotated in Step 10 via the `usms-dev` profile.
+- Lab 2 `usms-app-sg`, `usms-db-sg`: audited and hardened in Steps 12, 15 and 16.
+- Lab 2 `usms-s3-endpoint`: its prefix list becomes an egress destination in Step 13.
+- Lab 2 `usms-private-nacl`: one of the data tier's independent controls in Step 17.
+- Lab 2 Exercise 2 `usms-bastion-sg`: reused in Step 16 if it exists, created if not.
+- Lab 3 `usms-web-01` and `usms-ec2-app-profile`: IMDSv2 in Step 11; `PassRole` reasoning in Step 8.
+- Lab 4 `usms-ecs-task-role` and `usms-enrolment-sg`: trust policy rewritten in Step 7 (permissions untouched); egress written in Step 13.
+- Lab 5 `usms-alb-sg`: egress to a security group in Step 14.
+- Lab 6's scalable target: unchanged; Step 17 explains why scaling does not change the matrix.
+
+The audit covers the EC2/ECS estate from Labs 1 to 6. `usms-eks-node-role` and the Lab 7/8 ServiceAccount are out of scope (no IRSA on this build); a later audit would need to pick them up.
 
 ```text
-Created in previous labs:
-- Lab 01: Floci under Compose, hybrid storage, persistence proven
-- Lab 01: groups usms-admins / usms-developers / usms-auditors; three users
-- Lab 01: roles  usms-ec2-app-role, usms-lambda-exec-role, usms-developer-role
-- Lab 01: policies USMSDeveloperBase (v2), USMSStudentDataReadWrite, USMSAssumeAppRoles,
-                   USMSLambdaBasic, USMSSelfManageCredentials (inline on usms-dev-01)
-- Lab 01: instance profile usms-ec2-app-profile
-- Lab 01: an access key for usms-dev-01, in outputs/, git-ignored, chmod 600
-- Lab 01: configs/course.env, configs/lab-01.env
-- Lab 02: usms-vpc 10.0.0.0/16, DNS support and hostnames enabled
-- Lab 02: usms-public-subnet-a / -b, usms-private-subnet-a / -b
-- Lab 02: usms-igw, usms-nat (+ Elastic IP), usms-public-rt, usms-private-rt
-- Lab 02: usms-app-sg, usms-db-sg, usms-private-nacl, usms-s3-endpoint
-- Lab 02: configs/lab-02.env, scripts/utilities/verify-lab-02.sh
-- Lab 03: usms-web-01 (public subnet a, usms-app-sg, usms-ec2-app-profile, usms-web-eip)
-- Lab 03: usms-db-01 (private subnet a, usms-db-sg, no public address, no profile)
-- Lab 03: usms-web-data-vol, usms-web-golden, usms-app-key
-- Lab 03: configs/lab-03.env, scripts/utilities/verify-lab-03.sh
-- Lab 04: usms-ecs-cluster, /usms/ecs/enrolment, usms-enrolment:1 and :2
-- Lab 04: usms-ecs-exec-role (+ USMSECSTaskExecution), usms-ecs-task-role (+ Lab 01's S3 policy)
-- Lab 04: usms-enrolment-sg, usms-enrolment-svc, desired 2, both private subnets
-- Lab 04: configs/lab-04.env, scripts/utilities/verify-lab-04.sh
-- Lab 05: usms-alb-sg, usms-enrolment-alb, usms-enrolment-tg, the HTTP:80 listener
-- Lab 05: usms-enrolment-sg cut over to usms-alb-sg only
-- Lab 05: configs/lab-05.env, scripts/utilities/verify-lab-05.sh
-- Lab 06: a scalable target, three scaling policies, two scheduled actions, one alarm
-- Lab 06: configs/lab-06.env, scripts/utilities/verify-lab-06.sh
-- Lab 07: usms-eks-cluster, usms-eks-cluster-sg, usms-eks-nodes, usms-eks-node-role
-- Lab 07: namespace usms - gateway, enrolment, results; ServiceAccount usms-enrolment-sa (no IRSA on this build)
-- Lab 07: configs/lab-07.env, scripts/utilities/verify-lab-07.sh
-- Lab 08: usms-enrolment-hpa, node group scaling, ClusterIP/NodePort/LoadBalancer/Ingress exposure
-- Lab 08: configs/lab-08.env, scripts/utilities/verify-lab-08.sh
-
-This lab's own audit is scoped to the EC2/ECS-side IAM and security-group estate - the roles and
-groups built in Labs 01 through 06. It does not extend the review to `usms-eks-node-role` or the
-ServiceAccount from Labs 07-08, since the emulator does not support IRSA and there is no separate
-identity to review there yet. That gap is real and is not closed by this lab; a later audit would
-need to pick it up.
-
 Created in this lab:
 - USMSStudentDataReadOnly       customer managed, the read half of Lab 01's transcripts policy
 - USMSDeployBase                customer managed, with a SCOPED iam:PassRole
@@ -259,47 +110,11 @@ Required for future labs:
 - configs/lab-09.env            -> Lab 10 and the CloudFormation lab both source it
 ```
 
-### 4.2 What this lab genuinely reuses
+---
 
-Not mentions - uses.
+## 4. What We Are Building
 
-| From | Used here how |
-| --- | --- |
-| Lab 01 `USMSStudentDataReadWrite` | Step 6 reads its document and Step 7 derives the read-only policy from it, action by action |
-| Lab 01 `usms-ec2-app-role`, `usms-lambda-exec-role`, `usms-developer-role` | Step 4 inventories all three; Step 8's scoped `iam:PassRole` names two of them by ARN |
-| Lab 01 `usms-dev-01` and its access key | Step 10 rotates it, using the `usms-dev` profile Lab 01 created |
-| Lab 01 `usms-developer-role` and its one-hour session | Step 9 assumes it **with a session policy** and computes the intersection |
-| Lab 02 `usms-app-sg`, `usms-db-sg` | Steps 12, 15 and 16 audit and harden both |
-| Lab 02 `usms-s3-endpoint` | Step 14's egress rule names its **prefix list** as a destination - the first time in this course that the endpoint is used as anything but a route |
-| Lab 02 `usms-private-nacl` | Step 17 counts it as one of the four independent controls on the data tier |
-| Lab 02 Exercise 2 `usms-bastion-sg` | Step 16 reuses it if you did that exercise, and creates it if you did not |
-| Lab 03 `usms-web-01` | Step 11 requires IMDSv2 on it; Step 17 puts it in the reachability matrix |
-| Lab 03 `usms-ec2-app-profile` | Step 8 explains why passing it was a privilege-escalation opportunity, and scopes it |
-| Lab 04 `usms-ecs-task-role` | Step 7 rewrites its trust policy without touching its permissions |
-| Lab 04 `usms-enrolment-sg` | Step 13 writes its egress rules |
-| Lab 05 `usms-alb-sg` | Step 14 writes its egress rule, whose destination is another security group |
-| Lab 06 the scalable target | Step 17 explains why a scaling policy changes the reachability matrix without changing any rule in it |
-| `configs/course.env` names | `$COURSE_ROOT`, `$AWS_REGION_COURSE`, `$ACCOUNT_ID`, `$PROJECT` used, never redeclared |
-
-### 4.3 The sentence that makes this lab worth doing
-
-Lab 02 Step 14 said this, in passing, and nothing in the four laboratories since has come back to it:
-
-> Every security group is created with one rule you did not ask for: **allow all outbound**. It is not
-> shown by `authorize-security-group-ingress` and it is easy to forget it exists.
-
-There are now five security groups in `usms-vpc` and every one of them can open a connection to any
-address on the internet, on any port, and none of you wrote that rule.
-
-That matters for one specific reason, and it is the reason egress control exists at all. **Ingress
-rules protect you from an attacker who has not got in yet. Egress rules limit what an attacker can do
-once they have.** Data leaves through egress. Command-and-control traffic leaves through egress. A
-compromised container mining cryptocurrency talks to a pool through egress. Every one of those is
-invisible to an ingress rule, however carefully written.
-
-Say that out loud before you continue. It is Review Question 3.
-
-### 4.4 What changes, and what deliberately does not
+A review of the existing system and the repairs it turns up, not a new tier. We audit before changing anything, fix identity before network, and add rather than replace wherever a later lab depends on a resource (`usms-ecs-task-role` keeps `USMSStudentDataReadWrite` for Lab 10). Floci enforces neither IAM nor security groups, so every proof is made by reading configuration and is then written into a script (Section 8).
 
 | | Before this lab | After this lab |
 | --- | --- | --- |
@@ -317,76 +132,11 @@ Say that out loud before you continue. It is Review Question 3.
 | `usms-dev-01` access keys | one, created in Lab 01 | one, created today; the old one deleted |
 | Task definition, service, load balancer, scaling | as Lab 06 left them | **unchanged, all of it** |
 
-Read the last row against the second block. This lab changes a great deal about what the system is
-*allowed* to do and nothing whatsoever about what it *does*. That is the shape of a good security
-change, and it is the reason Step 18 can prove the whole thing by re-running four verification scripts
-written before this lab existed.
+The system's permissions change a great deal; what it does changes not at all. That is why Step 18 can prove it with four verification scripts written before this lab.
 
 ---
 
-## 5. What We Are Building
-
-Not a new tier. A review, and the repairs it turns up, on both axes at once.
-
-Five decisions justify the shape of what follows, and each is defensible in one sentence.
-
-**We audit before we change anything.** Steps 4, 5 and 12 produce three inventories and two audit
-scripts, and not one of them modifies a resource. A change made before the audit is a change you
-cannot justify afterwards, and a finding you fixed before you recorded it is a finding your report
-will not contain.
-
-**We fix identity first and network second.** They are independent, so the order is arbitrary in
-principle - but an identity mistake is silent and a network mistake is loud, so doing the silent one
-while you are fresh is the better use of four hours.
-
-**We add rather than replace, wherever a later lab depends on the thing.** `usms-ecs-task-role` keeps
-`USMSStudentDataReadWrite`, because Lab 10 is built around the moment that policy resolves. The
-read-only policy is a *new* policy on a *new* role, which is additive and which gives Lab 10 a second
-story to tell.
-
-**Every egress rule we write is narrower than allow-all and wider than it strictly has to be, and we
-say so.** A Fargate task pulling a container image needs to reach a registry whose addresses are not
-ours to know. Pretending otherwise produces a rule that is precise and wrong. Step 13 writes the
-honest rule and states plainly what a real account would do instead.
-
-**Every claim is asserted from configuration and then written into a script.** Section 9 is not a
-formality; it is the deliverable. A security review whose findings are in a document nobody re-reads
-has a half-life of about three weeks.
-
-### 5.1 The security baseline this lab establishes
-
-```text
-IDENTITY
-  usms-ecs-task-role       trust: ecs-tasks.amazonaws.com
-                                  + aws:SourceAccount 000000000000
-                                  + aws:SourceArn arn:aws:ecs:us-east-1:000000000000:*
-  usms-transcripts-reader-role  same scoped trust, USMSStudentDataReadOnly
-  usms-deploy-role         trust: usms-admin-01
-                           USMSDeployBase, iam:PassRole scoped to 3 role ARNs
-                                           + iam:PassedToService condition
-                           permissions boundary: USMSPermissionsBoundary
-  usms-dev-01              exactly one access key, created today
-  usms-web-01              IMDSv2 required, hop limit 1
-
-NETWORK - ingress unchanged, egress written
-  usms-alb-sg         in  tcp/80  from 0.0.0.0/0        out tcp/80  to usms-enrolment-sg
-  usms-enrolment-sg   in  tcp/80  from usms-alb-sg      out tcp/443 to pl-<s3>, 0.0.0.0/0
-  usms-app-sg         in  tcp/80,443 from 0.0.0.0/0     out (Exercise 1)
-                      in  tcp/22  from usms-bastion-sg
-  usms-db-sg          in  tcp/5432 from usms-app-sg     out tcp/443 to 0.0.0.0/0
-  usms-bastion-sg     in  tcp/22  from one /32          out tcp/22  to 10.0.0.0/16
-
-PROVEN NEGATIVES
-  usms-db-01           unreachable from the internet by FOUR independent controls
-  enrolment tasks      reachable ONLY from usms-alb-sg, by ONE control, and that is a finding
-```
-
-Every one of those is a decision with a reason, and Exercise 4 asks you to defend a different set for
-a system with an external auditor attached to it.
-
----
-
-## 6. Architecture
+## 5. Architecture
 
 ```text
                                    Internet
@@ -448,7 +198,7 @@ somebody assumed one of those two boxes had answered for the other.
 
 ---
 
-## 7. Directory Structure
+## 6. Directory Structure
 
 This lab adds the following. It restructures nothing and needs no new top-level folder.
 
@@ -457,7 +207,7 @@ aws-floci-course/
 ├── labs/
 │   └── lab-09-security/
 │       ├── README.md                                  # this document
-│       └── exercises.md                               # Section 13
+│       └── exercises.md                               # Section 12
 ├── policies/
 │   ├── usms-student-data-ro-policy.json               # NEW - the read half
 │   ├── usms-deploy-policy.json                        # NEW - scoped iam:PassRole
@@ -476,7 +226,7 @@ aws-floci-course/
 │   │   ├── usms-iam-audit.sh                          # NEW - Step 5
 │   │   ├── usms-sg-audit.sh                           # NEW - Step 12
 │   │   ├── usms-reachability-matrix.sh                # NEW - Step 17
-│   │   └── verify-lab-09.sh                           # NEW - Section 9
+│   │   └── verify-lab-09.sh                           # NEW - Section 8
 │   └── cleanup/
 │       └── lab-09-cleanup.sh                          # NEW - end of course only
 └── outputs/
@@ -512,37 +262,17 @@ labs/lab-05-ecs-alb  labs/lab-06-ecs-autoscaling  labs/lab-09-security
 
 ---
 
-## 8. Step-by-Step Implementation
+## 7. Step-by-Step Implementation
 
-!!! info "Where to run every command in this lab"
-    Unless a step says otherwise, run everything from the repository root:
+!!! info "Run every command from `aws-floci-course/`"
+    All paths are relative to the repository root. If a command reports `No such file or directory`, check `pwd`.
 
-    ```text
-    aws-floci-course/
-    ```
-
-    Every path below (`configs/...`, `policies/...`, `scripts/...`) is relative to that directory. If
-    a command reports `No such file or directory`, check `pwd` first.
-
-    One habit, restated because this lab writes more JSON documents than any since Lab 01: **capture
-    every identifier with `$(...)`, `--query` and `--output text`, and never type one by hand.** Shell
-    variables die with the terminal, which is why Step 19 writes them all to `configs/lab-09.env`.
+!!! tip "Shell variables die with the terminal"
+    Capture every identifier with `$(...)`, `--query` and `--output text`; never type one. Step 19 writes them to `configs/lab-09.env`.
 
 ### Step 1 - Resume the environment and load seven env files
 
-**Purpose**
-
-Bring Floci up and load everything the previous six labs recorded. This lab reads values from five of
-those files, and three of them - the account ID, the enrolment security group and the S3 endpoint -
-are used to build documents that would be silently wrong if the variable were empty.
-
-**Run from**
-
-```text
-aws-floci-course/
-```
-
-**Command**
+Three of these values (account ID, enrolment security group, S3 endpoint) are embedded in documents that would be silently wrong if a variable were empty.
 
 ```bash
 cd ~/aws-floci-course
@@ -578,15 +308,7 @@ printf '%-28s %s\n' \
   "db instance"          "$USMS_DB_INSTANCE"
 ```
 
-**What the command does**
-
-Seven env files is the standard opening from here on. They are additive and independent: sourcing them
-in any order gives the same result, because no two of them define the same variable. That property is
-not an accident - it is the reason every lab has used the `USMS_<THING>` convention and has looked
-values up by tag rather than reusing a shell variable.
-
-`printf` with more arguments than format specifiers reuses the format string until the arguments run
-out, which is why one `printf` prints seventeen lines.
+The env files are independent (no two define the same variable), so order does not matter. One `printf` prints seventeen lines because it reuses its format string.
 
 **Expected result**
 
@@ -621,39 +343,18 @@ db instance                  i-0fedcba9876543210
 
 **Verify**
 
-Seventeen non-empty values. Four failures matter more than the rest:
+Seventeen non-empty values. The four that matter most:
 
-- **`account` empty** stops Steps 7, 8 and 9 dead. Every document those steps write embeds the account
-  ID, and an empty one produces a malformed ARN that IAM rejects with a message about the ARN's
-  format rather than about your variable.
-- **`enrolment sg` or `alb sg` empty** means `configs/lab-04.env` or `configs/lab-05.env` is
-  incomplete. Re-run Lab 04 Step 20 or Lab 05 Step 18.
-- **`s3 endpoint` empty** means Lab 02 Step 21 did not complete. Step 14 has a documented fallback for
-  that case, but you should know now rather than then.
-- **`bucket name (policy)` empty** means `USMS_BUCKET_NAME` was never recorded. Step 6 re-derives it
-  from Lab 01's policy document, which is the more honest source anyway, so this one is survivable.
+- **`account` empty** breaks Steps 7, 8 and 9: every document they write embeds the account ID, and IAM reports a malformed ARN rather than an empty variable.
+- **`enrolment sg` or `alb sg` empty**: re-run Lab 4 Step 20 or Lab 5 Step 18.
+- **`s3 endpoint` empty**: Lab 2 Step 21 did not complete. Step 13 has a fallback.
+- **`bucket name (policy)` empty**: survivable; Step 6 re-derives it from Lab 1's policy.
 
 ---
 
 ### Step 2 - Record the security baseline before you change anything
 
-**Purpose**
-
-This lab modifies rules that five earlier laboratories wrote. Before it does, capture what every one
-of their verification scripts says today, so that at Step 18 you can prove - with a `diff`, not with a
-memory - that none of your changes broke anything they assert.
-
-This is the same discipline as Lab 05 Step 2, applied to five scripts instead of three, and for a
-sharper reason: a security change that quietly breaks a functional check is the single easiest way to
-have your work reverted by somebody who does not understand it.
-
-**Run from**
-
-```text
-aws-floci-course/
-```
-
-**Command**
+Capture what five earlier verification scripts say today, so Step 18 can prove with a `diff` that nothing they assert has changed.
 
 ```bash
 {
@@ -665,16 +366,7 @@ aws-floci-course/
 } | tee outputs/lab-09-pre-verify.txt
 ```
 
-**What the command does**
-
-Runs all five verification scripts and keeps only each one's summary line. The whole block is wrapped
-in `{ ... } | tee` so that one redirect captures the loop's output as well as the heading - a `tee`
-after a single command would have captured only that command.
-
-`python3` produces the timestamp rather than `date`, for the reason the Prerequisites gave: `date -u
-+%Y-%m-%dT%H:%M:%SZ` happens to be portable, but the moment you want any arithmetic on it the GNU and
-BSD flags diverge, and using one tool for every timestamp in the course is cheaper than remembering
-which invocations are safe.
+`{ ... } | tee` captures the loop and the heading together.
 
 **Expected result**
 
@@ -693,19 +385,13 @@ lab-06    PASS=42  FAIL=0
 
 **Verify**
 
-`FAIL=0` from Labs 02, 03, 05 and 06, and from Lab 04 either `FAIL=0` or exactly the one documented
-failure on the `usms-app-sg` source check.
-
-Confirm that the one allowed failure is the one you think it is:
+`FAIL=0` from Labs 2, 3, 5 and 6; Lab 4 at `FAIL=0` or the one documented failure. Confirm it:
 
 ```bash
 ./scripts/utilities/verify-lab-04.sh 2>/dev/null | grep FAIL || echo "no failures in 04"
 ```
 
-**What to look for:** either the single line
-`FAIL usms-enrolment-sg is sourced from usms-app-sg (not a CIDR)`, or `no failures in 04`. Any other
-failing line is a pre-existing problem, and this lab will make it harder to find rather than easier.
-Fix it first.
+You want either `FAIL usms-enrolment-sg is sourced from usms-app-sg (not a CIDR)` or `no failures in 04`. Fix any other failure first.
 
 **Checkpoint 1**
 
@@ -721,22 +407,7 @@ Ready to review
 
 ### Step 3 - Probe what this Floci build supports for policy evaluation and rule management
 
-**Purpose**
-
-Find out now which parts of IAM's evaluation surface and EC2's rule surface your build implements,
-rather than discovering it at Step 13 with three groups half-hardened. This is the same principle as
-Lab 04 Step 3, Lab 05 Step 3 and Lab 06 Step 3: **name the limitation before it costs you an hour.**
-
-This lab's probe matters more than most, because the two things it most wants to use - policy
-simulation and account-wide authorisation detail - are the two least reliably emulated calls in IAM.
-
-**Run from**
-
-```text
-aws-floci-course/
-```
-
-**Command**
+Find out now which IAM and EC2 calls your build implements, rather than at Step 13 with three groups half-hardened.
 
 ```bash
 probe() {
@@ -780,14 +451,7 @@ probe "ec2 describe-instances MetadataOptions" \
   "aws ec2 describe-instances --instance-ids $USMS_WEB_INSTANCE --query 'Reservations[0].Instances[0].MetadataOptions'"
 ```
 
-**What the command does**
-
-`probe` runs a harmless read, or generates a request skeleton, and reports whether the CLI got an
-answer at all. A skeleton probe answers "does this CLI version know the operation", which is a
-different and weaker question than "does this build implement it" - so where a skeleton is the probe,
-the step that uses the operation also has a fallback.
-
-Read the result as "the service responded to me", not "the call succeeded".
+A skeleton probe only shows the CLI knows the operation, not that the build implements it; steps that rely on one have a fallback. Read the result as "the service responded", not "the call succeeded".
 
 **Expected result**
 
@@ -824,10 +488,10 @@ ec2 describe-instances MetadataOptions               SUPPORTED
 > Example output - yours will differ, and that is exactly why the probe exists. The three
 > `not available` lines above are the *expected* answers on most builds.
 
+
 **Verify**
 
-Work out which path you are on and write it at the top of `notes/lab-09-notes.md`, because your lab
-report and Section 14 both require you to state it.
+Write your path at the top of `notes/lab-09-notes.md`; your report and Section 13 both require it.
 
 | Path | If | What changes |
 | --- | --- | --- |
@@ -836,102 +500,32 @@ report and Section 14 both require you to state it.
 | **C - no IAM writes** | `update-assume-role-policy` or `create-role` fails outright | Do Steps 4, 5, 12 to 18 and Exercises 3 and 4, which need no IAM writes, and record the identity half as conceptual. Tell your instructor |
 
 !!! note "Floci Limitation - nothing in this laboratory is enforced"
-    Floci accepts any non-empty credentials and, by default, does not authorise requests against your
-    IAM policies. It does not evaluate security groups against traffic either - it does not carry
-    traffic. A policy of `{"Effect":"Allow","Action":"*","Resource":"*"}` behaves identically to a
-    carefully scoped one, and a security group admitting everything behaves identically to one
-    admitting nothing.
+    Floci accepts any credentials, does not authorise requests against IAM policies, and carries no traffic for security groups to evaluate.
 
-    Real AWS evaluates every IAM policy on every API call and every security group on every packet.
+    Real AWS evaluates every policy on every API call and every security group on every packet.
 
-    Take this away, and it is the whole methodology of this lab: **judge your controls by reading
-    them, not by whether a command succeeded.** Do not build an exercise, or a habit, that depends on
-    seeing `AccessDenied`. Every step below asserts on a document or on a rule, because a document is
-    a thing you can actually observe here - and, as Section 12.3 argues, reading is what you would
-    have to do on a real account anyway for any claim about what *cannot* happen.
+    **Judge your controls by reading them, not by whether a command succeeded.** Never rely on seeing `AccessDenied`. For any claim about what *cannot* happen, reading is what you would do on a real account too (Section 11).
 
----
+!!! info "The two axes, and the order IAM decides in"
+    An **API call** is decided by IAM (identity policies, resource policies, boundaries, session policies) and fails with an error naming an action. A **packet** is decided by routing, security groups and NACLs and fails with a timeout. **An error message means IAM; a hang means the network.** For an API call, IAM evaluates in this order:
 
-### Interlude - the two axes, and the order AWS decides in
+    1. An explicit `Deny` anywhere: deny, and nothing overrides it.
+    2. A Service Control Policy must allow it (AWS Organizations; not modelled here).
+    3. The **permissions boundary** must allow it (Step 8).
+    4. A **session policy** must allow it (Step 9).
+    5. An **identity policy** allows it: allow.
+    6. A **resource policy** allows it: allow (Exercise 5).
+    7. Otherwise: deny.
 
-Before Step 4 reads anything, you need a model of what it is reading.
-
-**Two independent decisions.** Every interaction in AWS is one of two kinds, and they are policed by
-different machinery that does not consult each other:
-
-| | An API call | A packet |
-| --- | --- | --- |
-| Example | `s3:PutObject`, `ecs:UpdateService`, `ec2:RunInstances` | TCP 5432 from `10.0.1.87` to `10.0.3.42` |
-| Decided by | IAM: identity policies, resource policies, boundaries, session policies | Routing, security groups, network ACLs |
-| Where the decision happens | The service's API endpoint | The elastic network interface and the subnet |
-| Failure looks like | `AccessDenied`, with a message naming an action | A timeout, or a connection refused, with no message at all |
-| This course's examples | `usms-ec2-app-role` writing a transcript | `usms-web-01` reaching `usms-db-01` on 5432 |
-
-The second row of that table is the practical one. **An access-control failure that gives you an error
-message is an IAM problem. One that hangs is a network problem.** That single heuristic resolves most
-of the confusion, and it is worth more than any diagram.
-
-**The order IAM decides in.** For an API call, AWS evaluates in a fixed order, and the first two are
-the ones people forget:
-
-```text
-1. Is there an explicit DENY anywhere?             -> DENY. Nothing overrides this. Ever.
-2. Does a Service Control Policy allow it?         -> if not, DENY   (AWS Organizations)
-3. Does the PERMISSIONS BOUNDARY allow it?         -> if not, DENY   (Step 8)
-4. Does a SESSION POLICY allow it?                 -> if not, DENY   (Step 9)
-5. Does an IDENTITY policy allow it?               -> if yes, ALLOW
-6. Does a RESOURCE policy allow it?                -> if yes, ALLOW  (Exercise 5's bucket policy)
-7. Otherwise                                        -> DENY  (the implicit default)
-```
-
-Four things follow, and each of them is a step in this lab:
-
-- **An explicit `Deny` is absolute.** Lab 01 put one in `USMSDeveloperBase` against IAM escalation.
-  Nothing you attach to that role can undo it, which is exactly why it is there.
-- **Steps 3 and 4 are ceilings, not grants.** A permissions boundary and a session policy can only
-  take permissions away. Attaching a boundary that allows `s3:*` to a role with no S3 policy grants
-  the role nothing at all. This is the single most misunderstood thing in IAM and it is Step 8.
-- **The default is deny.** Every `Allow` you write is an exception to it, which is why a policy with
-  no statements is a perfectly valid and completely useless policy.
-- **Step 2 is the only one this course does not have.** Service Control Policies belong to AWS
-  Organizations, which Floci does not model and a single account does not have. Section 12 labels it
-  `Conceptual / Real AWS`, and Exercise 4 asks what you would put in one.
-
-**One distinction to fix now, because Steps 6 and 7 depend on it.** A role has two completely
-different policy documents attached to it, and students conflate them constantly:
-
-| | Trust policy | Identity (permissions) policy |
-| --- | --- | --- |
-| Also called | Assume-role policy document | Attached policy, managed or inline |
-| Answers | **Who may become this role?** | **What may this role do?** |
-| Attached with | `create-role --assume-role-policy-document`, `update-assume-role-policy` | `attach-role-policy`, `put-role-policy` |
-| Read with | `get-role --query 'Role.AssumeRolePolicyDocument'` | `list-attached-role-policies`, then `get-policy-version` |
-| Has a `Principal` | **Yes, always.** That is what it is for | No. The principal is the role itself |
-| How many | Exactly one | Up to 10 managed, plus inline |
-
-A role with a permissive trust policy and no permissions is harmless. A role with excellent
-permissions and a trust policy naming `"AWS": "*"` is a catastrophe that no permissions policy can
-mitigate. **The trust policy is the more dangerous of the two**, and it is the one nobody reads.
+    Boundaries and session policies only subtract. A role's **trust policy** decides who may become it; its **identity policy** decides what it may do. The trust policy is the more dangerous of the two. See [policy evaluation logic](../unit8/topic1.md#the-policy-evaluation-logic).
 
 ---
 
 ### Step 4 - Inventory every identity in the account
 
-**Purpose**
+List every role, what trusts it and what it can do, as a JSON file Step 5 consumes. Nothing is modified.
 
-You cannot review what you have not listed. This step produces the complete identity inventory - every
-role, what trusts it, and what it can do - as a single JSON file that Step 5's audit script consumes
-and that your lab report quotes.
-
-Nothing here modifies anything.
-
-**Run from**
-
-```text
-aws-floci-course/
-```
-
-**Command - part 1, the human-readable pass**
+**Part 1 - the human-readable pass**
 
 ```bash
 echo "== Roles in this account =="
@@ -953,16 +547,7 @@ aws iam list-policies --scope Local \
   --output table
 ```
 
-**What the command does**
-
-`--scope Local` restricts `list-policies` to policies **you** created. Without it, the call returns
-several hundred AWS managed policies and buries the six that are yours. On a real account this flag is
-the difference between a usable audit and a wall of text.
-
-`AttachmentCount` is the column to read. A customer managed policy with an attachment count of zero is
-either a mistake, a leftover, or - as `USMSPermissionsBoundary` will be after Step 8 - a policy
-deliberately used as a boundary and never attached. Knowing which is which is exactly the sort of
-thing an inventory is for.
+`--scope Local` limits `list-policies` to your policies. Read `AttachmentCount`: zero means a leftover, a mistake, or (after Step 8) a deliberate boundary.
 
 **Expected result**
 
@@ -1003,11 +588,9 @@ thing an inventory is for.
 > from Lab 06 may or may not appear in the roles list depending on how your build stores
 > service-linked roles; either is correct.
 
-**What to look for:** `USMSStudentDataReadWrite` with an attachment count of **2**. That is Lab 01's
-`usms-ec2-app-role` and Lab 04's `usms-ecs-task-role`, and it is the finding Step 6 pulls on. One
-policy, two roles, one of which does not need half of it.
+`USMSStudentDataReadWrite` with an attachment count of **2** (`usms-ec2-app-role` and `usms-ecs-task-role`) is the finding Step 6 pulls on.
 
-**Command - part 2, the machine-readable inventory**
+**Part 2 - the machine-readable inventory**
 
 ```bash
 python3 - << 'PY' > outputs/lab-09-identity-inventory.json
@@ -1066,20 +649,9 @@ for r in d:
 "
 ```
 
-**What the command does**
-
-A short Python program rather than a shell loop, and the reason is worth stating because it recurs:
-the data is **nested and irregular**. Each role has a trust policy that is an object, a list of
-attached policies each of which needs two more API calls to resolve to a document, and a list of
-inline policies with a different shape. Shell is a poor language for that and JSON is a good one.
-
-The heredoc is `<< 'PY'`, **quoted**, because the program contains `$` characters inside f-strings and
-`{}` braces everywhere, none of which the shell must touch. Getting this wrong produces a Python file
-full of empty strings and a `SyntaxError` that names a line the program does not contain.
-
-`aws(...)` returns `None` rather than raising when a call fails, so a build that does not implement
-`list-role-policies` produces an inventory with an empty `inlinePolicies` list instead of no inventory
-at all. **An audit tool that dies on the first unsupported call is an audit tool nobody runs twice.**
+- Python, because the data is nested and irregular (trust policy objects, attached policies needing two more calls, inline policies).
+- `<< 'PY'` is quoted so the shell leaves `$` and braces alone.
+- `aws(...)` returns `None` on failure, so an unsupported call gives an empty list rather than no inventory.
 
 **Expected result**
 
@@ -1095,9 +667,7 @@ valid JSON
 
 > Example output - your role count may include Lab 06's service-linked role.
 
-**What to look for:** every `boundary` reading `-`. **Not one role in this account has a permissions
-boundary**, which is finding number one and is what Step 8 fixes. That column existing and being empty
-across the board is more informative than any single role's policies.
+Every `boundary` reads `-`: **no role has a permissions boundary**. Step 8 fixes that.
 
 ✏️ **Your turn**
 
@@ -1113,29 +683,13 @@ of the two kinds of principal implies about WHO could obtain those credentials
 and HOW.
 ```
 
-Hint: `python3 -c "import json;d=json.load(open('outputs/lab-09-identity-inventory.json'));..."` will
-pull them out, or `jq '.[] | {role, trustPolicy}'` if you prefer. The interesting difference is not
-the syntax.
+Hint: pull them out with `python3 -c ...` or `jq '.[] | {role, trustPolicy}'`. The interesting difference is not the syntax.
 
 ---
 
 ### Step 5 - Build the IAM audit script
 
-**Purpose**
-
-Turn the inventory into findings. This script encodes four checks that catch the four IAM mistakes
-that actually cause incidents, and it is the artefact this lab is most likely to leave you using
-again.
-
-It changes nothing. Read-only, always.
-
-**Run from**
-
-```text
-aws-floci-course/
-```
-
-**Concept first - the four findings, and why these four**
+Turn the inventory into findings: four checks for the IAM mistakes that cause incidents. Read-only.
 
 | Finding | Why it matters |
 | --- | --- |
@@ -1143,10 +697,6 @@ aws-floci-course/
 | `Resource: "*"` on a mutating action | Scoping actions without scoping resources means the right verbs on the wrong nouns. `s3:DeleteObject` on `*` is not a smaller problem than `s3:*` on one bucket |
 | `iam:PassRole` without a resource scope | **The escalation.** A principal that may pass any role to any service can pass an admin role to a service it controls and inherit it. This is the single most exploited IAM misconfiguration there is |
 | A trust policy with no `Condition` on a **service** principal | The confused deputy. Step 7 explains it in full |
-
-Three of those four are about the *shape* of a document rather than its contents, which is why they
-can be checked mechanically. The fourth - is this grant appropriate to this workload - cannot be, and
-that is why Exercise 4 is a piece of writing rather than a script.
 
 **Command**
 
@@ -1287,28 +837,10 @@ bash -n scripts/utilities/usms-iam-audit.sh && echo "syntax OK"
 ./scripts/utilities/usms-iam-audit.sh | tee outputs/lab-09-iam-findings.txt
 ````
 
-**What the command does**
-
-The outer heredoc is `<< 'EOF'`, quoted, because the file contains `$1`, `${BASH_SOURCE[0]}` and an
-entire Python program full of braces, none of which your shell must expand. The **inner** heredoc,
-`<< 'PY'`, is quoted for the same reason and is nested inside the outer one - which is why the
-Markdown fence around this whole block uses **four** backticks rather than three.
-
-Three details in the Python are worth reading rather than skimming:
-
-**`as_list`** exists because IAM policy documents are irregular by design: `"Action": "s3:GetObject"`
-and `"Action": ["s3:GetObject"]` are both valid and mean the same thing, and the same is true of
-`Resource`, `Principal.Service` and `Statement` itself. Every tool that reads IAM policies has a
-function like this, and every tool that does not has a bug.
-
-**`is_mutating`** is a heuristic, not a rule, and the script says so. It matches an action's verb
-against a list of prefixes, so `s3:PutObject` is mutating and `s3:GetObject` is not. It will
-occasionally be wrong - `ec2:RunInstances` is caught by `Run`, but `sts:AssumeRole` is not caught by
-anything and is arguably the most consequential action in AWS. A heuristic that is right most of the
-time and honest about being a heuristic is worth having; one that pretends to be complete is not.
-
-**The exit code is 1 only for HIGH findings.** A tool that exits non-zero for every imperfection is a
-tool that gets `|| true` appended to it in somebody's pipeline within a week.
+- Outer `<< 'EOF'` and inner `<< 'PY'` are both quoted; the nested heredocs are why the Markdown fence uses four backticks.
+- `as_list` handles IAM's string-or-list fields (`Action`, `Resource`, `Principal.Service`, `Statement`).
+- `is_mutating` is a verb-prefix heuristic, and says so (it misses `sts:AssumeRole`, for instance).
+- Exit code is 1 only for HIGH findings, so nobody appends `|| true`.
 
 **Expected result**
 
@@ -1349,21 +881,13 @@ HIGH=4  MED=5  roles=5
 
 **Verify**
 
-Four HIGH findings, all of them the same shape, on four different roles. That is the point of running
-an audit rather than reading five documents: **a systematic mistake looks like a systematic mistake**,
-and one that appears on every role in the account was made by a convention rather than by a person
-having a bad afternoon.
-
-Steps 7 and 8 fix two of the four and Exercise 2 asks you about the others. The exit code is `1`;
-check it:
+Four HIGH findings of the same shape on four roles: a systematic mistake made by a convention. Steps 7 and 8 fix two; Exercise 2 handles the rest.
 
 ```bash
 ./scripts/utilities/usms-iam-audit.sh >/dev/null; echo "exit code: $?"
 ```
 
-**What to look for:** `exit code: 1`, because there are HIGH findings. When you re-run this at Step 18
-the count will be lower and the code will still be 1, because this lab does not fix all four - and a
-report that claims zero findings after a four-hour review is a report nobody believes.
+You want `exit code: 1`. It will still be 1 at Step 18, because this lab does not fix all four.
 
 **Checkpoint 2**
 
@@ -1379,21 +903,9 @@ Identity inventory complete
 
 ### Step 6 - Read the transcripts policy, and find the verb that should not be there
 
-**Purpose**
+Lab 1's `USMSStudentDataReadWrite` is attached to an EC2 role and a Fargate task role. Do both workloads need all of it?
 
-Lab 01 wrote `USMSStudentDataReadWrite` for a bucket that did not exist. Lab 03 attached it to an EC2
-instance. Lab 04 attached the same policy, unchanged, to a Fargate task role. Nobody has ever asked
-whether both of those workloads need all of it.
-
-This step asks.
-
-**Run from**
-
-```text
-aws-floci-course/
-```
-
-**Command - part 1, read the policy that two roles share**
+**Part 1 - read the policy that two roles share**
 
 ```bash
 POLICY_ARN="arn:aws:iam::${USMS_ACCOUNT_ID}:policy/USMSStudentDataReadWrite"
@@ -1413,15 +925,8 @@ aws iam list-entities-for-policy --policy-arn "$POLICY_ARN" \
   --output json
 ```
 
-**What the command does**
-
-`get-policy` then `get-policy-version` is the two-step Lab 02 Step 3 introduced, and the reason is the
-same: a managed policy is versioned and only one version is in force. Reading a policy without asking
-which version is default is how you review a document that is not the one being enforced.
-
-`list-entities-for-policy` is new here, and it is the reverse of `list-attached-role-policies`: given a
-policy, who has it. On a real account this is the first call in any "what breaks if I change this"
-conversation, and the answer is frequently larger than expected.
+- `get-policy` then `get-policy-version`: only the default version is in force.
+- `list-entities-for-policy` is the reverse lookup: given a policy, who has it.
 
 **Expected result**
 
@@ -1462,51 +967,25 @@ default version: v1
 > Example output - the exact `Sid` values and layout depend on what your Lab 01 wrote. What must be
 > true is the shape: a bucket-level statement, an object-level statement, and an explicit `Deny`.
 
-**What to look for**, and this is the finding:
+The findings:
 
-- **Two statements, two different ARNs.** `s3:ListBucket` is a *bucket* operation and takes the bucket
-  ARN; `s3:GetObject` and `s3:PutObject` are *object* operations and take the bucket ARN with `/*`.
-  Putting them in one statement with one resource is the most common S3 policy error there is, and
-  Lab 01 avoided it deliberately.
-- **`s3:PutObject` is granted to both roles.** The enrolment API reads a student's transcript to
-  display it. It does not write transcripts - the registry does that, from a different workload
-  entirely. One of these two roles is carrying a verb it does not use.
-- **The explicit `Deny` on `s3:DeleteBucket`.** Remember from the interlude that this outranks
-  everything. No policy anyone attaches to either role, now or ever, can let it delete that bucket.
+- **Two statements, two ARNs:** `s3:ListBucket` takes the bucket ARN, object actions take the ARN with `/*`. Lab 1 got this right.
+- **`s3:PutObject` is granted to both roles.** The enrolment API only reads transcripts; one role carries a verb it does not use.
+- **The explicit `Deny` on `s3:DeleteBucket`** outranks everything (rule 1 of the evaluation order).
 
-**Command - part 2, does the bucket exist yet?**
+**Part 2 - does the bucket exist yet?**
 
 ```bash
 aws s3api head-bucket --bucket "${USMS_BUCKET_NAME:-usms-student-data}" 2>&1 | head -3
 echo "head-bucket exit code: ${PIPESTATUS[0]}"
 ```
 
-**What to look for:** a non-zero exit code (`404` / `NoSuchBucket`). Lab 10 is the lab that creates
-this bucket, and it has not run yet, so that is the correct and expected result here - not a sign that
-anything is missing.
-
-The two policies above currently grant access to nothing, because there is nothing at that ARN. That
-does not make them unreviewable. **An IAM policy is a statement about ARNs, not a reference to
-objects** - you can review it, and you should, before the resource appears. When Lab 10 runs
-`create-bucket`, both policies resolve at once, and Exercise 5's bucket policy draft stops being a
-document about a hypothetical bucket and becomes one the (still unwritten) S3 configuration lab can
-apply.
-
-Record that the bucket did not exist yet at the top of `notes/lab-09-notes.md`. It is the second thing
-Section 14 asks for.
+A non-zero exit code (`404` / `NoSuchBucket`) is correct: Lab 10 creates the bucket. **An IAM policy is a statement about ARNs, not a reference to objects**, so it can be reviewed before the resource exists. Record that the bucket did not exist yet at the top of `notes/lab-09-notes.md`; Section 13 asks for it.
 
 !!! note "Floci Limitation - you cannot demonstrate the difference between these two policies"
-    On real AWS you could attach the read-only policy to a role, call `s3:PutObject`, and watch it
-    fail with `AccessDenied`. That is the natural way to show that a scoped policy is scoped.
+    On real AWS a `PutObject` under the read-only policy would fail with `AccessDenied`. Floci authorises nothing, so both roles succeed at everything.
 
-    Floci does not authorise requests against IAM policies, so both roles will succeed at everything
-    regardless of what you attach, and a demonstration built on seeing a denial would be a
-    demonstration of nothing.
-
-    Take this away: **the proof that a policy is correct is that you read it and it says what you
-    meant.** That is not a weaker proof than testing - for a claim about what a principal *cannot*
-    do, it is the only proof there is, because no finite number of successful denials proves the
-    absence of a path.
+    **The proof that a policy is correct is that you read it and it says what you meant.** For a claim about what a principal *cannot* do, it is the only proof there is.
 
 ✏️ **Your turn**
 
@@ -1521,58 +1000,27 @@ exactly one action. If your two lists differ by more than one action, read the
 policy document again - there are only three actions in it.
 ```
 
-Hint: `s3:ListBucket` is needed by both, and it is worth asking yourself why a reader needs to list a
-bucket at all. The answer is about what S3 returns when you `GetObject` a key that does not exist, and
-it depends on whether the caller has `ListBucket`.
+Hint: ask why a reader needs `s3:ListBucket` at all; it changes what S3 returns for a missing key.
 
 ---
 
 ### Step 7 - Create the read-only policy and the role that carries it
 
-**Purpose**
+Split the transcripts policy along Step 6's line: a new, narrower policy on a new role, additively, so Lab 10's moment for `USMSStudentDataReadWrite` is untouched.
 
-Split the transcripts policy along the line Step 6 found. This creates a second, narrower policy and a
-new role for the read path - additively, without touching either role that already carries the
-read-write one, because Lab 10 is built around the moment `USMSStudentDataReadWrite` resolves for both
-of them at once.
+!!! info "The confused deputy, briefly"
+    A trust policy naming a **service** principal lets that service assume the role on behalf of anyone, including another account. The fix pins the request to your account and resources:
 
-**Run from**
+    ```text
+    "Condition": {
+      "StringEquals": { "aws:SourceAccount": "000000000000" },
+      "ArnLike":      { "aws:SourceArn": "arn:aws:ecs:us-east-1:000000000000:*" }
+    }
+    ```
 
-```text
-aws-floci-course/
-```
+    Two caveats: `ec2.amazonaws.com` does not send `aws:SourceArn` for instance profiles, so `usms-ec2-app-role` cannot be fixed this way (Exercise 2); and a condition on a key the service never sends denies everything. See [the confused deputy problem](../unit8/topic1.md#the-confused-deputy-problem).
 
-**Concept first - the confused deputy, in one paragraph**
-
-A trust policy that names a **service** principal says "any request from this AWS service may assume
-this role". Not "any request from *my* use of this service" - any request from the service, on behalf
-of anyone. If an attacker can persuade that service, in **their** account, to act on **your** role's
-behalf, they inherit your permissions. The service is the deputy, and it has been confused about whose
-instruction it is following.
-
-The fix is a condition that pins the request to your account and your resources:
-
-```text
-"Condition": {
-  "StringEquals": { "aws:SourceAccount": "000000000000" },
-  "ArnLike":      { "aws:SourceArn": "arn:aws:ecs:us-east-1:000000000000:*" }
-}
-```
-
-`aws:SourceAccount` is the account that owns the resource making the call. `aws:SourceArn` is that
-resource. Together they say: only ECS, only in my account, only for my ECS resources.
-
-Two caveats worth knowing and both of them examinable:
-
-- **Not every service supports these keys.** `ec2.amazonaws.com` does not populate `aws:SourceArn` for
-  instance profiles, so `usms-ec2-app-role` cannot be fixed this way. That finding stays open in the
-  audit, deliberately, and Exercise 2 asks what you would do about it instead.
-- **A condition on a key the service does not send is a condition that denies everything.** If you add
-  `aws:SourceArn` to a trust policy for a service that never sends it, the condition evaluates false
-  and nothing can assume the role. That is a self-inflicted outage, and it is why you check the
-  documentation for the specific service rather than applying the pattern everywhere.
-
-**Command - part 1, the read-only policy document**
+**Part 1 - the read-only policy document**
 
 ```bash
 cat > policies/usms-student-data-ro-policy.json << 'EOF'
@@ -1613,27 +1061,11 @@ python3 -m json.tool policies/usms-student-data-ro-policy.json > /dev/null && ec
 grep -c '\$' policies/usms-student-data-ro-policy.json
 ```
 
-**What the command does**
+- `<< 'EOF'`, quoted: no shell variables. The bucket name is the same literal Lab 1 used, so Exercise 5 can compare them.
+- `grep -c '\$'` must print **`0`**.
+- The explicit `Deny` adds nothing today, but still wins if someone later attaches a broader policy. Say that in your report, or a reviewer will delete it as redundant.
 
-`<< 'EOF'`, **quoted**, because this document contains no shell variable and must reach disk exactly
-as written. The bucket name is a literal here on purpose: it is the same literal Lab 01 wrote, and
-having the two documents contain the identical string is what lets Exercise 5 compare them
-mechanically.
-
-The `grep -c '\$'` must print **`0`**. That check has now appeared in four laboratories in five
-different contexts, and it costs one line.
-
-The third statement is the interesting one and it is not strictly necessary. The first two statements
-grant `ListBucket` and `GetObject`, and everything not granted is denied by default - so the explicit
-`Deny` adds nothing today. It adds something tomorrow: **if anyone ever attaches a broader policy to a
-role that also carries this one, the explicit `Deny` still wins**, because of rule 1 in the interlude.
-That is what an explicit deny is for. It is not belt and braces; it is a statement that survives
-somebody else's future mistake.
-
-State that reasoning in your report. A reviewer who cannot explain why a redundant `Deny` is not
-redundant will delete it.
-
-**Command - part 2, create the policy**
+**Part 2 - create the policy**
 
 ```bash
 RO_POLICY_ARN=$(aws iam create-policy \
@@ -1657,7 +1089,7 @@ RO_POLICY_ARN = arn:aws:iam::000000000000:policy/USMSStudentDataReadOnly
 > Example output. If this fails with `EntityAlreadyExists`, you have run the step twice; read the
 > existing policy with `get-policy-version` and confirm it matches before continuing.
 
-**Command - part 3, the scoped trust policy**
+**Part 3 - the scoped trust policy**
 
 ```bash
 cat > policies/trust-ecs-tasks-scoped.json << EOF
@@ -1685,28 +1117,14 @@ grep -c '\$' policies/trust-ecs-tasks-scoped.json
 cat policies/trust-ecs-tasks-scoped.json
 ```
 
-!!! warning "Heredoc quoting - and the case where the usual rule gives the wrong answer"
-    This one is `<< EOF`, **unquoted**, because `${USMS_ACCOUNT_ID}` and `${AWS_REGION_COURSE}` must
-    become real values as the file is written. Lab 02 Step 15 did the same thing for
-    `policies/usms-db-sg-ingress.json`.
-
-    That contradicts the shorthand people carry away from Lab 01 - "policy documents use `<< 'EOF'`" -
-    and the shorthand is what is wrong, not this step. **The rule is not about the kind of file. The
-    rule is always the same question: do I want this expanded now, or later?** Lab 01's
-    `USMSSelfManageCredentials` needed `<< 'EOF'` because it contains `${aws:username}`, which is an
-    *IAM* variable that IAM expands at evaluation time and the shell must never touch. This document
-    contains *shell* variables that must be gone by the time IAM sees it.
-
-    A document containing **both** kinds is where this gets genuinely awkward, and it happens. In an
-    unquoted heredoc, escape the IAM variable with a backslash so the shell leaves it alone:
+!!! warning "Heredoc quoting: expand now, or later?"
+    This one is `<< EOF`, **unquoted**, because `${USMS_ACCOUNT_ID}` and `${AWS_REGION_COURSE}` must become real values now. The rule is not "policy files use `<< 'EOF'`"; it is always *do I want this expanded now or later?* Lab 1's `${aws:username}` is an IAM variable and must survive. In an unquoted heredoc that contains both kinds, escape the IAM one:
 
     ```text
     "Resource": "arn:aws:iam::${USMS_ACCOUNT_ID}:user/\${aws:username}"
     ```
 
-    Without the backslash, bash tries to expand `${aws:username}`, finds a colon where it expects an
-    operator, and aborts the whole heredoc with `bad substitution` - which at least fails loudly.
-    Getting it backwards in the other direction fails silently, which is worse.
+    Without the backslash, bash aborts with `bad substitution`.
 
 **Expected result**
 
@@ -1732,11 +1150,9 @@ valid JSON
 }
 ```
 
-**What to look for:** zero dollar signs, and real values where the variables were. If you see the
-literal text `${USMS_ACCOUNT_ID}` in the file, you used a quoted heredoc and IAM will reject the
-document with a message about an invalid principal that mentions neither quoting nor variables.
+Zero dollar signs and real values. Literal `${USMS_ACCOUNT_ID}` in the file means you used a quoted heredoc.
 
-**Command - part 4, the new role**
+**Part 4 - the new role**
 
 ```bash
 READER_ROLE_ARN=$(aws iam create-role \
@@ -1754,7 +1170,7 @@ aws iam attach-role-policy \
   --policy-arn "$RO_POLICY_ARN"
 ```
 
-**Command - part 5, fix the trust policy on the role that already exists**
+**Part 5 - fix the trust policy on the role that already exists**
 
 !!! danger "Read before running any update to a trust policy"
     **What will be replaced:** the entire assume-role policy document on `usms-ecs-task-role`.
@@ -1787,16 +1203,14 @@ aws iam update-assume-role-policy \
   --policy-document file://policies/trust-ecs-tasks-scoped.json
 ```
 
-If `$USMS_ECS_TASK_ROLE` is not set in your `configs/lab-04.env`, use the literal name - and add the
-variable to that file afterwards, because a name typed by hand in one place is a name that will be
-typed differently in another:
+If `$USMS_ECS_TASK_ROLE` is not set in `configs/lab-04.env`, use the literal name, and add the variable to that file afterwards:
 
 ```bash
 USMS_ECS_TASK_ROLE="${USMS_ECS_TASK_ROLE:-usms-ecs-task-role}"
 echo "task role: $USMS_ECS_TASK_ROLE"
 ```
 
-**Command - part 6, verify**
+**Part 6 - verify**
 
 ```bash
 echo "== the new role =="
@@ -1865,10 +1279,7 @@ SAME PRINCIPAL, NEW CONDITION
 
 > Example output.
 
-**What to look for:** the words `SAME PRINCIPAL, NEW CONDITION`. That is the whole claim of this step,
-made mechanically: **who may assume the role did not change; the circumstances under which they may
-did.** A trust policy change that altered the principal would be a functional change wearing a
-security change's clothes, and it is exactly the sort of thing that gets a security review reverted.
+`SAME PRINCIPAL, NEW CONDITION`: who may assume the role did not change; the circumstances did. A changed principal would be a functional change.
 
 **Checkpoint 3**
 
@@ -1885,35 +1296,9 @@ Identity, half fixed
 
 ### Step 8 - Scope `iam:PassRole`, and put a ceiling on a role for the first time
 
-**Purpose**
+Build the deployment identity the course has never had (everything so far ran as root), with a scoped `iam:PassRole` and a permissions boundary.
 
-Build the deployment identity this course has never had, and use it to introduce the two IAM
-mechanisms that actually contain a compromised principal: a scoped `iam:PassRole` and a permissions
-boundary.
-
-Everything in this course so far has been built as the account root, which is the one identity nobody
-should ever build anything as. This step creates the role a CI pipeline - or the CloudFormation lab -
-would use instead.
-
-**Run from**
-
-```text
-aws-floci-course/
-```
-
-**Concept first - why `iam:PassRole` is the action that matters**
-
-You have used it three times without noticing.
-
-- Lab 03 Step 8 passed `usms-ec2-app-profile` to `run-instances`.
-- Lab 04 passed `usms-ecs-exec-role` and `usms-ecs-task-role` to `register-task-definition`.
-- Lab 06's service-linked role passes nothing, which is part of why it is safe.
-
-Every one of those is an act of **handing a set of permissions to a service so that the service can
-use them on your behalf**. AWS gates it behind a separate action, `iam:PassRole`, precisely because the
-permissions being handed over may be larger than the permissions of the person handing them over.
-
-The escalation is short enough to write out in full:
+`iam:PassRole` gates handing a role to a service (Lab 3 passed `usms-ec2-app-profile`; Lab 4 passed the ECS roles). Unscoped, it is an escalation path:
 
 ```text
 1. Attacker controls a principal with:   ec2:RunInstances  and  iam:PassRole on Resource "*"
@@ -1923,16 +1308,9 @@ The escalation is short enough to write out in full:
 5. Attacker is now an administrator
 ```
 
-Nothing in that sequence exploits a bug. Every step is a documented, intended API call. The only thing
-that stops it is step 1 being false - which means scoping `iam:PassRole` to named role ARNs, and
-adding the `iam:PassedToService` condition so that even those roles can only be passed to the services
-that are supposed to receive them.
+Every step is a documented API call. The fix is scoping `iam:PassRole` to named ARNs plus an `iam:PassedToService` condition. See [iam:PassRole](../unit8/topic1.md#iampassrole).
 
-**Concept first - what a permissions boundary is, and what it is not**
-
-A permissions boundary is a managed policy attached to a role or user in a **second slot**, next to
-its ordinary policies. It grants nothing. It sets a **ceiling**: the principal's effective permissions
-are the intersection of its identity policies and its boundary.
+A **permissions boundary** sits in a second slot and grants nothing; effective permissions are the intersection:
 
 ```text
 identity policy says:   s3:*, ec2:*, iam:*
@@ -1944,16 +1322,9 @@ boundary says:          s3:*, ec2:*
 effective:              s3:GetObject         <- the boundary granted NOTHING
 ```
 
-Read the second example twice. **A boundary can only subtract.** Attaching a boundary that allows
-everything to a role with no policies gives that role no permissions at all.
+It is how you safely delegate role creation. See [permissions boundaries](../unit8/topic1.md#permissions-boundaries-and-delegated-administration).
 
-What it is for, in one sentence: it is how you safely delegate the ability to create roles. Give a
-platform team `iam:CreateRole` with a condition requiring `iam:PermissionsBoundary` to equal your
-boundary's ARN, and they can create as many roles as they like, none of which can exceed the ceiling
-you set - including roles they might create in order to escalate. That is the only mechanism in IAM
-that solves that problem, and it is why boundaries exist.
-
-**Command - part 1, the boundary document**
+**Part 1 - the boundary document**
 
 ```bash
 cat > policies/usms-permissions-boundary.json << 'EOF'
@@ -2018,26 +1389,10 @@ EOF
 python3 -m json.tool policies/usms-permissions-boundary.json > /dev/null && echo "valid JSON"
 ```
 
-**What the command does**
+- Quoted heredoc. `Resource: "*"` is correct for a ceiling; predict why Step 18's audit does not flag it.
+- The second statement denies every way of changing who can do what, so the role cannot escalate even if someone attaches an admin policy. `iam:DeleteRolePermissionsBoundary` stops it removing its own ceiling.
 
-Quoted heredoc - no shell variables in the document.
-
-Notice what the first statement does and does not contain. It has `Resource: "*"`, which the audit
-script in Step 5 would flag, and that is **correct for a boundary**: a ceiling that named specific
-resources would cap the role to those resources rather than to those actions, which is not what a
-ceiling is for. When you re-run the audit at Step 18 you will see this policy is not flagged at all,
-for a reason worth predicting before you get there.
-
-The second statement is where the real work is. Every action in it is a way of **changing who can do
-what**, and an explicit `Deny` on all of them means a principal wearing this boundary cannot escalate
-its own privileges even if somebody attaches an administrator policy to it by mistake. That last
-clause is the whole value proposition: a boundary protects you from a future mistake made by someone
-who has more authority than you do.
-
-`iam:DeleteRolePermissionsBoundary` in that list is not decoration. Without it, the first thing a
-compromised principal with `iam:*` would do is remove its own ceiling.
-
-**Command - part 2, create it, and do not attach it to anything**
+**Part 2 - create it, and do not attach it to anything**
 
 ```bash
 BOUNDARY_ARN=$(aws iam create-policy \
@@ -2050,7 +1405,7 @@ BOUNDARY_ARN=$(aws iam create-policy \
 echo "BOUNDARY_ARN = $BOUNDARY_ARN"
 ```
 
-**Command - part 3, the deploy policy, with a scoped `iam:PassRole`**
+**Part 3 - the deploy policy, with a scoped `iam:PassRole`**
 
 ```bash
 cat > policies/usms-deploy-policy.json << EOF
@@ -2119,28 +1474,13 @@ DEPLOY_POLICY_ARN=$(aws iam create-policy \
 echo "DEPLOY_POLICY_ARN = $DEPLOY_POLICY_ARN"
 ```
 
-**What the command does**
+Unquoted heredoc (three ARNs use `${USMS_ACCOUNT_ID}`); `grep -c '\$'` must print `0`.
 
-Unquoted heredoc, because three role ARNs have to be built from `${USMS_ACCOUNT_ID}`. Check the
-`grep -c '\$'` prints `0`.
+- **Statement 1** is what the pipeline does. `ecs:UpdateService` on `*` is a genuine MED finding (Exercise 2).
+- **Statement 2** passes three named roles, only to ECS tasks: the escalation's step 3 is now impossible.
+- **Statement 3** explicitly denies passing anything to EC2, which survives a future broad `Allow`. Without `iam:PassedToService`, `usms-ecs-task-role` could be passed to EC2 and an instance could write transcripts.
 
-The three statements are three different ideas and it is worth naming them:
-
-- **Statement 1** is what the pipeline does. Note that `ecs:UpdateService` on `Resource: "*"` would be
-  flagged MED by Step 5's audit, and it is a genuine finding - scoping it to one service ARN is
-  Exercise 2.
-- **Statement 2** is the `PassRole` grant: three named roles, and only to ECS tasks. Compare it with
-  the escalation sequence above and notice that step 3 is now impossible, because there is no admin
-  role in that list and no other service in that condition.
-- **Statement 3** is an explicit `Deny` on passing *anything* to EC2. That is stronger than the
-  absence of a grant, and the reason is the interlude's rule 1: if somebody later attaches a broad
-  policy to this role, the `Allow` they add is overridden and the escalation path stays shut.
-
-`iam:PassedToService` is the condition key that makes this precise. Without it, "may pass
-`usms-ecs-task-role`" means may pass it to *anything*, including EC2 - and `usms-ecs-task-role` has
-`USMSStudentDataReadWrite` on it, so an instance wearing it could write transcripts.
-
-**Command - part 4, the trust policy and the role**
+**Part 4 - the trust policy and the role**
 
 ```bash
 cat > policies/trust-deploy.json << EOF
@@ -2178,35 +1518,19 @@ aws iam attach-role-policy \
   --policy-arn "$DEPLOY_POLICY_ARN"
 ```
 
-**What the command does**
-
-`--permissions-boundary` is the flag that does the whole of this step's second idea, and it is one
-flag. A boundary can also be attached to an existing role with
-`aws iam put-role-permissions-boundary`, and removed with `aws iam delete-role-permissions-boundary` -
-which is exactly the action the boundary document above denies.
-
-The trust policy names a **user ARN**, not a service. Compare it with Step 7's document: the same
-`sts:AssumeRole` action, a completely different kind of principal, and no condition - because a user
-principal in your own account is not a confused deputy risk. It is your own user. The equivalent
-hardening for a user principal is an MFA condition, which Section 12 lists as
-`Conceptual / Real AWS` and Exercise 2 asks you to write anyway.
+`--permissions-boundary` sets the ceiling (`put-role-permissions-boundary` does it afterwards). The trust policy names a **user** in your own account, which is not a confused-deputy risk; its hardening would be MFA (Section 11, Exercise 2).
 
 !!! warning "If your build rejects `--permissions-boundary`"
-    Some builds accept `create-role` and silently ignore the flag, and some reject it outright.
-
-    Check which happened:
+    Some builds silently ignore the flag; some reject it. Check:
 
     ```bash
     aws iam get-role --role-name usms-deploy-role \
       --query 'Role.PermissionsBoundary' --output json
     ```
 
-    If it returns `null` on a role you created with the flag, your build stores roles without
-    boundaries. Record it as a limitation, try `put-role-permissions-boundary` once as a second
-    attempt, and continue - Section 9's script lists the boundary check among its known benign
-    failures, and the reasoning in this step is what is assessed.
+    `null` means boundaries are not stored. Record it, try `put-role-permissions-boundary` once, and continue; Section 8 lists it as a known benign failure.
 
-**Command - part 5, verify**
+**Part 5 - verify**
 
 ```bash
 echo "== the deploy role =="
@@ -2270,15 +1594,9 @@ aws iam list-entities-for-policy --policy-arn "$BOUNDARY_ARN" \
 
 > Example output - your ARNs will differ.
 
-**What to look for:** three things, in this order of importance.
-
-1. **`Boundary` is not null.** That is the ceiling, in the second slot.
-2. **The `PassRole` statement names three ARNs and no wildcard.** Read them and satisfy yourself that
-   none of the three is an administrator.
-3. **The boundary is attached to nothing.** `AttachmentCount` on that policy stays at zero forever,
-   and a colleague tidying up unattached policies would delete the one control preventing the
-   pipeline from escalating. Put a comment to that effect in your report; Section 16's KEEP column
-   says the same thing.
+1. **`Boundary` is not null.**
+2. **The `PassRole` statement names three ARNs and no wildcard**, none of them an administrator.
+3. **The boundary is attached to nothing.** It looks like an orphan; a colleague tidying up would delete the one control capping the pipeline. Section 15's KEEP column says so too.
 
 **Checkpoint 4**
 
@@ -2295,24 +1613,7 @@ Identity, fixed
 
 ### Step 9 - Scope down a session, and compute an intersection
 
-**Purpose**
-
-Lab 02 Step 3 assumed `usms-developer-role` and got everything the role could do. There is a third way
-to narrow permissions, orthogonal to both identity policies and boundaries, and it is the one you
-reach for when the narrowing is temporary: a **session policy**, passed at the moment you assume the
-role.
-
-This step uses one, and - more importantly - makes you compute the effective permissions of the
-session by hand, because that intersection is the thing you have to be able to do in your head when
-somebody asks why their credentials do not work.
-
-**Run from**
-
-```text
-aws-floci-course/
-```
-
-**Concept first - three ways to narrow, and where each one lives**
+A **session policy** narrows an assumed role for one session. This step uses one and makes you compute the effective permissions by hand.
 
 | Mechanism | Attached to | Lives for | Set by | Can it grant? |
 | --- | --- | --- | --- | --- |
@@ -2320,21 +1621,13 @@ aws-floci-course/
 | Permissions boundary | A role or user, in a second slot | Until removed | Whoever created the principal | No - caps only |
 | Session policy | One `sts:AssumeRole` call | The session, up to an hour here | **The caller**, at assume time | No - caps only |
 
-The third row is the interesting one and it has a property the other two do not: **the caller sets it
-on themselves**. That sounds pointless - why would anyone voluntarily take permissions away? - until
-you think about what a caller usually is. A pipeline step that only needs to read a log group can
-assume the deploy role with a session policy allowing exactly `logs:GetLogEvents`, so that a bug in
-*that step's own code* cannot delete a service. It is the seatbelt you fasten on yourself.
-
-The effective permissions of such a session are:
+The caller sets it on themselves, like a seatbelt: a pipeline step that only reads logs cannot delete a service through its own bug.
 
 ```text
 effective = identity policy  AND  boundary  AND  session policy
 ```
 
-Three intersections. An action must appear in all three, and must be denied by none.
-
-**Command - part 1, write a session policy**
+**Part 1 - write a session policy**
 
 ```bash
 cat > outputs/lab-09-session-policy.json << 'EOF'
@@ -2359,14 +1652,9 @@ EOF
 python3 -m json.tool outputs/lab-09-session-policy.json > /dev/null && echo "valid JSON"
 ```
 
-**What the command does**
+It lives in `outputs/`, not `policies/`: it is an argument to one API call, not part of the account's posture.
 
-This document lives in `outputs/` rather than `policies/`, and the distinction is deliberate: it is
-not a policy attached to anything in the account. It is an argument to one API call, used once, gone
-when the session ends. `policies/` is for the account's security posture; a session policy is not part
-of it.
-
-**Command - part 2, assume the role with it**
+**Part 2 - assume the role with it**
 
 ```bash
 ROLE_ARN="arn:aws:iam::${USMS_ACCOUNT_ID}:role/${USMS_ROLE_DEVELOPER}"
@@ -2393,15 +1681,9 @@ fi
 ```
 
 !!! warning "These three variables now outrank your profile, exactly as they did in Lab 02 Step 3"
-    Environment credentials sit **above** named profiles in the AWS CLI's resolution order. Until you
-    unset them in part 4, every `aws` command in this terminal runs as the scoped session, whatever
-    `--profile` you pass.
+    Until Part 4 unsets them, every `aws` command here runs as the scoped session, whatever `--profile` you pass. `--duration-seconds 900` keeps the session as short as the work.
 
-    `--duration-seconds 900` is fifteen minutes rather than the role's maximum of an hour, because a
-    session should be as short as the work it is for. If part 4 does not run, this one expires on its
-    own - which is the argument for short sessions in a single sentence.
-
-**Command - part 3, compute the intersection by hand**
+**Part 3 - compute the intersection by hand**
 
 ```bash
 python3 - << 'PY'
@@ -2473,18 +1755,7 @@ for a in sorted(session_allow):
 PY
 ```
 
-**What the command does**
-
-This is the whole point of the step. It reads the role's identity policy out of Step 4's inventory,
-reads the session policy off disk, and for each action in the session policy asks the two questions
-the interlude's evaluation order asks: is it allowed by the identity policy, and is it denied
-anywhere.
-
-`matches` implements the only wildcard rule IAM actions use - a trailing `*` - which is enough for
-every policy in this course. It is not a complete IAM evaluator and does not pretend to be: it ignores
-resources, conditions, and every one of the twenty-odd condition operators. **A tool that models the
-part of the problem you are reasoning about, and says so, is more useful than one that claims to model
-all of it.**
+For each session action it asks: allowed by the identity policy, and denied anywhere? `matches` handles only trailing `*` wildcards and ignores resources and conditions, which is enough for this course and says so.
 
 **Expected result**
 
@@ -2512,21 +1783,10 @@ EFFECTIVE - an action needs a match in BOTH and a match in NEITHER deny:
 > Example output - the exact identity actions depend on what your Lab 01 wrote into
 > `USMSDeveloperBase` v2.
 
-**What to look for:** at least one line that is **not** `ALLOWED`, and the reason for it. On most
-builds `sts:GetCallerIdentity` is the one, and it is the most instructive result in this step: the
-session policy allows it, and the session still cannot do it, because the identity policy never
-granted it and **a session policy cannot grant anything the role did not already have**.
-
-If your `USMSDeveloperBase` happens to include `sts:*`, pick another action for the session policy -
-`s3:ListAllMyBuckets` is a good one - and re-run. The lesson requires at least one line that fails.
+At least one line must **not** be `ALLOWED`. Usually `sts:GetCallerIdentity`: the session allows it but the identity policy never did, and **a session policy cannot grant anything the role did not already have**. If `USMSDeveloperBase` includes `sts:*`, use `s3:ListAllMyBuckets` instead and re-run.
 
 !!! note "Floci Limitation - the session policy is not enforced, and `simulate-principal-policy` may be absent"
-    Floci accepts `--policy` on `assume-role`, returns credentials, and then authorises nothing, so the
-    scoped session can do everything the unscoped one could.
-
-    Real AWS evaluates the intersection on every call. `aws iam simulate-principal-policy` is the API
-    that answers "would this principal be allowed to do this", and if your Step 3 probe found it
-    supported, use it as a second opinion:
+    Floci returns credentials for `--policy` and then authorises nothing. Real AWS evaluates the intersection on every call. If Step 3 found `simulate-principal-policy` supported, use it as a second opinion:
 
     ```bash
     aws iam simulate-principal-policy \
@@ -2536,11 +1796,9 @@ If your `USMSDeveloperBase` happens to include `sts:*`, pick another action for 
       --output table
     ```
 
-    If it is not supported - which is the expected case - the Python above **is** the fallback the
-    course contract requires: read the policy documents and justify your answer. Say in your report
-    which of the two you used.
+    Otherwise the Python above is the "read the documents and justify it" fallback. Say which you used.
 
-**Command - part 4, restore your normal identity**
+**Part 4 - restore your normal identity**
 
 ```bash
 unset AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN
@@ -2548,38 +1806,13 @@ unset AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN
 rm -f outputs/lab-09-scoped-session.json
 ```
 
-**What to look for:** `whoami.sh` reporting the root identity and account `000000000000` again.
-Deleting the session file immediately is the same habit as Lab 02 Step 4 and Lab 02's KEEP/CLEAN UP
-column: a credentials file that has outlived its session is dead weight with a blast radius.
+`whoami.sh` must report root and account `000000000000`. The session file is deleted at once: expired credentials are dead weight.
 
 ---
 
 ### Step 10 - Rotate the access key, with no window in which nothing works
 
-**Purpose**
-
-Lab 01 created a long-lived access key for `usms-dev-01` and every lab since has used it through the
-`usms-dev` profile. Nobody has looked at it since.
-
-A long-lived key is the one credential in this architecture that is not temporary, and rotation is the
-control that limits how long a leaked one is useful. This step rotates it properly - which means four
-steps rather than two, and the reason for the extra two is the whole lesson.
-
-**Run from**
-
-```text
-aws-floci-course/
-```
-
-**Concept first - why rotation is four steps**
-
-The naive rotation is: delete the old key, create a new one, update the profile. It has a window,
-between the delete and the update, during which nothing that uses that key works. On a real system
-that window is an outage, and it happens at the worst possible moment because rotation is usually done
-under time pressure.
-
-The correct sequence uses the fact that **IAM allows two access keys per user**, which exists for
-exactly this purpose:
+`usms-dev-01`'s Lab 1 key is the one long-lived credential here. Rotate it with no outage window, using IAM's two-keys-per-user allowance:
 
 ```text
 1. CREATE a second key                  -> two keys, both active, nothing has changed
@@ -2588,11 +1821,9 @@ exactly this purpose:
 4. DELETE the old key                   -> irreversible, and only after step 3 has been quiet
 ```
 
-Step 3 is the one people skip and it is the one that makes the procedure safe. A deactivated key can
-be reactivated in one command; a deleted one cannot be recovered at all. The gap between 3 and 4 is
-where you find out about the consumer nobody documented.
+Step 3 (deactivate) is what makes it safe: a deactivated key can be reactivated; a deleted one is gone. See [access key hygiene](../unit8/topic1.md#access-keys-and-their-hygiene).
 
-**Command - part 1, look at what you have**
+**Part 1 - look at what you have**
 
 ```bash
 aws iam list-access-keys --user-name "$USMS_DEV_USER" \
@@ -2608,12 +1839,7 @@ for k in $(aws iam list-access-keys --user-name "$USMS_DEV_USER" \
 done
 ```
 
-**What the command does**
-
-`get-access-key-last-used` is the call that answers the only question that matters about an old key:
-is anything still using it. On a real account, a key with a `LastUsedDate` of `N/A` and a creation
-date eighteen months ago is a key you can delete today, and finding those is the highest-value hour of
-IAM housekeeping there is.
+`get-access-key-last-used` answers whether anything still uses a key.
 
 **Expected result**
 
@@ -2631,11 +1857,9 @@ AKIAIOSFODNN7EXAMPLE     2026-09-05T11:02:44+00:00   sts   us-east-1
 > Example output - your key ID and dates will differ. `N/A` in the last-used columns is common on
 > Floci and is not a finding.
 
-**What to look for:** exactly **one** key. If there are two, a previous rotation was never finished,
-and you should work out which is in use before creating a third - you cannot, because two is the
-limit, and that error message is how most people discover the limit.
+Exactly **one** key. Two means an earlier rotation was never finished, and two is the limit.
 
-**Command - part 2, create the new key, straight into `outputs/`**
+**Part 2 - create the new key, straight into `outputs/`**
 
 !!! danger "Read before rotating a credential"
     **What will change:** `usms-dev-01` gains a second access key, the `usms-dev` CLI profile is
@@ -2670,20 +1894,9 @@ OLD_KEY_ID=$(aws iam list-access-keys --user-name "$USMS_DEV_USER" \
 echo "old key id: $OLD_KEY_ID"
 ```
 
-**What the command does**
-
-The redirect is the point, and it is Lab 03 Step 4's habit applied to a second kind of secret: the
-secret access key goes **straight to a file**. It never appears on screen, never enters scrollback,
-and cannot end up in a screenshot pasted into a lab report. The values are Floci dummies; the habit is
-what transfers.
-
-`git check-ignore -v` immediately afterwards is not optional. It prints the rule and the line number
-that protected you, and silence there means the file is **not** ignored - at which point you stop and
-fix `.gitignore` before doing anything else.
-
-The `OLD_KEY_ID` query is worth reading. `AccessKeyMetadata[?AccessKeyId!='...']` filters the list to
-everything that is not the new key, and `| [0]` takes the first - a JMESPath pattern for "the other
-one" that is more robust than assuming an ordering.
+- The secret goes **straight to a file**: never on screen, in scrollback or in a screenshot. The values are Floci dummies; the habit transfers.
+- `git check-ignore -v` must name the rule and line. Silence means the file is **not** ignored: stop and fix `.gitignore`.
+- `AccessKeyMetadata[?AccessKeyId!='...'] | [0]` picks "the other one" without assuming an order.
 
 **Expected result**
 
@@ -2695,7 +1908,7 @@ old key id: AKIAIOSFODNN7EXAMPLE
 
 > Example output - your key IDs and line number will differ.
 
-**Command - part 3, move the consumer over**
+**Part 3 - move the consumer over**
 
 ```bash
 aws configure set aws_access_key_id \
@@ -2707,11 +1920,9 @@ aws sts get-caller-identity --profile usms-dev --query 'Arn' --output text
 aws configure get aws_access_key_id --profile usms-dev
 ```
 
-**What to look for:** the ARN still reads `arn:aws:iam::000000000000:user/usms-dev-01`, and
-`aws configure get` prints your **new** key ID. Both are needed: the first says the profile works, the
-second says it works *because of the new key* rather than because the old one is still there.
+The ARN still reads `user/usms-dev-01`, and `aws configure get` prints the **new** key ID: the profile works because of the new key.
 
-**Command - part 4, deactivate the old key and prove nothing broke**
+**Part 4 - deactivate the old key and prove nothing broke**
 
 ```bash
 aws iam update-access-key \
@@ -2725,13 +1936,9 @@ aws iam list-access-keys --user-name "$USMS_DEV_USER" \
 aws sts get-caller-identity --profile usms-dev --query 'Arn' --output text
 ```
 
-**What to look for:** two keys listed, one `Active` and one `Inactive`, and the `usms-dev` profile
-still answering. **This is the state you would sit in for a day or a week on a real system**, watching
-for anything that breaks, before going on to part 5. Doing it in the next thirty seconds here is a
-compression of the procedure, not a demonstration that the pause is unnecessary - say so in your
-report.
+Two keys, one `Active`, one `Inactive`, and the profile still answering. On a real system you would wait here a day or a week; say in your report that this lab compresses that pause.
 
-**Command - part 5, delete the old key**
+**Part 5 - delete the old key**
 
 ```bash
 aws iam delete-access-key \
@@ -2746,11 +1953,6 @@ aws sts get-caller-identity --profile usms-dev --query 'Arn' --output text
 rm -f outputs/usms-dev-01-access-key.json
 ls -l outputs/ | grep -i access-key || echo "no other access key files remain"
 ```
-
-**What to look for:** exactly one key, `Active`, created today; the profile still working; and Lab 01's
-original key file gone from `outputs/`. That last `rm` deletes a file containing a secret that no
-longer exists anywhere in the account - which makes it harmless and, for exactly that reason, easy to
-leave lying around for two years.
 
 **Expected result**
 
@@ -2769,15 +1971,7 @@ no other access key files remain
 > Example output.
 
 !!! note "Conceptual / Real AWS - what would actually make this key unnecessary"
-    The best rotation is the one you never have to do, and on a real account this key would not exist.
-    A developer would authenticate through IAM Identity Center or a federated identity provider and
-    receive **temporary** credentials, and a workload would use a role - as `usms-web-01` and every
-    enrolment task already do.
-
-    This course keeps one long-lived key because Lab 02's assume-role handshake needs a principal that
-    the role's trust policy can name, and because rotating one is a skill worth having. Say in your
-    report what you would replace it with and why the replacement removes the need for this step
-    entirely.
+    On a real account, humans would use IAM Identity Center or federation for temporary credentials, and workloads would use roles. The course keeps one key because Lab 2's assume-role handshake needs a named principal. Say in your report what you would replace it with.
 
 **Checkpoint 5**
 
@@ -2794,28 +1988,7 @@ Credentials
 
 ### Step 11 - Require IMDSv2 on the web instance
 
-**Purpose**
-
-`usms-web-01` carries `usms-ec2-app-profile`, which means AWS credentials are available to anything
-running on that instance through the instance metadata service at `169.254.169.254`. Lab 03 Step 11
-traced that chain and called it a feature, correctly - no key on disk.
-
-It is also the most valuable thing on the instance, and there is a well-known way to steal it that
-does not require access to the instance at all.
-
-**Run from**
-
-```text
-aws-floci-course/
-```
-
-**Concept first - why a token requirement stops a whole class of attack**
-
-IMDSv1 answers a plain `GET http://169.254.169.254/latest/meta-data/...` with no authentication of
-any kind. IMDSv2 requires the caller to first `PUT` for a token and then send that token as a header
-on every request.
-
-That sounds like a trivial difference. It is not, and the reason is what the attacker has:
+`usms-web-01`'s instance profile credentials are served by the metadata service at `169.254.169.254`. Harden how they can be fetched.
 
 ```text
 A server-side request forgery (SSRF) bug lets an attacker make the APPLICATION issue a
@@ -2828,15 +2001,9 @@ IMDSv2:  the same GET is refused. Obtaining a token requires a PUT with a header
          SSRF bug can do neither.
 ```
 
-That is the Capital One breach of 2019 in four lines, and it is why `--http-tokens required` exists.
+`--http-put-response-hop-limit 1` stops the metadata response leaving the instance, so a container on it (one hop away) cannot inherit the host's role. See [IMDSv2](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/configuring-IMDS-new-instances.html).
 
-The second flag matters for a different reason. `--http-put-response-hop-limit` sets the IP TTL on the
-metadata response, and a hop limit of `1` means **the response cannot leave the instance**. Without it,
-a container running on that instance - on a Docker bridge network, which is one hop - can reach the
-host's metadata service and inherit the host's role. Setting it to 1 is what stops a compromised
-container becoming a compromised instance.
-
-**Command - part 1, look before you change**
+**Part 1 - look before you change**
 
 ```bash
 aws ec2 describe-instances --instance-ids "$USMS_WEB_INSTANCE" \
@@ -2860,11 +2027,9 @@ aws ec2 describe-instances --instance-ids "$USMS_WEB_INSTANCE" \
 > Example output. `HttpTokens: "optional"` is the AWS default for an instance launched from an older
 > AMI or without the option set, and it is the finding.
 
-**What to look for:** `HttpTokens`. `optional` means IMDSv1 still works, which means the SSRF path
-above is open. Some Floci builds return an empty object or omit the field entirely; if yours does,
-record it and read the fallback below.
+`HttpTokens: optional` means IMDSv1 works and the SSRF path is open. If your build returns an empty object, record it and see the fallback below.
 
-**Command - part 2, require tokens**
+**Part 2 - require tokens**
 
 ```bash
 aws ec2 modify-instance-metadata-options \
@@ -2877,28 +2042,11 @@ aws ec2 modify-instance-metadata-options \
   || echo "modify-instance-metadata-options not supported on this build - record it and continue"
 ```
 
-**What the command does**
+- `--http-tokens required` disables IMDSv1. On real AWS, watch the `MetadataNoToken` metric reach zero before requiring tokens, or old SDKs break.
+- `--http-endpoint enabled` keeps the service on; disabling it suits an instance with no role (the "Your turn").
+- `--http-put-response-hop-limit 1` is the container defence. Lab 3's `user-data.sh` already uses the token flow.
 
-Three flags, and the third one is the only one that is a judgement call.
-
-`--http-tokens required` turns off IMDSv1 on this instance. On a real account this is a change that
-can break things: an old SDK, or a script using plain `curl` against the metadata service, stops
-working. The correct rollout order is to watch the CloudWatch metric `MetadataNoToken` - which counts
-IMDSv1 calls - until it is zero, and only then require tokens. Doing it the other way round is how you
-find out which of your instances runs a 2016 SDK.
-
-`--http-endpoint enabled` keeps the metadata service on. Disabling it entirely is the strongest
-possible setting and is right for an instance with no instance profile - which `usms-db-01` is.
-Exercise 1's second half asks you about exactly that.
-
-`--http-put-response-hop-limit 1` is the container defence described above. AWS's own default for new
-instances is 1, but instances launched from some AMIs and by some tools get 2, and 2 is enough.
-
-Lab 03's `user-data.sh` already used the IMDSv2 token flow - go and look at its `meta()` function.
-That script was written to survive this change, which is what "write it correctly the first time"
-looks like when the change arrives two years later.
-
-**Command - part 3, verify**
+**Part 3 - verify**
 
 ```bash
 aws ec2 describe-instances --instance-ids "$USMS_WEB_INSTANCE" \
@@ -2930,18 +2078,11 @@ IMDSv2 REQUIRED, HOP LIMIT 1
 > Example output.
 
 !!! note "Floci Limitation - there is no metadata service to harden"
-    Lab 03 Step 11 recorded this already: Floci does not serve IMDS to instances, so there is no
-    endpoint on `169.254.169.254`, no credentials delivered, and nothing for a token requirement to
-    apply to. Some builds store `MetadataOptions` faithfully and return it; some ignore the
-    modification entirely.
+    Floci serves no IMDS to instances (Lab 3 Step 11). Some builds store `MetadataOptions`; some ignore the change.
 
-    Real AWS enforces it on the instance itself, at the hypervisor level, from the moment the API call
-    returns.
+    Real AWS enforces it at the hypervisor as soon as the call returns.
 
-    Take away the reasoning rather than the field. In your report, name the attack that
-    `--http-tokens required` prevents, the different attack that `--http-put-response-hop-limit 1`
-    prevents, and the rollout order that stops the first one from causing an outage. Section 14 asks
-    for exactly those three.
+    In your report, name the attack `--http-tokens required` prevents, the different attack the hop limit prevents, and the rollout order that avoids an outage. Section 13 asks for all three.
 
 ✏️ **Your turn**
 
@@ -2959,8 +2100,7 @@ Then answer in one sentence: what would break if you applied that same stronger
 setting to usms-web-01?
 ```
 
-Hint: the answer to the second question is in Lab 03 Step 11, in the paragraph about where the
-credentials come from.
+Hint: Lab 3 Step 11 explains where `usms-web-01`'s credentials come from.
 
 **Checkpoint 6**
 
@@ -2975,60 +2115,12 @@ usms-web-01
 
 ---
 
-### Interlude - the four questions to ask a security group
-
-Lab 02's interlude compared security groups with network ACLs. This one is about how to *review* a
-security group, which is a different skill and needs four questions rather than one table.
-
-```text
-1. WHO CAN REACH ME?        ingress rules. The only one anybody ever looks at
-2. WHAT CAN I REACH?        egress rules. The one nobody wrote and nobody has ever read
-3. IS THE SOURCE A GROUP OR AN ADDRESS?
-                            a group survives re-addressing, scaling and redeployment.
-                            an address range is a rule that was true when it was written
-4. IS THIS GROUP ATTACHED TO ANYTHING?
-                            an unattached group is not a risk. It is a source of confusion,
-                            which becomes a risk the day somebody attaches it
-```
-
-Question 2 is where the findings are, and question 4 is where the surprises are.
-
-Three facts about egress that are worth having in your head before Step 13 changes any of it:
-
-- **The allow-all egress rule is created for you, on every security group, and is not shown by
-  `authorize-security-group-ingress`.** You have created five groups in this course and written zero
-  egress rules.
-- **Security groups are stateful in both directions.** An outbound connection's replies come back
-  without an ingress rule, and an inbound connection's replies go out without an egress rule. So
-  restricting egress does *not* break anything that is answering an inbound request - which is the
-  single most common reason people give for not restricting it, and it is wrong.
-- **Removing the last egress rule denies all outbound traffic**, and there is no way to express
-  "allow nothing" other than having no rules. A group with an empty egress list is a group whose
-  instances can initiate nothing at all.
-
-That second point deserves the emphasis. `usms-enrolment-sg` serves HTTP requests that arrive from the
-load balancer, and the responses to those requests are return traffic on an established connection -
-they are permitted by state, not by rule. Everything Step 13 restricts is traffic the **task
-initiates**, which is exactly the traffic an attacker inside the task would need.
-
----
+!!! info "Reviewing a security group: four questions"
+    1. **Who can reach me?** (ingress) 2. **What can I reach?** (egress: the rule nobody wrote) 3. **Is the source a group or an address?** (a group survives re-addressing) 4. **Is the group attached to anything?** Every group gets an allow-all egress rule by default; security groups are **stateful**, so restricting egress does not break replies to inbound requests; and a group with no egress rules can initiate nothing. Steps 13 to 15 restrict only traffic the workload **initiates**. See [egress control](../unit8/topic2.md#egress-control-and-data-exfiltration).
 
 ### Step 12 - Build the security group audit script
 
-**Purpose**
-
-Do for the network axis what Step 5 did for the identity axis: turn five security groups into a list
-of findings, computed from rules rather than from names.
-
-It changes nothing. Read-only, always.
-
-**Run from**
-
-```text
-aws-floci-course/
-```
-
-**Command**
+Do for the network what Step 5 did for identity: findings computed from rules, not names. Read-only.
 
 ````bash
 cat > scripts/utilities/usms-sg-audit.sh << 'EOF'
@@ -3170,31 +2262,9 @@ bash -n scripts/utilities/usms-sg-audit.sh && echo "syntax OK"
 ./scripts/utilities/usms-sg-audit.sh | tee outputs/lab-09-sg-findings-before.txt
 ````
 
-**What the command does**
-
-Four backticks around the block again, because it contains two nested heredocs.
-
-Three design decisions worth naming, because they are the difference between an audit tool and a
-`describe-security-groups` wrapper:
-
-**It resolves group IDs to names.** `by_id` is built once from the same response, so a rule sourced
-from `sg-0bb22cc33dd44ee55` prints as `sg:usms-alb-sg`. Nobody can review a rule set written in
-sixteen-character hexadecimal, and the reviewer who tries will make a mistake.
-
-**It counts network interfaces per group.** That is a second API call per group and it is the only way
-to answer question 4. An unattached group is a `LOW` finding rather than a `MED` because it is not
-itself dangerous - but a group called `usms-app-sg` on no interfaces would mean something has gone
-very wrong somewhere else, and you would want to know.
-
-**It detects the default egress rule by its exact shape** - protocol `-1`, one `IpRanges` entry of
-`0.0.0.0/0` - rather than by asking "is egress wide". That precision matters because after Step 13 you
-will have deliberately written a wide egress rule (tcp/443 to `0.0.0.0/0`), and a tool that flagged
-your considered decision the same way it flags AWS's default would be teaching you to ignore it.
-
-`$$` in the temporary filenames is the shell's process ID, so two people running this on the same
-machine do not overwrite each other's scratch files. The `rm` at the end is unconditional and runs
-even if the Python exits non-zero, because it is a separate command rather than something chained
-with `&&`.
+- Four backticks again: two nested heredocs.
+- It resolves group IDs to names (`by_id`), counts network interfaces per group (question 4), and detects the default egress rule by its exact shape, so Step 13's deliberate tcp/443 rule is not flagged like AWS's default.
+- `$$` (the shell's PID) keeps temp files unique; the final `rm` runs even if Python fails.
 
 **Expected result**
 
@@ -3252,8 +2322,7 @@ HIGH=3  MED=6  LOW=1  groups=5
 
 **Verify**
 
-Read the findings before you fix any of them, and sort them into three piles. This is the actual work
-of a security review and it is worth doing on paper:
+Sort the findings before fixing any of them:
 
 | Finding | Verdict |
 | --- | --- |
@@ -3263,10 +2332,7 @@ of a security review and it is worth doing on paper:
 | Default egress on all five groups | **Fix in Steps 13 to 15**, and Exercise 1 for `usms-app-sg` |
 | `default` group on no interfaces | **Accepted.** Every VPC has one; nothing uses it; leave it |
 
-**What to look for:** the two `HIGH` findings on `usms-app-sg`. Notice that the tool has no idea one of
-those `0.0.0.0/0` rules is fine and the other is a finding, because the difference is architectural
-and lives in your head. **An audit tool produces findings, not verdicts.** A tool that produced
-verdicts would be one you argued with instead of one you used.
+The tool cannot tell that one `0.0.0.0/0` is fine and the other is a finding. **An audit tool produces findings, not verdicts.**
 
 **Checkpoint 7**
 
@@ -3282,22 +2348,7 @@ Network inventory complete
 
 ### Step 13 - Write the egress rules for the enrolment tasks
 
-**Purpose**
-
-Replace the allow-all egress rule on `usms-enrolment-sg` with one you wrote and can defend. This is
-the group in front of the workload most worth constraining: the enrolment tasks run code that pulls a
-container image, writes logs, and - from Lab 10 onwards - reads transcripts. Everything else they
-could reach is somebody else's opportunity.
-
-**Run from**
-
-```text
-aws-floci-course/
-```
-
-**Concept first - what a Fargate task legitimately needs to initiate**
-
-Work it out from the architecture rather than from a list:
+Replace the allow-all egress on `usms-enrolment-sg` with rules derived from what the tasks must initiate:
 
 | It must reach | Why | On what |
 | --- | --- | --- |
@@ -3306,28 +2357,9 @@ Work it out from the architecture rather than from a list:
 | S3 | Lab 10's transcripts, through Lab 02's gateway endpoint | tcp/443, to S3's address ranges |
 | Nothing else | There is nothing else in the design | - |
 
-And what it must **not** reach: the database tier, the web instance, the internet on any port other
-than 443, and every other AWS service in the region.
+Not the database, the web instance, or anything on a port other than 443. tcp/443 to everywhere is still wide, but it blocks DNS exfiltration, SSH, database protocols, mail and arbitrary command-and-control ports. The S3 row can be precise via the gateway endpoint's **managed prefix list**. On real AWS, interface endpoints would tighten the rest (Section 11, Exercise 4).
 
-Three of the four rows say tcp/443, which is the honest answer and also a slightly unsatisfying one:
-443 to everywhere is not a narrow rule. Two things make it worth writing anyway.
-
-**It is dramatically narrower than allow-all.** Every non-HTTPS protocol is now denied outbound: no
-DNS exfiltration on 53, no SSH out on 22, no database protocol on 5432, no mail on 25, no arbitrary
-high port to a command-and-control server. That is most of what an attacker inside a container would
-reach for.
-
-**One of the four rows can be made precise, and we do.** S3 traffic through Lab 02's gateway endpoint
-has a **managed prefix list** - a named, AWS-maintained set of address ranges - and a security group
-rule can name it as a destination. That is a genuinely tight rule, and it is the first time in this
-course the S3 endpoint has been anything but a route table entry.
-
-On a real account the other three rows tighten too, with **interface endpoints** for ECR, CloudWatch
-Logs and STS: each one puts a private address inside your subnet, so the egress rule becomes tcp/443
-to that endpoint's own security group. Section 12 lists it as `Conceptual / Real AWS` - Floci does not
-model interface endpoints - and Exercise 4 asks you to design it.
-
-**Command - part 1, find the S3 prefix list**
+**Part 1 - find the S3 prefix list**
 
 ```bash
 S3_PREFIX_LIST=$(aws ec2 describe-prefix-lists \
@@ -3346,21 +2378,11 @@ fi
 echo "S3_PREFIX_LIST = ${S3_PREFIX_LIST:-<none>}"
 ```
 
-**What the command does**
+- Two sources tried in order, because builds differ on whether the prefix-list route is injected (Lab 2 Step 21).
+- The backticks around `null` make it a JSON literal, not the string `"null"`.
+- If both are empty, your build has no prefix lists: record it; Part 2 has a branch.
 
-Two independent sources for the same value, tried in order, because Lab 02 Step 21 recorded a Floci
-limitation that goes exactly this way: some builds create the endpoint and report it `available` but
-do not inject the prefix-list route into the route table, and some do the reverse.
-
-`?DestinationPrefixListId!=` followed by a backtick, `null`, and a backtick is a JMESPath filter for
-"this field is not null". The backticks make `null` a JSON literal rather than the string `"null"`,
-which is a distinction that matters and produces an empty result when you get it wrong.
-
-**If both sources produce nothing**, your build does not model gateway endpoint prefix lists. That is
-fine and the step continues - part 2 has a branch for it. Record it in your notes as a limitation, and
-write in one sentence what the rule would have been.
-
-**Command - part 2, write the egress document**
+**Part 2 - write the egress document**
 
 ```bash
 if [ -n "$S3_PREFIX_LIST" ] && [ "$S3_PREFIX_LIST" != "None" ]; then
@@ -3413,21 +2435,9 @@ grep -c '\$' policies/usms-enrolment-sg-egress.json
 cat policies/usms-enrolment-sg-egress.json
 ```
 
-**What the command does**
+The `if` picks an **unquoted** heredoc (expands `${S3_PREFIX_LIST}`) or a **quoted** one (nothing to expand). `grep -c '\$'` must print `0`. Every rule has a `Description`, the cheapest documentation in AWS.
 
-The `if` chooses between an **unquoted** heredoc, because the first branch must expand
-`${S3_PREFIX_LIST}`, and a **quoted** one, because the second branch has nothing to expand. Two
-documents, opposite quoting, twelve lines apart, for the reason that has now appeared in five
-laboratories: *do I want this expanded now, or later?*
-
-The `grep -c '\$'` must print `0` either way.
-
-Each rule carries a `Description`. Security group rule descriptions are the cheapest documentation in
-AWS - they are returned by `describe-security-group-rules`, they survive everything, and they are read
-by the next person at exactly the moment they need them. A rule without one is a rule somebody will
-eventually delete because nobody could say what it was for.
-
-**Command - part 3, keep the undo, then make the change**
+**Part 3 - keep the undo, then make the change**
 
 !!! danger "Read before revoking an egress rule"
     **What will be deleted:** the default allow-all egress rule on `usms-enrolment-sg` - protocol
@@ -3492,11 +2502,7 @@ aws ec2 describe-security-group-rules \
   --output table
 ```
 
-**What to look for:** one or two egress rules, both tcp on 443, and **no rule with protocol `-1`**.
-That last one is the assertion: a `-1` rule still present means the revoke did not take, and the group
-still permits everything.
-
-Then confirm the change did not touch ingress, because that is what would break the architecture:
+One or two tcp/443 egress rules and **no rule with protocol `-1`**. Then confirm ingress is untouched:
 
 ```bash
 aws ec2 describe-security-groups --group-ids "$USMS_ENROLMENT_SG" \
@@ -3505,40 +2511,15 @@ aws ec2 describe-security-groups --group-ids "$USMS_ENROLMENT_SG" \
 echo "usms-alb-sg = $USMS_ALB_SG"
 ```
 
-**What to look for:** one ingress rule, tcp/80, sourced from `$USMS_ALB_SG`. Exactly as Lab 05 Step
-13 left it.
+One ingress rule, tcp/80 from `$USMS_ALB_SG`, as Lab 5 Step 13 left it.
 
 ---
 
 ### Step 14 - Write the load balancer's egress rule, whose destination is a security group
 
-**Purpose**
+A load balancer's only legitimate outbound destination is its targets, whose addresses change on every deployment and scaling event. An egress rule naming `usms-enrolment-sg` stays right permanently: **a group reference is a rule about a role in the architecture; an address is a rule about a moment in time.**
 
-Constrain what the load balancer itself may initiate. This is the smallest egress rule in the lab and
-the most precise, because for once the destination is a thing you own and can name.
-
-**Run from**
-
-```text
-aws-floci-course/
-```
-
-**Concept first - an egress rule whose destination is a group**
-
-Lab 02 Step 15 wrote an **ingress** rule sourced from a security group, and gave the reason: the
-addresses of the thing you are permitting are not stable. The same argument runs in the outbound
-direction and almost nobody uses it.
-
-A load balancer's only legitimate outbound destination is its targets. The targets are Fargate tasks
-whose addresses change every deployment, every scale-out and every task replacement - and Lab 06
-made that happen automatically, so they now change without anyone doing anything. An egress rule
-written against those addresses would be wrong within the hour.
-
-An egress rule whose destination is `usms-enrolment-sg` is right permanently, including for tasks that
-do not exist yet. That is the sentence to take away: **a group reference is a rule about a role in the
-architecture, and an address is a rule about a moment in time.**
-
-**Command - part 1, the document**
+**Part 1 - the document**
 
 ```bash
 cat > policies/usms-alb-sg-egress.json << EOF
@@ -3561,7 +2542,7 @@ python3 -m json.tool policies/usms-alb-sg-egress.json > /dev/null && echo "valid
 grep -c '\$' policies/usms-alb-sg-egress.json
 ```
 
-**Command - part 2, authorise then revoke**
+**Part 2 - authorise then revoke**
 
 !!! danger "Read before revoking an egress rule"
     **What will be deleted:** the default allow-all egress rule on `usms-alb-sg`.
@@ -3609,36 +2590,15 @@ echo "usms-enrolment-sg = $USMS_ENROLMENT_SG"
 
 > Example output - your group ID will differ.
 
-**What to look for:** the two rules read as a matched pair, and they say something you can state in
-one sentence. *Anything on the internet may open an HTTP connection to this load balancer; this load
-balancer may open an HTTP connection to exactly one thing.* `CIDR` being `null` on the egress rule and
-`ToGroup` being populated is the group reference; if they are the other way round, you have written an
-address-based rule and Step 12's audit will not notice, because a rule to a `10.0.3.0/24` is not a
-finding by any mechanical test.
-
-That is worth dwelling on for a moment. The audit script cannot catch this one. **Some review is
-mechanical and some is reading, and knowing which findings are which is most of the skill.**
+The pair reads: anything may open HTTP to this load balancer; it may open HTTP to exactly one thing. `CIDR` null and `ToGroup` populated is the group reference. The audit script cannot catch the reverse (a CIDR rule to `10.0.3.0/24` is not a mechanical finding); some review is mechanical and some is reading.
 
 ---
 
 ### Step 15 - Write the data tier's egress rule
 
-**Purpose**
+Lab 2 gave the data tier outbound access for OS updates, then allowed everything. Egress matters most here, because a database is what an attacker wants data *out of*.
 
-`usms-db-01` holds student transcripts. Lab 02's design gave it outbound internet access through the
-NAT gateway for one stated reason - operating system updates - and then permitted every protocol to
-every destination, which is not that.
-
-This is the group where egress control does the most work, because a database is the thing an attacker
-is trying to get data *out of*.
-
-**Run from**
-
-```text
-aws-floci-course/
-```
-
-**Command - part 1, the document**
+**Part 1 - the document**
 
 ```bash
 cat > policies/usms-db-sg-egress.json << 'EOF'
@@ -3660,22 +2620,9 @@ EOF
 python3 -m json.tool policies/usms-db-sg-egress.json > /dev/null && echo "valid JSON"
 ```
 
-**What the command does**
+Quoted heredoc. DNS out, SSH out, database connections, SMTP and HTTP on 80 are now denied. Port 443 to `0.0.0.0/0` still permits an HTTPS POST of the data anywhere; stopping that needs hostname filtering (Network Firewall or a proxy, Exercise 4). Say so in your report.
 
-Quoted heredoc; no variables.
-
-One rule, and it is worth noticing what is now denied that was not before. The data tier can no longer
-initiate: DNS to an external resolver on 53, SSH out on 22, a database connection to anything, SMTP,
-or an HTTP connection on 80 to a server the attacker controls. **Every one of those is a data
-exfiltration path and none of them is a port anybody would have thought to close.**
-
-It is still not tight. Port 443 to `0.0.0.0/0` permits an HTTPS POST of the transcripts table to any
-host on the internet, and no security group rule written in terms of ports can prevent that. Stopping
-it needs a different control - egress filtering by hostname, which on AWS means a NAT instance with a
-proxy or an AWS Network Firewall rule group, and is Exercise 4's second half. Say that in your report
-rather than claiming the rule solves a problem it narrows.
-
-**Command - part 2, authorise then revoke**
+**Part 2 - authorise then revoke**
 
 !!! danger "Read before revoking an egress rule"
     **What will be deleted:** the default allow-all egress rule on `usms-db-sg`.
@@ -3702,18 +2649,7 @@ aws ec2 revoke-security-group-egress \
 ```
 
 !!! warning "What this rule breaks on real AWS, and how you would know"
-    An instance that can reach HTTPS but cannot reach **DNS** cannot resolve the name of the mirror it
-    is about to fetch from. `dnf update` would hang and then fail with a name-resolution error that
-    says nothing about security groups.
-
-    In `usms-vpc` the resolver is the Amazon-provided one at `10.0.0.2` - the second address in the
-    VPC range, reserved for exactly this, as Lab 02's CIDR interlude noted. Traffic to it is **inside
-    the VPC**, so a rule permitting UDP and TCP 53 to `10.0.0.0/16` is what a complete version of this
-    document would add.
-
-    We leave it out here because Floci does not provide the resolver - Lab 02's Section 12 lists it as
-    a limitation - and adding a rule for a service that does not exist would be a rule nobody could
-    check. Add it to your Exercise 1 answer, with both protocols, and say why UDP comes first.
+    Without DNS, `dnf update` cannot resolve its mirror and fails with a name-resolution error. The Amazon resolver is at `10.0.0.2`, inside the VPC, so a complete document would add UDP and TCP 53 to `10.0.0.0/16`. It is left out because Floci provides no resolver. Add it in Exercise 1, with both protocols, and say why UDP comes first.
 
 **Verify**
 
@@ -3735,8 +2671,7 @@ usms-alb-sg            allow-all egress rules remaining: 0
 usms-db-sg             allow-all egress rules remaining: 0
 ```
 
-**What to look for:** three zeros. That is the claim of Steps 13 to 15 in three lines, asserted rather
-than described, and it is a check Section 9's script repeats.
+Three zeros: Steps 13 to 15 in three lines. Section 8's script repeats the check.
 
 **Checkpoint 8**
 
@@ -3754,35 +2689,9 @@ Egress, written
 
 ### Step 16 - Narrow the SSH rule to a bastion group
 
-**Purpose**
+`usms-app-sg` admits tcp/22 from `10.0.0.0/16`: every address in the VPC, including every Fargate task. Replace it with a rule sourced from `usms-bastion-sg`. No jump host is created; the group names a role in the architecture, correct whether or not a host exists today.
 
-`usms-app-sg` admits TCP 22 from `10.0.0.0/16`. That is every address in the VPC: both EC2 instances,
-every Fargate task, the NAT gateway, and anything anyone adds later. Lab 02 Step 14 wrote it that way
-deliberately, as an improvement on `0.0.0.0/0`, and Lab 02's Exercise 2 asked you to improve it again.
-
-This step finishes that job - reusing the bastion group if that exercise created one, and creating it
-if not.
-
-**Run from**
-
-```text
-aws-floci-course/
-```
-
-**Concept first - why a bastion group and not a bastion instance**
-
-There is no jump host in this architecture and this step does not create one. What it creates is the
-**group**, and the group is the useful half.
-
-A security group with no members is a name for a role in the architecture. `usms-app-sg` admitting SSH
-from `usms-bastion-sg` says "administrative access arrives through the jump host tier", and it says it
-whether or not a jump host exists today. The day one is launched, it carries the group and the rule is
-already correct. The day it is terminated, the rule is still correct and grants nothing to anyone.
-
-That is a property addresses do not have, and it is the third time this course has made the argument -
-Lab 02 Step 15, Lab 05 Step 9, and here.
-
-**Command - part 1, find or create the group**
+**Part 1 - find or create the group**
 
 ```bash
 BASTION_SG=$(aws ec2 describe-security-groups \
@@ -3809,22 +2718,11 @@ fi
 echo "BASTION_SG = $BASTION_SG"
 ```
 
-**What the command does**
+- Idempotent: a lookup with a fallback, so students who did Lab 2 Exercise 2 and those who did not end in the same state.
+- The `None` test catches a filter that matched nothing.
+- `203.0.113.10/32` is a documentation address (RFC 5737 `TEST-NET-3`).
 
-The whole block is idempotent, which is why it is written as a lookup with a fallback rather than as a
-`create-security-group`. Running it twice does nothing the second time, and running it in a class where
-half the students did Lab 02's Exercise 2 gives both halves the same end state.
-
-`| [0]` on a `--query` that already selects `SecurityGroups[0]` looks redundant and is not: on a build
-where the filter matches nothing, `SecurityGroups[0]` yields null, `--output text` prints `None`, and
-the `[ "$BASTION_SG" = "None" ]` test catches it. Without the pipe, some CLI versions print an empty
-line instead and the test still works - belt and braces, one character.
-
-`203.0.113.10/32` is from `TEST-NET-3`, a range RFC 5737 reserves for documentation. Using a
-documentation address rather than an invented real one means nobody in the class accidentally
-authorises a stranger's server, and it is the same address Lab 02's Exercise 2 suggested.
-
-**Command - part 2, the new rule on `usms-app-sg`**
+**Part 2 - the new rule on `usms-app-sg`**
 
 ```bash
 cat > policies/usms-app-sg-ssh-bastion.json << EOF
@@ -3852,7 +2750,7 @@ aws ec2 authorize-security-group-ingress \
   --query 'SecurityGroupRules[].SecurityGroupRuleId' --output text
 ```
 
-**Command - part 3, remove the old rule**
+**Part 3 - remove the old rule**
 
 !!! danger "Read before running any revoke command"
     **What will be deleted:** one inbound rule on `usms-app-sg` - tcp/22 from `10.0.0.0/16`, written
@@ -3889,17 +2787,8 @@ else
 fi
 ```
 
-**What the command does**
-
-The JMESPath filter combines three conditions: a boolean literal in backticks, a numeric literal in
-backticks, and a string in single quotes. That is the quoting rule Lab 05 Step 13 introduced, and the
-backticks are escaped as `\`` because the whole query is inside double quotes so that `$USMS_APP_SG`
-expands.
-
-`revoke-security-group-ingress --security-group-rule-ids` removes exactly one rule by its own
-identifier. The alternative - restating the permission with `--ip-permissions` - works too and is
-riskier, because a permission you restate slightly differently from the one that exists silently
-removes nothing and returns `True`.
+- The filter mixes a boolean and a number in backticks (escaped as `` \` `` inside double quotes) and a string in single quotes.
+- `--security-group-rule-ids` removes exactly one rule; restating it with `--ip-permissions` can silently remove nothing and still return `True`.
 
 **Verify**
 
@@ -3930,19 +2819,7 @@ usms-bastion-sg = sg-0dd44ee55ff66aa77
 > Example output - your IDs will differ, and the 443 row appears only if you did Lab 02 Step 14's
 > "Your turn".
 
-**What to look for:** the port 22 row has `CIDR` of `None` and `FromGroup` holding the bastion group's
-ID. If both are populated you have two SSH rules and the revoke did not take; if `CIDR` still reads
-`10.0.0.0/16`, part 3 found no rule to remove and you should re-read its output.
-
-Now say what changed, in one sentence, because this is the sentence the assessment asks for: *SSH to
-the USMS web tier is no longer reachable from anything in the VPC that is not part of the
-administrative tier - including from a compromised enrolment task.*
-
-That last clause is the finding this step actually closed. Lab 04 put Fargate tasks in
-`10.0.3.0/24` and `10.0.4.0/24`, both of which are inside `10.0.0.0/16`, so **every enrolment task
-could open an SSH connection to the web server** until ninety seconds ago. Nobody wrote that rule
-either; it was written in Lab 02, before the tasks existed, and it grew a new meaning when they
-arrived.
+The port 22 row has `CIDR` `None` and `FromGroup` set. Both populated means two SSH rules; `CIDR` still `10.0.0.0/16` means Part 3 removed nothing. What changed: *SSH to the web tier is no longer reachable from anything outside the administrative tier, including a compromised enrolment task* (the tasks' subnets sit inside `10.0.0.0/16`).
 
 **Checkpoint 9**
 
@@ -3958,28 +2835,9 @@ usms-app-sg
 
 ### Step 17 - Compute the reachability matrix, and prove two negatives
 
-**Purpose**
+*Who can reach what* is a property of relationships between objects, not of any one object. Build the tool that answers it, then prove the two claims the architecture rests on.
 
-The audits in Steps 5 and 12 listed findings one object at a time. A security review has to answer a
-different kind of question - *who can reach what* - and that question is not answered by any single
-object, because it is a property of the relationships between all of them.
-
-This step builds the tool that answers it, and then uses it to prove the two claims this architecture
-rests on.
-
-**Run from**
-
-```text
-aws-floci-course/
-```
-
-**Concept first - a negative needs more than one control, and here is why**
-
-Claiming "the transcripts database is not reachable from the internet" is a claim about everything
-that does not exist, and you cannot test it. What you can do is enumerate the controls that would each
-independently have to fail, and count them.
-
-For `usms-db-01` there are four:
+A negative cannot be tested; you enumerate the controls that would each have to fail. For `usms-db-01`:
 
 ```text
 1. It has NO public IPv4 address.
@@ -3998,17 +2856,9 @@ For `usms-db-01` there are four:
    denies everything its four explicit rules do not allow.
 ```
 
-Now do the thing that makes this reasoning worth writing down: **remove one and ask whether the claim
-still holds.** Give the instance a public address and control 3 still stops it. Add an internet
-gateway route and control 1 still stops it. Open the security group to `0.0.0.0/0` and controls 1 and
-3 both still stop it.
+Remove any one and the claim still holds. That is defence in depth stated precisely: **the claim survives the failure of any single control.** See [defence in depth](../unit8/topic2.md#defence-in-depth-for-the-network-layers-from-edge-to-workload).
 
-That is defence in depth, stated precisely rather than as a slogan: **the claim survives the failure of
-any single control.** A system where the claim rests on exactly one control is a system one mistake
-away from a breach, and this step's second half shows you that the enrolment tasks are exactly that
-system.
-
-**Command - part 1, build the matrix tool**
+**Part 1 - build the matrix tool**
 
 ````bash
 cat > scripts/utilities/usms-reachability-matrix.sh << 'EOF'
@@ -4137,17 +2987,7 @@ bash -n scripts/utilities/usms-reachability-matrix.sh && echo "syntax OK"
 ./scripts/utilities/usms-reachability-matrix.sh | tee outputs/lab-09-reachability.txt
 ````
 
-**What the command does**
-
-The verdicts are computed from `IpPermissions` and `IpPermissionsEgress` and from nothing else. No
-name, no tag, no description enters the logic - which is the same rule Lab 02's Exercise 3 and Lab
-03's Exercise 3 imposed, and for the same reason: a report that reads the `Tier` tag is a report of
-what somebody intended, and you are trying to find out what is true.
-
-The `lonely` list is the part worth stealing for your own work. It counts ingress rules per group and
-names the groups with exactly one - not because one rule is wrong, but because a group with one rule
-has no second control, and knowing which of your protections are load-bearing on their own is more
-useful than knowing how many you have.
+Verdicts come only from `IpPermissions` and `IpPermissionsEgress`, never from names, tags or descriptions. The `lonely` list names groups protected by exactly one ingress rule.
 
 **Expected result**
 
@@ -4201,26 +3041,12 @@ SINGLE POINT OF CONTROL - these groups are protected by exactly ONE ingress rule
 
 > Example output - your IDs, addresses and prefix list will differ.
 
-**What to look for:** four things, and the fourth is the finding.
+1. **Two groups admit the internet**, `usms-alb-sg` (argued in Lab 5) and `usms-app-sg` (never argued; Exercise 4).
+2. **`usms-db-sg` and `usms-enrolment-sg` admit only a group.**
+3. **`usms-app-sg` and `usms-bastion-sg` keep default egress.** Exercise 1 handles the first; a jump host's job is to initiate SSH.
+4. **`usms-enrolment-sg` is a single point of control.** The tasks' private subnet and lack of public address are further controls, but this report models security groups only. **A tool that models one axis understates the defences on the other.**
 
-1. **Two groups admit the internet**, and they are `usms-alb-sg` and `usms-app-sg`. Lab 05 argued for
-   the first. Nobody has ever argued for the second, and Exercise 4 makes you.
-2. **`usms-db-sg` and `usms-enrolment-sg` admit only a group.** That is the shape you want.
-3. **`usms-app-sg` and `usms-bastion-sg` still carry the default egress rule.** Exercise 1 is the
-   first; the bastion group is deliberately left, and its answer is different, because a jump host's
-   whole job is to initiate SSH connections.
-4. **`usms-enrolment-sg` is a single point of control.** One rule stands between the enrolment tasks
-   and everything else in the VPC. Compare that with `usms-db-01`, which has four independent
-   controls, and notice that the tasks have exactly one - because they are in a private subnet with no
-   public address, which is two more, but neither of those is *in this report* because the report is
-   about security groups.
-
-Point 4 is the honest complication and it is worth stating carefully in your report: the reachability
-matrix answers question 4 of the security group interlude and knows nothing about routing. **A tool
-that models one axis will always understate the defences on the other one.** Say which axis yours
-models.
-
-**Command - part 2, prove the negative on the data tier, four controls at a time**
+**Part 2 - prove the negative on the data tier, four controls at a time**
 
 ```bash
 {
@@ -4274,9 +3100,6 @@ acl-0999888777666555a   False
 
 > Example output - your IDs will differ.
 
-**What to look for**, line by line, because each line is one control and each has a specific right
-answer:
-
 | Line | Correct answer | What a wrong answer would mean |
 | --- | --- | --- |
 | control 1 | `None` | The instance has a public address. Control 3 still saves you |
@@ -4285,9 +3108,7 @@ answer:
 | control 4 | a port, a `sg-` id, and `None` for the CIDR | A CIDR here means an address-based rule |
 | control 5 | an `acl-` id and `False` | `True` means the custom NACL is not associated |
 
-Write into `notes/lab-09-notes.md`, in one sentence each, what would still stop an attacker if control
-3 failed, and what would still stop one if control 4 failed. Those two sentences are Review Question 5
-and the viva asks for them out loud.
+Write in `notes/lab-09-notes.md`, one sentence each, what would still stop an attacker if control 3 failed, and if control 4 failed (Review Question 5).
 
 **Checkpoint 10**
 
@@ -4304,25 +3125,9 @@ Reachability computed, negatives proven
 
 ### Step 18 - Prove the whole posture survives a restart, and that nothing else broke
 
-**Purpose**
+Two proofs: the controls persist across a stop and start (a vanished control is worse than none, because the audit recorded it), and the five earlier verification scripts are unchanged since Step 2.
 
-Two proofs in one step, and they answer different questions.
-
-The first is this course's standard persistence proof, applied to controls rather than to resources:
-does an IAM condition, a permissions boundary, a written egress rule and an IMDS setting survive a
-stop and start of the emulator? A security control that evaporates on restart is worse than none,
-because the audit script would have recorded it as present.
-
-The second is the question this lab has been deferring since Step 2: did any of it break what the
-previous five laboratories built?
-
-**Run from**
-
-```text
-aws-floci-course/
-```
-
-**Command - part 1, record the truth**
+**Part 1 - record the truth**
 
 ```bash
 {
@@ -4349,22 +3154,9 @@ aws-floci-course/
 cat outputs/lab-09-pre-restart.txt
 ```
 
-**What the command does**
+Nine facts across three services. `length(...Condition)` counts condition keys (`2` intact, `0` gone), which diffs more reliably than a JSON object. The SSH count must be `0`: a negative assertion.
 
-Nine facts, across three services, chosen because each one is a control this lab created and each one
-would be invisible if it vanished.
-
-Two of them are worth explaining. `length(Role.AssumeRolePolicyDocument.Statement[0].Condition)`
-counts the **keys of the condition block** rather than reading its contents - a number that is `2`
-when both `StringEquals` and `ArnLike` survive and `0` when the condition is gone. Comparing a number
-is more robust across a `diff` than comparing a JSON object whose key ordering may not be stable.
-
-`length(IpPermissions[?FromPort==` + backtick + `22` + backtick + `].IpRanges[])` counts CIDR sources
-on the SSH rule, and the correct answer is `0` - because after Step 16 the only source is a group. A
-count of zero is a negative assertion, which is the kind Lab 02's Section 9 called out as the ones
-worth having.
-
-**Command - part 2, perturb**
+**Part 2 - perturb**
 
 ```bash
 ./scripts/setup/floci-down.sh
@@ -4380,11 +3172,9 @@ source configs/lab-04.env
 source configs/lab-05.env
 ```
 
-`floci-down.sh` is `docker compose stop`. It stops the container and keeps the state. It is not
-`docker compose down`, and it is emphatically not `docker compose down -v`, which would delete the
-volumes and with them the entire course.
+`floci-down.sh` is `docker compose stop`, which keeps state. It is not `docker compose down -v`.
 
-**Command - part 3, re-derive every identifier and read it back**
+**Part 3 - re-derive every identifier and read it back**
 
 ```bash
 USMS_ALB_SG=$(aws ec2 describe-security-groups \
@@ -4429,17 +3219,7 @@ diff outputs/lab-09-pre-restart.txt outputs/lab-09-post-restart.txt \
   || echo "PERSISTENCE FAILED: read the diff above, then run ./scripts/utilities/floci-storage-check.sh"
 ```
 
-**What the command does**
-
-Every identifier is **re-derived from the API** - by tag, by group name, by instance tag - rather than
-reused from a shell variable. Reusing the variables would have proved only that Bash remembers
-strings, which is the mistake described in Lab 01 Step 14 and repeated as a warning in every lab
-since.
-
-Note that `usms-enrolment-sg` is found by `group-name` and the others by `tag:Name`. That is not
-inconsistency for its own sake: it is a hedge, because Lab 04 may or may not have tagged that group,
-and a lookup that works for the object in front of you is better than a lookup that is stylistically
-uniform and returns `None`.
+Every identifier is re-derived from the API, not reused from a variable, or the test would only prove that Bash remembers strings (Lab 1 Step 14). `usms-enrolment-sg` is found by group name because Lab 4 may not have tagged it.
 
 **Expected result**
 
@@ -4453,12 +3233,9 @@ re-derived:
 PERSISTENCE PROVEN: the trust condition, the permissions boundary, the read-only role and its policy, the single access key, three written egress rules, the absence of a CIDR SSH source, and the IMDSv2 requirement are all unchanged
 ```
 
-**What to look for:** exactly that line. If you see `PERSISTENCE FAILED`, read the `diff` **before
-doing anything else** - it names *which* of the nine facts did not survive, which is far more useful
-than a general failure. A build that persists security groups but not IMDS settings is a real and
-specific limitation and should be recorded as one.
+If you see `PERSISTENCE FAILED`, read the `diff` first; it names which of the nine facts did not survive.
 
-**Command - part 4, prove you broke nothing**
+**Part 4 - prove you broke nothing**
 
 ```bash
 {
@@ -4477,12 +3254,7 @@ diff <(grep -v '^==' outputs/lab-09-pre-verify.txt) \
   || echo "SOMETHING CHANGED - read the diff above and find out which check and why"
 ```
 
-**What the command does**
-
-`diff <(...) <(...)` is process substitution: each `<(...)` becomes a filename that the command can
-read, so `diff` compares the output of two pipelines without either one touching disk. `grep -v '^=='`
-drops the timestamp headings, which are guaranteed to differ and would otherwise make every run report
-a change.
+`diff <(...) <(...)` compares two pipelines without temp files; `grep -v '^=='` drops the timestamps.
 
 **Expected result**
 
@@ -4500,14 +3272,7 @@ NOTHING BROKE: all five verification scripts report exactly what they reported b
 
 > Example output - your counts are whatever Step 2 recorded.
 
-**What to look for:** the words `NOTHING BROKE`, and understand precisely what they do and do not
-claim. They claim that **no property any earlier laboratory asserted has changed.** They do not claim
-that nothing changed - a great deal did - and they do not claim that the changes are correct. That is
-what this lab's own verification script, in Section 9, is for.
-
-If something did change, work out which check and decide, using the three responses Lab 05 Step 13
-set out: document the expected failure, update the check to assert the new architecture, or - almost
-never - delete the check.
+`NOTHING BROKE` means no property an earlier lab asserted has changed; it does not say this lab's changes are correct (Section 8 does). If something changed, document it, update the check, or (rarely) delete it, as Lab 5 Step 13 set out.
 
 **Checkpoint 11**
 
@@ -4523,20 +3288,7 @@ Persistence and regression, both proven
 
 ### Step 19 - Write `configs/lab-09.env`
 
-**Purpose**
-
-Every shell variable in this terminal dies when you close it, and this lab created ten things whose
-names and ARNs matter. Lab 10 reads three of them and the CloudFormation lab re-declares all of them.
-Record them **by lookup, not from the variables**, so that a populated value in the file is evidence
-the resource actually exists.
-
-**Run from**
-
-```text
-aws-floci-course/
-```
-
-**Command**
+Record names and ARNs **by lookup**, so a populated value is evidence the resource exists.
 
 ```bash
 cat > configs/lab-09.env << EOF
@@ -4597,25 +3349,8 @@ EOF
 grep -n 'export .*=$\|=None$' configs/lab-09.env || echo "all values populated"
 ```
 
-**What the command does**
-
-Unquoted heredoc - `<< EOF`, not `<< 'EOF'` - for the same reason as Lab 02 Step 24, Lab 03 Step 22,
-Lab 04 Step 20, Lab 05 Step 18 and Lab 06 Step 16: every `$(...)` must run **now** and the
-resulting value must land on disk. Had this been quoted, the file would contain the text of a dozen
-API calls, and `source configs/lab-09.env` would re-run all of them in every new terminal you ever
-open. That is the seventh appearance of this rule in six laboratories.
-
-`USMS_EGRESS_ALLOW_ALL_REMAINING` is the awkward one and it repays a close look. It is a small shell
-program inside a command substitution inside an unquoted heredoc, so **every dollar sign that belongs
-to the inner program is escaped** - `\$(...)`, `\$g`, `\$id`, `\$total` - and so are the backticks
-inside the JMESPath literal. Without the escapes, the outer shell would expand `$g` (to nothing, since
-the loop has not run yet) as the file is *written*, and the file would contain a program that reads
-`--filters "Name=group-name,Values="`.
-
-That is the same escaping problem Lab 06 Step 16 met with `awk -F: '{print \$NF}'`, in a bigger and
-less forgiving form. If you find yourself escaping more than about four dollar signs, the honest
-alternative is to compute the value **before** the heredoc and interpolate a single variable - and
-saying that out loud is worth more than the cleverness:
+- **Unquoted heredoc**, so every `$(...)` runs now. Quoted, `source configs/lab-09.env` would re-run a dozen API calls in every terminal.
+- `USMS_EGRESS_ALLOW_ALL_REMAINING` is a small program inside an unquoted heredoc, so its own `$` signs and backticks are escaped (`\$g`, `\$id`, `\$total`). Without them `$g` would expand to nothing as the file is written. If the escaping fights you, compute the value first:
 
 ```bash
 # The readable alternative, if the escaping fights you:
@@ -4624,9 +3359,7 @@ REMAINING=$(for g in usms-alb-sg usms-enrolment-sg usms-db-sg; do ... done)
 #   export USMS_EGRESS_ALLOW_ALL_REMAINING=$REMAINING
 ```
 
-`USMS_IMDS_TOKENS` and `USMS_EGRESS_ALLOW_ALL_REMAINING` are both **read back from the API** rather
-than hard-coded as `required` and `0`. A file that quietly claims what you intended rather than what
-exists is worse than no file, and Section 9's script asserts both values, so a lie here fails there.
+- `USMS_IMDS_TOKENS` and `USMS_EGRESS_ALLOW_ALL_REMAINING` are read back from the API, not hard-coded; Section 8 asserts both.
 
 **Verify**
 
@@ -4668,33 +3401,15 @@ review date                          2026-09-06
 
 > Example output - your ARNs, IDs and dates will differ.
 
-**What to look for:** `all values populated`, eleven non-empty lines, and a count of **16** exported
-variables. Three of those values are assertions rather than facts and each must read exactly:
-
-- `imds tokens` must be `required`, not `optional`. Anything else means Step 11 did not take on this
-  build - which is an acceptable, recorded limitation, but the file must say `optional` honestly
-  rather than claim otherwise.
-- `allow-all egress left` must be `0`. Any other number means one of Steps 13, 14 or 15 revoked
-  nothing.
-- `s3 prefix list` reading `none` is the documented Step 13 fallback and is acceptable. Any other
-  non-`pl-` value is not.
+`all values populated`, eleven non-empty lines and **16** exports. `imds tokens` must be `required` (or honestly `optional` if Step 11 did not take); `allow-all egress left` must be `0`; `s3 prefix list` may be `none` (Step 13 fallback) but no other non-`pl-` value.
 
 ---
 
 ### Step 20 - Commit
 
-**Purpose**
+This lab handled two secrets, so there is more to check.
 
-Same discipline as every lab: look first, stage explicitly, then commit. This one has more to check
-than most, because it is the lab that handled two secrets.
-
-**Run from**
-
-```text
-aws-floci-course/
-```
-
-**Command - part 1, look before you add**
+**Part 1 - look before you add**
 
 ```bash
 git status --short
@@ -4708,17 +3423,13 @@ echo "== no policy document may contain an unexpanded variable =="
 grep -l '\$' policies/*.json || echo "no unexpanded variables in any policy document"
 ```
 
-**What to look for, before typing anything else:**
+Before typing anything else:
 
-- No path under `outputs/` appears in `git status --short`. Especially not the access key file.
-- No `.env` at the repository root appears.
-- `configs/lab-09.env` **does** appear. It holds names and ARNs - no secrets, by construction.
-- `git check-ignore -v` names the file, the rule and the line number for **both** output files.
-  Silence there means the file is not ignored; stop and fix `.gitignore` before committing anything.
-- `git ls-files outputs/` lists `outputs/.gitkeep` and nothing else.
-- The last block prints `no unexpanded variables in any policy document`. If it names a file, open it:
-  you used a quoted heredoc where an unquoted one was needed, and the document currently grants access
-  to the literal string `${USMS_ACCOUNT_ID}`.
+- Nothing under `outputs/` in `git status --short`, especially the access key file. No root `.env`.
+- `configs/lab-09.env` **does** appear (names and ARNs only).
+- `git check-ignore -v` names the rule for **both** output files. Silence means not ignored: fix `.gitignore` first.
+- `git ls-files outputs/` lists only `outputs/.gitkeep`.
+- The last block prints `no unexpanded variables in any policy document`. A named file used a quoted heredoc where an unquoted one was needed.
 
 **Expected result**
 
@@ -4733,7 +3444,7 @@ no unexpanded variables in any policy document
 
 > Example output - your line numbers may differ.
 
-**Command - part 2, commit**
+**Part 2 - commit**
 
 ```bash
 git add labs/lab-09-security/ \
@@ -4761,13 +3472,7 @@ git commit -m "Lab 09: security review - scoped trust policies, a permissions bo
 git log --oneline -7
 ```
 
-The `git add` names paths explicitly rather than using `git add -A`. That is not fussiness: `git add
--A` stages whatever happens to be in the working tree, which is exactly how an un-ignored secret
-reaches a commit and, from there, a remote. In a laboratory that created an access key twenty minutes
-ago, it is the wrong command to reach for.
-
-The two script paths at the end only exist after Section 9. If you commit before building them, drop
-those two lines and add them in a second commit.
+Name paths explicitly, never `git add -A`, which stages whatever is in the tree, un-ignored secrets included. The last two script paths exist only after Section 8; if you commit first, drop them and add them in a second commit.
 
 **Expected result**
 
@@ -4791,43 +3496,11 @@ Lab 09 recorded
 
 ---
 
-## 9. Verification
+## 8. Verification
 
-### 9.1 What this script checks that a naive one would not
+### 8.1 Build `scripts/utilities/verify-lab-09.sh`
 
-Nine of the checks below are the ones worth having, and they are why "does the role exist" is not
-enough for a security lab:
-
-- **`USMSStudentDataReadOnly` does NOT allow `s3:PutObject`** - a *negative* assertion about a policy
-  document. Checking that a policy grants what you meant catches typos; checking that it does not
-  grant what you did not mean catches the mistake that matters.
-- **`usms-ecs-task-role`'s trust policy has a `Condition`** - the confused-deputy fix, asserted on the
-  document rather than on the fact that Step 7 ran.
-- **`usms-ecs-task-role`'s principal is still `ecs-tasks.amazonaws.com`** - because a trust policy
-  update is a whole-document replace, and the failure mode of getting it wrong is a role nobody can
-  assume.
-- **`USMSDeployBase`'s `iam:PassRole` has no `Resource "*"`** - the escalation path, asserted directly.
-- **`USMSPermissionsBoundary` has an attachment count of zero** - a check that something is *not*
-  attached, which no other script in this course does, and which catches a colleague "tidying up" by
-  attaching it as an ordinary policy.
-- **`usms-dev-01` has exactly one access key** - two means a rotation was started and never finished,
-  which is the state that looks fine and quietly doubles your exposure.
-- **Three groups have zero allow-all egress rules** - the claim of Steps 13 to 15 in one line.
-- **`usms-app-sg` has no CIDR source on port 22** - a negative assertion, and the only thing that would
-  notice if somebody re-added the `10.0.0.0/16` rule for convenience.
-- **No document in `policies/` contains an unexpanded variable** - the silent heredoc bug, which has
-  now had ten opportunities to appear in this laboratory alone.
-
-And, as in every lab, the environment block comes first: a script that verifies only its own resources
-passes right up until the restart that deletes them.
-
-### 9.2 Build `scripts/utilities/verify-lab-09.sh`
-
-**Run from**
-
-```text
-aws-floci-course/
-```
+Beyond existence, it asserts: `USMSStudentDataReadOnly` does **not** allow `s3:PutObject`; the task role has a `Condition` and still trusts `ecs-tasks.amazonaws.com`; `USMSDeployBase`'s `iam:PassRole` has no `Resource "*"`; the boundary has zero attachments; `usms-dev-01` has exactly one key; three groups have zero allow-all egress rules; `usms-app-sg` has no CIDR source on port 22; and no `policies/` document contains an unexpanded variable. The environment block comes first, as always.
 
 {% raw %}```bash
 cat > scripts/utilities/verify-lab-09.sh << 'EOF'
@@ -5066,9 +3739,7 @@ PASS=50  FAIL=0
 
 > Example output - the middle is abbreviated; you will see all 50.
 
-**The expected count is `PASS=50  FAIL=0`.**
-
-Known benign failures, which you record rather than fight:
+**The expected count is `PASS=50  FAIL=0`.** Known benign failures, which you record rather than fight:
 
 | Check | Benign cause |
 | --- | --- |
@@ -5081,7 +3752,7 @@ Known benign failures, which you record rather than fight:
 
 Everything else failing is a real problem with your work.
 
-### 9.3 Build the end-of-course cleanup script
+### 8.2 Build the end-of-course cleanup script
 
 !!! danger "DO NOT RUN THIS SCRIPT NOW"
     **What will be deleted:** `usms-deploy-role`, `usms-transcripts-reader-role`,
@@ -5113,18 +3784,12 @@ Everything else failing is a real problem with your work.
 
     It requires you to type `UNDO USMS SECURITY REVIEW` in full before it does anything.
 
-**Run from**
-
-```text
-aws-floci-course/
-```
-
 ````bash
 cat > scripts/cleanup/lab-09-cleanup.sh << 'EOF'
 #!/usr/bin/env bash
 # END OF COURSE ONLY. Reverses Lab 09, dependencies first.
 # Order: detach and delete roles -> delete policies -> restore the rules this lab changed.
-# Run FIRST of the teardown scripts. See Lab 09 Section 9.3.
+# Run FIRST of the teardown scripts. See Lab 09 Section 8.2.
 set -Eeuo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -5205,32 +3870,11 @@ chmod +x scripts/cleanup/lab-09-cleanup.sh
 bash -n scripts/cleanup/lab-09-cleanup.sh && echo "syntax OK - do NOT run it"
 ````
 
-**What to look for:** the words `syntax OK - do NOT run it`. `bash -n` parses a script without
-executing a single command, and it is the only safe way to check a destructive one.
-
-The order is the lesson again, and three steps in it are dependencies the APIs enforce:
-
-1. **Detach policies before deleting roles.** `delete-role` fails with `DeleteConflict` while any
-   policy is attached, and the message names the role rather than explaining the dependency.
-2. **Remove the permissions boundary before deleting the role.** A boundary is a second attachment and
-   is subject to the same rule.
-3. **Delete non-default policy versions before deleting a policy.** `delete-policy` refuses while more
-   than one version exists, and `Versions[?!IsDefaultVersion]` is the JMESPath for "every version that
-   is not the default" - note the `!` negating a boolean field, which is a form this course has not
-   used before.
-4. **Restore the security group rules last**, and restore the referencing rule before deleting the
-   referenced group, because `delete-security-group` fails with `DependencyViolation` while another
-   group's rule names it.
-
-Two things are deliberately **not** undone, and the script says so in its own banner: the access key
-rotation, because the old key no longer exists anywhere and re-creating one would be a new secret
-rather than an undo; and the IMDSv2 requirement, because there is no scenario in which reverting to
-IMDSv1 is the right thing to do. **A teardown script that undoes a security improvement is a teardown
-script that leaves the account worse than it found it.**
+You want `syntax OK - do NOT run it`. The order follows API dependencies: detach policies before deleting roles; remove the boundary before deleting its role; delete non-default policy versions before the policy (`Versions[?!IsDefaultVersion]` negates a boolean field); restore rules last, and the referencing rule before deleting the referenced group. It deliberately does **not** undo the key rotation or IMDSv2: a teardown should never leave the account less secure.
 
 ---
 
-## 10. Checkpoints
+## 9. Checkpoints
 
 | # | After step | What must be true |
 | --- | --- | --- |
@@ -5249,38 +3893,32 @@ script that leaves the account worse than it found it.**
 
 ---
 
-## 11. Troubleshooting
+## 10. Troubleshooting
+
+!!! warning "Known issue on Floci 2.0.1"
+    On Floci 2.0.1, permissions boundaries and IMDSv2 `HttpTokens` are not reflected on readback. Diagnose first, then use the alternative in [Known Issues - Lab 09](known-issues.md#lab-09-security). It states what the alternative does and does not prove.
 
 ??? danger "`MalformedPolicyDocument` when creating a policy or a role"
-    Almost always an unexpanded shell variable, or an expanded one that should not have been. Look at
-    the document before looking at anything else:
+    Usually an unexpanded shell variable, or one expanded that should not have been. Look at the document first:
 
     ```bash
     grep -n '\$' policies/*.json
     python3 -m json.tool policies/<the-one-that-failed>.json
     ```
 
-    If the file contains the literal text `${USMS_ACCOUNT_ID}`, you used `<< 'EOF'` where Step 7 or
-    Step 8 calls for `<< EOF`. If it contains an empty string where an ARN should be, the variable was
-    unset - re-source `configs/lab-01.env`.
-
-    The third case is the awkward one: a document that legitimately contains an IAM variable such as
-    `${aws:username}` written in an unquoted heredoc. Bash aborts with `bad substitution`. Escape it
-    as `\${aws:username}`, as Step 7's warning describes.
+    Literal `${USMS_ACCOUNT_ID}` means `<< 'EOF'` where Step 7 or 8 needs `<< EOF`. An empty string where an ARN should be means the variable was unset: re-source `configs/lab-01.env`. An IAM variable like `${aws:username}` in an unquoted heredoc gives `bad substitution`; escape it as `\${aws:username}` (Step 7's warning).
 
 ??? danger "`NoSuchEntity` when the role plainly exists"
-    Check the spelling of the role **name**, not its ARN. `aws iam get-role --role-name` takes a bare
-    name and rejects an ARN with exactly this error, which reads as though the role is missing:
+    `get-role --role-name` takes a bare name and rejects an ARN with this error:
 
     ```bash
     aws iam list-roles --query 'Roles[].RoleName' --output text | tr '\t' '\n' | sort
     ```
 
-    The same trap applies to `--policy-arn`, which takes the opposite: an ARN and never a name.
+    `--policy-arn` is the opposite: an ARN, never a name.
 
 ??? danger "`DeleteConflict` when deleting a role"
-    A role with a policy attached, an instance profile referencing it, or a permissions boundary set
-    cannot be deleted. Find out which:
+    An attached policy, an instance profile or a permissions boundary blocks deletion. Find which:
 
     ```bash
     aws iam list-attached-role-policies --role-name <role>
@@ -5289,40 +3927,30 @@ script that leaves the account worse than it found it.**
     aws iam list-instance-profiles-for-role --role-name <role>
     ```
 
-    Detach everything, remove the boundary with `delete-role-permissions-boundary`, then delete. That
-    is the order in `scripts/cleanup/lab-09-cleanup.sh`.
+    Detach everything, `delete-role-permissions-boundary`, then delete (the order in `scripts/cleanup/lab-09-cleanup.sh`).
 
 ??? danger "`DeleteConflict` when deleting a policy"
-    Either it is still attached to something, or it has more than one version.
+    It is still attached, or has more than one version.
 
     ```bash
     aws iam list-entities-for-policy --policy-arn <arn>
     aws iam list-policy-versions --policy-arn <arn> --query 'Versions[].[VersionId,IsDefaultVersion]' --output text
     ```
 
-    Delete every non-default version first. A policy can hold five versions and refuses deletion until
-    exactly one remains.
+    Delete every non-default version first.
 
 ??? danger "The trust policy update succeeded and the condition is not there"
-    `update-assume-role-policy` replaces the **whole document**. If your document had a syntax error
-    that IAM tolerated - a `Condition` block nested one level too deep, for instance - the call
-    succeeds and the condition is silently in the wrong place.
+    `update-assume-role-policy` replaces the whole document, and a misplaced `Condition` can be accepted silently.
 
     ```bash
     aws iam get-role --role-name usms-ecs-task-role \
       --query 'Role.AssumeRolePolicyDocument' --output json | python3 -m json.tool
     ```
 
-    `Condition` is a sibling of `Effect`, `Principal` and `Action`, **inside** a statement. If it is
-    inside `Principal`, or at the top level next to `Version`, it does nothing and IAM will not tell
-    you.
+    `Condition` belongs **inside** a statement, beside `Effect`, `Principal` and `Action`. Inside `Principal` or at the top level it does nothing.
 
 ??? danger "`InvalidPermission.NotFound` when revoking an egress rule"
-    The permission you described does not exactly match the one that exists. The default egress rule
-    is protocol `-1` with one `IpRanges` entry of `0.0.0.0/0` and **no** port fields; adding
-    `"FromPort": 0` to the document makes it a different permission that matches nothing.
-
-    Read what is actually there, then revoke by rule ID instead, which cannot be ambiguous:
+    Your permission does not exactly match the existing one. The default egress rule is protocol `-1`, one `IpRanges` entry of `0.0.0.0/0`, and **no** port fields. Revoke by rule ID instead:
 
     ```bash
     aws ec2 describe-security-group-rules --filters "Name=group-id,Values=$USMS_ENROLMENT_SG" \
@@ -5334,32 +3962,24 @@ script that leaves the account worse than it found it.**
     ```
 
 ??? danger "A security group now has no egress rules at all"
-    You revoked the default before authorising the replacement, or the authorise failed silently.
-    A group with an empty egress list denies **all** outbound traffic - which on real AWS means a
-    Fargate task that cannot pull its image and a service that never stabilises.
-
-    Put it back immediately, then redo the step in the right order:
+    You revoked before authorising, or the authorise failed. On real AWS that blocks all outbound traffic. Put it back, then redo the step in order:
 
     ```bash
     aws ec2 authorize-security-group-egress --group-id <sg> \
       --ip-permissions file://policies/usms-egress-allow-all.json
     ```
 
-    That document exists for exactly this moment, which is why Step 13 wrote it before touching
-    anything.
-
 ??? danger "`InvalidGroup.NotFound` when writing an egress rule that names a group"
-    `$USMS_ENROLMENT_SG` or `$BASTION_SG` was empty when the document was written. Check the file:
+    `$USMS_ENROLMENT_SG` or `$BASTION_SG` was empty when the document was written:
 
     ```bash
     cat policies/usms-alb-sg-egress.json
     ```
 
-    A `GroupId` of `""` produces this error, and the message names an invalid group rather than an
-    empty variable. Re-source `configs/lab-04.env` and rewrite the document.
+    A `GroupId` of `""` produces this error. Re-source `configs/lab-04.env` and rewrite the document.
 
 ??? danger "`aws sts get-caller-identity --profile usms-dev` fails with `InvalidClientTokenId`"
-    Step 10's rotation went wrong. Work out where:
+    Step 10 went wrong. Find where:
 
     ```bash
     aws configure get aws_access_key_id --profile usms-dev
@@ -5367,20 +3987,16 @@ script that leaves the account worse than it found it.**
       --query 'AccessKeyMetadata[].[AccessKeyId,Status]' --output text
     ```
 
-    If the profile's key is not in the list, the profile points at a deleted key - repoint it from
-    `outputs/usms-dev-01-access-key-new.json`. If the key is listed as `Inactive`, reactivate it:
+    If the profile's key is not listed, repoint it from `outputs/usms-dev-01-access-key-new.json`. If it is `Inactive`, reactivate it:
 
     ```bash
     aws iam update-access-key --user-name usms-dev-01 --access-key-id <id> --status Active
     ```
 
-    If `outputs/usms-dev-01-access-key-new.json` is gone as well, the secret is unrecoverable. Delete
-    both keys and create one fresh, following Step 10 from part 2.
+    If the new key file is also gone, the secret is unrecoverable: delete both keys and redo Step 10 from Part 2.
 
 ??? danger "`LimitExceeded` when creating an access key"
-    `usms-dev-01` already has two. That is the IAM maximum and it exists to make the four-step
-    rotation possible. Finish the previous rotation - deactivate and delete the older key - before
-    starting another.
+    `usms-dev-01` already has two, the maximum. Finish the previous rotation first.
 
     ```bash
     aws iam list-access-keys --user-name usms-dev-01 \
@@ -5388,53 +4004,38 @@ script that leaves the account worse than it found it.**
     ```
 
 ??? danger "`usms-iam-audit.sh` reports `no inventory` and exits 2"
-    It reads `outputs/lab-09-identity-inventory.json`, which Step 4 part 2 writes. Run that first, or
-    pass a path:
+    Run Step 4 Part 2 first, or pass a path:
 
     ```bash
     ./scripts/utilities/usms-iam-audit.sh outputs/lab-09-identity-inventory.json
     ```
 
-    If the inventory exists but is empty or `[]`, `iam list-roles` returned nothing - check
-    `./scripts/utilities/whoami.sh` before assuming the script is at fault.
+    An empty inventory means `iam list-roles` returned nothing; check `./scripts/utilities/whoami.sh`.
 
 ??? danger "`usms-sg-audit.sh` prints group IDs instead of names"
-    A group in the VPC has no `GroupName` in the API response, which happens on some builds for the
-    default group. It is cosmetic. If it happens for a group you created, the group was created
-    without `--group-name`, which is not possible through the CLI - so check you are looking at the
-    VPC you think you are.
+    Some builds omit `GroupName` for the default group; cosmetic. For a group you created, check you are looking at the right VPC.
 
 ??? danger "`An error occurred (NoCredentials)` or a suggestion to run `aws login`"
-    Do **not** run `aws login`. It begins an interactive sign-in to **real AWS**, and this course's
-    entire safety model rests on never touching a real account.
-
-    In this terminal, right now:
+    Do **not** run `aws login`; it signs in to **real AWS**. In this terminal:
 
     ```bash
     cd ~/aws-floci-course && source configs/course.env && ./scripts/utilities/whoami.sh
     ```
 
-    Permanently: this is Errata 01, and the loader belongs in the startup file your **login** shell
-    reads.
-
-    In this laboratory there is a second possibility worth checking before you blame the shell: Step 9
-    exported three environment credentials, and if part 4 never ran they are still set and may have
-    expired. `unset AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN` and try again.
+    Permanently: apply Errata 01. Also check Step 9's three environment credentials were unset: `unset AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN`.
 
 ??? danger "Everything is gone after a restart"
-    Storage mode, as always.
+    Check storage mode:
 
     ```bash
     ./scripts/utilities/floci-storage-check.sh
     ```
 
-    If it reports `FLOCI_STORAGE_MODE=memory`, a stray `floci start` has replaced the Compose
-    container. The work is not recoverable - restore from the snapshot you took at the end of Lab 06,
-    and this time confirm the storage check before building anything.
+    `FLOCI_STORAGE_MODE=memory` means a stray `floci start` replaced the Compose container. Restore from your Lab 6 snapshot and confirm the storage check before rebuilding.
 
 ---
 
-## 12. Floci vs Real AWS
+## 11. Floci vs Real AWS
 
 | Feature | Real AWS | Floci | Status |
 | --- | --- | --- | --- |
@@ -5469,130 +4070,21 @@ script that leaves the account worse than it found it.**
 | Cost - a NAT gateway, an interface endpoint per service per AZ | Real, and interface endpoints are not cheap | Free | Conceptual / Real AWS |
 | Service quotas (60 rules per security group, 5 groups per interface) | Enforced | Not enforced | Conceptual / Real AWS |
 
-### 12.1 What you actually observed in this lab
+**Where Floci is nicer than reality (traps on real AWS):** IAM changes apply instantly, but real IAM is eventually consistent, so retry the first use of a new identity; a wrong policy costs nothing here, while on AWS over-permissive is a finding and over-restrictive is an outage; no quotas (60 rules per group, 5 groups per interface); no cost (interface endpoints for ECR, Logs and STS across two AZs are six billed endpoints); and no CloudTrail to say who changed what.
 
-```text
-OBSERVABLE - you saw this happen
-  every role's trust policy and every policy document, read out of the API
-  a systematic finding: four roles with the same unconditioned service trust
-  a trust policy replaced, with the principal unchanged and a condition added
-  a permissions boundary stored in a role's second policy slot
-  a policy with an attachment count of zero, deliberately
-  a session policy accepted by assume-role, and its intersection computed on paper
-  two access keys existing at once, one Inactive, then one
-  the default allow-all egress rule, on five groups, none of which you wrote
-  three of those replaced with rules you wrote, one naming another security group
-  an SSH rule whose source changed from a /16 to a group
-  a reachability matrix computed from rules alone
-  five independent controls on usms-db-01, and one on usms-enrolment-sg
-  all of it surviving a container restart, with every identifier re-derived
+**Two kinds of proof.** Demonstration proves one action was refused; review proves what a whole document permits, including untested cases. Security claims are about what *cannot* happen, so real review is mostly reading (`simulate-principal-policy` and Access Analyzer read too). What Floci removes is the loud failure of a malformed document, which is why Section 8 asserts on document structure. Say in your report which items you observed (documents, rules, the restart) and which you only reasoned about (any enforcement, SSRF, prefix-list routing, cost).
 
-CONCEPTUAL - you reasoned about it, you did not see it
-  any policy being enforced, ever
-  a condition on a trust policy preventing an assume-role
-  a permissions boundary capping anything
-  a session policy denying anything
-  iam:PassRole refusing to pass a role
-  a security group dropping a packet, inbound or outbound
-  IMDSv2 refusing an untokened request
-  the SSRF attack the token requirement prevents
-  a prefix list keeping S3 traffic on the AWS network
-  the cost of any of it
-```
-
-If your Step 3 probe put you on path A, `simulate-principal-policy` moves one line from the second list
-to the first. Say in your report which list each item ended up in **for you**. Claiming to have
-observed something you reasoned about is worth negative marks, and Section 14 checks it.
-
-### 12.2 Where Floci is nicer than reality, which makes it a trap
-
-- **IAM changes take effect instantly.** Real IAM is eventually consistent: a role created and
-  immediately assumed can fail, a policy attached and immediately relied on can be a second behind,
-  and code written against Floci's timing has a race condition in it. The standard mitigation is a
-  retry with backoff around the first use of a newly created identity, and every mature deployment
-  tool has one.
-- **A wrong policy costs nothing.** On a real account, an over-permissive policy is a finding in a
-  security review, an over-restrictive one is an outage, and both are discovered by someone else.
-  Here, both are invisible. That is why every proof in this lab is a proof about a document.
-- **No quotas.** A security group holds 60 rules by default and an interface can carry 5 groups. A
-  team that solves every problem by adding a rule discovers the first limit at the worst moment, with
-  a `RulesPerSecurityGroupLimitExceeded` in the middle of a deployment.
-- **No cost.** Interface endpoints - the correct fix for Step 13's wide HTTPS rule - are billed per
-  hour per Availability Zone, per service. Doing it properly for ECR, Logs and STS across two zones is
-  six endpoints, and the security improvement has a price that has to be argued for.
-- **No CloudTrail.** Every claim in this lab about *who changed what* is unverifiable here. On a real
-  account, the first question after any security finding is "when did this change and who changed it",
-  and the answer takes about ninety seconds. Without it, a security review is a photograph rather than
-  a history.
-
-### 12.3 Two kinds of proof, and why one of them is not a compromise
-
-This laboratory could not test a single one of its controls, and that is worth confronting rather than
-apologising for.
-
-There are exactly two ways to establish that a control works:
-
-```text
-DEMONSTRATION   do the thing; watch it be refused.
-                Proves: this specific action, by this principal, on this resource, right now.
-                Cannot prove: that nothing ELSE is permitted.
-
-REVIEW          read the configuration; reason about what it permits.
-                Proves: what the whole document permits, including cases nobody thought to test.
-                Cannot prove: that the system behaves as its configuration says.
-```
-
-A security claim is almost always a claim about what *cannot* happen, and demonstration cannot
-establish those, because there is no finite set of failed attempts that adds up to "and nothing else".
-The claim "only the load balancer can reach the enrolment tasks" is a claim about every other thing in
-the account, including the ones that do not exist yet.
-
-So real security review is mostly reading, on real AWS as much as here - and the tooling reflects it.
-`simulate-principal-policy` reads. IAM Access Analyzer reads. Every static analysis tool in this space
-reads. What testing adds is the second half of the pair: confidence that the *implementation* matches
-the configuration, which is AWS's job rather than yours.
-
-What Floci actually costs you, then, is not the ability to review. It is the feedback loop that
-catches a document that is malformed rather than mistaken - a condition nested one level too deep, a
-resource ARN with a typo. On real AWS a bad policy fails loudly the first time something uses it. Here
-it does not, which is why Section 9's script asserts on document *structure* and Step 7's verification
-compares principals before and after.
-
-State this in your report. Section 14's viva asks you to defend the methodology, not just the findings.
-
-### 12.4 One thing this lab is *not*
-
-Nothing in this lab is monitoring. Every control here is preventive: it stops something from being
-permitted. Not one of them tells you when somebody tries.
-
-The detective half of the same job is CloudTrail - which records every API call and would have told
-you who removed a rule and when - plus CloudWatch alarms on the events that matter, plus GuardDuty for
-behavioural findings. Floci provides none of them, the CloudWatch laboratory provides the second, and
-the first two are `Conceptual / Real AWS` throughout this course.
-
-If you can say, in one sentence, what a preventive control and a detective control each give you that
-the other cannot, you have the distinction this section exists for. Exercise 4's fourth bullet asks for
-it in writing, and the CloudWatch laboratory is where the detective half stops being conceptual.
+**Preventive, not detective.** Every control here prevents; none tells you when someone tries. The detective half is CloudTrail, CloudWatch alarms and GuardDuty, conceptual here; the CloudWatch lab covers alarms.
 
 ---
 
-## 13. Independent Lab Exercises
+## 12. Independent Lab Exercises
 
-Record commands and output in `labs/lab-09-security/exercises.md`. Take screenshots into
-`screenshots/` where an exercise asks for evidence.
+Record commands and output in `labs/lab-09-security/exercises.md`; screenshots go in `screenshots/`.
 
 ### Exercise 1 - Basic: finish the egress work on the web tier
 
-**Requirements**
-
-Steps 13, 14 and 15 wrote egress rules for three security groups. `usms-app-sg` still carries the
-default allow-all rule, and it is the hardest of the four because `usms-web-01` legitimately needs
-more than the others.
-
-Work out what it needs from the architecture, write the document, authorise it, revoke the default,
-and prove the result.
-
-Specifically, the web instance must still be able to:
+**Requirements:** write egress for `usms-app-sg`, authorise it, revoke the default, and prove it. The web instance must still:
 
 1. reach S3 for Lab 10's transcripts, through Lab 02's gateway endpoint,
 2. reach AWS service endpoints over HTTPS, including STS for its instance profile credentials,
@@ -5602,103 +4094,45 @@ Specifically, the web instance must still be able to:
 
 **Constraints**
 
-- The document lives in `policies/usms-app-sg-egress.json` and is written with the correct heredoc
-  quoting for its contents. Say in one sentence which you chose and why.
-- Requirement 3 must be expressed as a **group reference**, not a CIDR. Work out which group.
-- Requirement 5 needs **two** rules, and the ports and protocols are not both what you would guess.
-  State the destination you chose and justify it against Lab 02's CIDR interlude.
-- Authorise before you revoke, as Steps 13 to 16 did, and say why in one sentence.
-- Every rule carries a `Description`.
-- Do **not** touch `usms-app-sg`'s ingress rules. Exercise 4 argues about those.
+- The document is `policies/usms-app-sg-egress.json`, with the right heredoc quoting; say which and why.
+- Requirement 3 is a **group reference**; work out which group.
+- Requirement 5 needs **two** rules; justify the destination against Lab 2's reserved addresses.
+- Authorise before revoking, and say why. Every rule has a `Description`.
+- Do **not** touch `usms-app-sg`'s ingress rules.
 
-**Expected outcome**
+**Expected outcome:** `usms-sg-audit.sh` shows written egress on `usms-app-sg` and no default rule; the matrix shows its destinations; `verify-lab-09.sh` still `FAIL=0`. Then say in two sentences why `usms-bastion-sg`'s egress is different in kind, and what its destination should be.
 
-`usms-sg-audit.sh` showing `usms-app-sg` with written egress and no default allow-all rule; the
-reachability matrix showing the web tier's outbound destinations; and
-`./scripts/utilities/verify-lab-09.sh` still reporting `FAIL=0`.
-
-Then do the same reasoning, and reach the opposite conclusion, for `usms-bastion-sg`: say in two
-sentences why a jump host's egress rule is different in kind from every other group in this
-architecture, and what its correct destination is.
-
-**Hints**
-
-Requirement 5 is the interesting one. The Amazon-provided resolver is at the second address in the VPC
-CIDR - Lab 02's interlude lists the five reserved addresses and says what each is for. DNS uses UDP
-first and falls back to TCP for large responses, and a rule for only one of the two produces
-intermittent failures on exactly the queries that matter.
-
-Requirement 2 has a subtlety worth noticing: `usms-web-01` obtains its credentials from the metadata
-service at `169.254.169.254`, which is **link-local** and is not subject to security group rules at
-all. Say in one sentence why not.
-
----
+**Hints:** the resolver is the VPC's second address; DNS uses UDP and falls back to TCP. `169.254.169.254` is link-local and not subject to security groups; say why.
 
 ### Exercise 2 - Intermediate: the break-glass role, and the two findings this lab left open
 
 **Requirements**
 
-Two pieces of work, and the second is the more interesting.
+**Part A:** create `usms-breakglass-role`:
 
-**Part A - a break-glass role.** Create `usms-breakglass-role`, the identity somebody assumes during
-an incident when the normal path is unavailable. It must:
+1. assumable only by `usms-admin-01`,
+2. requiring MFA via `aws:MultiFactorAuthPresent`,
+3. requiring `sts:ExternalId`, so assuming it is deliberate,
+4. with the shortest maximum session IAM allows,
+5. carrying a permissions boundary,
+6. granting exactly the Application Auto Scaling calls Lab 6 used to suspend scaling, and nothing else.
 
-1. be assumable only by `usms-admin-01`,
-2. require multi-factor authentication, using the `aws:MultiFactorAuthPresent` condition key,
-3. require an external identifier, using `sts:ExternalId`, so that assuming it is deliberate rather
-   than accidental,
-4. have the shortest maximum session duration IAM allows,
-5. carry a permissions boundary - `USMSPermissionsBoundary` or one of your own,
-6. and grant, through an identity policy you write, exactly the permissions needed to stop a runaway
-   scaling policy: the Application Auto Scaling calls Lab 06 used to suspend scaling, and nothing
-   else.
-
-**Part B - close, or formally accept, the two IAM findings this lab left open.** Step 5's audit
-reported four unconditioned service trust policies and Step 7 fixed one. For each of the remaining
-three - `usms-ec2-app-role`, `usms-ecs-exec-role`, `usms-lambda-exec-role` - decide and justify one of:
-
-- **Fix it**, with the correct condition keys for that service. Two of the three can be fixed and the
-  documentation says which keys each service sends.
-- **Accept it**, with a written reason naming what the service does instead and what compensating
-  control exists.
-
-Then update `scripts/utilities/usms-iam-audit.sh` so that a formally accepted finding is reported as
-`ACCEPTED` rather than `HIGH`, reading the accepted list from a file rather than from a list hard-coded
-in the script.
+**Part B:** for `usms-ec2-app-role`, `usms-ecs-exec-role` and `usms-lambda-exec-role`, either **fix** the unconditioned trust (two can be fixed) or **accept** it with a written reason and compensating control. Then make `usms-iam-audit.sh` report accepted findings as `ACCEPTED`, read from a file, not hard-coded.
 
 **Constraints**
 
-- Part A's policy must not use a wildcard action. Look up the exact operation names Lab 06 used.
-- Part A's trust policy must have **both** conditions in one `Condition` block, and you must be able to
-  say whether they combine with AND or with OR - and why that is not a matter of opinion.
-- Part B's accepted-findings file must be committed and must contain a reason per entry. A file of
-  bare identifiers is a suppression list, not an acceptance record, and the difference is the whole
-  point.
-- After your change, `usms-iam-audit.sh` must still exit 1 if any unaccepted HIGH finding remains.
+- No wildcard actions in Part A.
+- Both Part A conditions in one `Condition` block; say whether they combine with AND or OR, and why.
+- The accepted-findings file is committed with a reason per entry (otherwise it is a suppression list).
+- The audit still exits 1 for any unaccepted HIGH finding.
 
-**Expected outcome**
+**Expected outcome:** a role that cannot be assumed casually, a ten-second policy, and an audit that reports decisions.
 
-A role that cannot be assumed casually, a policy narrow enough to read in ten seconds, and an audit
-script whose output is a list of decisions rather than a list of observations.
-
-**Hints**
-
-For part A condition 3, `sts:ExternalId` is normally a cross-account control, and using it here is a
-slight repurposing - say so, and say what it buys you in a single account.
-
-For part B, the two services that support source conditions are documented under "cross-service
-confused deputy prevention" in each service's own security chapter. The one that does not is the one
-whose credentials arrive through a metadata service rather than through `sts:AssumeRole` on your
-behalf - which is a hint about *why* it cannot, and Step 11 is about the compensating control.
-
----
+**Hints:** `sts:ExternalId` is normally cross-account; say what it buys in one account. See each service's "cross-service confused deputy prevention" docs; the unfixable one gets credentials via a metadata service (Step 11).
 
 ### Exercise 3 - Problem solving: the exposure report
 
-**Requirements**
-
-Write `scripts/utilities/usms-exposure-report.sh`. With no arguments, it examines every elastic
-network interface in `usms-vpc` and prints one line per interface classifying it:
+**Requirements:** write `scripts/utilities/usms-exposure-report.sh`, classifying every network interface in `usms-vpc`, one line each:
 
 ```text
 usms-web-01        10.0.1.87   52.9.144.17  EXPOSED     igw route + sg allows 80,443 from 0.0.0.0/0
@@ -5708,47 +4142,23 @@ enrolment task     10.0.3.117  -            ISOLATED    no igw route on subnet
 usms-nat           10.0.1.7    3.221.44.9   EXPOSED     igw route, but no ingress rule at all
 ```
 
-The verdict must be **computed** from the interface's subnet's route table, its public address, and
-its security groups' ingress rules - never from a name, a tag or a description.
+The verdict is **computed** from the interface's subnet route table, public address and security group ingress rules, never from names, tags or descriptions.
 
 **Constraints**
 
-- Runs correctly from any directory. Resolve `configs/` from `${BASH_SOURCE[0]}`, as every script in
-  this course does.
-- Takes no arguments and hard-codes no resource ID.
-- Must handle: an interface with no security group in the report's cache, an interface with no
-  description, a subnet with no explicit route table association, and an instance that has been
-  terminated but whose interface still lingers.
-- `set -uo pipefail`. Decide about `-e` and justify your decision in a comment.
-- The last row of the example above is the interesting case: an interface in a public subnet with a
-  public address and **no ingress rule at all**. Decide what verdict that deserves, implement it, and
-  defend the choice in a comment. There is more than one defensible answer.
-- Also write the machine-readable form to `outputs/lab-09-exposure.json`.
+- Runs from any directory (resolve `configs/` from `${BASH_SOURCE[0]}`); no arguments; no hard-coded IDs.
+- Handles: an interface whose group is not cached, no description, a subnet with no explicit route table association, and a lingering interface of a terminated instance.
+- `set -uo pipefail`; justify your choice about `-e` in a comment.
+- Decide and defend the verdict for a public interface with **no ingress rule at all** (the last example row).
+- Also write `outputs/lab-09-exposure.json`.
 
-**Expected outcome**
+**Expected outcome:** identical output from `~` and from `~/aws-floci-course/labs/lab-09-security/`, unchanged by Exercise 1's egress changes.
 
-Identical output when run from `~` and from `~/aws-floci-course/labs/lab-09-security/`. Correct output
-before and after Exercise 1 changes egress, which it must not depend on at all - and if your report
-changes when only egress changed, you have a bug worth understanding.
-
-**Hints**
-
-`aws ec2 describe-network-interfaces --filters "Name=vpc-id,Values=..."` returns everything at once,
-including the load balancer's interfaces and every Fargate task's, each with a `Description` that tells
-you what created it and a `Groups` list. Four levels of nesting after that - interface to subnet,
-subnet to route table, interface to groups, groups to rules - which is where the design question is:
-how much do you shell out for, and where do you switch to `python3` over one JSON document?
-
-Step 17's matrix answers half of this for security groups. The half it does not answer is routing, and
-Section 12.1 of this document says so explicitly. This exercise is the tool that models both axes.
-
----
+**Hints:** `describe-network-interfaces --filters "Name=vpc-id,Values=..."` returns everything; decide where to switch to `python3`. Step 17's matrix models security groups only; this tool models both axes.
 
 ### Exercise 4 - Challenge: the security review, written for someone else to act on
 
-**Requirements**
-
-The university's information security officer, who signed off on Lab 05's load balancer, writes:
+**Requirements:** the information security officer writes:
 
 > I am told there has been a security review. Before I take it to the audit committee I need four
 > things from you, in writing, and none of them longer than a page.
@@ -5768,125 +4178,52 @@ The university's information security officer, who signed off on Lab 05's load b
 > Fourth: we have no way of knowing when any of this changes. What would you put in place, what would
 > it cost, and what would you look at first on the morning after an incident?
 
-Produce a written review in `labs/lab-09-security/exercises.md` covering:
+Write a review in `labs/lab-09-security/exercises.md` covering:
 
-- **The second front door.** Argue it properly. What is `usms-app-sg`'s ingress for, what has changed
-  since Lab 02 Step 14 wrote it, and what would putting the web tier behind the existing load balancer
-  actually involve - naming the target group, the listener rule and the security group change. Then
-  argue the other side in two sentences, because there is a real case for leaving it.
-- **What egress control bought.** Name three specific attacker behaviours that Steps 13 to 15 now
-  prevent and two that they do not. For the two, name the control that would - by service, with a
-  citation - and say roughly what it costs.
-- **The transcripts access list**, as a table: every principal, how it obtains access, whether it can
-  read, write or both, and which document grants it. Then answer the officer's real question, which is
-  the last clause: **how do you know the list is complete?** Say which API call you would run on a real
-  account to enumerate every principal with access to one bucket, why this course cannot run it, and
-  what you did instead.
-- **Detection.** Name the AWS services that would tell you a security group changed, that a policy was
-  attached, or that a role was assumed from an unusual place. Say which of them are free, which are
-  not, and what you would look at first on the morning after an incident - in order, with a reason for
-  the order.
+- **The second front door:** what `usms-app-sg`'s ingress is for, what changed since Lab 2 Step 14, and what moving the web tier behind the load balancer involves (target group, listener rule, security group change). Then argue the other side in two sentences.
+- **What egress control bought:** three attacker behaviours Steps 13 to 15 prevent and two they do not, with the control (service, citation, rough cost) that would.
+- **The transcripts access list** as a table (principal, how it gets access, read/write, granting document), and how you know it is complete: name the real-AWS API call, why this course cannot run it, and what you did instead.
+- **Detection:** services that would report a group change, a policy attachment or an unusual assume-role; which are free; and what you would read first after an incident, in order.
 
-Then implement only one thing: the **paper** design for the web tier's move behind the load balancer,
-as a numbered sequence of commands with the four-line danger admonition on each destructive one. Do
-not run them.
+Then write, but do not run, the numbered command sequence for moving the web tier behind the load balancer, with the four-line danger admonition on each destructive command.
 
 **Constraints**
 
-- Every claim about a cost has a citation. "Some money" earns nothing.
-- Every claim about what a control prevents names the attacker behaviour, not the technology.
-- The transcripts table must be derived from the documents in `policies/` and from
-  `outputs/lab-09-identity-inventory.json`, and must include the two roles that carry
-  `USMSStudentDataReadWrite` **and** the one that carries the read-only policy.
-- The detection section must distinguish preventive from detective controls, per Section 12.4.
+- Every cost has a citation.
+- Every claim names the attacker behaviour, not the technology.
+- The table derives from `policies/` and `outputs/lab-09-identity-inventory.json` and includes both `USMSStudentDataReadWrite` roles **and** the read-only role.
+- Detection distinguishes preventive from detective controls (Section 11).
 
-**Expected outcome**
+**Expected outcome:** a review a committee could accept and a junior engineer could implement without questions.
 
-A review an information security officer could take to a committee, and a junior engineer could
-implement, without asking you a single question.
-
-**Hints**
-
-For the second bullet, the honest answer to "what does egress control not prevent" is in Step 15's own
-text, and it is the one the vendors do not volunteer.
-
-For the third bullet, the call you cannot run here is the one that answers "who has access to this
-resource" from the resource's side rather than the principal's. Search the IAM Access Analyzer
-documentation for what it does with a bucket, and note that the answer involves a kind of policy this
-course has not yet written - which is Exercise 5's subject.
-
----
+**Hints:** Step 15's text answers what egress control does not prevent. The missing call answers "who has access" from the resource's side; see IAM Access Analyzer and Exercise 5.
 
 ### Exercise 5 - Integration: the bucket policy the S3 configuration lab will apply
 
-**Requirements**
+**Requirements:** every policy so far is an **identity** policy. A bucket can carry a **resource** policy (rule 6 of the evaluation order). Draft the one the (still unwritten) S3 configuration lab will apply:
 
-Every policy in this course so far has been an **identity** policy: attached to a principal, saying
-what that principal may do. Lab 10 creates `usms-student-data`, and a bucket can carry a policy of its
-own - a **resource** policy, attached to the resource, saying who may do what to it.
-
-Step 3's interlude listed both, and rule 6 of the evaluation order is where the resource policy enters.
-This exercise writes the one the (still unwritten) S3 configuration lab will apply, and derives it from
-what already exists rather than inventing it.
-
-Specifically:
-
-1. Write `scripts/utilities/usms-bucket-policy-draft.sh`, which reads
-   `outputs/lab-09-identity-inventory.json` and the three transcripts policies out of the API, works
-   out **every role ARN that is granted any `s3:` action on `usms-student-data`**, and emits a bucket
-   policy draft to `outputs/lab-09-bucket-policy-draft.json` containing:
-   - a statement allowing those principals the actions their identity policies already name - no more,
-   - a statement denying **every** principal any action on the bucket when
-     `aws:SecureTransport` is `false`, so that a plaintext request is refused whoever makes it,
-   - a statement denying every principal other than those roles and the account root.
-2. Validate the draft as JSON, and check three properties mechanically: that every `Principal` in it
-   is an ARN rather than `"*"`, that the `Deny` on insecure transport applies to `"Principal": "*"`,
-   and that the bucket ARN appears in both its forms - with and without `/*`.
-3. Write `outputs/lab-09-lab10-readiness.txt` containing, each on its own labelled line: the exact
-   bucket name, read from Lab 01's policy document rather than typed; the three policy names that
-   reference it; each of their attached role ARNs; the count of principals in your draft; and one
-   sentence naming what will change, and for which principals, at the moment Lab 10 runs
-   `create-bucket`.
-4. Append `USMS_BUCKET_POLICY_DRAFT` to `configs/lab-09.env` with the path to the draft, and state the
-   new export count.
-5. Explain, in three sentences in `exercises.md`, the difference between the `Deny` in your bucket
-   policy and the `Deny` in `USMSStudentDataReadOnly` - specifically, whose actions each one can stop,
-   and which of the two would still apply to a principal in a **different AWS account**.
+1. `scripts/utilities/usms-bucket-policy-draft.sh` reads the inventory and the three transcripts policies, finds **every role ARN granted any `s3:` action on the bucket**, and writes `outputs/lab-09-bucket-policy-draft.json` with: an `Allow` for those principals limited to the actions they already have; a `Deny` for every principal when `aws:SecureTransport` is `false`; and a `Deny` for every principal other than those roles and the account root.
+2. Validate it as JSON and check mechanically: every `Principal` is an ARN rather than `"*"`, except that the insecure-transport `Deny` uses `"Principal": "*"`; and the bucket ARN appears with and without `/*`.
+3. Write `outputs/lab-09-lab10-readiness.txt`, one labelled line each: the bucket name read from Lab 1's policy; the three policy names; their role ARNs; the principal count; and one sentence on what changes, for whom, when Lab 10 runs `create-bucket`.
+4. Append `USMS_BUCKET_POLICY_DRAFT` to `configs/lab-09.env` and state the new export count.
+5. In three sentences, contrast this `Deny` with `USMSStudentDataReadOnly`'s: whose actions each can stop, and which applies to a principal in **another account**.
 
 **Constraints**
 
-- The script must derive the bucket name from a policy document. Typing `usms-student-data` anywhere
-  in it fails the exercise, because the whole point is that the name has been in a policy since Lab 01
-  and the bucket is what is missing.
-- It must work whether or not the bucket exists. It writes a draft; it applies nothing.
-- No script you write may contain, read or reference an access key.
-- Use `python3` for the JSON, and shell parameter expansion for at least one string operation, saying
-  in a comment why that one was better done in shell.
+- Derive the bucket name from a policy document; typing `usms-student-data` fails the exercise.
+- Works whether or not the bucket exists; applies nothing.
+- No script contains, reads or references an access key.
+- `python3` for JSON, plus at least one shell parameter expansion, with a comment saying why.
 
-**Expected outcome**
+**Expected outcome:** a committed script, a draft whose principals were computed, and a readiness file a reader can use without this document.
 
-A committed script, a valid bucket policy draft whose principals were computed rather than typed, and
-a readiness file that lets a reader validate the draft against the bucket, or apply it, without opening
-this document.
+**Lab 10 reads this.** It validates the draft's ARNs against the bucket it creates; applying it remains the S3 configuration lab's job.
 
-**Lab 10 reads this.** It validates the draft's ARNs against the bucket it creates; actually applying
-the draft as the bucket's resource policy remains the (still unwritten) S3 configuration lab's job. The
-sentence in point 3 is the one Lab 10 is built around: the identity chains resolve the moment it runs
-`create-bucket`, and not one of them has to be modified.
-
-**Hints**
-
-`aws iam list-entities-for-policy` gives you the roles for one policy. Doing it for three policies and
-merging the results is the whole of point 1's first half.
-
-For point 5, the distinction is about **where** each policy lives and therefore whose requests it is
-consulted on. An identity policy in your account is never consulted for a principal in someone else's;
-a resource policy on your bucket always is. That is why a resource policy is the only way to deny
-something you do not administer, and it is why every serious S3 configuration has one.
+**Hints:** `list-entities-for-policy` per policy, then merge. An identity policy in your account is never consulted for another account's principal; a resource policy on your bucket always is.
 
 ---
 
-## 14. Lab Assessment Checklist
+## 13. Lab Assessment Checklist
 
 Tick these off before you submit. Every one is checkable from your own repository.
 
@@ -5956,100 +4293,21 @@ Tick these off before you submit. Every one is checkable from your own repositor
 
 ---
 
-## 15. Review Questions
+## 14. Review Questions
 
-Answer in prose, in your own words, in `notes/lab-09-notes.md`. No command output - these ask whether
-you understood, not whether you typed.
+Answer in prose in `notes/lab-09-notes.md`.
 
-1. This laboratory changed a great many things about what the USMS system is permitted to do, and Step
-   18 proved that five verification scripts written before it still report exactly what they reported
-   before. Explain in a full paragraph why that is a strong result and not a trivial one, and describe
-   a security change - one you could plausibly have made in this lab - that would have broken one of
-   those scripts. Say what you would have done about it.
-
-2. A colleague attaches `USMSPermissionsBoundary` to `usms-deploy-role` as an ordinary policy, with
-   `attach-role-policy`, reasoning that it allows the same actions so the effect must be the same.
-   Describe precisely what changes about that role's effective permissions, in both directions. Then
-   say what would have to happen for their version to become dangerous, and name the check in Section 9
-   that catches it.
-
-3. Ingress rules and egress rules are both security group rules and they protect against different
-   things. Describe a concrete incident on the USMS system in which every ingress rule is correct and
-   the outcome is still a data breach, and say which of Steps 13 to 15 would have narrowed it and by
-   how much. Then name what would have prevented it entirely and why this course cannot build that.
-
-4. `usms-ecs-task-role` and `usms-transcripts-reader-role` have identical trust policies and different
-   permissions policies. `usms-deploy-role` has a different trust policy and a permissions boundary.
-   For each of the three, say what would happen if an attacker obtained the ability to call
-   `sts:AssumeRole` for that role from a machine they control - and explain why the answers are
-   different.
-
-5. Step 17 listed five independent controls that make `usms-db-01` unreachable from the internet, and
-   identified `usms-enrolment-sg` as protected by a single ingress rule. Explain why "five controls" is
-   not simply five times better than "one control", using the specific failure modes of the controls
-   involved. Then say whether the enrolment tasks are genuinely less well protected than the database
-   instance, and justify your answer against what Section 12.1 says the reachability matrix models.
-
-6. Step 10's rotation had four steps and could have had two. Explain what each of the two extra steps
-   protects against, and describe the incident that each one would have prevented. Then explain why
-   this course's use of a long-lived access key at all is a compromise, and say what a real system
-   would do instead - for a human, and for a workload, which are different answers.
-
-7. This laboratory could not demonstrate that a single one of its controls works. Argue either that
-   the review methodology in Section 12.3 is an adequate substitute for testing, or that it is not.
-   Whichever side you take, name one specific class of defect that reading a policy catches and testing
-   would not, and one that testing catches and reading would not. Then say which of the two you would
-   want first on a system holding student transcripts.
+1. Step 18 proved five pre-existing verification scripts report exactly what they did before. Explain why that is a strong result, describe a plausible change in this lab that would have broken one of them, and say what you would have done.
+2. A colleague attaches `USMSPermissionsBoundary` to `usms-deploy-role` with `attach-role-policy`, reasoning it allows the same actions. What changes in that role's effective permissions, in both directions? When would their version become dangerous, and which Section 8 check catches it?
+3. Describe a USMS incident in which every ingress rule is correct and the outcome is still a data breach. Which of Steps 13 to 15 would have narrowed it, and by how much? What would have prevented it entirely, and why can this course not build it?
+4. `usms-ecs-task-role` and `usms-transcripts-reader-role` share a trust policy but not permissions; `usms-deploy-role` has a different trust policy and a boundary. For each, what happens if an attacker can call `sts:AssumeRole` for it from their own machine, and why do the answers differ?
+5. Why is "five controls" on `usms-db-01` not simply five times better than "one control" on `usms-enrolment-sg`, given the specific failure modes involved? Are the enrolment tasks genuinely less well protected, given what Step 17 says the matrix models?
+6. What does each of the two extra rotation steps in Step 10 protect against, and what incident would each prevent? Why is a long-lived key a compromise, and what would a real system use for a human and for a workload?
+7. Argue whether Section 11's review methodology is an adequate substitute for testing. Name a defect reading catches that testing would not, and one testing catches that reading would not. Which would you want first for student transcripts?
 
 ---
 
-## 16. What We Built
-
-### 16.1 Reflection
-
-Six laboratories built a system and this one read it back.
-
-The idea to keep is **two axes, evaluated independently, both required**. Almost every confusing
-access-control incident in a cloud system is a case of somebody debugging the wrong one - adding IAM
-permissions to fix a connection that hangs, or opening a firewall to fix an `AccessDenied`. The
-heuristic from Step 3's interlude is worth more than any diagram in this document: an error message
-means IAM; a timeout means the network. Say it to yourself the next time something does not work and
-you will save an hour.
-
-The second idea is that **the interesting controls are the ones nobody wrote**. Five security groups
-carried an allow-all egress rule created by AWS on your behalf. One SSH rule, written in Lab 02 before
-Fargate tasks existed, quietly grew to permit every task in the architecture to reach the web server
-on port 22. Four trust policies had no conditions because the `create-role` examples in every tutorial
-have none. Not one of those was a mistake anybody made; every one of them was a default that outlived
-the assumption behind it. **Reviewing a system means reading what is there, not what somebody
-decided.**
-
-The third is about proof, and it is the sharpest version of a theme this course has returned to since
-Lab 01. Every previous laboratory could, in the end, point at something: a route table read back, a
-target moving from `initial` to `healthy`, a `desiredCount` moved by something other than you. This
-one could point at nothing, because a security control's whole job is that something does not happen,
-and Floci does not enforce a single one of them. So every proof here was a proof about a document - and
-Section 12.3 argues that this is not a compromise forced by the emulator but the normal condition of
-security work. You cannot test your way to "and nothing else". You read, you reason, and then you
-write the reasoning into a script so that the next person inherits the conclusion rather than the
-argument.
-
-The fourth is smaller and more practical. Steps 9, 12, 13 and 16 all did the same thing in different
-services: **build the new path, prove it, then remove the old one.** Authorise the egress rule before
-revoking allow-all. Add the bastion SSH rule before removing the `/16` one. Create the new access key,
-move the consumer, deactivate, and only then delete. Lab 05 called it a cutover and this lab did it
-three more times, which should now feel less like a procedure and more like the obvious way to change
-anything that something depends on.
-
-And one connection worth naming out loud, because it closes something Lab 01 opened. Lab 01 wrote
-`USMSStudentDataReadWrite` as an exercise in least privilege for a bucket that did not exist. Lab 03
-attached it to an instance, Lab 04 attached it unchanged to a task role, and nobody asked whether both
-workloads needed all three verbs. Step 6 asked. **The policy was as least-privilege as it could have
-been when it was written, and stopped being so the moment a second workload with different needs
-picked it up.** Least privilege is not a property a policy has. It is a property of the relationship
-between a policy and a workload, and it decays whenever either one changes.
-
-### 16.2 KEEP vs CLEAN UP
+## 15. KEEP vs CLEAN UP
 
 ```text
 ╔═══════════════════════ KEEP ════════════════════════╗    ╔═════════════ CLEAN UP ══════════════╗
@@ -6090,29 +4348,11 @@ git status --short
 ./scripts/utilities/verify-lab-09.sh | tail -2
 ```
 
-Keep `outputs/lab-09-identity-inventory.json`, `outputs/lab-09-iam-findings.txt`,
-`outputs/lab-09-sg-findings-before.txt`, `outputs/lab-09-reachability.txt` and
-`outputs/lab-09-negative-proof.txt` until Exercise 5 and your report are both finished. They are
-git-ignored, so they will not be committed either way - but they are the evidence for every claim in
-your review, and re-generating them after a later lab has changed something produces a different
-document.
+Keep `outputs/lab-09-identity-inventory.json`, `outputs/lab-09-iam-findings.txt`, `outputs/lab-09-sg-findings-before.txt`, `outputs/lab-09-reachability.txt` and `outputs/lab-09-negative-proof.txt` until Exercise 5 and your report are done; they are the evidence for your review.
 
-Two entries deserve their own sentence.
+`USMSPermissionsBoundary` has zero attachments and looks like an orphan; it is the control capping `usms-deploy-role`. Do not tidy it up. Confirm Lab 1's `outputs/usms-dev-01-access-key.json` is gone (Step 10 Part 5).
 
-`USMSPermissionsBoundary` is in the KEEP column with an instruction not to tidy it up. It has an
-attachment count of zero and looks exactly like an orphan. It is the one control preventing
-`usms-deploy-role` from escalating, and deleting it would silently remove that ceiling. Put a comment
-to that effect wherever your team lists unattached policies.
-
-`outputs/usms-dev-01-access-key.json` - Lab 01's key file - should already be gone, because Step 10
-part 5 removed it. Check. A file containing a secret that no longer works is not dangerous, and that
-is exactly why it survives for years.
-
-Do **not** run `scripts/cleanup/lab-09-cleanup.sh`, `lab-06-cleanup.sh`, `lab-05-cleanup.sh`,
-`lab-04-cleanup.sh`, `lab-03-cleanup.sh` or `lab-02-cleanup.sh`. They are for the end of the course,
-in the order given in Section 9.3.
-
-### 16.3 The architecture you now have
+Do **not** run `scripts/cleanup/lab-09-cleanup.sh` or any earlier lab's cleanup script; they are for the end of the course, in the order Section 8.2 gives.
 
 ```text
 Lab 01  IAM
@@ -6169,12 +4409,9 @@ Lab 10  LAMBDA (next)
 
 ---
 
-## 17. Preparation for the Next Lab
+## 16. Preparation for the Next Lab
 
-Lab 10 - Lambda - creates `usms-student-data`, and it is the moment two policies stop being
-hypothetical. `USMSStudentDataReadWrite` was written in Lab 01 and is now attached to three roles -
-`usms-ec2-app-role` (Lab 03), `usms-ecs-task-role` (Lab 04), and `usms-eks-node-role` (Lab 07). The
-second policy is `USMSStudentDataReadOnly`, which you wrote today.
+Lab 10 creates `usms-student-data`. `USMSStudentDataReadWrite` (on `usms-ec2-app-role`, `usms-ecs-task-role` and `usms-eks-node-role`) and today's `USMSStudentDataReadOnly` stop being hypothetical at that moment; the Exercise 5 resource policy waits for the S3 configuration lab.
 
 | From this lab | Lab 10 uses it for |
 | --- | --- |
@@ -6192,17 +4429,7 @@ second policy is `USMSStudentDataReadOnly`, which you wrote today.
 | Lab 07 `usms-eks-node-role` | The third, attached unchanged since Step 7 - the coarse, every-pod-on-every-node answer Lab 07 flagged and did not fix |
 | Lab 02 `usms-s3-endpoint` | The gateway endpoint, which since Step 13 is also named by a security group egress rule and finally has something to carry |
 
-**The connection to state out loud before the next session.** Lab 01 wrote an identity policy for a
-bucket that did not exist. Lab 09 wrote a second identity policy for the same non-existent bucket, and
-Exercise 5 drafts a **resource** policy for it. Lab 10 runs `create-bucket`, and that is the moment the
-two identity policies stop being hypothetical - but the resource policy still waits: applying it is the
-(still unwritten) S3 configuration lab's job, not Lab 10's. When that lab finally runs
-`put-bucket-policy`, the two kinds of policy will meet for the first time in this course - and the
-evaluation order from Step 3's interlude becomes something you can point at rather than recite: rule 5
-is the identity policies, rule 6 is the bucket policy, and rule 1 is the explicit `Deny` on insecure
-transport that outranks both.
-
-**Before the next session, confirm all six of these:**
+Before the next session:
 
 ```bash
 cd ~/aws-floci-course
@@ -6216,28 +4443,15 @@ aws iam list-entities-for-policy \
   --query 'length(PolicyRoles)' --output text
 ```
 
-You want: `FAIL=0` twice; a count of **16** (or 17 after Exercise 5); a `HIGH=` count **lower** than
-Step 5's and non-zero, because this lab fixed one of four findings and Exercise 2 handles the rest;
-`HIGH=2 MED=3 LOW=1` or thereabouts from the security group audit, with the remaining MED findings
-being `usms-app-sg`'s and `usms-bastion-sg`'s egress; and a `3` from the last call.
+You want `FAIL=0` twice; **16** (or 17 after Exercise 5); an IAM `HIGH=` count lower than Step 5's but non-zero; about `HIGH=2 MED=3 LOW=1` from the security group audit (remaining MEDs are `usms-app-sg` and `usms-bastion-sg` egress); and `3` from the last call. `1` there means `USMSStudentDataReadWrite` was detached from a role; fix it before Lab 10.
 
-That last line is the one that will actually stop you in Lab 10. If it reads `1`, something detached
-`USMSStudentDataReadWrite` from a role, and Lab 10's central claim - that one `create-bucket` resolves
-three chains at once - will be a claim about two.
-
-**Read ahead, five minutes:** find out what an S3 **bucket policy** is and how it differs from an
-identity policy, and what `aws:SecureTransport` is. Then find out why an S3 bucket name has to be
-globally unique across every AWS account in the world, and what that means for a course in which every
-student creates a bucket called `usms-student-data` on their own emulator.
-
-Finally, take a snapshot so that a mistake in Lab 10 is recoverable:
+Take a snapshot so a Lab 10 mistake is recoverable:
 
 ```bash
 floci snapshot save lab-09-complete
 ```
 
-If `floci snapshot` is not available on your build, use the filesystem fallback. Stop Floci first -
-archiving a live data directory can capture a half-written file:
+If `floci snapshot` is unavailable, stop Floci first and archive outside the repository:
 
 ```bash
 ./scripts/setup/floci-down.sh
@@ -6246,95 +4460,9 @@ tar -czf ~/floci-data-lab-09.tar.gz -C ~ floci-data
 ls -lh ~/floci-data-lab-09.tar.gz
 ```
 
-The archive lives in your home directory, **outside** the repository, so it is never a commit
-candidate.
-
 ---
 
-## Appendix A - Command Reference
-
-Every command this lab used, grouped by service.
-
-### IAM - reading
-
-| Command | What it does |
-| --- | --- |
-| `aws iam list-roles` | Every role, with its trust policy inline in the response |
-| `aws iam get-role` | One role: trust policy, max session duration, and `PermissionsBoundary` |
-| `aws iam list-users` / `list-groups` | The other two kinds of principal |
-| `aws iam list-policies --scope Local` | **Your** policies only. Without the flag you get several hundred AWS managed ones |
-| `aws iam get-policy` | A policy's metadata, including which version is the default |
-| `aws iam get-policy-version` | The actual document, for a given version |
-| `aws iam list-policy-versions` | Every version; a policy holds five and refuses deletion above one |
-| `aws iam list-attached-role-policies` | Managed policies on a role |
-| `aws iam list-role-policies` / `get-role-policy` | Inline policies on a role |
-| `aws iam list-entities-for-policy` | The reverse: given a policy, who carries it |
-| `aws iam get-account-authorization-details` | The whole account's IAM in one call. Usually absent on Floci |
-
-### IAM - changing
-
-| Command | What it does |
-| --- | --- |
-| `aws iam create-policy` | Create a customer managed policy from a document |
-| `aws iam create-role --assume-role-policy-document` | Create a role. The document is the **trust** policy |
-| `aws iam create-role --permissions-boundary` | Set the ceiling at creation |
-| `aws iam put-role-permissions-boundary` | Set it afterwards |
-| `aws iam delete-role-permissions-boundary` | Remove it - an action worth denying in the boundary itself |
-| `aws iam update-assume-role-policy` | **Replaces** the whole trust policy. Never merges |
-| `aws iam attach-role-policy` / `detach-role-policy` | Managed policies on and off a role |
-| `aws iam delete-policy-version` / `delete-policy` | Versions first, then the policy |
-
-### IAM - credentials
-
-| Command | What it does |
-| --- | --- |
-| `aws iam list-access-keys` | Every key for a user, with status and creation date. Maximum two |
-| `aws iam create-access-key` | Creates one. The secret is shown **once**; redirect it to a file |
-| `aws iam update-access-key --status Inactive` | Deactivate reversibly - step 3 of a four-step rotation |
-| `aws iam delete-access-key` | Irreversible. Only after the deactivation has been quiet |
-| `aws iam get-access-key-last-used` | When, by what service, in what region. The call that finds dead keys |
-| `aws iam get-credential-report` | An account-wide CSV of credential age and MFA state. Real AWS only |
-
-### IAM - evaluating
-
-| Command | What it does |
-| --- | --- |
-| `aws sts assume-role --policy file://...` | Assume with a **session policy** - a third intersection, set by the caller |
-| `aws sts assume-role --duration-seconds` | Shorter than the role's maximum, because a session should be as short as its work |
-| `aws sts get-caller-identity` | Who the current credentials say you are |
-| `aws iam simulate-principal-policy` | Would this principal be allowed to do this. Usually absent on Floci |
-| `aws accessanalyzer list-analyzers` | External-access findings. Real AWS only |
-
-### EC2 - security group rules
-
-| Command | What it does |
-| --- | --- |
-| `aws ec2 describe-security-groups` | Groups and their rules, with permissions **merged** by protocol and port |
-| `aws ec2 describe-security-group-rules` | One object per rule, each with its own ID. The only separable view |
-| `aws ec2 authorize-security-group-ingress` | Add inbound rules |
-| `aws ec2 revoke-security-group-ingress --security-group-rule-ids` | Remove exactly one rule, unambiguously |
-| `aws ec2 authorize-security-group-egress` | Add **outbound** rules - the half nobody writes |
-| `aws ec2 revoke-security-group-egress` | Remove one, including the AWS default allow-all |
-| `aws ec2 describe-prefix-lists` | AWS-managed prefix lists, including the gateway endpoints' |
-| `aws ec2 describe-network-interfaces --filters Name=group-id` | What actually carries a group |
-
-### EC2 - instance metadata
-
-| Command | What it does |
-| --- | --- |
-| `aws ec2 modify-instance-metadata-options` | `--http-tokens`, `--http-endpoint`, `--http-put-response-hop-limit` |
-| `aws ec2 describe-instances --query '...MetadataOptions'` | Read them back; `State` is `applied` when the change has taken |
-
-**The two flags worth memorising**, because they prevent different attacks:
-
-| Flag | Prevents |
-| --- | --- |
-| `--http-tokens required` | An SSRF bug in the application reading the instance's credentials with a plain `GET` |
-| `--http-put-response-hop-limit 1` | A container on the instance reaching the host's metadata service and inheriting its role |
-
----
-
-## Appendix B - New JMESPath, CLI and policy patterns introduced
+## Appendix - New CLI and JMESPath patterns
 
 Labs 1 to 06 taught `Key[*].Field`, `[A,B]`, `{X:A}`, `[?filter]`, `| [0]`, `sort_by()`, `length()`,
 `contains()`, `starts_with()`, `@`, flattening with `[]`, `--filters`, `--generate-cli-skeleton`,
@@ -6344,13 +4472,13 @@ lab adds:
 | Pattern | Meaning | Where it appeared |
 | --- | --- | --- |
 | `--scope Local` | Your policies only, not the several hundred AWS managed ones | Step 4 |
-| `Policies[?PolicyName=='X'].Arn \| [0]` | Find an ARN by name - the only way in, since IAM's read calls take ARNs | Steps 19, Section 9 |
+| `Policies[?PolicyName=='X'].Arn \| [0]` | Find an ARN by name - the only way in, since IAM's read calls take ARNs | Steps 19, Section 8 |
 | `length(Role.AssumeRolePolicyDocument.Statement[0].Condition)` | Count a condition block's keys - a number is more `diff`-stable than an object | Step 18 |
 | `AccessKeyMetadata[?AccessKeyId!='X'].AccessKeyId \| [0]` | "The other one", without assuming an ordering | Step 10 |
-| `Versions[?!IsDefaultVersion].VersionId` | `!` negating a boolean field inside a filter | Section 9.3 |
+| `Versions[?!IsDefaultVersion].VersionId` | `!` negating a boolean field inside a filter | Section 8.2 |
 | `Routes[?DestinationPrefixListId!=` backtick `null` backtick `]` | Test a field for not-null, with `null` as a JSON literal | Step 13 |
-| `length(IpPermissionsEgress[?IpProtocol==` backtick `-1` backtick `])` | Count the AWS default egress rules - zero is the assertion | Steps 15, 18, Section 9 |
-| `length(IpPermissions[?FromPort==` backtick `22` backtick `].IpRanges[])` | Count CIDR sources on one port - a negative assertion | Steps 18, Section 9 |
+| `length(IpPermissionsEgress[?IpProtocol==` backtick `-1` backtick `])` | Count the AWS default egress rules - zero is the assertion | Steps 15, 18, Section 8 |
+| `length(IpPermissions[?FromPort==` backtick `22` backtick `].IpRanges[])` | Count CIDR sources on one port - a negative assertion | Steps 18, Section 8 |
 | `--ip-permissions` with `PrefixListIds` | An egress rule whose destination is a managed prefix list | Step 13 |
 | `--ip-permissions` with `UserIdGroupPairs` on **egress** | An outbound rule whose destination is a security group | Step 14 |
 | `--permissions-boundary` | The second policy slot on a role. A ceiling, never a grant | Step 8 |
@@ -6421,9 +4549,3 @@ effective = identity policy  AND  boundary  AND  session policy   -- minus every
 - [`aws ec2` CLI reference](https://docs.aws.amazon.com/cli/latest/reference/ec2/)
 - [JMESPath specification](https://jmespath.org/specification.html)
 - [RFC 5737 - IPv4 address blocks reserved for documentation](https://datatracker.ietf.org/doc/html/rfc5737)
-
----
-
-*Lab 09 complete. Lab 10 - Lambda - creates `usms-student-data`, and three policies written across two
-laboratories stop being hypothetical at the same instant. Bring `outputs/lab-09-bucket-policy-draft.json`
-with you.*

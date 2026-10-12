@@ -1,135 +1,37 @@
 # Lab 11 - Building a CI/CD Pipeline with AWS CodePipeline and CodeBuild
 
-*Practical 7 - Practical 5 in the module descriptor. The first half of the pipeline: getting
-source into a build, and getting a build to run the same way every time.*
+!!! info "Numbering"
+    The module descriptor calls this Practical 5; the course delivers it as Practical 7 (Labs 11 and 12). Lab numbers follow the dependency graph. This lab depends on Labs 01, 04, 05 and 06; Lab 09 artefacts are optional.
 
-!!! info "Numbering - read this once"
-    Your module descriptor numbers this practical **5**. This course delivers it as **Practical 7**,
-    because Practical 2 ran to three documents and the delivery schedule has since reordered the
-    back half of the course. Laboratory numbering follows the *dependency graph*, not the practical
-    numbering:
+## 1. Objectives
 
-    ```text
-    Practical 1  ->  Lab 02 (VPC), Lab 03 (EC2)
-    Practical 2  ->  Lab 04, Lab 05                (ECS + Fargate, ECS + ALB)
-    Practical 3  ->  Lab 06                         (service auto scaling)
-    Practical 4  ->  Lab 07, Lab 08                (EKS)          descriptor Practical 3
-    Practical 5  ->  Lab 09                          (security)     descriptor Practical 8
-    Practical 6  ->  Lab 10                          (edge functions)
-    Practical 7  ->  Lab 11, Lab 12                (CI/CD)        descriptor Practical 5   <- here
-    ```
+- Create a versioned S3 artifact store and prove versioning by create, perturb, read back.
+- Write the enrolment service source tree and a `buildspec.yml`, and run it in CodeBuild and with a local runner.
+- Create scoped CodeBuild and CodePipeline service roles, including a conditioned `iam:PassRole`.
+- Build a two-stage pipeline (S3 Source, CodeBuild Build), prove from the artifact's contents that it consumed your source, and diagnose a deliberate failure.
 
-    Every student builds this whole sequence, in order: ECS with its ALB and autoscaling layer
-    (Labs 04-06), then EKS as a second deployment target for the same application (Labs 07-08), then
-    security (Lab 09), then Lambda (Lab 10), and now this pipeline. There is no alternate track and no
-    reserved slot. Lab 10 Section 17 flagged that the enrolment bucket still needs a dedicated Amazon
-    S3 configuration document; that document has not been written yet, and when it is, it takes
-    whatever number fits it into this graph at the time - not a number promised in advance.
-
-    This lab does **not** depend on that (still unwritten) S3 lab. It depends on Labs 01, 04, 05 and
-    06, all of which you have completed.
-
----
-
-## 1. Lab Overview
-
-Everything you have built in this course, you have built by typing. You created the ECS cluster by
-typing `aws ecs create-cluster`. You created the service by typing `aws ecs create-service`. When
-Lab 04 gave you a second revision of the task definition, you rolled it out by typing
-`aws ecs update-service --task-definition usms-enrolment:2`.
-
-That works. It does not scale, and more importantly it is not *reproducible*. Nobody - including
-you, three weeks from now - can say with certainty which commands produced the running system, in
-what order, from which version of which file. A university that runs a student records system has to
-be able to answer that question, because at some point somebody will ask "when did the enrolment
-service change, who changed it, and what exactly did they change?"
-
-A **pipeline** is the answer. It is a machine that watches a place where source code lives, and when
-that source changes, runs a fixed sequence of stages against it: fetch it, build it, test it, and -
-in Lab 12 - deploy it. The sequence is written down. It runs the same way every time. It leaves a
-record.
-
-This laboratory builds the first two stages of that machine:
-
-- a **Source** stage, which fetches a versioned archive of the enrolment service's source from S3,
-- a **Build** stage, which hands that archive to **AWS CodeBuild**, a managed build service that runs
-  your commands inside a disposable container and hands back whatever files you tell it to keep.
-
-The commands CodeBuild runs are not configured in the console or in the CLI. They live in a file
-called `buildspec.yml`, which sits *in your source tree*, next to the code it builds. That is the
-single most important idea in this laboratory, and Section 8 Step 8 spends a long time on it.
-
-Lab 12 adds the third stage - Deploy - and points it at the ECS service you built in
-Lab 04 and put behind a load balancer in Lab 05. Lab 12 also carries the Practical 7 in-class
-assessment.
+!!! info "Concepts used in this lab"
+    Read these first if a term is new: [AWS CodeBuild](../unit5/topic1.md#aws-codebuild) ·
+    [build reproducibility](../unit5/topic1.md#build-reproducibility-and-the-supply-chain) ·
+    [separate build and deploy identities](../unit5/topic1.md#separation-of-build-and-deploy-identities) ·
+    [AWS CodePipeline](../unit5/topic2.md#aws-codepipeline) ·
+    [stages and actions](../unit5/topic2.md#stages-actions-and-the-parallelism-inside-a-stage) ·
+    [S3 versioning](../unit6/topic1.md#the-life-of-an-object-under-versioning-and-lifecycle-rules) ·
+    [iam:PassRole](../unit8/topic1.md#iampassrole) ·
+    [the confused deputy problem](../unit8/topic1.md#the-confused-deputy-problem)
 
 !!! warning "Do not run `aws login`"
-    If you see `NoCredentials`, the AWS CLI v2 will suggest `aws login`. That begins a sign-in to
-    **real AWS**. The answer in this course is always `source configs/course.env` or a missing
-    `floci` profile - never a sign-in. See Errata 01 Section 3.
-
-### 1.1 What is genuinely new here
-
-| New thing | Why it matters |
-| --- | --- |
-| `buildspec.yml` | Build instructions live in the repository, versioned with the code, not in a console setting somebody changed last March |
-| CodeBuild service role | The build container is a principal. It has an identity, and what it can reach is a policy decision |
-| The artifact store | Every stage hands the next one a zip file in S3. Understanding this makes CodePipeline stop being magic |
-| S3 source versioning | CodePipeline refuses an unversioned S3 source bucket. The reason is worth five minutes |
-| Pipeline JSON | A pipeline is a document. `get-pipeline` gives it to you, `update-pipeline` takes it back |
-| `iam:PassRole` | The pipeline does not build. It asks CodeBuild to build *as* a role. That handoff is a permission of its own |
-
-### 1.2 Time
-
-Roughly three hours if CodeBuild runs on your build of Floci, roughly two if it does not and you take
-the local path in Step 14. Both paths finish the lab; they differ in what you *observe* versus what
-you *record*.
+    If you see `NoCredentials`, the AWS CLI v2 may suggest `aws login`, which signs in to **real AWS**. The answer here is always `source configs/course.env` or a missing `floci` profile. See Errata 01 Section 3.
 
 ---
 
-## 2. Learning Objectives
+## 2. Prerequisites
 
-By the end of this laboratory you will be able to:
-
-1. Explain what a CI/CD pipeline is in terms of stages, actions, and the artifacts that pass between
-   them - and say where each artifact physically lives.
-2. Create and configure an S3 artifact store, and explain why CodePipeline requires versioning on an
-   S3 source bucket rather than merely recommending it.
-3. Write a `buildspec.yml` from scratch, naming the purpose of every top-level key: `version`, `env`,
-   `phases`, `artifacts`, `cache`, and `reports`.
-4. Create a CodeBuild service role with a policy scoped to the log group and the bucket prefixes the
-   build actually needs, and justify each statement by reading it.
-5. Create a CodeBuild project, start a build, and read `batch-get-builds` to determine which phase
-   failed and why.
-6. Create a CodePipeline with a Source stage and a Build stage, expressed as a JSON document, and
-   read `get-pipeline-state` to determine where an execution is.
-7. Explain `iam:PassRole`, and identify which principal passes which role to which service in this
-   pipeline.
-8. Diagnose a failed pipeline execution by working backwards from the stage state to the build phase
-   to the command that exited non-zero.
-9. Distinguish what your build actually proved from what it merely reported, and say which of the
-   two your evidence supports.
-
----
-
-## 3. Prerequisites
-
-Before you start, all of the following must be true.
-
-- Labs 01, 02, 03, 04, 05 and 06 complete. Lab 06, Lab 07-08 (EKS), and Lab 09 (security) are
-  helpful but not required; Step 2 tolerates their absence.
+- Labs 01 to 06 complete. Labs 07 to 09 are helpful but not required; Step 2 tolerates their absence.
 - Floci running under Docker Compose with `FLOCI_STORAGE_MODE=hybrid`.
-- A terminal in which a **new window** already has `AWS_PROFILE` and `COURSE_ROOT` set. If that is
-  not true, you have the defect described in Errata 01 and you should fix it now rather than halfway
-  through Step 12.
-- `docker` available to your user, because CodeBuild on Floci runs builds in Docker containers.
-- `python3` on your path. This lab uses it for JSON surgery on the pipeline document, the way earlier
-  labs used it for `python3 -m json.tool`.
-- `zip` and `unzip` on your path. Check now: `command -v zip unzip`. On a bare Debian image neither
-  is installed; `sudo apt-get install -y zip unzip` fixes it. Step 11 gives a `python3 -m zipfile`
-  fallback if you cannot install them.
-
-Baseline verification. Every one of these should pass before you create anything:
+- A **new** terminal already has `AWS_PROFILE` and `COURSE_ROOT` set (otherwise apply Errata 01 now).
+- `docker` available to your user (CodeBuild on Floci runs builds in Docker containers).
+- `python3`, `zip` and `unzip` on your path (`command -v zip unzip`; on Debian `sudo apt-get install -y zip unzip`; Step 11 has a `python3 -m zipfile` fallback).
 
 ```bash
 cd ~/aws-floci-course
@@ -141,30 +43,19 @@ source configs/course.env
 ./scripts/utilities/verify-lab-10.sh            # PASS=51  FAIL=0
 ```
 
-If `verify-lab-05.sh` fails, stop. Lab 12 deploys to the service that script checks, and a pipeline
-pointed at a service that is not there teaches nothing except how to read a `ServiceNotFoundException`.
+If `verify-lab-05.sh` fails, stop: Lab 12 deploys to the service it checks.
 
 ---
 
-## 4. Connection to Previous Labs
+## 3. What This Lab Reuses
 
-### 4.1 Current environment
+- From Lab 04: the cluster, `usms-enrolment-svc` and the container name `enrolment-api` (Step 2 checks; Lab 12's `imagedefinitions.json` must match it).
+- From Lab 05: the service behind the load balancer that Lab 12 deploys to (`verify-lab-05.sh` in Section 2).
+- From Lab 01: the bucket/object ARN split in `USMSStudentDataReadWrite`, repeated in Step 9's policy.
+- From Lab 09 (optional): `USMSDeployBase`'s scoped `iam:PassRole`, compared in Step 15.
+- Lab 04 Step 15's `--force-new-deployment` assumed an image that changes; the buildspec written in Step 8 is what Lab 12 extends to produce that image.
 
 ```text
-Created in previous labs:
-- Lab 01: IAM foundation - 3 groups, 3 users, 3 roles, 5 policies, 1 instance profile
-- Lab 01: Floci under Compose, hybrid storage, persistence proven
-- Lab 02: usms-vpc (10.0.0.0/16), two public + two private subnets, IGW, NAT, route tables
-- Lab 03: usms-web-01 and usms-db-01
-- Lab 04: usms-ecs-cluster, task family usms-enrolment (rev 2), service usms-enrolment-svc,
-           roles usms-ecs-exec-role + usms-ecs-task-role, policy USMSECSTaskExecution,
-           log group /usms/ecs/enrolment, container enrolment-api on port 80
-- Lab 05: usms-enrolment-alb, target group usms-enrolment-tg (target-type ip), HTTP:80 listener,
-           usms-alb-sg, the service registered as a load-balanced target
-- Lab 06: scalable target on service/usms-ecs-cluster/usms-enrolment-svc, min 2 max 10
-- Lab 09 (security, if completed): usms-deploy-role, USMSDeployBase, USMSPermissionsBoundary
-- Lab 10: bucket usms-student-data, three Lambda functions, an S3 notification
-
 Created in this lab:
 - usms-pipeline-artifacts        S3 bucket, versioning ENABLED - the artifact store AND the source
 - source/usms-enrolment-src.zip  the versioned source archive the pipeline fetches
@@ -183,55 +74,15 @@ Required for future labs:
 - labs/lab-11-cicd/app/         -> Lab 12 adds a Dockerfile here and builds it
 ```
 
-### 4.2 Which earlier artefacts this lab makes newly meaningful
+---
 
-Two connections are worth saying out loud, because they are the moments where something you built
-earlier stops being hypothetical.
+## 4. What We Are Building
 
-**Lab 04 Step 15 taught `--force-new-deployment`** and justified it with "the image tag now points
-at a different image". At the time that was a sentence about a thing that had not happened, because
-nothing in this course had ever built an image. Lab 12 is where it happens. The buildspec you write
-in Step 8 of *this* lab is the thing that will produce that image.
-
-**Lab 09 Step 8 created `usms-deploy-role`** with the note that it is "the role a CI pipeline - or the
-CloudFormation lab - should ever build anything as", and scoped `iam:PassRole` to three role ARNs
-with an `iam:PassedToService` condition. Step 15 of this lab asks you to read `USMSDeployBase` side by
-side with the `USMSCodePipelineBase` you are about to write, and say which one you would rather defend
-in a review. Step 15 also gives you the equivalent pass-role statement from the EKS deployment work
-(Labs 07-08) inline, so you have a third policy to weigh the same question against.
-
-!!! note "Lab 09 artefacts are optional here"
-    Lab 09 (security) is not a strict prerequisite for this lab, even though it sits earlier in the
-    sequence. Every command in this lab that touches a Lab 09 artefact is guarded, and Step 2's loader
-    reports which files it found. Nothing here fails if that env file is absent.
+One pipeline with two stages. The enrolment service gets its own small source tree (a static portal, a health endpoint, a validated config and a `buildspec.yml`) to replace the placeholder nginx image Lab 04 used. The **Source** stage fetches `source/usms-enrolment-src.zip` from `usms-pipeline-artifacts`; an S3 source is used because AWS CodeCommit has been closed to new customers since July 2024, and it makes the artifact mechanism visible. The **Build** stage hands that zip to CodeBuild, which runs the buildspec's phases and writes the files named under `artifacts` back to the same bucket.
 
 ---
 
-## 5. What We Are Building
-
-One pipeline, two stages, and the supporting cast that makes them possible.
-
-The **enrolment service source tree** is new. Until now the ECS task definition has pointed at
-`public.ecr.aws/nginx/nginx:stable-alpine` - a placeholder, chosen in Lab 04 precisely because the
-course had no application of its own. This lab writes one: a small static enrolment portal, a health
-endpoint, a build metadata file, and the `buildspec.yml` that turns the tree into a deployable
-artifact. It is deliberately tiny. The point is not the application; the point is that there is now
-*a thing with a version number* flowing through a pipeline.
-
-The **Source stage** fetches `source/usms-enrolment-src.zip` from `usms-pipeline-artifacts`. In a
-real deployment that source would come from Git. This course uses an S3 source instead, for a reason
-Section 12 explains at length: AWS CodeCommit stopped accepting new customers in July 2024, so
-teaching it would be teaching a door that is closed. S3 sources are still fully supported, are what
-many real pipelines use for release archives, and - crucially - make the artifact mechanism visible
-instead of hiding it behind a `git clone`.
-
-The **Build stage** hands that zip to CodeBuild, which unpacks it into a container, runs the phases
-in `buildspec.yml`, and zips up whatever the `artifacts` section names. That output zip goes back
-into `usms-pipeline-artifacts` under a key CodePipeline chooses.
-
----
-
-## 6. Architecture
+## 5. Architecture
 
 ```text
                         THE PIPELINE, AND WHERE EVERY BYTE PHYSICALLY LIVES
@@ -291,9 +142,10 @@ fails in a way that looks nothing like "the bucket is gone".
 **The buildspec is inside the source zip.** Change the build by changing a file in the repository and
 uploading a new version. You never touch the project configuration to change what a build does.
 
+
 ---
 
-## 7. Directory Structure
+## 6. Directory Structure
 
 What this lab adds. Nothing is restructured; no new top-level folder is needed.
 
@@ -335,7 +187,7 @@ aws-floci-course/
 │   ├── lab-11-build-<id>.json              NEW  - git-ignored
 │   └── lab-11-pipeline-state.json          NEW  - git-ignored
 └── notes/
-    └── lab-11-notes.md                     NEW  - your answers to Section 15
+    └── lab-11-notes.md                     NEW  - your answers to Section 14
 ```
 
 `app/` sits under `labs/lab-11-cicd/` rather than at the repository root on purpose. It is the
@@ -343,23 +195,18 @@ source of one service, owned by one lab. Lab 12 adds a `Dockerfile` to the same 
 than creating a second copy of the tree somewhere else.
 
 ---
-## 8. Step-by-Step Implementation
+
+## 7. Step-by-Step Implementation
+
+!!! info "Run every command from `aws-floci-course/`"
+    All paths are relative to the repository root unless a step's **Run from** says otherwise (Steps 7 and 8 run inside `labs/lab-11-cicd/app/`). If a command reports `No such file or directory`, check `pwd`.
+
+!!! tip "Shell variables die with the terminal"
+    Capture every ID with `$(...)`, `--query` and `--output text`. Step 21 writes them to `configs/lab-11.env` so Lab 12 can use them.
 
 ### Step 1 - Start Floci and confirm where you are
 
-**Purpose**
-
-Everything this lab creates lives inside the emulator. If the emulator is not running in hybrid
-storage mode, the pipeline you build tonight is gone tomorrow, and - this is the part that costs
-people an afternoon - every command will still report success while it happens.
-
-**Run from**
-
-```text
-aws-floci-course/
-```
-
-**Command**
+If the emulator is not in hybrid storage mode, tonight's pipeline is gone tomorrow while every command still reports success.
 
 ```bash
 cd ~/aws-floci-course
@@ -368,13 +215,7 @@ cd ~/aws-floci-course
 ./scripts/utilities/whoami.sh
 ```
 
-**What the command does**
-
-`floci-up.sh` starts the Compose project or adopts the running container; it refuses to adopt a
-container that Compose did not create, which is how it protects you from a stray `floci start`.
-`floci-storage-check.sh` runs sixteen read-only checks in two blocks - shell and profile first,
-storage second - and names the cause of any failure rather than just reporting one.
-`whoami.sh` prints the identity and endpoint and exits 1 if the account is not `000000000000`.
+`floci-up.sh` refuses to adopt a container Compose did not create; `floci-storage-check.sh` runs sixteen checks (shell and profile, then storage); `whoami.sh` exits 1 if the account is not `000000000000`.
 
 **Expected result**
 
@@ -388,28 +229,13 @@ PASS=16  FAIL=0
 
 > Example output - the account is always `000000000000` in Floci.
 
-**What to look for:** `PASS=16  FAIL=0`. If you see `PASS=6`, you are running the pre-Errata version
-of the storage check; apply Errata 01 Patch 2 before continuing. If any check in the
-`-- shell and profile --` block fails, fix that first - the storage checks below it will produce
-confusing results when `COURSE_ROOT` is unset.
+`PASS=16  FAIL=0`. `PASS=6` means the pre-Errata storage check: apply Errata 01 Patch 2. Fix any `-- shell and profile --` failure first.
 
 ---
 
 ### Step 2 - Source every earlier lab's environment
 
-**Purpose**
-
-This lab reads names from Labs 01, 04, 05, 06 and 06, and optionally from Lab 09. Shell variables
-die with the terminal, which is exactly why every lab ends by writing its IDs to `configs/lab-NN.env`
-- and why every lab begins by reading them back.
-
-**Run from**
-
-```text
-aws-floci-course/
-```
-
-**Command**
+Read back the names earlier labs recorded.
 
 ```bash
 source configs/course.env
@@ -430,13 +256,7 @@ done
 ./scripts/utilities/whoami.sh
 ```
 
-**What the command does**
-
-The `for` loop is deliberately not `source configs/lab-*.env`. A glob would silently source a file
-you did not intend - an editor backup, a half-written file from a failed lab - and would give you no
-report of what it did. The explicit list, with a printed result per file, is the version you can
-debug. Because of the Lab 09 fork, some of those files will legitimately be `absent`; that is
-information, not an error.
+An explicit list rather than `source configs/lab-*.env`, so an editor backup is never sourced and you see what was loaded. `absent` for an optional lab is information, not an error.
 
 **Expected result**
 
@@ -467,41 +287,13 @@ printf 'cluster   : %s\nservice   : %s\ncontainer : %s\ntarget grp: %s\nexec rol
   "${USMS_ECS_EXEC_ROLE_ARN:-MISSING}"
 ```
 
-**What to look for:** no line says `MISSING`. `USMS_ENROLMENT_CONTAINER` must read `enrolment-api`
-- Lab 12's `imagedefinitions.json` has to name that container exactly, and a mismatch there produces
-a deploy failure whose message does not mention the container name at all.
+No line says `MISSING`. `USMS_ENROLMENT_CONTAINER` must read `enrolment-api`: a mismatch in Lab 12 produces a deploy failure whose message does not name the container.
 
 ---
 
 ### Step 3 - Probe CI/CD support and choose your path
 
-**Purpose**
-
-CodeBuild and CodePipeline are large services, and emulator coverage of them varies more than it does
-for, say, S3. Lab 04 and Lab 07 both opened with a support probe for the same reason. Find out now,
-in ninety seconds, which of three paths you are on - rather than in Step 19, after you have built
-everything.
-
-**Concept first - what "supported" can mean**
-
-An emulator can respond to an API in three usefully different ways:
-
-- it implements the operation and does the work;
-- it implements the operation, stores the object, and never does the work (the control plane exists,
-  the data plane does not);
-- it does not implement the operation at all, and returns an error naming it.
-
-Only the third is obvious. The second is the one that teaches people wrong things, because every
-command succeeds. So the probe below does not only ask "did the call return 0?" - it asks whether the
-object it created can be read back, and it labels the three paths explicitly.
-
-**Run from**
-
-```text
-aws-floci-course/
-```
-
-**Command**
+Find out now which of three paths you are on, rather than at Step 19. An emulator may do the work, store the object without doing the work, or reject the operation; only the last is obvious, so the probe creates an object and reads it back.
 
 ```bash
 mkdir -p scripts/utilities outputs
@@ -573,7 +365,7 @@ else
   PATHNAME="C"
   echo "PATH C - neither service is present on this build."
   echo "         Every document in this lab is still written and validated; the"
-  echo "         execution happens in Step 14's local runner. Section 12 tells you"
+  echo "         execution happens in Step 14's local runner. Section 11 tells you"
   echo "         exactly what to claim and what not to claim."
 fi
 printf 'USMS_CICD_SUPPORT_PATH=%s\n' "$PATHNAME" > outputs/lab-11-support-probe.txt
@@ -585,16 +377,8 @@ bash -n scripts/utilities/cicd-support-probe.sh && echo "syntax OK"
 ./scripts/utilities/cicd-support-probe.sh
 ```
 
-**What the command does**
-
-The probe creates a project with `type=NO_SOURCE` and `type=NO_ARTIFACTS`, which is the smallest
-legal CodeBuild project - it needs no bucket, no role that resolves, and no source. If the API
-accepts that, it will accept the real one. Then it deletes it. The service role ARN is deliberately a
-name that does not exist: on Floci the call is not authorised anyway, and on real AWS you would never
-run a probe like this against an account that mattered.
-
-`--source ... buildspec='version: 0.2'` supplies an inline buildspec so the project is valid without
-a source tree. That is the only place in this lab where a buildspec is not a file.
+- The probe project uses `type=NO_SOURCE` and `type=NO_ARTIFACTS`, the smallest legal project, and deletes it. The role ARN deliberately does not exist (Floci does not authorize calls).
+- `buildspec='version: 0.2'` is the only inline buildspec in this lab.
 
 **Expected result**
 
@@ -616,20 +400,14 @@ recorded in outputs/lab-11-support-probe.txt
 
 > Example output - your build may report Path B or Path C. All three finish this laboratory.
 
-**What to look for:** the last block names your path. Write it on the first line of
-`notes/lab-11-notes.md` now. Section 12 asks you to distinguish what you observed from what you
-recorded, and you cannot do that honestly at the end if you have forgotten which path you were on.
+Write your path on the first line of `notes/lab-11-notes.md` now; Section 11 asks what you observed versus recorded.
 
 !!! note "Floci Limitation - CodeDeploy is very likely absent"
-    Floci commonly answers `codedeploy list-applications` with an error naming the operation.
+    Floci commonly rejects `codedeploy list-applications`.
 
-    On real AWS, CodeDeploy is what makes blue/green ECS deployments possible: it stands up a second
-    task set, shifts the load balancer's traffic to it, and can roll back within seconds because the
-    old task set is still running.
+    On real AWS, CodeDeploy runs blue/green ECS deployments: a second task set, traffic shifted by the load balancer, and fast rollback.
 
-    Lab 12 Step 17 writes the CodeDeploy application specification and the deployment-group
-    configuration as documents you read and validate, and labels them Conceptual / Real AWS. That is
-    the honest version. Do not claim in your report that you performed a blue/green deployment.
+    Lab 12 Step 17 writes the CodeDeploy documents as Conceptual / Real AWS. Do not claim a blue/green deployment in your report.
 
 **Checkpoint 1**
 
@@ -643,18 +421,7 @@ aws-floci-course/
 
 ### Step 4 - Create this lab's directories
 
-**Purpose**
-
-Create every directory this lab writes to, in one command, so that no later step fails on a missing
-parent. A build that fails because `config/` did not exist is a waste of a build.
-
-**Run from**
-
-```text
-aws-floci-course/
-```
-
-**Command**
+Create every directory this lab writes to, so no later step fails on a missing parent.
 
 ```bash
 mkdir -p labs/lab-11-cicd/app/src \
@@ -665,11 +432,7 @@ mkdir -p labs/lab-11-cicd/app/src \
 ls -d labs/lab-11-cicd/app/*
 ```
 
-**What the command does**
-
-`mkdir -p` creates parents as needed and does not complain when a directory already exists, which
-makes it safe to re-run. The `ls -d` afterwards is the verify: it lists the directories themselves
-rather than their (currently empty) contents.
+`mkdir -p` is safe to re-run; `ls -d` lists the directories themselves.
 
 **Expected result**
 
@@ -685,33 +448,7 @@ labs/lab-11-cicd/app/tests
 
 ### Step 5 - Create the pipeline artifact bucket
 
-**Purpose**
-
-Every stage in a pipeline hands the next one a zip file, and those zip files live in one S3 bucket
-called the **artifact store**. This same bucket will also hold the source archive. One bucket, two
-roles - and Step 6 proves the property the pipeline actually depends on.
-
-**Concept first - why the artifact store is not an implementation detail**
-
-CodePipeline is often described as "connecting" stages. It does not. Stage 1 finishes by writing a
-zip to S3 and recording its key; stage 2 begins by downloading that key. Nothing streams. Nothing is
-held in memory between stages. This has three consequences you will meet:
-
-- The artifact bucket must be in the **same region** as the pipeline. Cross-region artifacts need an
-  explicit per-region artifact store, which is a different, more complex pipeline document.
-- Anything in that bucket is readable by anything with `s3:GetObject` on it. Build artifacts routinely
-  contain compiled configuration. Scope the policy.
-- If an execution fails with something that looks like a permissions error on an object key you have
-  never heard of, it is an artifact key. CodePipeline names them
-  `<pipeline-name>/<OutputArtifactName>/<random>.zip`.
-
-**Run from**
-
-```text
-aws-floci-course/
-```
-
-**Command**
+Every stage hands the next a zip file in one S3 bucket, the **artifact store**; this bucket also holds the source archive. Nothing streams between stages, so the bucket must be in the pipeline's Region, its policy must be scoped (artifacts contain configuration), and an unfamiliar key in an error is an artifact key (`<pipeline-name>/<OutputArtifactName>/<random>.zip`). See [AWS CodePipeline](../unit5/topic2.md#aws-codepipeline).
 
 ```bash
 PIPELINE_BUCKET="usms-pipeline-artifacts"
@@ -732,25 +469,8 @@ aws s3api put-public-access-block \
     BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true
 ```
 
-**What the command does**
-
-```text
-aws
- └── s3api                      the SERVICE (the low-level S3 API, not the `aws s3` file-transfer wrapper)
-      └── create-bucket         the OPERATION
-           └── --bucket         the name, globally unique on real AWS
-      └── put-bucket-versioning
-           └── --versioning-configuration Status=Enabled
-```
-
-In `us-east-1` - the course region - `create-bucket` takes no `--create-bucket-configuration`. Every
-other region requires `--create-bucket-configuration LocationConstraint=<region>`, and omitting it
-there is one of the most common first errors on real AWS. `us-east-1` is the exception because it is
-the original region and its API predates the constraint.
-
-`put-public-access-block` is not required by CodePipeline. It is here because an artifact bucket is
-the single worst bucket in an account to leave publicly readable, and because the habit is the part
-that transfers.
+- In `us-east-1`, `create-bucket` takes no `--create-bucket-configuration`; every other Region requires `LocationConstraint`.
+- `put-public-access-block` is not required by CodePipeline; an artifact bucket is the worst bucket to leave public.
 
 **Expected result**
 
@@ -770,35 +490,13 @@ aws s3api get-bucket-tagging    --bucket "$PIPELINE_BUCKET" \
   --query 'TagSet[].[Key,Value]' --output table
 ```
 
-**What to look for:** `Status` must read `Enabled`, not `Suspended` and not empty. An empty response
-from `get-bucket-versioning` means versioning was never enabled - the API returns nothing rather than
-`Status: Disabled`, which is a small trap worth knowing.
+`Status` must read `Enabled`. An empty response means versioning was never enabled (the API does not say `Disabled`).
 
 ---
 
 ### Step 6 - Prove versioning is on
 
-**Purpose**
-
-Step 5's `get-bucket-versioning` reports what the configuration *says*. This step proves what the
-bucket actually *does*. CodePipeline refuses an unversioned S3 source, and a pipeline that fails at
-creation with `InvalidStructureException` because a bucket reported `Enabled` and behaved otherwise
-is a bad afternoon.
-
-**Concept first - create, perturb, read back**
-
-This course's standard proof shape. Create something, change the world, read it back, and check the
-*earlier* state survived. Here: put an object, put a different object at the same key, then ask for
-the list of **versions** at that key. If versioning is real, both are still there. If it is not, the
-second overwrote the first and you get one.
-
-**Run from**
-
-```text
-aws-floci-course/
-```
-
-**Command**
+CodePipeline refuses an unversioned S3 source, so prove what the bucket does, not what its configuration says: put two objects at one key, then list the versions. See [S3 versioning](../unit6/topic1.md#the-life-of-an-object-under-versioning-and-lifecycle-rules).
 
 ```bash
 printf 'first\n'  > /tmp/usms-version-probe.txt
@@ -816,11 +514,7 @@ aws s3api list-object-versions \
   --output table
 ```
 
-**What the command does**
-
-Two `put-object` calls to the same key with different bodies, then `list-object-versions` - which is
-a different operation from `list-objects-v2`, and is the only one that can see anything other than
-the current version.
+`list-object-versions` is the only listing that sees anything other than the current version.
 
 **Expected result**
 
@@ -838,13 +532,9 @@ the current version.
 > Example output - your version IDs will differ, and some builds report `null` as a version ID for
 > objects written before versioning was enabled.
 
-**What to look for:** **two rows**, exactly one of which has `Latest` as `True`. One row means
-versioning is not actually in effect; go back to Step 5 and re-run `put-bucket-versioning`, then
-re-run this step. Do not continue with one row - Step 17 will fail and the error will not mention
-versioning.
+**Two rows**, one with `Latest` `True`. One row means versioning is not in effect: re-run Step 5's `put-bucket-versioning` and this step. Do not continue; Step 17 would fail without mentioning versioning.
 
-Clean up the probe object. This is the only thing in this lab that gets deleted, and it is deleted
-because leaving debris in an artifact bucket is how artifact buckets become unreadable:
+Clean up the probe object:
 
 !!! danger "Read before running any delete command"
     **What will be deleted:** the two versions of `probe/versioning.txt` in `usms-pipeline-artifacts`,
@@ -868,9 +558,7 @@ aws s3api list-object-versions --bucket "$PIPELINE_BUCKET" --prefix probe/ \
   --query 'length(Versions || `[]`)' --output text
 ```
 
-**What to look for:** the final number is `0`. Note the JMESPath `Versions || ` with a backtick-quoted
-empty list - when there are no versions the field is absent, and `length(null)` is an error, so the
-`||` supplies a default. That idiom is new in this lab and Appendix B records it.
+The final number is `0`. `Versions || [] ` (a backtick-quoted empty list) supplies a default when the field is absent, because `length(null)` is an error (Appendix).
 
 **Checkpoint 2**
 
@@ -885,11 +573,7 @@ s3://usms-pipeline-artifacts
 
 ### Step 7 - Write the enrolment service source tree
 
-**Purpose**
-
-Give the pipeline something to build. Until now the ECS task definition has pointed at a public nginx
-image chosen as a placeholder. From here on, the enrolment service has source, and that source has a
-version number that you can watch move through a pipeline.
+Give the pipeline something to build, with a version number you can watch move through it.
 
 **Run from**
 
@@ -922,18 +606,10 @@ ok
 EOF
 ```
 
-**What the command does**
+`__RELEASE__` and `__BUILT_AT__` are replaced by the build, so their absence in the artifact proves a build ran (Step 19).
 
-`__RELEASE__` and `__BUILT_AT__` are placeholders. The build replaces them. That is the whole reason
-they exist: it gives you something in the deployed artifact that could only have got there by a build
-running, which is how Step 19 proves the pipeline did the work rather than merely reporting that it
-did.
-
-Note the **quoted** heredoc, `<< 'EOF'`. Everything inside is written literally. If you used the
-unquoted form here, your shell would try to expand nothing in particular in this file - but the habit
-matters, because the very next file contains `$` characters that must survive, and `configs/lab-11.env`
-at the end of the lab uses the *unquoted* form deliberately so that `$(...)` runs at write time. Two
-forms, opposite purposes, one character of difference.
+!!! warning "Quoted heredoc"
+    `<< 'EOF'` writes text literally. `configs/lab-11.env` in Step 21 uses unquoted `<< EOF` so `$(...)` runs at write time. Opposite purposes, one character of difference.
 
 **Command - part 2, the configuration the build validates**
 
@@ -953,12 +629,7 @@ EOF
 python3 -m json.tool config/service.json > /dev/null && echo "service.json is valid JSON"
 ```
 
-**What the command does**
-
-This file is not read by the application. It is read by the *build*, in the `pre_build` phase, which
-validates it and fails the build if it is malformed or if its `container` value does not match the
-container name the ECS task definition uses. That is a real pattern: catch a configuration mistake in
-the build, where it costs ninety seconds, rather than in a deployment, where it costs a rollback.
+The build, not the application, reads this file: `pre_build` fails if it is malformed or names the wrong container, catching the mistake in ninety seconds rather than in a rollback.
 
 **Command - part 3, the test**
 
@@ -992,15 +663,7 @@ chmod +x tests/smoke.sh
 bash -n tests/smoke.sh && echo "syntax OK"
 ```
 
-**What the command does**
-
-Seven assertions, each of which can only pass if the build actually did its job. Four of them check
-for the *absence* of a placeholder, which is the useful direction: a build that silently skipped its
-substitution step produces a file that still contains `__RELEASE__`, and a test that only checked
-"the file exists" would pass.
-
-`set -uo pipefail` without `-e`, matching every other script in this course: `-e` would abort on the
-first failing `t` and you would never see the other six results.
+Four of the seven assertions check that a placeholder is **absent**, so a build that skipped substitution fails. `set -uo pipefail` without `-e` so every result prints.
 
 **Verify**
 
@@ -1021,21 +684,13 @@ labs/lab-11-cicd/app/tests/smoke.sh
 
 > Example output.
 
-**What to look for:** five files. `buildspec.yml` is not there yet - it is Step 8, and it gets a step
-of its own because it deserves one.
+Five files; `buildspec.yml` comes in Step 8.
 
 ---
+
 ### Step 8 - Write `buildspec.yml`
 
-**Purpose**
-
-This is the centre of the laboratory. `buildspec.yml` is the file that says what a build *is*. It
-lives in the source tree, so changing what a build does is a source change - reviewable, versioned,
-attributable - rather than a click in a console.
-
-**Concept first - the five top-level keys**
-
-A buildspec is YAML with a fixed vocabulary. You will use five keys today:
+The centre of the lab: the build commands live in the source tree, so changing a build is a reviewable, versioned source change. See [AWS CodeBuild](../unit5/topic1.md#aws-codebuild).
 
 | Key | What it is for |
 | --- | --- |
@@ -1043,21 +698,9 @@ A buildspec is YAML with a fixed vocabulary. You will use five keys today:
 | `env` | Variables available to every phase, and which of them to export back to the pipeline |
 | `phases` | The four named phases, in fixed order: `install`, `pre_build`, `build`, `post_build` |
 | `artifacts` | Which files, of everything the build produced, are kept and handed to the next stage |
-| `cache` | Directories preserved between builds. Empty here, and Section 12 says why |
+| `cache` | Directories preserved between builds. Empty here, and Section 11 says why |
 
-The four phases are not arbitrary. CodeBuild runs them in order and reports each one separately, so
-when a build fails you are told *which phase*, and that is most of the diagnosis. The convention -
-and it is only a convention, nothing enforces it - is:
-
-- `install` - install tools and runtimes. Nothing project-specific.
-- `pre_build` - checks and preparation that must succeed before building is worth attempting.
-  Validate configuration, log in to a registry, resolve a version number.
-- `build` - produce the thing.
-- `post_build` - test the thing, and write whatever the next stage needs.
-
-There is a fifth phase name, `finally`, which can be attached to any phase and runs whether that
-phase succeeded or failed. It is useful for uploading test reports. This lab does not use it;
-Exercise 2 asks you to.
+Phases run in order and are reported separately, so a failure names its phase. Convention: `install` tools, `pre_build` checks that must pass first, `build` produces, `post_build` tests and writes what the next stage needs. `finally` (Exercise 2) runs whether a phase succeeded or not.
 
 **Run from**
 
@@ -1154,50 +797,14 @@ print("buildspec.yml parses, and all four phases are present.")
 PY
 ```
 
-**What the command does**
-
-Line by line, the parts that are not obvious:
-
-- **`USMS_RELEASE` is recomputed inside the `build` phase** rather than being set in `pre_build` and
-  reused. CodeBuild does run a build's commands in one shell, so the variable *would* survive - but
-  relying on that makes the buildspec untestable anywhere else, including in the local runner you
-  build in Step 14. Recomputing costs nothing and removes an assumption.
-- **`sed -i.bak`, not `sed -i`.** GNU `sed` accepts `-i` with no argument; BSD `sed`, which is what
-  macOS ships, requires a suffix and will silently eat your next argument if you do not give one.
-  `-i.bak` works on both, and the following `rm -f` removes the backup. This lab's build runs on
-  Linux inside CodeBuild, but Step 14's local runner runs on your laptop, and half the room's laptops
-  are BSD.
-- **`${CODEBUILD_BUILD_ID:-local}`** - CodeBuild sets a documented set of environment variables in
-  every build. `CODEBUILD_BUILD_ID` identifies the build; `CODEBUILD_RESOLVED_SOURCE_VERSION` is the
-  version of the source that was actually fetched, which for an S3 source is the object's version ID.
-  The `:-local` default means the same buildspec produces sensible metadata when the local runner
-  executes it, where neither variable exists.
-- **The `- |` block** is YAML's literal block scalar: everything indented beneath it is one command,
-  newlines included. Without it you cannot write a heredoc in a buildspec, because each list item is
-  otherwise a single line.
-- **The `grep` in `pre_build` is a `- |` block, and it has to be.** A plain YAML scalar that contains a
-  colon followed by a space is parsed as a mapping key. The command
-  `grep -q '"container": "enrolment-api"' ...` contains exactly that sequence inside its quotes - and
-  YAML does not care that the quotes are the shell's, because YAML is parsed first. Written as a plain
-  list item it produces `expected <block end>, but found '<scalar>'`, which is a message about YAML
-  that gives no hint that your shell quoting is innocent. Any build command containing `": "` needs a
-  block scalar or a fully YAML-quoted string. This is the single most common way a buildspec that
-  looks correct fails to load.
-- **`artifacts.base-directory: dist` with `files: ['**/*']`** means "take everything under `dist`, and
-  make `dist` the root of the artifact". Get this wrong and your artifact contains a top-level `dist/`
-  directory, which Lab 12's deploy stage will not find `imagedefinitions.json` inside. Path-relative
-  bugs in this section are the single most common CodeBuild mistake.
+- `USMS_RELEASE` is recomputed in `build`, so the buildspec also works in Step 14's local runner.
+- `sed -i.bak` works with GNU and BSD `sed` (BSD requires a suffix); the backup is removed.
+- `${CODEBUILD_BUILD_ID:-local}` and `${CODEBUILD_RESOLVED_SOURCE_VERSION:-local}` are CodeBuild variables; the default marks a local build.
+- `- |` is a YAML literal block: one multi-line command. The `pre_build` `grep` **must** be one, because a plain item containing `": "` parses as a mapping (`expected <block end>, but found '<scalar>'`).
+- `artifacts.base-directory: dist` with `files: ['**/*']` makes `dist` the artifact root. Get it wrong and Lab 12 cannot find `imagedefinitions.json`.
 
 !!! warning "The heredoc inside the heredoc"
-    The outer shell heredoc is `<< 'BUILDSPEC'` - **quoted**, so nothing inside is expanded by your
-    shell. That is essential: the file is full of `$USMS_RELEASE`, `$ARTIFACT_DIR` and
-    `${CODEBUILD_BUILD_ID:-local}`, all of which must reach the file as literal text for CodeBuild to
-    expand later. The inner `<< META` is **unquoted**, because there the expansion is wanted - at
-    build time, inside the build container.
-
-    Two heredocs, nested, with opposite quoting, for opposite reasons. If you only remember one rule
-    from this course's shell material, make it this one: quoted heredoc writes the text, unquoted
-    heredoc writes the result.
+    The outer `<< 'BUILDSPEC'` is **quoted**, so `$USMS_RELEASE`, `$ARTIFACT_DIR` and `${CODEBUILD_BUILD_ID:-local}` reach the file literally for CodeBuild to expand. The inner `<< META` is **unquoted**, because expansion is wanted at build time. Quoted heredoc writes the text; unquoted heredoc writes the result.
 
 **Expected result**
 
@@ -1215,10 +822,7 @@ grep -c '' labs/lab-11-cicd/app/buildspec.yml
 grep -n 'base-directory\|^version\|^phases\|^artifacts' labs/lab-11-cicd/app/buildspec.yml
 ```
 
-**What to look for:** `version`, `phases`, `artifacts` and `base-directory` each appear exactly once,
-at the line numbers you expect. If `version` appears twice you have pasted the file twice, which
-produces a YAML error that CodeBuild reports as `YAML_FILE_ERROR` and which reads, unhelpfully, like
-a syntax problem in your commands.
+`version`, `phases`, `artifacts` and `base-directory` each appear exactly once. `version` twice means you pasted the file twice (`YAML_FILE_ERROR`).
 
 ✏️ **Your turn**
 
@@ -1251,32 +855,7 @@ labs/lab-11-cicd/app/
 
 ### Step 9 - Create the CodeBuild service role and its policy
 
-**Purpose**
-
-A build container is a principal. It runs as a role, and what that role can reach is the answer to
-"what could a compromised build do to us?" - which, for any organisation that runs one, is a real
-question with a real answer.
-
-**Concept first - what this role must be able to do, and nothing more**
-
-Work it out from the buildspec rather than from a template on the internet. The build:
-
-- writes logs - so it needs `logs:CreateLogStream` and `logs:PutLogEvents` on its own log group, and
-  `logs:CreateLogGroup` because nothing has created that group yet;
-- reads the source zip and writes the artifact zip - so it needs `s3:GetObject`, `s3:GetObjectVersion`
-  and `s3:PutObject` on the artifact bucket, plus `s3:GetBucketAcl` and `s3:GetBucketLocation`, which
-  CodeBuild calls before it uploads.
-
-That is all. It does not need to read `usms-student-data`, so we add an explicit `Deny` saying so.
-Section 12.2 of Lab 09 made the point that Floci does not enforce IAM; the `Deny` is here because the
-policy is a document that people read, and a document that says "builds do not touch student records"
-is worth having even on a day when nothing enforces it.
-
-**Run from**
-
-```text
-aws-floci-course/
-```
+A build container is a principal; its role is the answer to "what could a compromised build do?". Derive the permissions from the buildspec: write its own logs (`logs:CreateLogGroup`, `CreateLogStream`, `PutLogEvents`), and read the source and write the artifact (`s3:GetObject`, `GetObjectVersion`, `PutObject`, `GetBucketAcl`, `GetBucketLocation`). An explicit `Deny` on `usms-student-data` documents that builds never touch student records, even though Floci enforces nothing.
 
 **Command - part 1, the trust policy**
 
@@ -1303,11 +882,7 @@ EOF
 python3 -m json.tool policies/trust-codebuild.json > /dev/null && echo "trust-codebuild.json is valid JSON"
 ```
 
-**What the command does**
-
-The `aws:SourceAccount` condition is the confused-deputy guard Lab 09 Step 6 introduced: without it,
-any CodeBuild project in any account could, in principle, be configured to assume this role. On real
-AWS you would tighten it further with `aws:SourceArn` naming the project ARN. That is Exercise 3.
+`aws:SourceAccount` is the confused-deputy guard (Lab 09 Step 6; [the confused deputy problem](../unit8/topic1.md#the-confused-deputy-problem)). On real AWS add `aws:SourceArn` with the project ARN (Exercise 3).
 
 **Command - part 2, the permissions policy**
 
@@ -1360,16 +935,8 @@ EOF
 python3 -m json.tool policies/usms-codebuild-policy.json > /dev/null && echo "usms-codebuild-policy.json is valid JSON"
 ```
 
-**What the command does**
-
-Note the **two** log-group ARNs in the first statement. The one without `:*` is the group itself, and
-is what `CreateLogGroup` acts on; the one with `:*` covers the log *streams* inside it, which is what
-`CreateLogStream` and `PutLogEvents` act on. Writing only one of the two is a classic half-working
-policy: the group gets created and then nothing can write to it.
-
-The bucket ARN and the object ARN are likewise separate - `arn:aws:s3:::bucket` for bucket-level
-actions and `arn:aws:s3:::bucket/*` for object-level ones. Lab 01's `USMSStudentDataReadWrite` made
-the same split for the same reason.
+- Two log-group ARNs: without `:*` for `CreateLogGroup` on the group, with `:*` for the streams. Only one gives a half-working policy.
+- Bucket ARN and object ARN are separate, as in Lab 01's `USMSStudentDataReadWrite`.
 
 **Command - part 3, create the role and attach**
 
@@ -1414,41 +981,13 @@ aws iam get-role --role-name "$BUILD_ROLE" \
   --query 'Role.AssumeRolePolicyDocument.Statement[0].Principal' --output json
 ```
 
-**What to look for:** exactly one attached policy, named `USMSCodeBuildBase`, and a principal of
-`{"Service": "codebuild.amazonaws.com"}`. If the principal reads `codebuild.us-east-1.amazonaws.com`
-you have copied a regional service principal from somewhere; CodeBuild's is global.
+Exactly one attached policy, `USMSCodeBuildBase`, and principal `{"Service": "codebuild.amazonaws.com"}` (global, not `codebuild.us-east-1.amazonaws.com`).
 
 ---
 
 ### Step 10 - Create the CodeBuild project
 
-**Purpose**
-
-The project is the durable configuration of *how* to build: which container image, how much compute,
-which role, where the source is, where the artifact goes, and how long to wait before giving up. The
-one thing it does not contain is the build commands - those are in the source.
-
-**Concept first - source type, and the trap in it**
-
-A CodeBuild project's `source.type` can be `S3`, `GITHUB`, `BITBUCKET`, `CODECOMMIT`, `NO_SOURCE`, or
-`CODEPIPELINE`. The last one means "I have no source of my own; the pipeline will hand me one".
-
-Here is the trap, and it catches nearly everybody once: **a project whose source type is
-`CODEPIPELINE` cannot be started on its own.** `aws codebuild start-build --project-name ...` on such
-a project is rejected, because there is no source to build.
-
-So this lab creates the project with an `S3` source first, runs it standalone in Step 12 to prove the
-buildspec works in isolation, and only in Step 18 - after the pipeline exists - converts it to
-`CODEPIPELINE`. That ordering is deliberate, and Step 18 shows you the one-off escape hatch for
-running a `CODEPIPELINE` project by hand when you need to.
-
-**Run from**
-
-```text
-aws-floci-course/
-```
-
-**Command**
+The project holds how to build (image, compute, role, source, artifact, timeout), never the build commands. A project whose `source.type` is `CODEPIPELINE` **cannot be started on its own**, so this step uses an `S3` source, Step 12 runs it standalone, and Step 18 converts it.
 
 ```bash
 cat > templates/lab-11-codebuild-project.json << EOF
@@ -1500,16 +1039,10 @@ python3 -m json.tool templates/lab-11-codebuild-project.json > /dev/null \
 grep -c '\$' templates/lab-11-codebuild-project.json
 ```
 
-**What the command does**
+!!! warning "Unquoted heredoc"
+    `<< EOF` so `${BUILD_ROLE_ARN}` is substituted at write time. `grep -c '\$'` must print `0`; a surviving `$` means an empty variable and an invalid-ARN error that never mentions your shell.
 
-This heredoc is **unquoted** - `<< EOF`, not `<< 'EOF'` - because `${BUILD_ROLE_ARN}` must be
-substituted at write time. The `grep -c '\$'` afterwards is the check that it was: the answer must be
-`0`. A template with a surviving `$` in it is a template whose variable was empty, and
-`create-project` will reject it with a message about an invalid ARN that does not mention your shell
-at all.
-
-Note that CodeBuild tags use lowercase `key`/`value`, while IAM and ELBv2 use `Key`/`Value`. This
-inconsistency is real, is not going away, and costs everybody twenty minutes exactly once.
+CodeBuild tags use lowercase `key`/`value`; IAM and ELBv2 use `Key`/`Value`.
 
 **Expected result**
 
@@ -1537,10 +1070,7 @@ aws codebuild batch-get-projects --names usms-enrolment-build \
   --output table
 ```
 
-**What to look for:** `Source` is `S3` and `Location` is
-`usms-pipeline-artifacts/source/usms-enrolment-src.zip`. If `batch-get-projects` returns an empty
-`projects` list and a populated `projectsNotFound` list, the project was not created - re-read the
-`create-project` output rather than re-running it.
+`Source` is `S3` and `Location` is `usms-pipeline-artifacts/source/usms-enrolment-src.zip`. An empty `projects` list with `projectsNotFound` populated means it was not created; read the `create-project` output rather than re-running it.
 
 **Checkpoint 4**
 
@@ -1557,13 +1087,7 @@ CodeBuild
 
 ### Step 11 - Package and upload the source
 
-**Purpose**
-
-CodeBuild's S3 source is a zip file. Getting its internal layout right matters: the buildspec must be
-at the **root** of the archive, not inside a directory. This step builds a small packer script,
-because you will repackage the source four more times before the lab ends.
-
-**Concept first - the layout that works**
+The buildspec must be at the **root** of the zip. A small packer script avoids getting that wrong on the four repackagings ahead.
 
 ```text
 usms-enrolment-src.zip
@@ -1582,14 +1106,7 @@ usms-enrolment-src.zip
       └── ...
 ```
 
-`zip -r ../x.zip .` from inside the directory produces the first. `zip -r x.zip app/` from its parent
-produces the second. One character of difference in where you stand.
-
-**Run from**
-
-```text
-aws-floci-course/
-```
+`zip -r ../x.zip .` from inside the directory gives the first; `zip -r x.zip app/` from its parent gives the second.
 
 **Command - part 1, the packer**
 
@@ -1647,19 +1164,9 @@ chmod +x scripts/utilities/usms-pack-source.sh
 bash -n scripts/utilities/usms-pack-source.sh && echo "syntax OK"
 ```
 
-**What the command does**
-
-The script prefers `zip` and falls back to Python's `zipfile` module, which is in the standard library
-and therefore always present. Both exclude `dist/` - the build output directory - because shipping
-the previous build's output into the next build's source is how you get a build that passes its own
-tests without having built anything.
-
-The Python fallback does not preserve the executable bit. That is deliberate and harmless: the
-buildspec runs the test with `bash tests/smoke.sh`, not `./tests/smoke.sh`. If you change that line,
-you will discover this the hard way, which is a reasonable thing to have discovered once.
-
-`OUT_ABS` is computed before the subshell `cd`, because `zip` is run from inside `$SRC` and a relative
-output path would land in the wrong place. This is the `cd` that never comes back, caught early.
+- Prefers `zip`, falls back to Python's `zipfile`. Both exclude `dist/`, so a previous build's output never ships as source.
+- The Python fallback drops the executable bit; harmless because the buildspec runs `bash tests/smoke.sh`.
+- `OUT_ABS` is computed before the subshell `cd`, so a relative output path does not land in the wrong place.
 
 **Command - part 2, pack and upload**
 
@@ -1702,38 +1209,21 @@ Archive:  /home/you/aws-floci-course/outputs/usms-enrolment-src.zip
 > as zero-length entries and counts them, so it reports nine; the Python fallback records only the six
 > real files and reports six. Both archives behave identically in a build.
 
-**What to look for:** `buildspec.yml` and `VERSION` sitting at the top level, and **no path in the
-listing beginning with `app/`**. The last line is the S3 version ID of the object you just uploaded -
-the pipeline's Source stage will fetch exactly that version, and Step 19 uses this to prove the
-pipeline consumed the source you think it did.
+`buildspec.yml` and `VERSION` at the top level, and **no path beginning with `app/`**. The last line is the object's S3 version ID; Step 19 uses it to prove what the pipeline consumed.
 
-`outputs/` is git-ignored, so the zip you just built is not a commit candidate. Confirm the rule that
-protected you:
+`outputs/` is git-ignored. Confirm the rule that protected you:
 
 ```bash
 git check-ignore -v outputs/usms-enrolment-src.zip
 ```
 
-**What to look for:** the output names `.gitignore`, the line number, and the pattern `outputs/*`.
-If it prints nothing, the file is *not* ignored and your `.gitignore` has the `outputs/` form that
-Section 15 of the project instructions warns about.
+The output names `.gitignore`, a line number and `outputs/*`. Silence means the file is not ignored (the `outputs/` form the course's Git rules warn about).
 
 ---
 
 ### Step 12 - Run the build on its own
 
-**Purpose**
-
-Before putting a build inside a pipeline, prove the build works. If the build is broken and you find
-out through a pipeline, you have two systems to debug instead of one.
-
-**Run from**
-
-```text
-aws-floci-course/
-```
-
-**Command**
+Prove the build works before putting it in a pipeline; otherwise you debug two systems at once.
 
 ```bash
 BUILD_ID=$(aws codebuild start-build \
@@ -1743,17 +1233,7 @@ BUILD_ID=$(aws codebuild start-build \
 echo "$BUILD_ID"
 ```
 
-**What the command does**
-
-```text
-aws
- └── codebuild            the SERVICE
-      └── start-build     the OPERATION - queues one build of one project
-           └── --project-name   which project's configuration to use
-```
-
-`start-build` returns immediately. The build is asynchronous; the returned `id` has the form
-`usms-enrolment-build:<uuid>` and is how you ask about it afterwards.
+`start-build` returns immediately; the ID `usms-enrolment-build:<uuid>` is how you ask about the build.
 
 **Expected result**
 
@@ -1779,43 +1259,20 @@ for i in $(seq 1 40); do
 done
 ```
 
-**What to look for:** `status=IN_PROGRESS` with the phase advancing through `QUEUED`, `PROVISIONING`,
-`INSTALL`, `PRE_BUILD`, `BUILD`, `POST_BUILD`, `UPLOAD_ARTIFACTS`, `COMPLETED`, ending at
-`status=SUCCEEDED`.
-
-A hand-written polling loop rather than a waiter, for the reason Lab 04 gave about
-`aws ecs wait services-stable`: waiters on this emulator can run until they exhaust their attempts
-without ever telling you what they are seeing. A loop that prints each observation tells you whether
-nothing is happening or something is happening slowly, and those need different responses.
+The phase advances `QUEUED`, `PROVISIONING`, `INSTALL`, `PRE_BUILD`, `BUILD`, `POST_BUILD`, `UPLOAD_ARTIFACTS`, `COMPLETED`, ending at `status=SUCCEEDED`. A printing loop rather than a waiter shows whether nothing is happening or something is happening slowly.
 
 !!! note "Floci Limitation - a build that never leaves PROVISIONING"
-    On some builds, CodeBuild accepts `start-build`, records the build, and never runs it, because
-    running it means pulling a multi-gigabyte `aws/codebuild/standard:7.0` image through the Docker
-    socket and starting a container. You will see `status=IN_PROGRESS`, `phase=PROVISIONING`, forever.
+    Some builds accept `start-build` and never run it (pulling `aws/codebuild/standard:7.0` is multi-gigabyte), so you see `phase=PROVISIONING` forever.
 
-    On real AWS, provisioning takes a few seconds because the image is cached in the service.
+    On real AWS provisioning takes seconds because the image is cached.
 
-    Give it four minutes. If the phase has not moved, stop the build with
-    `aws codebuild stop-build --id "$BUILD_ID"`, record what you saw in
-    `notes/lab-11-notes.md`, and go to Step 14 - the local runner executes exactly the same
-    buildspec, and everything after Step 14 still works. This is Path B or Path C from Step 3.
+    After four minutes, stop it with `aws codebuild stop-build --id "$BUILD_ID"`, record it in `notes/lab-11-notes.md`, and go to Step 14. The local runner executes the same buildspec (Path B or C).
 
 ---
 
 ### Step 13 - Read the build output and the logs
 
-**Purpose**
-
-`SUCCEEDED` is not the interesting part. The interesting part is per-phase timing and the log, because
-that is the pair you will use for every failed build for the rest of your career.
-
-**Run from**
-
-```text
-aws-floci-course/
-```
-
-**Command**
+Per-phase timing and the log are the pair you use for every failed build.
 
 ```bash
 aws codebuild batch-get-builds --ids "$BUILD_ID" \
@@ -1850,11 +1307,7 @@ aws codebuild batch-get-builds --ids "$BUILD_ID" > "outputs/lab-11-build-$(date 
 > Example output - your durations will differ, and a failed build shows the failing phase with
 > `FAILED` and every phase after it absent.
 
-**What to look for:** the phase names are not the four you wrote. CodeBuild adds `SUBMITTED`,
-`QUEUED`, `PROVISIONING`, `DOWNLOAD_SOURCE`, `UPLOAD_ARTIFACTS`, `FINALIZING` and `COMPLETED` around
-them. Learning which of those are yours and which are the service's is most of learning to read a
-build failure: a failure in `DOWNLOAD_SOURCE` is a source or permissions problem, a failure in
-`PRE_BUILD` is your code, and a failure in `PROVISIONING` is capacity or image.
+CodeBuild adds `SUBMITTED`, `QUEUED`, `PROVISIONING`, `DOWNLOAD_SOURCE`, `UPLOAD_ARTIFACTS`, `FINALIZING` and `COMPLETED` around your four phases. A `DOWNLOAD_SOURCE` failure is source or permissions; `PRE_BUILD` is your code; `PROVISIONING` is capacity or image.
 
 **Command - the log**
 
@@ -1873,20 +1326,14 @@ aws logs get-log-events \
   --query 'events[].message' --output text
 ```
 
-**What to look for:** the `--- install ---`, `--- pre_build ---`, `--- build ---` and
-`--- post_build ---` markers you put in the buildspec, and between the last two, the seven `ok` lines
-from `tests/smoke.sh`. Those markers exist precisely so that a log you are skimming at speed tells you
-where you are.
+Look for your `--- install ---` to `--- post_build ---` markers and the seven `ok` lines from `tests/smoke.sh`.
 
 !!! note "Floci Limitation - empty build logs"
-    Log streams for CodeBuild builds are frequently empty on this emulator even when the build ran,
-    because the log-shipping side of the build agent is not wired up.
+    CodeBuild log streams are often empty here even when the build ran.
 
-    On real AWS the stream contains every line the build printed, and is the primary debugging tool.
+    On real AWS the stream holds every line the build printed.
 
-    If `get-log-events` returns no events, do not conclude the build did nothing. Check
-    `batch-get-builds` phases instead, and check the artifact in the next command - the artifact is
-    the evidence that survives.
+    If there are no events, check the phases and the artifact below; the artifact is the evidence that survives.
 
 **Command - read the artifact back**
 
@@ -1895,10 +1342,7 @@ aws s3api list-objects-v2 --bucket usms-pipeline-artifacts --prefix build/ \
   --query 'Contents[].{Key:Key,Size:Size}' --output table
 ```
 
-**What to look for:** one object under `build/`. This is the `create → perturb → read back` shape
-again: the build ran (perturbation), and the artifact it left behind is the read-back. A `SUCCEEDED`
-status with no artifact means `artifacts.base-directory` in your buildspec does not match where the
-build actually wrote files.
+One object under `build/`: the read-back. `SUCCEEDED` with no artifact means `artifacts.base-directory` does not match where the build wrote files.
 
 **Checkpoint 5**
 
@@ -1912,21 +1356,10 @@ CodeBuild
 ```
 
 ---
+
 ### Step 14 - The local buildspec runner
 
-**Purpose**
-
-Two reasons, and the second is the important one.
-
-First, if Step 12 never left `PROVISIONING`, this is how you still run your build. Second - and this
-applies even if CodeBuild worked perfectly - a buildspec you can only run by pushing to a bucket and
-waiting ninety seconds is a buildspec you will debug badly. Being able to run the same phases in two
-seconds on your laptop changes how you write them.
-
-**Concept first - what "the same build" does and does not mean**
-
-The local runner reads *your* `buildspec.yml` and executes the same commands in the same order. It is
-not a CodeBuild emulator:
+If Step 12 never left `PROVISIONING`, this runs your build anyway; and even when CodeBuild works, running the same phases in two seconds changes how you write them.
 
 | Same | Different |
 | --- | --- |
@@ -1935,14 +1368,7 @@ not a CodeBuild emulator:
 | `env.variables`, and the rule that an environment value overrides them | No `CODEBUILD_*` variables - the buildspec's `:-local` defaults fire |
 | The artifacts directory it produces | Does not zip or upload anything |
 
-Say which one you used when you report a result. "The build passed" and "the build passed locally"
-are different claims.
-
-**Run from**
-
-```text
-aws-floci-course/
-```
+"The build passed" and "the build passed locally" are different claims; say which.
 
 **Command**
 
@@ -2094,23 +1520,9 @@ bash -n scripts/utilities/usms-buildspec-run.sh && echo "syntax OK"
 ./scripts/utilities/usms-buildspec-run.sh labs/lab-11-cicd/app
 ```{% endraw %}
 
-**What the command does**
-
-The script asks Python to turn the buildspec into a plain shell script, checks that script with
-`bash -n`, then runs it in a subshell that `cd`s into the application directory - so the parent shell
-never changes directory, which is the `cd` that never comes back, avoided by construction.
-
-Each `env.variables` entry becomes `export NAME="${NAME:-value}"` rather than a plain assignment, so a
-value you set in your own environment before invoking the runner wins over the buildspec's default.
-That matches CodeBuild, where a project-level environment variable overrides an `env.variables` default
-in the buildspec, and Lab 12 relies on it. The generated form assumes the default contains no double
-quote, which is true of every value this course writes.
-
-The Python part prefers PyYAML and falls back to a hand-written parser that understands exactly the
-YAML shape this course writes: `env.variables`, `phases.<name>.commands`, plain `- command` items and
-`- |` literal blocks. It does not understand anchors, flow sequences, or multi-document files, and it
-says which parser it used so you can tell. That honesty is the point: a fallback that quietly
-mis-parses is worse than no fallback.
+- Python turns the buildspec into a shell script, `bash -n` checks it, and a subshell runs it inside the app directory (the parent shell never changes directory).
+- Each `env.variables` entry becomes `export NAME="${NAME:-value}"`, so a value already in your environment wins, matching CodeBuild's project-level override (Lab 12 relies on it).
+- PyYAML is preferred; the fallback parser handles exactly this course's subset (`env.variables`, `phases.<name>.commands`, `- command`, `- |`) and says which parser it used.
 
 **Expected result**
 
@@ -2150,12 +1562,9 @@ cat labs/lab-11-cicd/app/dist/build-metadata.json
 grep -n 'release:' labs/lab-11-cicd/app/dist/index.html
 ```
 
-**What to look for:** `build-metadata.json` shows `"release": "r3"` and `"buildId": "local"`. That
-`local` is how you tell, later and at a glance, whether an artifact came from a real build or from
-your laptop. `index.html` shows `release: r3` with no `__RELEASE__` anywhere.
+`"release": "r3"` and `"buildId": "local"` (the marker of a laptop build); `release: r3` and no `__RELEASE__` in `index.html`.
 
-The `dist/` directory is build output and must never be committed or packed into the source. The
-packer from Step 11 already excludes it; add it to `.gitignore` as well:
+`dist/` is build output; the packer excludes it, and `.gitignore` should too:
 
 ```bash
 grep -q '^labs/lab-11-cicd/app/dist/' .gitignore || \
@@ -2164,10 +1573,7 @@ grep -q '^labs/lab-11-cicd/app/dist/' .gitignore || \
 git check-ignore -v labs/lab-11-cicd/app/dist/build-metadata.json
 ```
 
-**What to look for:** the output names `.gitignore`, a line number, and the pattern. Note the form -
-`labs/lab-11-cicd/app/dist/` with a trailing slash excludes the directory and everything in it, and
-nothing here needs re-including, so the `outputs/*` plus negation shape from Section 15 of the course
-rules does not apply.
+The output names `.gitignore`, a line number and the pattern. A trailing-slash directory rule is fine here because nothing inside needs re-including.
 
 **Checkpoint 6**
 
@@ -2182,25 +1588,7 @@ scripts/utilities/
 
 ### Step 15 - Create the CodePipeline service role and its policy
 
-**Purpose**
-
-The pipeline is also a principal, and it is a different one from the build. Keeping them separate is
-not bureaucracy: the pipeline can start builds and read every artifact, while the build can read one
-bucket and write logs. If the build container is compromised, it cannot start other builds.
-
-**Concept first - `iam:PassRole`, properly**
-
-The pipeline does not build anything. It calls `codebuild:StartBuild`, and CodeBuild then runs the
-build **as `usms-codebuild-role`**. That is a role handoff, and AWS treats handoffs as a permission in
-their own right.
-
-Think about why. Without `iam:PassRole`, anyone who could create a CodeBuild project could name
-*any* role in the account as its service role - including an administrator role - and then run
-arbitrary commands as it. `iam:PassRole` is the control that stops that: to hand role R to service S,
-you need explicit permission to pass R, and the `iam:PassedToService` condition pins which service
-may receive it.
-
-In this pipeline the handoff is:
+The pipeline is a separate principal: it can start builds and read every artifact, while the build can read one bucket and write logs. The pipeline does not build; it calls `codebuild:StartBuild` and CodeBuild runs **as `usms-codebuild-role`**. Handing a role to a service requires `iam:PassRole`, and `iam:PassedToService` pins the receiving service; without it, anyone who can create a project could name an administrator role. See [iam:PassRole](../unit8/topic1.md#iampassrole).
 
 ```text
 usms-codepipeline-role  ──iam:PassRole──>  usms-codebuild-role  ──used by──>  codebuild.amazonaws.com
@@ -2209,13 +1597,7 @@ usms-codepipeline-role  ──iam:PassRole──>  usms-codebuild-role  ──us
 Lab 12 adds a second handoff, to the ECS task and execution roles, for exactly the same reason.
 
 !!! info "Compare with `USMSDeployBase`, if you have it"
-    If you completed Lab 09, open `policies/usms-deploy-policy.json` now and find its
-    `iam:PassRole` statement. It scopes `PassRole` to three role ARNs with an `iam:PassedToService`
-    condition naming `ec2.amazonaws.com` and `ecs-tasks.amazonaws.com`. The statement you are about
-    to write is the same idea with a different receiving service.
-
-    For a second data point, here is the equivalent pass-role statement from the EKS deployment work
-    in Labs 07-08, so you can compare all three side by side:
+    Lab 09's `policies/usms-deploy-policy.json` scopes `iam:PassRole` to three role ARNs with `iam:PassedToService` naming `ec2.amazonaws.com` and `ecs-tasks.amazonaws.com`. The EKS work in Labs 07-08 uses the equivalent statement:
 
     ```json
     {
@@ -2237,12 +1619,6 @@ Lab 12 adds a second handoff, to the ECS task and execution roles, for exactly t
 
     The question to answer in `notes/lab-11-notes.md`: what would go wrong if the `Resource` were
     `"*"` but the condition were kept? Be specific about which role an attacker would name.
-
-**Run from**
-
-```text
-aws-floci-course/
-```
 
 **Command - part 1, the documents**
 
@@ -2313,15 +1689,8 @@ for f in policies/trust-codepipeline.json policies/usms-codepipeline-policy.json
 done
 ```
 
-**What the command does**
-
-The second statement names **one project ARN**, not `project/*`. That is the difference between "this
-pipeline can run the enrolment build" and "this pipeline can run every build in the account", and it
-is one line of typing.
-
-`s3:GetBucketVersioning` is in the first statement because CodePipeline genuinely calls it - it checks
-that an S3 source bucket is versioned before it will run, which is the machine-enforced half of what
-Step 6 proved by hand.
+- `StartBuild` names **one project ARN**, not `project/*`.
+- `s3:GetBucketVersioning` is there because CodePipeline checks that an S3 source is versioned, the machine-enforced half of Step 6.
 
 **Command - part 2, create and attach**
 
@@ -2355,20 +1724,13 @@ aws iam get-policy --policy-arn "$PIPELINE_POLICY_ARN" \
   --query 'Policy.{Name:PolicyName,Default:DefaultVersionId,Attached:AttachmentCount}' --output table
 ```
 
-**What to look for:** `Default` is `v1` and `Attached` is `1`. Remember `Default` - Lab 12 creates
-`v2` of `USMSCodeBuildBase` and has to set it as the default explicitly, because creating a policy
-version does not activate it.
+`Default` is `v1` and `Attached` is `1`. Lab 12 creates `v2` of `USMSCodeBuildBase` and must set it as default explicitly.
 
 ---
 
 ### Step 16 - Write the pipeline definition
 
-**Purpose**
-
-A pipeline is a JSON document. Understanding its shape is the difference between operating
-CodePipeline and clicking at it.
-
-**Concept first - the four nested things**
+A pipeline is a JSON document. See [stages and actions](../unit5/topic2.md#stages-actions-and-the-parallelism-inside-a-stage).
 
 ```text
 pipeline
@@ -2381,24 +1743,9 @@ pipeline
            └── outputArtifacts[]   names this action produces
 ```
 
-Two details that trip people:
-
-- **`actionTypeId` has four parts and all four are required.** `category` is one of `Source`, `Build`,
-  `Test`, `Deploy`, `Approval`, `Invoke`. `owner` is `AWS`, `ThirdParty`, or `Custom`. `version` is
-  the string `"1"` - a string, not a number, for every action type in use today.
-- **Every value in `configuration` is a string.** `"PollForSourceChanges": "false"` is the *string*
-  `false`. A JSON boolean there is rejected, and the message is about the structure, not the type.
-
-Artifact names - `SourceOutput`, `BuildOutput` - are local to the pipeline. They are how one action
-says "give me what that one produced". They are not S3 keys; CodePipeline chooses those.
-
-**Run from**
-
-```text
-aws-floci-course/
-```
-
-**Command**
+- `actionTypeId` needs all four parts; `version` is the string `"1"`.
+- Every `configuration` value is a string: `"PollForSourceChanges": "false"`. A JSON boolean is rejected with a structural message.
+- Artifact names (`SourceOutput`, `BuildOutput`) are local to the pipeline, not S3 keys.
 
 ```bash
 cat > templates/lab-11-pipeline.json << EOF
@@ -2462,17 +1809,7 @@ python3 -m json.tool templates/lab-11-pipeline.json > /dev/null && echo "pipelin
 grep -c '\$' templates/lab-11-pipeline.json
 ```
 
-**What the command does**
-
-Unquoted heredoc again, for `${PIPELINE_ROLE_ARN}`, and the same `grep -c '\$'` check afterwards. The
-answer must be `0`.
-
-`"PollForSourceChanges": "false"` deserves a sentence. If it were `"true"`, CodePipeline would poll
-the S3 object every minute and start an execution whenever the version ID changed. Polling is the old
-mechanism; the modern one is an EventBridge rule fed by CloudTrail data events on that object. This
-lab uses neither - executions are started by hand with `start-pipeline-execution` - because polling on
-an emulator is an unreliable thing to build a laboratory step on, and because starting an execution by
-hand makes the causal chain visible. Exercise 4 asks you to write the EventBridge rule.
+Unquoted heredoc for `${PIPELINE_ROLE_ARN}`; `grep -c '\$'` must print `0`. `PollForSourceChanges` is `"false"`: executions are started by hand, which keeps the causal chain visible (polling is deprecated in favour of EventBridge; Exercise 4).
 
 **Expected result**
 
@@ -2487,18 +1824,7 @@ pipeline template is valid JSON
 
 ### Step 17 - Create the pipeline
 
-**Purpose**
-
-Turn the document into a running pipeline, and learn to read `get-pipeline-state`, which is the one
-command you will use most.
-
-**Run from**
-
-```text
-aws-floci-course/
-```
-
-**Command**
+Turn the document into a pipeline and learn `get-pipeline-state`, the command you will use most.
 
 ```bash
 aws codepipeline create-pipeline \
@@ -2522,12 +1848,7 @@ aws codepipeline create-pipeline \
 > Example output - the table's column layout depends on your terminal width.
 
 !!! warning "Creating a pipeline starts an execution immediately"
-    CodePipeline runs the pipeline once as soon as it is created. You did not ask for that and you
-    cannot turn it off. That first execution will use the project as it is configured *right now* -
-    with its own S3 source - which is the configuration Step 18 is about to change.
-
-    Let it run. Note what it does. Step 18 explains why the result is ambiguous, and Step 19 is the
-    execution whose result you will actually rely on.
+    This first execution uses the project as configured now, with its own S3 source, which Step 18 changes. Let it run and note what it does; Step 19's execution is the one you rely on.
 
 **Verify**
 
@@ -2553,21 +1874,14 @@ aws codepipeline get-pipeline-state --name usms-enrolment-pipeline \
 > Example output - on a build where CodeBuild does not run, the Build row stays `InProgress` and then
 > reads `Failed`. Both are informative; neither blocks the rest of this lab.
 
-**What to look for:** the Source stage reaching `Succeeded` is the meaningful signal here. It proves
-three things at once: the bucket is versioned, the object exists at the key you named, and the
-pipeline role can read it.
+Source reaching `Succeeded` proves the bucket is versioned, the object exists at the key, and the pipeline role can read it.
 
 !!! note "Floci Limitation - pipeline execution state may not advance"
-    Some builds create pipelines, store them, return them faithfully from `get-pipeline`, and never
-    execute them. `get-pipeline-state` then shows stages with no `latestExecution` at all.
+    Some builds store pipelines and never execute them; `get-pipeline-state` then shows no `latestExecution`.
 
-    On real AWS an execution starts within seconds of `create-pipeline` and every transition is
-    visible in `list-pipeline-executions`.
+    On real AWS an execution starts within seconds and every transition appears in `list-pipeline-executions`.
 
-    If your stage states are empty, you are on Path B or Path C. Record the pipeline document you
-    wrote, run the local runner from Step 14 to produce the artifact, and say so in your report.
-    Sections 13 and 14 are written so that every exercise and every assessment item is completable on
-    all three paths.
+    If stage states are empty you are on Path B or C: record the document, produce the artifact with Step 14's runner, and say so. Every exercise and assessment item works on all three paths.
 
 **Checkpoint 7**
 
@@ -2583,33 +1897,7 @@ CodePipeline: usms-enrolment-pipeline
 
 ### Step 18 - Hand the project to the pipeline
 
-**Purpose**
-
-Make it unambiguous which source the build builds. Right now the project has an S3 source of its own
-*and* is being handed an input artifact by the pipeline. Two sources, one build: that is exactly the
-kind of arrangement where everything succeeds and you cannot say what happened.
-
-**Concept first - the trade-off you are about to make**
-
-Setting `source.type` to `CODEPIPELINE` means "my source comes from whoever invoked me". After this
-change:
-
-- the pipeline's Build stage unambiguously builds the artifact the Source stage produced;
-- `aws codebuild start-build --project-name usms-enrolment-build` **stops working**, because the
-  project no longer knows where any source is.
-
-That second point is the cost, and it is worth knowing before you pay it. There is an escape hatch -
-`start-build` accepts `--source-type-override` and `--source-location-override`, which let you run a
-one-off build of a `CODEPIPELINE` project against an explicit source. It is shown below, because at
-some point you will need to reproduce a pipeline build by hand.
-
-**Run from**
-
-```text
-aws-floci-course/
-```
-
-**Command**
+The project currently has its own S3 source **and** receives the pipeline's input artifact: two sources, one build. Setting `source.type` to `CODEPIPELINE` makes the Build stage unambiguously build the Source stage's output, at the cost that `start-build --project-name usms-enrolment-build` stops working. `--source-type-override` and `--source-location-override` are the one-off escape hatch.
 
 ```bash
 aws codebuild update-project \
@@ -2620,12 +1908,7 @@ aws codebuild update-project \
   --output table
 ```
 
-**What the command does**
-
-`update-project` replaces the members you name and leaves the rest alone - the environment, the role,
-the timeout and the tags all survive. `--source type=CODEPIPELINE,buildspec=buildspec.yml` keeps the
-buildspec *path* while dropping the location, because the buildspec still has to be found at the root
-of whatever artifact arrives.
+`update-project` replaces only the members you name; the buildspec path is kept because it is still found at the artifact root.
 
 **Expected result**
 
@@ -2647,12 +1930,9 @@ of whatever artifact arrives.
 aws codebuild start-build --project-name usms-enrolment-build 2>&1 | head -3
 ```
 
-**What to look for:** an error. On real AWS it is an `InvalidInputException` explaining that a project
-with a `CODEPIPELINE` source cannot be built directly; on Floci the wording differs. Either way, this
-is the expected result and it is the point of the step. If it *succeeds*, your build accepted a build
-with no source, and you should note that in Section 12's "recorded, not observed" list.
+An error is the expected result (`InvalidInputException` on real AWS; wording differs on Floci). If it succeeds, note it in Section 11's "recorded, not observed" list.
 
-The one-off override, for when you need to reproduce a pipeline build by hand:
+The one-off override, for reproducing a pipeline build by hand:
 
 ```bash
 aws codebuild start-build \
@@ -2662,34 +1942,13 @@ aws codebuild start-build \
   --query 'build.id' --output text
 ```
 
-**What to look for:** a build ID. If your build of Floci rejects the override flags, record that and
-move on - the pipeline in Step 19 is the path that matters, and the local runner is the path that
-always works.
+A build ID. If your build rejects the override flags, record it and move on.
 
 ---
 
 ### Step 19 - Run the pipeline end to end, and prove it consumed your source
 
-**Purpose**
-
-The whole laboratory converges here. Change one line of source, and show - not assert - that the
-change travelled through the pipeline into the build artifact.
-
-**Concept first - the proof, again**
-
-`create → perturb → read back`. The artifact from the first execution says `release: r3`. You change
-`VERSION` to `r4`, repackage, upload a new version of the object, and start an execution. Then you
-fetch the *output artifact* out of S3 and look inside it. If it says `r4`, the pipeline read your new
-source, ran your buildspec against it, and wrote the result where it said it would. If it says `r3`,
-something in that chain did not happen, no matter what status the console shows.
-
-A green pipeline is not evidence. The contents of the artifact are evidence.
-
-**Run from**
-
-```text
-aws-floci-course/
-```
+Create, perturb, read back: change `VERSION` to `r4`, upload a new source version, run the pipeline, and look inside the output artifact. A green pipeline is not evidence; the artifact's contents are.
 
 **Command - part 1, perturb**
 
@@ -2716,9 +1975,7 @@ aws s3api list-object-versions --bucket usms-pipeline-artifacts \
   --output table
 ```
 
-**What to look for:** two versions, one `Latest`. The versioning you proved in Step 6 is now doing
-real work: the old source is still retrievable, which is what makes "deploy the previous release"
-possible without a rebuild.
+Two versions, one `Latest`: the old source is still retrievable, which makes "deploy the previous release" possible without a rebuild.
 
 **Command - part 2, run**
 
@@ -2789,12 +2046,7 @@ print("srcVersion:", meta["sourceVersion"])
 PY
 ```
 
-**What the command does**
-
-`sort_by(Contents, &LastModified)[-1].Key` is new JMESPath surface and Appendix B records it:
-`sort_by` takes a list and an expression reference - the `&` - and `[-1]` takes the last element,
-which after sorting by modification time is the newest. Doing this in JMESPath rather than piping
-through `sort` keeps it on one line and works identically on both operating systems.
+`sort_by(Contents, &LastModified)[-1].Key` sorts by modification time and takes the last (newest) key, on both operating systems.
 
 **Expected result**
 
@@ -2813,18 +2065,12 @@ srcVersion: 3HL9pQ...
 
 > Example output - your key, timestamps and IDs will differ.
 
-**What to look for:** four things, in this order of importance.
+In order of importance:
 
-1. **`release` is `r4`.** The pipeline consumed the source you uploaded ninety seconds ago, not a
-   cached copy of anything.
-2. **`buildId` is not `local`.** The artifact came from CodeBuild, not from your laptop. If it says
-   `local`, you have downloaded an artifact your local runner produced and copied by hand - which is
-   a legitimate Path B or Path C result, but you must report it as such.
-3. **The artifact's root is the files themselves**, with no `dist/` prefix. That is
-   `artifacts.base-directory` doing its job, and Lab 12 depends on it.
-4. **`srcVersion` matches `$NEW_VERSION_ID`** from part 1, if your build populates
-   `CODEBUILD_RESOLVED_SOURCE_VERSION`. When it does, you have an unbroken chain from the byte you
-   changed to the artifact that will be deployed.
+1. **`release` is `r4`**: the pipeline consumed the source you just uploaded.
+2. **`buildId` is not `local`**: the artifact came from CodeBuild. `local` is a legitimate Path B or C result, reported as such.
+3. **The artifact root is the files**, with no `dist/` prefix; Lab 12 depends on it.
+4. **`srcVersion` matches `$NEW_VERSION_ID`**, if your build sets `CODEBUILD_RESOLVED_SOURCE_VERSION`: an unbroken chain from the changed byte to the artifact.
 
 ✏️ **Your turn**
 
@@ -2840,6 +2086,8 @@ executions ran, including the automatic one at Step 17 - and on Path B or C it
 may be fewer. A correct answer explains the relationship, not just the counts.
 ```
 
+Hint: `list-object-versions` and `list-objects-v2 --prefix usms-enrolment-pipeline/BuildOutput/` give the two counts.
+
 **Checkpoint 8**
 
 ```text
@@ -2852,19 +2100,10 @@ s3://usms-pipeline-artifacts
 ```
 
 ---
+
 ### Step 20 - Make the build fail on purpose, then fix it
 
-**Purpose**
-
-Every pipeline you will ever operate spends most of its interesting moments failing. Learning to read
-a failure on a build you broke deliberately, where you already know the answer, is much cheaper than
-learning it at 11pm on a build somebody else broke.
-
-**Run from**
-
-```text
-aws-floci-course/
-```
+Learn to read a failure you broke deliberately, where you already know the answer.
 
 **Command - part 1, break it**
 
@@ -2890,16 +2129,7 @@ BAD_EXEC=$(aws codepipeline start-pipeline-execution --name usms-enrolment-pipel
 echo "execution: $BAD_EXEC"
 ```
 
-**What the command does**
-
-The change is one word in one JSON file, and it is the kind of change that looks harmless in a diff.
-`pre_build` greps for `"container": "enrolment-api"` and exits 1 when it does not find it. Lab 12's
-deploy stage would fail on the same mismatch, but much later and much more expensively - which is the
-argument for putting the check in `pre_build` in the first place.
-
-Note that the `grep` in the buildspec matches the two-space-indented form that `json.dump(indent=2)`
-produces. A reformat of that file with different indentation would also fail the build. That is a
-fragility worth noticing; Exercise 3 asks you to replace the grep with something that parses.
+One word in one JSON file: `pre_build` greps for `"container": "enrolment-api"` and exits 1. The grep depends on `json.dump(indent=2)` formatting; Exercise 3 replaces it with a parse.
 
 **Command - part 2, diagnose it**
 
@@ -2933,9 +2163,7 @@ aws codepipeline get-pipeline-state --name usms-enrolment-pipeline \
 > Example output - the exact wording of the error differs between real AWS and this emulator, and on
 > Path B or C the Build stage may report nothing at all.
 
-**What to look for:** the failure is in **Build**, not Source, which already tells you the source was
-fetched fine. Then work inward: pipeline stage → build → phase → command. The command below is the
-inward step:
+The failure is in **Build**, so the source was fetched. Work inward, stage to build to phase to command:
 
 ```bash
 LAST_BUILD=$(aws codebuild list-builds-for-project --project-name usms-enrolment-build \
@@ -2946,20 +2174,14 @@ aws codebuild batch-get-builds --ids "$LAST_BUILD" \
   --output table
 ```
 
-**What to look for:** one row, `Phase` is `PRE_BUILD`. The `contexts[0].message` names the command
-that exited non-zero. That four-step chain - stage, build, phase, command - is the whole diagnostic
-method, and it does not change no matter how complicated the pipeline gets.
+One row, `Phase` `PRE_BUILD`; `contexts[0].message` names the failing command. That chain is the whole diagnostic method.
 
 !!! note "Floci Limitation - `list-builds-for-project` and `contexts`"
-    Some builds do not implement `list-builds-for-project`, and many do not populate `contexts` on a
-    failed phase.
+    Some builds lack `list-builds-for-project`, and many leave `contexts` empty.
 
-    On real AWS both are reliable, and `contexts[0].message` is usually the fastest route to the
-    failing command.
+    On real AWS both are reliable, and `contexts[0].message` is the fastest route to the command.
 
-    If either is unavailable, reproduce the failure locally - the local runner from Step 14 prints
-    the failing command directly, because it is running in your own terminal. That is Path B and
-    Path C's diagnostic route, and it is not a worse one.
+    Otherwise reproduce the failure with Step 14's runner, which prints the failing command directly.
 
 **Command - part 3, fix it**
 
@@ -2985,9 +2207,7 @@ aws codepipeline start-pipeline-execution --name usms-enrolment-pipeline \
   --query 'pipelineExecutionId' --output text
 ```
 
-**What to look for:** `local build passes again` **before** you repackage. That ordering is the habit
-worth forming - validate locally, then push. A pipeline is not a place to find out whether your change
-works; it is a place to record that it did.
+`local build passes again` **before** you repackage: validate locally, then push.
 
 **Checkpoint 9**
 
@@ -3004,19 +2224,7 @@ usms-enrolment-pipeline
 
 ### Step 21 - Record this lab's outputs, and commit
 
-**Purpose**
-
-Shell variables die with the terminal. `PIPELINE_ROLE_ARN`, `BUILD_ID`, `NEW_VERSION_ID` - all of them
-are gone the moment you close this window, and Lab 12 needs most of what they held. Writing them to
-`configs/lab-11.env` is what makes the next lab possible without repeating this one.
-
-**Run from**
-
-```text
-aws-floci-course/
-```
-
-**Command**
+Write the names, ARNs and IDs Lab 12 needs to `configs/lab-11.env`.
 
 ```bash
 cd ~/aws-floci-course
@@ -3077,18 +2285,10 @@ grep -n 'export .*=$\|None' configs/lab-11.env || echo "all values populated"
 grep -c '^export' configs/lab-11.env
 ```
 
-**What the command does**
+!!! warning "Unquoted heredoc"
+    `<< EOF` so every `$(...)` runs now; the file on disk contains no command substitutions. The opposite of Step 8's `<< 'BUILDSPEC'` and Step 9's `<< 'EOF'`, with no error message if you get it backwards.
 
-**Unquoted** heredoc, `<< EOF`, because every `$(...)` must run now and be replaced by its answer. The
-file that lands on disk contains no command substitutions at all - check it with `grep '\$(' ` if you
-want to see that for yourself. This is the opposite of Step 8's `<< 'BUILDSPEC'`, where the `$` signs
-had to survive untouched, and Step 9's `<< 'EOF'`, where the JSON had to be written literally. Same
-syntax, one quote of difference, opposite behaviour, no error message when you get it backwards.
-
-The `| grep -E '...' || echo not-created` idiom on the project and pipeline lookups is Lab 06's
-pattern. On Path B or C those resources genuinely do not exist, and an env file full of the literal
-string `None` is worse than one that says `not-created` - because `None` is also what a successful
-call returns for an absent field, and you could not tell the two apart later.
+`| grep -E '...' || echo not-created` (Lab 06's pattern) records `not-created` on Path B or C instead of an ambiguous `None`.
 
 **Expected result**
 
@@ -3109,9 +2309,7 @@ printf 'bucket=%s versioning=%s project=%s stages=%s release=%s path=%s\n' \
   "$USMS_RELEASE_TAG" "$USMS_CICD_SUPPORT_PATH"
 ```
 
-**What to look for:** `versioning=Enabled`, `stages=2` on Path A, and `release=r5` if you did the
-Step 19 "Your turn". A `versioning=Unknown` here means Step 5 did not take effect and Lab 12 will
-fail at its first pipeline update.
+`versioning=Enabled`, `stages=2` on Path A, and `release=r5` if you did Step 19's "Your turn". `versioning=Unknown` means Step 5 did not take effect.
 
 **Command - commit**
 
@@ -3119,9 +2317,7 @@ fail at its first pipeline update.
 git status --short
 ```
 
-**What to look for:** before you stage anything, read that list. **No file under `outputs/` and no
-`.env` other than `configs/lab-11.env` may appear.** If one does, stop and fix `.gitignore` rather
-than committing carefully - a rule you have to remember is a rule that will be forgotten.
+**No file under `outputs/` and no `.env` other than `configs/lab-11.env` may appear.** If one does, fix `.gitignore` rather than committing carefully.
 
 ```bash
 git add configs/lab-11.env \
@@ -3147,18 +2343,11 @@ git                        committed; nothing from outputs/ staged
 
 ---
 
-## 9. Verification
+## 8. Verification
 
-One script, run from anywhere, that checks this lab's artefacts **and** the environment they depend
-on. A verification script that only checks its own resources passes right up until the restart that
-deletes them, which is why the environment block comes first and why its failures matter more than
-the ones below it.
+The environment block comes first: a script that only checks its own resources passes until the restart that deletes them.
 
-**Run from**
-
-```text
-aws-floci-course/
-```
+### 8.1 Build `scripts/utilities/verify-lab-11.sh`
 
 {% raw %}```bash
 cat > scripts/utilities/verify-lab-11.sh << 'EOF'
@@ -3308,7 +2497,7 @@ PASS=46  FAIL=0
 
 > Example output - Path B and Path C correctly read `PASS=38  FAIL=8`.
 
-### 9.1 Known benign failures
+Known benign failures:
 
 | Failure | Benign when | What it means |
 | --- | --- | --- |
@@ -3319,9 +2508,112 @@ PASS=46  FAIL=0
 | `no secret is tracked` | Never | **Not benign.** Something under `outputs/` is in the index. Fix `.gitignore`, then `git rm --cached` it |
 | `versioning is Enabled` | Never | **Not benign.** The pipeline depends on it. Return to Step 5 |
 
+### 8.2 Build the end-of-course cleanup script
+
+!!! danger "Read before running any delete command"
+    **What will be deleted:** the pipeline, the build project, both roles, both customer-managed
+    policies, and every object and object *version* in `usms-pipeline-artifacts`, then the bucket.
+
+    **What depends on it:** Lab 12's entire deploy stage, and any report you have not yet written.
+
+    **Reversible?** No. Deleted object versions are gone; deleted IAM policies take their version
+    history with them.
+
+    **Effect on later labs:** total for Lab 12. Run this only at the end of the course.
+
+```bash
+cat > scripts/cleanup/lab-11-cleanup.sh << 'EOF'
+#!/usr/bin/env bash
+# END OF COURSE ONLY. Removes everything Lab 11 created, dependencies inside-out.
+# DO NOT RUN NOW.
+set -Eeuo pipefail
+
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+cd "$REPO_ROOT"
+# shellcheck disable=SC1091
+source "$REPO_ROOT/configs/course.env"
+# shellcheck disable=SC1091
+[ -f configs/lab-11.env ] && source configs/lab-11.env
+
+: "${USMS_PIPELINE_BUCKET:=usms-pipeline-artifacts}"
+: "${USMS_PIPELINE_NAME:=usms-enrolment-pipeline}"
+: "${USMS_BUILD_PROJECT:=usms-enrolment-build}"
+
+cat <<'WARN'
+This deletes the Lab 11 pipeline, build project, roles, policies and the ENTIRE
+artifact bucket including every object version. Lab 12 depends on all of it.
+
+If Lab 12 has been completed, run scripts/cleanup/lab-12-cleanup.sh FIRST.
+WARN
+
+if aws codepipeline get-pipeline --name "$USMS_PIPELINE_NAME" \
+     --query 'length(pipeline.stages)' --output text 2>/dev/null | grep -qx '3'; then
+  echo "REFUSING: the pipeline still has three stages, so Lab 12 has not been cleaned up." >&2
+  exit 1
+fi
+
+printf 'Type exactly: DELETE USMS PIPELINE\n> '
+read -r CONFIRM
+[ "$CONFIRM" = "DELETE USMS PIPELINE" ] || { echo "aborted"; exit 1; }
+
+say() { printf '\n== %s ==\n' "$1"; }
+
+say "pipeline"
+aws codepipeline delete-pipeline --name "$USMS_PIPELINE_NAME" 2>/dev/null || true
+
+say "build project"
+aws codebuild delete-project --name "$USMS_BUILD_PROJECT" 2>/dev/null || true
+
+say "roles and policies"
+for pair in "usms-codepipeline-role:USMSCodePipelineBase" "usms-codebuild-role:USMSCodeBuildBase"; do
+  ROLE="${pair%%:*}"; POL="${pair##*:}"
+  ARN="arn:aws:iam::000000000000:policy/$POL"
+  aws iam detach-role-policy --role-name "$ROLE" --policy-arn "$ARN" 2>/dev/null || true
+  aws iam delete-role --role-name "$ROLE" 2>/dev/null || true
+  for V in $(aws iam list-policy-versions --policy-arn "$ARN" \
+               --query 'Versions[?!IsDefaultVersion].VersionId' --output text 2>/dev/null); do
+    aws iam delete-policy-version --policy-arn "$ARN" --version-id "$V" 2>/dev/null || true
+  done
+  aws iam delete-policy --policy-arn "$ARN" 2>/dev/null || true
+done
+
+say "artifact bucket: every version, then the bucket"
+aws s3api list-object-versions --bucket "$USMS_PIPELINE_BUCKET" \
+  --query '[Versions[].[Key,VersionId], DeleteMarkers[].[Key,VersionId]][]' \
+  --output text 2>/dev/null |
+while read -r KEY VID; do
+  [ -n "${KEY:-}" ] && aws s3api delete-object --bucket "$USMS_PIPELINE_BUCKET" \
+      --key "$KEY" --version-id "$VID" >/dev/null 2>&1 || true
+done
+aws s3api delete-bucket --bucket "$USMS_PIPELINE_BUCKET" 2>/dev/null || true
+
+say "done"
+echo "Lab 11 resources removed. The ECS platform from Lab 04/05 is untouched."
+EOF
+
+chmod +x scripts/cleanup/lab-11-cleanup.sh
+bash -n scripts/cleanup/lab-11-cleanup.sh && echo "syntax OK - do NOT run it"
+```
+
+End-of-course run order, with this lab slotted in:
+
+```text
+scripts/cleanup/lab-12-cleanup.sh    (deploy stage, ECR repository, image)
+scripts/cleanup/lab-11-cleanup.sh    (pipeline, build project, artifact bucket)
+scripts/cleanup/lab-10-cleanup.sh
+scripts/cleanup/lab-09-cleanup.sh
+scripts/cleanup/lab-08-cleanup.sh
+scripts/cleanup/lab-07-cleanup.sh
+scripts/cleanup/lab-06-cleanup.sh
+scripts/cleanup/lab-05-cleanup.sh
+scripts/cleanup/lab-04-cleanup.sh
+scripts/cleanup/lab-03-cleanup.sh
+scripts/cleanup/lab-02-cleanup.sh
+```
+
 ---
 
-## 10. Checkpoints
+## 9. Checkpoints
 
 | # | After Step | What must exist |
 | --- | --- | --- |
@@ -3337,7 +2629,11 @@ PASS=46  FAIL=0
 | 10 | 21 | `configs/lab-11.env` with 26 populated exports, committed |
 
 ---
-## 11. Troubleshooting
+
+## 10. Troubleshooting
+
+!!! warning "Known issue on Floci 2.0.1"
+    On Floci 2.0.1, CodeBuild cannot pull `aws/codebuild/standard:7.0`. Diagnose first, then use the alternative in [Known Issues - Lab 11](known-issues.md#lab-11-cicd-pipeline). It states what the alternative does and does not prove.
 
 ### `The bucket you are attempting to access must be addressed using the specified endpoint`
 
@@ -3408,9 +2704,7 @@ documented rather than hidden precisely so this failure is diagnosable.
 
 ---
 
-## 12. Floci vs Real AWS
-
-### 12.1 Feature by feature
+## 11. Floci vs Real AWS
 
 | Feature | Real AWS | Floci | Status |
 | --- | --- | --- | --- |
@@ -3432,57 +2726,15 @@ documented rather than hidden precisely so this failure is diagnosable.
 | CodeCommit as a source | Existing customers only - closed to new accounts since July 2024 | May exist, but teaching it would teach a closed door | **Conceptual / Real AWS** |
 | Build cost | Per build-minute, by compute type | Free | **Floci Limitation** |
 
-### 12.2 What you observed, and what you recorded
+Observed (on Path A): the source zip layout, the buildspec's four phases, the smoke tests passing and failing, an artifact naming your release, a `pre_build` failure, two versions at one key. Recorded but not enforced: the build role's scoping, the explicit `Deny`, the scoped `iam:PassRole`, the single project ARN. Not available: S3-triggered executions, approvals, build reports, KMS-encrypted artifacts. On Path B or C, move lines from observed to recorded in your report: "I wrote and validated a pipeline document" is worth more than an overstated "I built a pipeline".
 
-```text
-OBSERVED - you saw this happen on your own machine
-  the source tree packaged into a zip whose root is the tree's contents
-  the buildspec parsed, and its four phases executed in order
-  the seven smoke tests passing, and failing when a placeholder was not replaced
-  a build artifact whose build-metadata.json named the release you had just set
-  a deliberately broken config failing in pre_build and not in build
-  two versions of one S3 key, and the older one still retrievable
-
-RECORDED - correct, checkable by reading, not enforced here
-  the CodeBuild service role's scoping to one log group and one bucket
-  the explicit Deny on usms-student-data
-  the pipeline role's iam:PassRole, scoped to one role and one receiving service
-  the single project ARN in codebuild:StartBuild, rather than project/*
-
-NOT AVAILABLE AT ALL
-  automatic pipeline triggering from an S3 object change
-  manual approval stages
-  build reports and test report groups
-  artifact-store encryption with a customer-managed key
-```
-
-If your Step 3 probe said Path B or Path C, move the corresponding lines from OBSERVED to RECORDED in
-your own report. "I built a two-stage pipeline" and "I wrote and validated a two-stage pipeline
-document, on a build that does not execute pipelines" are different claims, and the second one is
-worth more than an overstated first one.
-
-### 12.3 Where Floci is nicer than reality
-
-Four traps, each of which will bite you on a real account:
-
-- **Builds are instant and free.** On real AWS, `BUILD_GENERAL1_SMALL` is billed per build-minute, and
-  a pipeline that rebuilds on every commit to a busy repository is a line item. `cache` exists for
-  that reason; this lab left it empty because caching a build this small would be theatre.
-- **No concurrency limits.** Real accounts have a concurrent-build quota, and a pipeline that fans out
-  to twenty parallel builds will queue.
-- **No propagation delay.** A role you created one second ago is usable immediately here. On real AWS,
-  IAM is eventually consistent, and `create-role` followed straight away by `create-project` naming it
-  is the single most common "it works the second time" failure in CI setup code.
-- **Nothing is encrypted.** Real artifact stores are encrypted with a KMS key by default, and the
-  build role needs `kms:Decrypt` on it. A policy that works here and omits KMS will fail there, and
-  the error names the key rather than the bucket.
+**Where Floci is nicer than reality (traps on real AWS):** builds are instant and free (real builds bill per build-minute; `cache` exists for that); no concurrent-build quota; no IAM propagation delay (`create-role` then `create-project` is the classic "works the second time" failure); nothing is encrypted (real artifact stores use KMS, so the build role needs `kms:Decrypt`).
 
 ---
 
-## 13. Independent Lab Exercises
+## 12. Independent Lab Exercises
 
-Five exercises, increasing in difficulty. Requirements and constraints are given; commands are not.
-Write your answers and evidence in `labs/lab-11-cicd/exercises.md`.
+Requirements and constraints are given; commands are not. Write answers and evidence in `labs/lab-11-cicd/exercises.md`.
 
 ### Exercise 1 - Basic: a second build project for the results service
 
@@ -3628,9 +2880,7 @@ tells you what the placeholder image currently is.
 
 ---
 
-## 14. Lab Assessment Checklist
-
-Tick each item only when you have the evidence, not when you remember doing it.
+## 13. Lab Assessment Checklist
 
 - [ ] `./scripts/utilities/cicd-support-probe.sh` run, and the path recorded in your notes
 - [ ] `usms-pipeline-artifacts` created, versioned, and versioning **proved** by two versions at one key
@@ -3652,11 +2902,11 @@ Tick each item only when you have the evidence, not when you remember doing it.
 - [ ] `./scripts/utilities/verify-lab-11.sh` run, with its count and any benign failures recorded
 - [ ] `git status --short` checked before staging; nothing from `outputs/` committed
 - [ ] Five exercises attempted, with Exercise 5's readiness file written
-- [ ] Section 15's questions answered in prose in `notes/lab-11-notes.md`
+- [ ] Section 14's questions answered in prose in `notes/lab-11-notes.md`
 
 ---
 
-## 15. Review Questions
+## 14. Review Questions
 
 Answer in prose, in `notes/lab-11-notes.md`. No command output.
 
@@ -3690,26 +2940,7 @@ Answer in prose, in `notes/lab-11-notes.md`. No command output.
 
 ---
 
-## 16. What We Built
-
-### 16.1 Reflection
-
-At the start of this laboratory, changing the enrolment service meant typing a command, and the
-record of what changed was your shell history. At the end, changing it means editing a file,
-packaging it, and uploading it - and the record is an S3 version ID, a build ID, a pipeline execution
-ID, and an artifact containing a `build-metadata.json` that links all three.
-
-That chain is the deliverable. Not the pipeline; the chain. The pipeline is just the machine that
-maintains it.
-
-Two moments in this lab are worth remembering specifically. The first is Step 18, where handing the
-project to the pipeline **broke** the ability to build it directly - a real trade-off, made visible,
-rather than a configuration setting you flipped without noticing. The second is Step 19, where the
-proof that the pipeline worked was not a green status but the contents of a zip file. Status is
-reporting. Contents are evidence. Every system you operate will offer you the first when you need the
-second.
-
-### 16.2 KEEP and CLEAN UP
+## 15. KEEP vs CLEAN UP
 
 ```text
 ╔══════════════════ KEEP ══════════════════╗    ╔═══════════ CLEAN UP ═══════════╗
@@ -3730,110 +2961,7 @@ second.
 
 Everything in the KEEP column is consumed by Lab 12. Do not delete any of it.
 
-### 16.3 The end-of-course cleanup script
-
-!!! danger "Read before running any delete command"
-    **What will be deleted:** the pipeline, the build project, both roles, both customer-managed
-    policies, and every object and object *version* in `usms-pipeline-artifacts`, then the bucket.
-
-    **What depends on it:** Lab 12's entire deploy stage, and any report you have not yet written.
-
-    **Reversible?** No. Deleted object versions are gone; deleted IAM policies take their version
-    history with them.
-
-    **Effect on later labs:** total for Lab 12. Run this only at the end of the course.
-
-```bash
-cat > scripts/cleanup/lab-11-cleanup.sh << 'EOF'
-#!/usr/bin/env bash
-# END OF COURSE ONLY. Removes everything Lab 11 created, dependencies inside-out.
-# DO NOT RUN NOW.
-set -Eeuo pipefail
-
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-cd "$REPO_ROOT"
-# shellcheck disable=SC1091
-source "$REPO_ROOT/configs/course.env"
-# shellcheck disable=SC1091
-[ -f configs/lab-11.env ] && source configs/lab-11.env
-
-: "${USMS_PIPELINE_BUCKET:=usms-pipeline-artifacts}"
-: "${USMS_PIPELINE_NAME:=usms-enrolment-pipeline}"
-: "${USMS_BUILD_PROJECT:=usms-enrolment-build}"
-
-cat <<'WARN'
-This deletes the Lab 11 pipeline, build project, roles, policies and the ENTIRE
-artifact bucket including every object version. Lab 12 depends on all of it.
-
-If Lab 12 has been completed, run scripts/cleanup/lab-12-cleanup.sh FIRST.
-WARN
-
-if aws codepipeline get-pipeline --name "$USMS_PIPELINE_NAME" \
-     --query 'length(pipeline.stages)' --output text 2>/dev/null | grep -qx '3'; then
-  echo "REFUSING: the pipeline still has three stages, so Lab 12 has not been cleaned up." >&2
-  exit 1
-fi
-
-printf 'Type exactly: DELETE USMS PIPELINE\n> '
-read -r CONFIRM
-[ "$CONFIRM" = "DELETE USMS PIPELINE" ] || { echo "aborted"; exit 1; }
-
-say() { printf '\n== %s ==\n' "$1"; }
-
-say "pipeline"
-aws codepipeline delete-pipeline --name "$USMS_PIPELINE_NAME" 2>/dev/null || true
-
-say "build project"
-aws codebuild delete-project --name "$USMS_BUILD_PROJECT" 2>/dev/null || true
-
-say "roles and policies"
-for pair in "usms-codepipeline-role:USMSCodePipelineBase" "usms-codebuild-role:USMSCodeBuildBase"; do
-  ROLE="${pair%%:*}"; POL="${pair##*:}"
-  ARN="arn:aws:iam::000000000000:policy/$POL"
-  aws iam detach-role-policy --role-name "$ROLE" --policy-arn "$ARN" 2>/dev/null || true
-  aws iam delete-role --role-name "$ROLE" 2>/dev/null || true
-  for V in $(aws iam list-policy-versions --policy-arn "$ARN" \
-               --query 'Versions[?!IsDefaultVersion].VersionId' --output text 2>/dev/null); do
-    aws iam delete-policy-version --policy-arn "$ARN" --version-id "$V" 2>/dev/null || true
-  done
-  aws iam delete-policy --policy-arn "$ARN" 2>/dev/null || true
-done
-
-say "artifact bucket: every version, then the bucket"
-aws s3api list-object-versions --bucket "$USMS_PIPELINE_BUCKET" \
-  --query '[Versions[].[Key,VersionId], DeleteMarkers[].[Key,VersionId]][]' \
-  --output text 2>/dev/null |
-while read -r KEY VID; do
-  [ -n "${KEY:-}" ] && aws s3api delete-object --bucket "$USMS_PIPELINE_BUCKET" \
-      --key "$KEY" --version-id "$VID" >/dev/null 2>&1 || true
-done
-aws s3api delete-bucket --bucket "$USMS_PIPELINE_BUCKET" 2>/dev/null || true
-
-say "done"
-echo "Lab 11 resources removed. The ECS platform from Lab 04/05 is untouched."
-EOF
-
-chmod +x scripts/cleanup/lab-11-cleanup.sh
-bash -n scripts/cleanup/lab-11-cleanup.sh && echo "syntax OK - do NOT run it"
-```
-
-End-of-course run order, with this lab slotted in:
-
-```text
-scripts/cleanup/lab-12-cleanup.sh    (deploy stage, ECR repository, image)
-scripts/cleanup/lab-11-cleanup.sh    (pipeline, build project, artifact bucket)
-scripts/cleanup/lab-10-cleanup.sh
-scripts/cleanup/lab-09-cleanup.sh
-scripts/cleanup/lab-08-cleanup.sh
-scripts/cleanup/lab-07-cleanup.sh
-scripts/cleanup/lab-06-cleanup.sh
-scripts/cleanup/lab-05-cleanup.sh
-scripts/cleanup/lab-04-cleanup.sh
-scripts/cleanup/lab-03-cleanup.sh
-scripts/cleanup/lab-02-cleanup.sh
-```
-
-### 16.4 The architecture now
+Do **not** run `scripts/cleanup/lab-11-cleanup.sh`; it is for the end of the course (Section 8.2).
 
 ```text
   source tree ──> S3 (versioned) ──> CodePipeline ──> CodeBuild ──> artifact in S3
@@ -3849,12 +2977,9 @@ scripts/cleanup/lab-02-cleanup.sh
 
 ---
 
-## 17. Preparation for the Next Lab
+## 16. Preparation for the Next Lab
 
-The next laboratory is **Lab 12 - Deploying to ECS from the Pipeline**, which is Practical 7
-and carries the Practical 7 in-class assessment.
-
-### What Lab 12 will consume
+Lab 12 (Deploying to ECS from the Pipeline) completes Practical 7 and carries its in-class assessment.
 
 | Artefact | From | How Lab 12 uses it |
 | --- | --- | --- |
@@ -3868,20 +2993,10 @@ and carries the Practical 7 in-class assessment.
 | `outputs/lab-11-lab08b-readiness.txt` | Exercise 5 | Read in Lab 12 Step 1 as the inventory of what it inherited |
 | `configs/lab-11.env` | Step 21 | Sourced in Lab 12 Step 2 |
 
-### The thing Lab 12 must be careful about
+!!! warning "`update-pipeline` replaces the whole document"
+    There is no "add a stage" operation: get, modify, put. Putting a document with only the new stage silently deletes today's two stages. `put-bucket-notification-configuration`, `update-assume-role-policy`, `put-bucket-policy` and `put-bucket-tagging` belong to the same replace-only family.
 
-`update-pipeline` **replaces the whole pipeline document**. There is no "add a stage" operation. The
-sequence has to be get, modify, put - and if you put a document containing only your new stage, the
-two stages you built today disappear, silently, with a successful API call.
-
-That is the same shape as Lab 10's warning about `put-bucket-notification-configuration`, and the same
-category: `update-assume-role-policy`, `put-bucket-policy`, `put-bucket-tagging`,
-`update-pipeline`. Replace-only APIs are worth recognising as a family, because every one of them will
-happily delete something you did not mention.
-
-### Pre-session checks
-
-Run these before the next session. All four should pass.
+Before the next session:
 
 ```bash
 cd ~/aws-floci-course
@@ -3896,7 +3011,7 @@ docker info >/dev/null 2>&1 && echo "docker reachable"
 The `docker info` check is new and is not decorative: Lab 12 builds a container image on your
 machine, and a Docker daemon you cannot reach makes half of it impossible.
 
-### Snapshot before you finish
+Snapshot before you finish:
 
 ```bash
 floci snapshot save lab-11-complete
@@ -3914,47 +3029,9 @@ tar -czf ~/floci-data-lab-11.tar.gz -C ~ floci-data
 
 Keep the archive **outside** the repository so it is never a commit candidate.
 
-### Read ahead
-
-Three things, each of which Lab 12 assumes you have thought about for five minutes:
-
-- **A container image is identified by a tag or by a digest, and they are not the same.** A tag can be
-  moved to point at different bytes; a digest cannot. Decide now which one you would want a production
-  task definition to name, and what you would give up by choosing it.
-- **The ECS deploy action does not register a task definition from a file you wrote.** It takes the
-  service's current task definition, replaces the image of the container named in
-  `imagedefinitions.json`, registers that as a new revision, and updates the service. Work out which
-  changes to a task definition that mechanism can express and which it cannot.
-- **`docker build` inside CodeBuild needs `privilegedMode`.** Find out what that flag actually turns
-  on, and why a build that can run a privileged container is a build worth being careful about who can
-  trigger.
-
 ---
 
-## Appendix A - Command Reference
-
-| Command | What it does here |
-| --- | --- |
-| `aws s3api create-bucket --bucket X` | Creates the bucket; no `--create-bucket-configuration` in `us-east-1` |
-| `aws s3api put-bucket-versioning --versioning-configuration Status=Enabled` | Turns on versioning; required for an S3 pipeline source |
-| `aws s3api list-object-versions --prefix K` | The only way to see anything but the current version |
-| `aws s3api delete-object --key K --version-id V` | Deletes one specific version, permanently |
-| `aws codebuild create-project --cli-input-json file://T` | Creates the project from a template |
-| `aws codebuild batch-get-projects --names X` | Reads the project back; `projectsNotFound` tells you it is absent |
-| `aws codebuild update-project --source type=CODEPIPELINE` | Hands the project's source to whoever invokes it |
-| `aws codebuild start-build --project-name X` | Queues one build; returns immediately |
-| `aws codebuild start-build --source-type-override S3 --source-location-override B/K` | One-off build of a `CODEPIPELINE` project |
-| `aws codebuild batch-get-builds --ids I` | Status, per-phase timing, log stream names |
-| `aws codebuild stop-build --id I` | Stops a build that will not progress |
-| `aws codepipeline create-pipeline --cli-input-json file://T` | Creates the pipeline, and runs it once immediately |
-| `aws codepipeline get-pipeline --name X` | Returns `{pipeline, metadata}`; only `pipeline` goes back in |
-| `aws codepipeline get-pipeline-state --name X` | Per-stage status - the command you will use most |
-| `aws codepipeline start-pipeline-execution --name X` | Starts an execution by hand |
-| `aws codepipeline get-pipeline-execution --pipeline-execution-id E` | The status of one execution |
-| `aws iam create-policy` / `attach-role-policy` | Customer-managed policy, attached to a role |
-| `aws logs get-log-events --log-group-name G --log-stream-name S` | Reads a build's log, when the build ships one |
-
-## Appendix B - New JMESPath and CLI patterns introduced
+## Appendix - New CLI and JMESPath patterns
 
 | Pattern | Meaning | Where |
 | --- | --- | --- |
@@ -3966,6 +3043,8 @@ Three things, each of which Lab 12 assumes you have thought about for five minut
 | `\| grep -E '^arn:' \|\| echo not-created` | Turn an absent resource into a populated env value | Step 21 |
 | `- \|` in YAML | Literal block scalar - how a heredoc fits in a buildspec | Step 8 |
 | `env -u VAR` | Run a command with a variable unset, so a check can actually fail | Errata 01, referenced |
+
+---
 
 ## Sources
 
@@ -3997,8 +3076,3 @@ Three things, each of which Lab 12 assumes you have thought about for five minut
   (`--force-new-deployment` and image tags), Lab 05 (the target group and container name this
   pipeline will deploy to), Lab 09 Step 8 (`usms-deploy-role` and scoped `iam:PassRole`), Lab 10
   Step 2 (the tolerant loader), Errata 01.
-
----
-
-*Lab 11 complete. There is now a machine that turns a change to a file into an artifact with a name,
-a version and a record. Lab 12 connects the other end of it to the running service.*

@@ -1,140 +1,35 @@
 # Lab 06 - Implementing Auto Scaling for an ECS-Based Application
 
+## 1. Objectives
 
-## 1. Lab Overview
+- Register `usms-enrolment-svc` as a scalable target (min 2, max 10) and read the service-linked role that writes `desiredCount` for you.
+- Add two target tracking policies (CPU and `ALBRequestCountPerTarget`), a step scaling policy driven by your own CloudWatch alarm, and two scheduled actions.
+- Fire the alarm and prove that something other than you moved `desiredCount`; suspend and resume scaling.
+- Prove the scaling configuration survives a restart and save its names to `configs/lab-06.env`.
 
-Practical 2 built a container platform and gave it a front door. At the end of Lab 05 you had an ECS
-service running two Fargate tasks in private subnets, an Application Load Balancer in front of them,
-and a target group that the service keeps up to date without being asked.
-
-One number in that architecture has never moved on its own: `desiredCount`. In Lab 04 Step 16 you
-typed `4`, watched `pendingCount` lag behind, and typed `2` again. In Lab 05 Step 11's "Your turn"
-you typed `3` and then `2`. Both times the capacity changed because a human decided it should.
-
-This laboratory replaces the human. **Application Auto Scaling** - a separate AWS service from ECS,
-with its own API, its own vocabulary and its own IAM identity - will watch a metric, decide that the
-enrolment service needs more or fewer tasks, and write `desiredCount` for you.
-
-The single most important idea to leave with is how little that involves:
-
-```text
-Application Auto Scaling writes ONE INTEGER.
-
-It does not start tasks. It does not talk to containers. It does not know what your
-application does, whether it is healthy, or that a load balancer exists. It reads a
-metric, compares it with a target, and writes desiredCount.
-
-Everything after that is machinery you have already built:
-  ECS starts a task -> the task gets an ENI in a Lab 02 subnet
-                    -> the service registers its address in Lab 05's target group
-                    -> the load balancer health-checks it
-                    -> it receives traffic
-```
-
-Students who hold on to that sentence find auto scaling almost anticlimactic, which is the correct
-reaction. Students who imagine it as a mysterious orchestrator spend an afternoon looking for the part
-of it that starts containers, and there isn't one.
-
-The emphasis of this lab is in its title: **implementing**. Registering a scalable target is one
-command. What takes four hours is choosing a metric that means something, choosing a target value you
-can defend, understanding the two CloudWatch alarms a target tracking policy creates behind your back,
-writing a step scaling policy for the cases target tracking cannot express, adding scheduled scaling
-for the spike you already know about, suspending all of it during an incident, and - the part that
-matters most - **proving that something other than you moved the number.**
-
-**Time:** roughly 4 hours, including the exercises.
-
-**Where this sits in the course**
-
-```text
-Lab 01   IAM ................. roles, policies, instance profile
-Lab 02   VPC ................. subnets, NAT, route tables, security groups
-Lab 03   EC2 ................. usms-web-01 and usms-db-01 in that network
-Lab 04   ECS + Fargate ....... the cluster, the blueprint, the service, and how to operate them
-Lab 05   ECS + ALB ........... the front door, and Practical 2's in-class assessment
-Lab 06   Service Auto Scaling  THIS LAB - the same service, made elastic
-Lab 07   EKS .................. the same workload, a different control plane
-Lab 08   EKS Scaling ......... HPA, node group scaling, exposure
-Lab 09   Security ............ least-privilege review of the IAM and security-group estate
-Lab 10   Lambda .............. functions triggered from usms-student-data, S3 built inline
-```
-
-This document builds only the scaling: it does not touch the cluster, the task definition or the
-service, all of which Lab 04 already built and Lab 05 put behind a load balancer. Steps run from 1,
-as §8's numbering rule requires. Step 17 explains one small piece of repository housekeeping this
-split left behind: the cleanup scripts Labs 04 and 05 ship print a message telling you to run
-`scripts/cleanup/lab-04-cleanup.sh` first, and this lab ships `scripts/cleanup/lab-06-cleanup.sh` -
-neither script *executes* the name it prints, so nothing is broken, but §11 has the one-line repair
-if you want the printed instruction to match exactly.
-
-!!! info "The row Lab 05 unlocked"
-    The earlier edition of this lab scaled on CPU utilisation and said, in its own text, that requests
-    per target would be a better signal for a web API and that it could not use one because the course
-    had no load balancer.
-
-    Lab 05 built one. Step 9 of this lab creates the request-count policy that was previously
-    impossible, using the `ResourceLabel` string Lab 05's Exercise 5 asked you to derive. If you
-    skipped that exercise, Step 9 derives it for you and explains what it is made of.
+!!! info "Concepts used in this lab"
+    Read these first if a term is new: [Application Auto Scaling on ECS](../unit2/topic3.md#application-auto-scaling-on-ecs) ·
+    [why the signal matters](../unit2/topic3.md#why-auto-scaling-exists-and-why-the-signal-matters-more-than-the-mechanism) ·
+    [choosing the scaling metric](../unit2/topic3.md#choosing-the-scaling-metric) ·
+    [the two scaling layers](../unit2/topic3.md#the-two-scaling-layers-revisited) ·
+    [Application Auto Scaling vs EC2 Auto Scaling](../unit7/topic1.md#application-auto-scaling-and-ec2-auto-scaling) ·
+    [custom metrics](../unit7/topic1.md#custom-metrics-and-the-four-ways-to-publish-them) ·
+    [how an alarm evaluates data](../unit7/topic3.md#how-an-alarm-evaluates-data) ·
+    [missing-data treatment](../unit7/topic3.md#missing-data-treatment) ·
+    [alarm actions](../unit7/topic3.md#alarm-actions) ·
+    [service-linked roles](../unit8/topic1.md#service-roles-instance-profiles-and-service-linked-roles)
 
 ---
 
-## 2. Learning Objectives
+## 2. Prerequisites
 
-After completing this laboratory you will be able to:
-
-1. Explain what Application Auto Scaling is, name the one thing it changes on an ECS service, and list
-   three things it does **not** do.
-2. Distinguish **ECS service auto scaling** from **ECS cluster auto scaling** and from **EC2 Auto
-   Scaling groups**, and say which of the three the golden AMI from Lab 3 belongs to.
-3. Construct the three-part address of a scalable target - service namespace, resource ID and scalable
-   dimension - and explain why the resource ID is a constructed string rather than an ARN.
-4. Register a scalable target with a minimum and maximum capacity, and predict what registering it does
-   to a service that is currently below the minimum.
-5. Explain what the service-linked role `AWSServiceRoleForApplicationAutoScaling_ECSService` is for, and
-   why you never write its trust policy yourself.
-6. Create a **target tracking** scaling policy, choose a target value you can defend, and explain what
-   `ScaleOutCooldown` and `ScaleInCooldown` each protect against.
-7. Find the two CloudWatch alarms a target tracking policy created on your behalf, read them, and say
-   why you must not edit or delete them by hand.
-8. Explain why `ALBRequestCountPerTarget` is a better scaling signal than CPU for a web API, name the one
-   case where CPU is better, and build the `ResourceLabel` string it requires.
-9. Create a **step scaling** policy with more than one step adjustment, and describe a requirement that
-   target tracking cannot express.
-10. Attach a CloudWatch alarm to a scaling policy, and read the alarm's `AlarmActions` to prove the
-    attachment.
-11. Create **scheduled** scaling actions with a `cron` schedule expression, and explain the difference
-    between the schedule's time zone and the resources' region.
-12. Fire an alarm deliberately and read `describe-scaling-activities` to prove that something other than
-    you changed `desiredCount`.
-13. Suspend and resume dynamic and scheduled scaling independently, and say why leaving one suspended is
-    a silent fault.
-14. Explain why reactive scaling can never fully absorb a spike, and quantify the gap using a figure you
-    measured yourself in Lab 04 or Lab 05.
-15. Prove that the scalable target, all three policies, both scheduled actions and the custom alarm
-    survive a restart of the emulator, deriving every identifier from the API.
-
----
-
-## 3. Prerequisites
-
-- **Lab 04 complete**, with `usms-ecs-cluster`, the `usms-enrolment` family and `usms-enrolment-svc` as
-  Lab 04 left them.
-- **Lab 05 complete**, with `./scripts/utilities/verify-lab-05.sh` reporting `FAIL=0` **before you
-  start this lab**. Run it now, not at the end.
-- **`verify-lab-04.sh` reporting either `FAIL=0` or exactly the one documented failure** on the
-  `usms-app-sg` source check. Lab 05 Step 13 caused that failure deliberately and Lab 05's Exercise 2
-  repairs it; either state is acceptable here, and any *other* failure is not.
-- **The service at its baseline**: `desiredCount` of 2, exactly one deployment. Step 5 registers a
-  scalable target with a minimum of 2 and will raise the capacity immediately if it finds the service
-  below that, which is a confusing way to discover you left it at 1.
-- **Errata 01 applied.** If `echo "$AWS_PROFILE"` in a brand-new terminal prints nothing, stop and apply
-  Errata 01 first - every command in this lab would otherwise fail with a credentials error that names
-  the wrong cause.
-- Floci running under Docker Compose with `FLOCI_STORAGE_MODE` set to `hybrid`.
-- `jq` and `python3` available. `python3` is used for every timestamp in this lab, because GNU `date` and
-  BSD `date` disagree about every flag that matters and half this class is on macOS.
-
-Check all of that in one go:
+- Lab 04 complete: `usms-ecs-cluster`, the `usms-enrolment` family and `usms-enrolment-svc` as Lab 04 left them.
+- Lab 05 complete: `./scripts/utilities/verify-lab-05.sh` reports `FAIL=0` **before you start**.
+- `verify-lab-04.sh` reports `FAIL=0` or exactly the one documented failure on the `usms-app-sg` source check (caused by Lab 05 Step 13, repaired by Lab 05 Exercise 2). Any other failure is not acceptable.
+- The service at its baseline: `desiredCount` 2, one deployment. Step 5 raises the count immediately if the service is below the new minimum.
+- Errata 01 applied: `echo "$AWS_PROFILE"` in a brand-new terminal must print `floci`.
+- Floci running under Docker Compose with `FLOCI_STORAGE_MODE=hybrid`.
+- `jq` and `python3` installed. `python3` produces every timestamp, because GNU and BSD `date` disagree.
 
 ```bash
 cd ~/aws-floci-course
@@ -154,18 +49,10 @@ aws-cli/2.17.42 Python/3.11.9 Darwin/23.5.0 exe/x86_64
 PASS=16  FAIL=0
 ```
 
-**What to look for:** three tools found, and `PASS=16  FAIL=0` from the storage check. A failure in that
-script's `shell and profile` block is the real problem and everything below it is a consequence - fix
-that block before starting.
+Three tools found and `PASS=16  FAIL=0`. A failure in the storage check's `shell and profile` block is the real problem; fix it first.
 
-!!! tip "One number from an earlier lab that this lab will keep asking you for"
-    Lab 04 Exercise 5 asked you to measure how long a scale-out actually takes in your environment, and
-    Lab 05 Exercise 5 asked you to measure how long a full capacity replacement takes. Have those two
-    figures - or the AWS-documented Fargate start-up figure you cited instead - to hand.
-
-    Every cooldown in this lab is chosen relative to them. A `ScaleOutCooldown` shorter than the time it
-    takes a task to become useful is a policy that scales out twice for one event, and the only way to
-    know whether yours is is to know that number.
+!!! tip "Have your measured scale-out latency to hand"
+    Lab 04 Exercise 5 and Lab 05 Exercise 5 measured how long a scale-out and a capacity replacement take. Every cooldown in this lab is sized against those figures (or the cited Fargate start-up figure).
 
     ```bash
     cat outputs/lab-04-scale-latency.txt 2>/dev/null || echo "not measured - use the cited figure"
@@ -174,40 +61,23 @@ that block before starting.
 
 ---
 
-## 4. Connection to Previous Labs
+## 3. What This Lab Reuses
 
-### 4.1 Current Environment
+From Lab 04:
+
+- `usms-ecs-cluster` and `usms-enrolment-svc`: Step 5 builds the scalable target's resource ID from the service's ARN.
+- `USMS_ECS_DESIRED_BASELINE` (2): Step 5 uses it as `MinCapacity`, one task per Availability Zone.
+- Container Insights: Step 7's CPU metric exists only because Lab 04 Step 4 enabled it.
+- `usms-enrolment:2`: untouched; this lab registers no revision (Step 15 checks).
+
+From Lab 05:
+
+- `usms-enrolment-alb` and `usms-enrolment-tg`: Step 9 builds the `ResourceLabel` from both ARNs (or uses `USMS_ALB_RESOURCE_LABEL` from Lab 05 Exercise 5).
+- `healthCheckGracePeriodSeconds` (60): Step 12 explains why a new task is not useful capacity for another minute.
+
+From Lab 02: `usms-private-subnet-a` and `-b`, where scaled tasks appear (Step 15, Exercise 4).
 
 ```text
-Created in previous labs:
-- Lab 01: Floci under Compose, hybrid storage, persistence proven
-- Lab 01: groups usms-admins / usms-developers / usms-auditors; three users
-- Lab 01: roles  usms-ec2-app-role, usms-lambda-exec-role, usms-developer-role
-- Lab 01: policies USMSDeveloperBase (v2), USMSStudentDataReadWrite, USMSAssumeAppRoles,
-                   USMSLambdaBasic, USMSSelfManageCredentials (inline)
-- Lab 01: instance profile usms-ec2-app-profile
-- Lab 01: configs/course.env, configs/lab-01.env
-- Lab 02: usms-vpc 10.0.0.0/16, DNS support and hostnames enabled
-- Lab 02: usms-public-subnet-a / -b, usms-private-subnet-a / -b
-- Lab 02: usms-igw, usms-nat (+ Elastic IP), usms-public-rt, usms-private-rt
-- Lab 02: usms-app-sg, usms-db-sg, usms-private-nacl, usms-s3-endpoint
-- Lab 02: configs/lab-02.env, scripts/utilities/verify-lab-02.sh
-- Lab 03: usms-web-01 (public subnet a, usms-app-sg, usms-ec2-app-profile, usms-web-eip)
-- Lab 03: usms-db-01 (private subnet a, usms-db-sg, no public address)
-- Lab 03: usms-web-data-vol, usms-web-golden, usms-app-key
-- Lab 03: configs/lab-03.env, scripts/utilities/verify-lab-03.sh
-- Lab 04: usms-ecs-cluster, Container Insights enabled
-- Lab 04: /usms/ecs/enrolment log group, retention 7 days
-- Lab 04: usms-ecs-exec-role (+ USMSECSTaskExecution), usms-ecs-task-role (+ Lab 01's S3 policy)
-- Lab 04: usms-enrolment:1 and usms-enrolment:2, two immutable revisions
-- Lab 04: usms-enrolment-svc, desired 2, both private subnets, no public address
-- Lab 04: configs/lab-04.env, scripts/utilities/verify-lab-04.sh
-- Lab 05: usms-alb-sg, usms-enrolment-alb (internet-facing, public subnets a + b)
-- Lab 05: usms-enrolment-tg (target-type ip), the HTTP:80 listener, the /alb-health rule
-- Lab 05: usms-enrolment-svc attached to the target group; grace period 60s
-- Lab 05: usms-enrolment-sg cut over to usms-alb-sg only
-- Lab 05: configs/lab-05.env, scripts/utilities/verify-lab-05.sh
-
 Created in this lab:
 - AWSServiceRoleForApplicationAutoScaling_ECSService   the identity that writes desiredCount
 - a SCALABLE TARGET   service/usms-ecs-cluster/usms-enrolment-svc
@@ -233,99 +103,20 @@ Required for future labs:
 - outputs/lab-06-scaling-history.json (Exercise 5) -> Lab 10's first put-object needs a real file
 - usms-ecs-task-role       -> Lab 10 creates the bucket its attached policy already names
 ```
-
-### 4.2 What this lab genuinely reuses
-
-Not mentions - uses.
-
-| From | Used here how |
-| --- | --- |
-| Lab 04 `usms-ecs-cluster` and `usms-enrolment-svc` | Step 5 builds the scalable target's resource ID out of these two names, derived from the service's own ARN |
-| Lab 04 `USMS_ECS_DESIRED_BASELINE` | Step 5 uses it as the scalable target's `MinCapacity`. The floor is 2 because Lab 04 Step 13 argued for one task per Availability Zone |
-| Lab 04 Container Insights | Step 7's CPU policy reads a metric that exists only because Lab 04 Step 4 turned that setting on. If it is off, Step 7 says what you get instead |
-| Lab 04 `usms-enrolment:2` | Untouched. This lab registers no revision and changes no blueprint. Step 15 says so out loud |
-| Lab 05 `usms-enrolment-tg` and `usms-enrolment-alb` | Step 9's `ResourceLabel` is built from fragments of **both** their ARNs |
-| Lab 05 `USMS_ALB_RESOURCE_LABEL` | Step 9 uses it directly if Lab 05's Exercise 5 produced it, and derives it if not |
-| Lab 05 `healthCheckGracePeriodSeconds` | Step 12 explains why a task that ASA just created is not useful capacity for another 60 seconds |
-| Lab 02 `usms-private-subnet-a` and `-b` | Step 15 traces where a task created by a scaling policy actually appears, and Exercise 4 works out how many will fit |
-| `configs/course.env` names | `$COURSE_ROOT`, `$AWS_REGION_COURSE`, `$ACCOUNT_ID`, `$PROJECT` used, never redeclared |
-
-### 4.3 The sentence that makes this lab worth doing
-
-Lab 04 Step 16 had you change `desiredCount` by hand and watch `pendingCount` sit at a number for a
-while before `runningCount` caught up. The lab asked you to hold on to that feeling.
-
-This is what it was for. **A reactive scaling policy cannot make capacity appear before it observes the
-load.** By the time a metric has been published, aggregated over a period, compared with a threshold,
-and turned into an alarm state change, and by the time ECS has started a task and the load balancer has
-health-checked it, the better part of two or three minutes has gone - and every second of that is
-served by the capacity you already had.
-
-That is not a flaw in the implementation. It is arithmetic, and it has three consequences that shape
-every decision in this lab:
-
-- **Your minimum capacity is not a cost decision, it is a latency decision.** Whatever you set as the
-  floor is what absorbs the first two minutes of any spike.
-- **Scale-out should be eager and scale-in reluctant.** That asymmetry is why `ScaleOutCooldown` is 60
-  seconds in this lab and `ScaleInCooldown` is 300.
-- **For a spike you already know about, reactive scaling is the wrong tool.** Enrolment week starts at a
-  time printed in the university calendar. Step 11 is the answer to that, and it is the one form of
-  scaling that can have capacity ready *before* the load arrives.
-
-Say the first sentence out loud before you continue. It is Review Question 5.
-
-### 4.4 What changes, and what deliberately does not
-
-| | Before this lab | After this lab |
-| --- | --- | --- |
-| Who writes `desiredCount` | You, with `update-service` | Application Auto Scaling, or you |
-| `desiredCount` baseline | 2 | 2, with a floor of 2 and a ceiling of 10 |
-| Task definition | `usms-enrolment:2` | unchanged. No new revision is registered |
-| Service `loadBalancers` | one entry | unchanged |
-| Tasks' subnets | private a and b | unchanged |
-| Tasks' public address | none | still none |
-| `usms-enrolment-sg` ingress | tcp/80 from `usms-alb-sg` | unchanged |
-| Target group membership | maintained by the service | unchanged, and now it changes more often |
-| CloudWatch alarms in the account | none of yours | two per target tracking policy, created by AWS, plus one you wrote |
-
-Read the third row and the last row together. This lab adds a great deal of behaviour and changes
-almost nothing about the objects that behaviour acts on. That is the shape of a well-separated system,
-and it is worth noticing while you can still see the seams.
+```
 
 ---
 
-## 5. What We Are Building
+## 4. What We Are Building
 
-Three kinds of scaling on one service, plus the ability to switch all of them off without deleting any
-of them.
+Three kinds of scaling on one service, plus the ability to switch all of them off without deleting any of them. Application Auto Scaling writes **one integer**, `desiredCount`; ECS, the target group and the load balancer you already built do everything after that.
 
-Five decisions justify the shape of what follows, and each is defensible in one sentence.
+!!! info "Why reactive scaling is always late"
+    A metric must be published, aggregated, compared and turned into an alarm state; then ECS starts a task and the load balancer health-checks it. Two to three minutes pass, served by the capacity you already had. Three consequences shape this lab:
 
-**The floor is 2 and the ceiling is 10.** The floor comes from Lab 04: one task per Availability Zone,
-so that losing a zone costs half the capacity rather than all of it. The ceiling is a guard against a
-runaway policy, a metric that has gone mad, and a bill nobody authorised - and Exercise 4 asks you to
-check it against how many addresses Lab 02's private subnets actually have.
-
-**CPU is the policy we start with and requests is the policy we prefer.** CPU is available from
-Container Insights, which Lab 04 enabled, and it is the metric almost every tutorial uses. Requests per
-target measures the thing the service is actually for. Step 9 adds it, and Review Question 7 asks you to
-say when CPU is nonetheless the better of the two.
-
-**Scale out fast, scale in slowly.** `ScaleOutCooldown` of 60 seconds against `ScaleInCooldown` of 300.
-Scaling out too eagerly costs money; scaling in too eagerly costs availability, and the second mistake is
-the expensive one. Note that this is an asymmetry you have to choose: the AWS default for both is 300
-seconds.
-
-**Step scaling exists for the requirement target tracking cannot express.** Target tracking answers "keep
-this metric near this number". It cannot answer "if the backlog is a bit high add one task, and if it is
-enormous add three", because that is a function rather than a set point. Step 10 builds exactly that, on
-a custom metric, and the custom metric is also what makes the scaling *observable* on an emulator.
-
-**Scheduled scaling is the only one that can be early.** Enrolment opens at 08:00. A reactive policy
-learns about it at 08:02. A scheduled action raises the floor at 07:45 and the first student to click
-"Register" finds the capacity already there.
-
-### 5.1 The scaling baseline this lab establishes
+    - **The minimum capacity is a latency decision**, not a cost decision: the floor absorbs the first minutes of any spike.
+    - **Scale out eagerly, scale in reluctantly**: `ScaleOutCooldown` 60 against `ScaleInCooldown` 300 (the AWS default is 300 for both).
+    - **For a spike you know about, use scheduled scaling** (Step 11); it is the only form that can be early.
 
 ```text
 scalable target      service/usms-ecs-cluster/usms-enrolment-svc
@@ -341,12 +132,11 @@ scheduled            weekday 07:45 Asia/Thimphu   min 4   max 10
 suspension           all three switchable independently, none left suspended
 ```
 
-Every one of those is a decision with a reason, and Exercise 4 asks you to defend a completely different
-set for a three-week enrolment window.
+The floor of 2 is one task per AZ; the ceiling of 10 guards against a runaway policy (Exercise 4 checks it against Lab 02's subnet sizes). Step scaling exists for the piecewise requirement target tracking cannot express (Step 10).
 
 ---
 
-## 6. Architecture
+## 5. Architecture
 
 ```text
                               Internet
@@ -422,7 +212,7 @@ Auto Scaling panel exists to decide what that integer should be. Not one of them
 
 ---
 
-## 7. Directory Structure
+## 6. Directory Structure
 
 This lab adds the following. It restructures nothing and needs no new top-level folder.
 
@@ -431,7 +221,7 @@ aws-floci-course/
 ├── labs/
 │   └── lab-06-ecs-autoscaling/
 │       ├── README.md                                  # this document
-│       └── exercises.md                               # Section 13
+│       └── exercises.md                               # Section 12
 ├── templates/
 │   ├── lab-06-target-tracking-cpu.json               # NEW - put-scaling-policy config
 │   ├── lab-06-target-tracking-requests.json          # NEW - the ALB metric config
@@ -441,21 +231,14 @@ aws-floci-course/
 │   └── lab-06.env                                    # NEW
 ├── scripts/
 │   ├── utilities/
-│   │   └── verify-lab-06.sh                          # NEW - Section 9
+│   │   └── verify-lab-06.sh                          # NEW - Section 8
 │   └── cleanup/
 │       └── lab-06-cleanup.sh                         # NEW - end of course only
 └── outputs/
     └── lab-06-*.json / *.txt                         # command output, git-ignored
 ```
 
-Note what is **not** here: no new file under `policies/`. Every document this lab writes is an **API
-request body** - a scaling policy configuration, a suspended-state structure - and none of them grants
-or denies anything. The one identity this lab needs is a service-linked role whose policy AWS writes and
-owns, which is the whole point of a service-linked role and is Step 4's subject.
-
-That distinction is worth keeping sharp. A reviewer opening `policies/` should be looking at your
-security posture and nothing else, and a scaling policy is not a security policy despite sharing a word
-with one.
+There is no new file under `policies/`: every document this lab writes is an API request body, not a permissions policy.
 
 Create the lab folder now:
 
@@ -474,38 +257,17 @@ labs/lab-05-ecs-alb  labs/lab-06-ecs-autoscaling
 
 ---
 
-## 8. Step-by-Step Implementation
+## 7. Step-by-Step Implementation
 
-!!! info "Where to run every command in this lab"
-    Unless a step says otherwise, run everything from the repository root:
+!!! info "Run every command from `aws-floci-course/`"
+    All paths are relative to the repository root. If a command reports `No such file or directory`, check `pwd`.
 
-    ```text
-    aws-floci-course/
-    ```
-
-    Every path below (`configs/...`, `templates/...`, `scripts/...`) is relative to that directory. If a
-    command reports `No such file or directory`, check `pwd` first.
-
-    One habit, restated because this lab's central identifier is a string you build rather than an ID you
-    are given: **capture every identifier with `$(...)`, `--query` and `--output text`, and never type
-    one by hand.** Shell variables die with the terminal, which is why Step 16 writes them all to
-    `configs/lab-06.env`.
+!!! tip "Shell variables die with the terminal"
+    Capture every identifier with `$(...)`, `--query` and `--output text`; never type one. Step 16 writes them to `configs/lab-06.env`.
 
 ### Step 1 - Resume the environment and load six env files
 
-**Purpose**
-
-Bring Floci up and load everything the previous five labs recorded. This lab reads nine values from
-`configs/lab-04.env` and `configs/lab-05.env`, and two of them - the load balancer ARN and the target
-group ARN - are the halves of a composite string Step 9 cannot build without them.
-
-**Run from**
-
-```text
-aws-floci-course/
-```
-
-**Command**
+Bring Floci up and load what Labs 01 to 05 recorded. Step 9 cannot build its composite string without the load balancer and target group ARNs.
 
 ```bash
 cd ~/aws-floci-course
@@ -537,17 +299,7 @@ printf '%-28s %s\n' \
   "account"              "$ACCOUNT_ID"
 ```
 
-**What the command does**
-
-`floci-up.sh` is idempotent: it starts the container if it is stopped, says so if it is already running,
-and refuses to adopt a container that Compose did not create. `whoami.sh` exits 1 if the account is not
-`000000000000`, which is the guard that stops a course command reaching a real AWS account.
-
-Six env files is the standard opening from here on. They are additive and independent: sourcing them in
-any order gives the same result, because no two of them define the same variable.
-
-The `printf` is not decoration. Five of those values are consumed by commands later in this lab, and an
-empty one produces an API error whose message names a malformed parameter rather than a missing variable.
+`whoami.sh` exits 1 if the account is not `000000000000`. The six env files define no variable twice, so order does not matter.
 
 **Expected result**
 
@@ -577,35 +329,17 @@ account                      000000000000
 
 > Example output - your IDs and ARN suffixes will differ.
 
-**Verify**
+**Verify:** fourteen non-empty values. In particular:
 
-Fourteen non-empty values. Three specific failures matter more than the rest:
-
-- **`baseline desired` empty or not `2`** means `configs/lab-04.env` recorded something other than the
-  baseline. Step 5 uses this value as the scalable target's minimum, and a minimum of 4 recorded by
-  accident is a decision you did not make.
-- **`target group arn` empty** means `configs/lab-05.env` was never written or is incomplete. Re-run
-  Lab 05 Step 18 before continuing; Step 9 cannot proceed without it.
-- **`grace period` empty or `None`** means Lab 05's Step 10 attachment did not fully take. It changes
-  nothing in Steps 1 to 11, and it changes Step 12's arithmetic, which is where it would confuse you.
+- `baseline desired` must be `2`; Step 5 uses it as the minimum.
+- `target group arn` empty means `configs/lab-05.env` is incomplete; re-run Lab 05 Step 18.
+- `grace period` empty or `None` means Lab 05 Step 10's attachment did not take; it changes Step 12's arithmetic.
 
 ---
 
 ### Step 2 - Confirm Labs 02, 03, 04 and 05 are still intact
 
-**Purpose**
-
-A week may have passed since Practical 2. This lab attaches scaling to a service whose configuration it
-never modifies, which means every fault in that service will present itself as a fault in the scaling.
-Confirm the foundation before adding anything on top of it.
-
-**Run from**
-
-```text
-aws-floci-course/
-```
-
-**Command**
+Every fault in the service will present itself as a fault in the scaling, so confirm the foundation first.
 
 ```bash
 ./scripts/utilities/verify-lab-02.sh  | tail -3
@@ -617,14 +351,7 @@ echo "== the one failure that is allowed, and only this one =="
 ./scripts/utilities/verify-lab-04.sh | grep FAIL || echo "no failures in 04"
 ```
 
-**What the command does**
-
-Each script checks its own lab's resources and, first, the shared environment. All four were written in
-their own labs; you are only running them.
-
-The fourth is captured into `outputs/` on purpose. Nothing in this lab modifies Lab 05's objects, so a
-`verify-lab-05.sh` run at the end must produce the same result as this one - and having the "before" on
-disk turns that from an opinion into a `diff`.
+The Lab 05 run is saved to `outputs/` so you can `diff` it against a run at the end: this lab must not change Lab 05's objects.
 
 **Expected result**
 
@@ -641,17 +368,9 @@ PASS=49  FAIL=0
 > count changed because that exercise added a check - and the last block prints `no failures in 04`.
 > Both are correct.
 
-**Verify**
+**Verify:** `FAIL=0` from Labs 02, 03 and 05; Lab 04 at `FAIL=0` or the single documented failure. A failure under `== Environment ==` is the real problem; fix it with `./scripts/utilities/floci-storage-check.sh`.
 
-`FAIL=0` from Labs 02, 03 and 05, and from Lab 04 either `FAIL=0` or exactly the single documented
-failure on the `usms-app-sg` source check. That failure is Lab 05 Step 13 doing its job; anything else
-failing is a real problem and this lab will make it harder to see, not easier.
-
-A failure under `== Environment ==` in any of the four is the real problem and the resource failures
-below it are usually consequences. Fix the environment first with
-`./scripts/utilities/floci-storage-check.sh`.
-
-Now confirm the one piece of *state*, rather than configuration, that Step 5 depends on:
+Now confirm the service state Step 5 depends on:
 
 ```bash
 aws ecs describe-services --cluster "$USMS_ECS_CLUSTER" --services "$USMS_ENROLMENT_SERVICE" \
@@ -659,32 +378,13 @@ aws ecs describe-services --cluster "$USMS_ECS_CLUSTER" --services "$USMS_ENROLM
   --output json
 ```
 
-**What to look for:** `Desired` is `2`, `Deployments` is `1`, `LBs` is `1`. If `Desired` is anything else,
-put it back with `aws ecs update-service --cluster "$USMS_ECS_CLUSTER" --service
-"$USMS_ENROLMENT_SERVICE" --desired-count 2` before going on. Registering a scalable target against a
-service that is not at its intended baseline is how you spend twenty minutes wondering which of the two
-things changed the number.
+`Desired` is `2`, `Deployments` is `1`, `LBs` is `1`. If `Desired` is anything else, reset it with `aws ecs update-service --cluster "$USMS_ECS_CLUSTER" --service "$USMS_ENROLMENT_SERVICE" --desired-count 2` before going on.
 
 ---
 
 ### Step 3 - Probe what this Floci build supports
 
-**Purpose**
-
-Find out now which parts of Application Auto Scaling and CloudWatch your build implements, rather than
-discovering it at Step 12 with three policies built and nothing to show. This is the same principle as
-Lab 04 Step 3 and Lab 05 Step 3: **name the limitation before it costs you an hour.**
-
-Application Auto Scaling is a small API - nine operations matter - but it depends on CloudWatch for
-everything it decides, so this probe covers both.
-
-**Run from**
-
-```text
-aws-floci-course/
-```
-
-**Command**
+Find out now which parts of Application Auto Scaling and CloudWatch your build implements, rather than at Step 12.
 
 ```bash
 probe() {
@@ -713,21 +413,8 @@ probe "ecs describe-services"                     "aws ecs describe-services --c
 probe "elbv2 describe-target-groups"              "aws elbv2 describe-target-groups --names $USMS_TG_NAME"
 ```
 
-**What the command does**
-
-`probe` runs a harmless read, or generates a request skeleton, and reports whether the CLI got an answer
-at all. Read the result as "the service responded to me", not "the call succeeded". A completely
-unsupported service produces a connection error or `InvalidAction`, which reads differently from a
-validation error about an argument.
-
-Note that `describe-scalable-targets --service-namespace ecs` with no other argument is a legitimate
-call that returns an empty list right now. An empty list is a *successful* answer and is exactly what
-you should see: nothing is registered yet.
-
-`--generate-cli-skeleton` is used four times here, and it is the right probe for a write operation you
-do not want to perform yet. It is answered by the CLI's own service model, so a `SUPPORTED` on a skeleton
-means "your CLI knows this operation exists", not "the emulator implements it" - which is why the read
-operations are probed as well.
+- An empty list from `describe-scalable-targets` is a successful answer: nothing is registered yet.
+- `SUPPORTED` on a `--generate-cli-skeleton` probe means your CLI knows the operation, not that the emulator implements it; that is why the reads are probed too.
 
 **Expected result**
 
@@ -753,34 +440,20 @@ elbv2 describe-target-groups                         SUPPORTED
 
 > Example output - this is the best case. Yours may differ, and that is exactly why the probe exists.
 
-**Verify**
-
-Work out which path you are on and write it at the top of `notes/lab-06-notes.md`, because your lab
-report has to say so.
+**Verify:** record your path at the top of `notes/lab-06-notes.md`.
 
 | Path | If | What changes |
 | --- | --- | --- |
-| **A - full** | Every Application Auto Scaling call answers, and `set-alarm-state` at Step 12 actually moves `desiredCount` | Do every step as written. You will see auto scaling work end to end |
-| **B - control plane only** | The objects are created and describable, but `describe-scaling-activities` stays empty and `desiredCount` never moves on its own | Everything in this lab still works. Every proof except Step 12's is built on control-plane fields. Step 12 has a documented fallback that proves the *wiring* instead, and you record which one you got |
-| **C - no Application Auto Scaling** | `describe-scalable-targets` does not answer, or `register-scalable-target` fails with `InvalidAction` | Stop and tell your instructor. Do Section 8's interludes, Exercises 4 and 5, and Section 15 - Exercise 4 is the part of this lab that needs no emulator at all, and it is the part a real employer would care most about |
+| **A - full** | Every call answers, and `set-alarm-state` at Step 12 moves `desiredCount` | Do every step as written |
+| **B - control plane only** | Objects are created and describable, but `describe-scaling-activities` stays empty and `desiredCount` never moves on its own | Everything still works; Step 12 uses its control-plane fallback proof |
+| **C - no Application Auto Scaling** | `describe-scalable-targets` does not answer, or `register-scalable-target` fails with `InvalidAction` | Tell your instructor. Do Exercises 4 and 5 and Section 14 |
 
 !!! note "Floci Limitation - the scaling loop may be modelled without being closed"
-    Application Auto Scaling on real AWS is a control loop: CloudWatch aggregates a metric, an alarm
-    changes state, the alarm invokes a scaling policy, the policy calls `ecs:UpdateService`, and a
-    scaling *activity* is recorded. Five services have to cooperate.
+    Floci may store targets, policies and scheduled actions without running the loop: no alarm fires by itself and `describe-scaling-activities` stays empty. Some builds honour `set-alarm-state`.
 
-    Floci builds may implement the objects - targets, policies, scheduled actions - without running the
-    loop that connects them. The most likely outcome is that everything you create is stored and
-    describable, no alarm ever fires by itself, and `describe-scaling-activities` returns an empty list.
-    Some builds do honour `set-alarm-state` and will move the number for you.
+    Real AWS evaluates every alarm each minute, invokes the policy within seconds and records an activity whose cause names the alarm.
 
-    Real AWS evaluates every alarm once a minute, invokes the policy within seconds of a state change,
-    and records an activity with a cause string that names the alarm.
-
-    Take this away regardless: **nothing this lab asks you to prove requires the loop to run**, with the
-    single exception of Step 12, which tries it, tells you honestly when it did not work, and gives you a
-    control-plane proof of the same wiring. Claiming a scaling activity you did not observe is worth
-    negative marks.
+    Nothing this lab asks you to prove requires the loop, except Step 12, which has a control-plane fallback. Claiming an activity you did not observe is worth negative marks.
 
 **Checkpoint 1**
 
@@ -796,164 +469,12 @@ Ready to build
 
 ---
 
-### Interlude - what Application Auto Scaling is, in three objects
-
-Three nouns. Lab 04 had four for ECS and Lab 05 had four for load balancing; this service is smaller,
-which is a good sign about how much it does.
-
-**A scalable target** is the thing that can be scaled, and it is not the ECS service. It is a
-*registration*: a statement that says "this particular dimension of this particular resource in this
-particular service namespace may be moved, and only between these two numbers". Registering it changes
-nothing about the resource except that it now has a floor and a ceiling. Deregistering it changes nothing
-except that it does not.
-
-**A scaling policy** is a rule for deciding what the number should be. There are two kinds in
-Application Auto Scaling - target tracking and step scaling - and they answer different questions. A
-policy is attached to exactly one scalable target, and one target can have several policies.
-
-**A scheduled action** is a change to the floor, the ceiling, or both, at a stated time. It is not a
-policy: it does not read a metric and it does not decide anything. It is a calendar entry.
-
-```text
-scalable target      service/usms-ecs-cluster/usms-enrolment-svc
-                     ecs:service:DesiredCount        min 2 .. max 10
-       |
-       +-- scaling policy   usms-enrolment-cpu-target-tracking
-       |       reads a metric, computes a desired capacity, writes it
-       |
-       +-- scaling policy   usms-enrolment-queue-step-out
-       |       is INVOKED BY AN ALARM, applies a step adjustment
-       |
-       +-- scheduled action usms-enrolment-morning-scale-out
-               at 07:45 on weekdays, raise MinCapacity to 4
-```
-
-And one object that is not in that list and does most of the work: **a CloudWatch alarm**. Every
-reactive decision in Application Auto Scaling is made by an alarm. For step scaling you write the alarm
-yourself and attach the policy to it. For target tracking AWS writes two alarms on your behalf and
-attaches them for you - which is convenient right up until the day you find them in the console, do not
-recognise them, and delete them. Step 8 exists so that day never comes.
-
-### Interlude - the three-part address of a scalable target, and why it is not an ARN
-
-To name a scalable target you need three strings, and none of them is an ARN.
-
-| Part | Value here | What it is |
-| --- | --- | --- |
-| **Service namespace** | `ecs` | Which AWS service owns the resource. Also `dynamodb`, `lambda`, `rds`, `elasticache`, `sagemaker`, `appstream`, `comprehend`, `kafka`, `neptune`, `cassandra`, `custom-resource` |
-| **Resource ID** | `service/usms-ecs-cluster/usms-enrolment-svc` | A *constructed* string whose shape is defined per namespace |
-| **Scalable dimension** | `ecs:service:DesiredCount` | Which property of that resource may be moved |
-
-The resource ID is the part that surprises people, and it is worth understanding rather than memorising.
-Application Auto Scaling scales things in nine different services, whose resources are named in nine
-different ways: a DynamoDB table, a Lambda function alias, an Aurora replica, a SageMaker endpoint
-variant. A single generic API cannot take "an ARN" and know what to do with it, so instead each namespace
-defines a small path-shaped grammar:
-
-```text
-ecs         service/<cluster-name>/<service-name>
-dynamodb    table/<table-name>   or  table/<table-name>/index/<index-name>
-lambda      function:<function-name>:<alias-name>
-rds         cluster:<cluster-name>
-```
-
-The ECS form is, deliberately, **exactly the suffix of the service's ARN**:
-
-```text
-arn:aws:ecs:us-east-1:000000000000:service/usms-ecs-cluster/usms-enrolment-svc
-                                   |-------------------------------------------|
-                                   this part, and nothing else, is the resource ID
-```
-
-That is why Lab 04 Step 13 told you to look hard at the shape of the service ARN it printed. It is also
-why passing the *whole* ARN to `--resource-id` seems reasonable and is wrong: the call is rejected with a
-validation error about the resource ID's format, and the message does not tell you that you gave it too
-much.
-
-The scalable dimension is the third part and the easiest to get wrong by being nearly right.
-`ecs:service:DesiredCount` is the only dimension ECS offers, and it is case-sensitive in a way that looks
-like a typo when you get it wrong: `ecs:service:desiredCount` is rejected.
-
-You have now met four constructed identifiers in this architecture, and this is the fourth:
-
-```text
-ECS control-plane calls     --cluster usms-ecs-cluster --service usms-enrolment-svc
-ECS tagging calls           --resource-arn arn:aws:ecs:...:service/usms-ecs-cluster/usms-enrolment-svc
-ELB request-count metric    ResourceLabel  app/<lb-name>/<lb-id>/targetgroup/<tg-name>/<tg-id>
-Application Auto Scaling    --resource-id  service/usms-ecs-cluster/usms-enrolment-svc
-```
-
-Four ways of naming things that all live in one architecture. Being able to build each one from the
-right ARN, rather than guessing, is a genuinely useful skill and is Review Question 2.
-
-### Interlude - three policy types here, and a fourth that is somewhere else
-
-| Mechanism | Answers | You supply | AWS supplies |
-| --- | --- | --- | --- |
-| **Target tracking** | "Keep this metric near this number" | A metric and a target value | Two alarms, the arithmetic, and the capacity |
-| **Step scaling** | "When this alarm fires, apply this adjustment - and a bigger one if it is worse" | An alarm and a table of steps | The invocation |
-| **Scheduled** | "At this time, change the floor and the ceiling" | A schedule and new bounds | The clock |
-| **Predictive** | "Look at the last two weeks and have capacity ready before the pattern repeats" | A metric | A forecast - **but not for ECS** |
-
-The fourth row is the one worth being precise about, because it is a common interview trap. Predictive
-scaling exists in the **EC2 Auto Scaling** service, for Auto Scaling groups of instances. Application
-Auto Scaling - the service in this lab - does not offer it for ECS services. If you want anticipatory
-capacity for a container service, the tool is a scheduled action, and Step 11 is where you get one.
-
-Choosing between the first two is not a matter of taste:
-
-- **Target tracking** is right when your metric has a natural set point. "Average CPU near 50 per cent",
-  "1000 requests per task". You cannot express a non-linear response with it, and you should not try.
-- **Step scaling** is right when the response is a function of how bad things are, or when the signal is
-  not a utilisation at all - a queue depth, a backlog, an error rate. It is also the only one of the two
-  in which *you* own the alarm, which matters when the alarm has to do something else as well, such as
-  notify a human.
-
-Use target tracking by default. Reach for step scaling when you can say, in one sentence, what target
-tracking cannot express about your requirement. Step 10 has such a sentence.
-
----
+!!! info "Application Auto Scaling in brief"
+    A **scalable target** is a registration: "this dimension of this resource may move between these two numbers". **Scaling policies** (target tracking or step) decide the number; **scheduled actions** change the floor and ceiling at a time. Every reactive decision is made by a **CloudWatch alarm**. The target's address has three parts, none of them an ARN: namespace `ecs`, resource ID `service/<cluster>/<service>` (exactly the suffix of the service ARN), and dimension `ecs:service:DesiredCount` (case-sensitive). Predictive scaling exists only in EC2 Auto Scaling, not for ECS services. See [Application Auto Scaling on ECS](../unit2/topic3.md#application-auto-scaling-on-ecs).
 
 ### Step 4 - Create the service-linked role that writes `desiredCount`
 
-**Purpose**
-
-Application Auto Scaling calls `ecs:UpdateService` on your behalf. Like every AWS service that acts on
-your resources, it needs an identity to do it with - and this is the one case in the whole course where
-you create a role without writing a trust policy, without writing a permissions policy, and without
-choosing its name.
-
-**Run from**
-
-```text
-aws-floci-course/
-```
-
-**Concept first - what a service-linked role is, and why it is not like Lab 1's roles**
-
-Lab 1 created three roles and you wrote every part of each one: the trust policy naming a service
-principal, and an attached permissions policy you had argued about. Lab 04 created two more the same
-way.
-
-A **service-linked role** is different in four ways, and each difference is deliberate:
-
-| | A role you write (Labs 1 and 04) | A service-linked role |
-| --- | --- | --- |
-| Name | Yours | Fixed by AWS: `AWSServiceRoleForApplicationAutoScaling_ECSService` |
-| Trust policy | You write it | AWS writes it, and you cannot change it |
-| Permissions | You attach a policy you wrote | An AWS-managed policy AWS owns and updates |
-| Created by | `aws iam create-role` with `--assume-role-policy-document` | `aws iam create-service-linked-role --aws-service-name <the service>` |
-
-The reason is worth understanding, because "AWS writes the policy" sounds like a loss of control and is
-mostly the opposite. The permissions Application Auto Scaling needs on ECS are not a matter of opinion:
-it needs `ecs:DescribeServices` and `ecs:UpdateService` on your services, plus a handful of CloudWatch
-calls to manage the alarms it creates. Every account that uses ECS service auto scaling needs exactly
-that set. Letting every customer write it by hand produces thousands of subtly wrong versions, and - the
-part that actually bites - means that when the service gains a feature requiring one more permission,
-every one of those thousands of policies is now out of date and the feature silently does not work.
-
-The trade you are making is explicit: you give up the ability to write the policy, and in exchange you
-give up the ability to get it wrong.
+Application Auto Scaling calls `ecs:UpdateService` on your behalf through a **service-linked role**: AWS fixes its name, writes its trust policy and owns its permissions policy. You only create it. See [service-linked roles](../unit8/topic1.md#service-roles-instance-profiles-and-service-linked-roles).
 
 **Command - part 1, create it**
 
@@ -968,31 +489,8 @@ aws iam create-service-linked-role \
   || echo "not created - see the note below; this is often already present, and sometimes unsupported"
 ```
 
-**What the command does**
-
-```text
-aws
- └── iam
-      └── create-service-linked-role
-           ├── --aws-service-name   the SERVICE PRINCIPAL, not a role name
-           └── --description        the only field you get to choose
-```
-
-`--aws-service-name` takes a service principal - `ecs.application-autoscaling.amazonaws.com` - and note
-what it is *not*. It is not `ecs.amazonaws.com`, which is ECS itself, and it is not
-`application-autoscaling.amazonaws.com`, which is the generic form used by other namespaces. The
-principal encodes *which* Application Auto Scaling integration you want, because the ECS one and the
-DynamoDB one need different permissions and therefore get different roles. Getting this wrong produces
-`InvalidInput: Service role name ... has been taken in this account` or a message about an unknown
-service name, neither of which explains the distinction.
-
-Two harmless failures are likely here and neither is a problem:
-
-- **`InvalidInput` saying the role already exists.** Something created it earlier - possibly you, on a
-  previous run. Service-linked roles are one per account per service, so this is idempotent by nature.
-- **The whole operation being unsupported.** Some Floci builds do not implement
-  `create-service-linked-role`. Since the same builds also do not enforce IAM, the absence changes
-  nothing about whether the rest of this lab works.
+- `--aws-service-name` is the service principal `ecs.application-autoscaling.amazonaws.com`, not `ecs.amazonaws.com` and not the generic `application-autoscaling.amazonaws.com`.
+- `InvalidInput` saying the role already exists is fine (one per account). The operation being unsupported on your build is also fine.
 
 **Command - part 2, read it back**
 
@@ -1020,47 +518,20 @@ AWSApplicationAutoscalingECSServicePolicy
 
 > Example output - the attached policy name may differ or be absent on this build.
 
-**Verify**
-
-**What to look for:** the `Path`. Every role you have created in this course so far has been at `/`, the
-account root path. This one is under `/aws-service-role/<service principal>/`, and that path is not
-cosmetic - it is how IAM marks a role as belonging to a service rather than to you, and it is why
-`aws iam delete-role` on it behaves differently from `delete-role` on `usms-ecs-task-role`. The correct
-way to remove one is `aws iam delete-service-linked-role`, which asks the owning service whether it is
-still in use first.
-
-If the role is absent, write one sentence in `notes/lab-06-notes.md` recording it, and continue. On real
-AWS its absence would produce a very specific failure at Step 5 - `register-scalable-target` returning an
-error about being unable to assume the service-linked role - and knowing that symptom is worth as much as
-having the role.
+**Verify:** the `Path` is `/aws-service-role/<service principal>/`, not `/`. That marks it as owned by a service; remove one with `aws iam delete-service-linked-role`, not `delete-role`. If the role is absent, record it in `notes/lab-06-notes.md` and continue (on real AWS, Step 5 would fail being unable to assume it).
 
 !!! note "Floci Limitation - the role exists as a record, and nothing assumes it"
-    On real AWS this role is what Application Auto Scaling actually uses. Every `UpdateService` call the
-    service makes on your behalf is made with credentials from this role, and it appears in CloudTrail
-    with the role's ARN as the invoker - which is how you answer "who scaled my service at 3am".
+    Floci does not assume the role or authorize requests against IAM policies.
 
-    Floci accepts any non-empty credentials and by default does not authorize requests against your IAM
-    policies, so nothing here is assumed and nothing is enforced.
+    On real AWS every `UpdateService` call the service makes uses this role, and CloudTrail records it as the invoker.
 
-    Take this away regardless: when someone asks how an AWS service is allowed to modify your resources,
-    the answer is always a role, and for most modern integrations it is a service-linked role whose name
-    begins `AWSServiceRoleFor`. Being able to find it, read its path, and say who trusts it is the point
-    of this step.
+    When an AWS service modifies your resources, the answer is always a role, usually one named `AWSServiceRoleFor...`.
 
 ---
 
 ### Step 5 - Register the scalable target
 
-**Purpose**
-
-The registration. This is the object every policy and every scheduled action in the rest of the lab
-attaches to, and it is where the floor of 2 and the ceiling of 10 live.
-
-**Run from**
-
-```text
-aws-floci-course/
-```
+The object every policy and scheduled action attaches to, holding the floor of 2 and ceiling of 10.
 
 **Command - part 1, build the resource ID from the API, not by hand**
 
@@ -1090,34 +561,16 @@ fi
 SDIM="ecs:service:DesiredCount"
 ```
 
-**What the command does**
-
-`"${SVC_ARN##*:}"` is shell parameter expansion: strip the **longest** prefix matching `*:`, leaving
-everything after the final colon. You met the `##*/` form in Lab 04 Step 12 for pulling a task ID out
-of an ARN; this is the same operator with a different delimiter, and choosing the delimiter correctly is
-the whole trick. `#` would strip the *shortest* prefix and give you the wrong thing, and using `awk -F:`
-would give the wrong thing too, because you want the last field and not a numbered one.
-
-The validation is not defensive padding. ECS has two ARN formats: the modern long format,
-`...:service/<cluster>/<service>`, and a legacy short format, `...:service/<service>`, which some
-accounts and some emulator builds still emit. Only the long format's suffix is a valid Application Auto
-Scaling resource ID. A short-format ARN would give you `service/usms-enrolment-svc`, two segments, which
-`register-scalable-target` rejects with a validation error about the resource ID - and the error does not
-mention ARN formats, so you would be looking in the wrong place. Checking the segment count costs one
-line and turns a confusing failure into a message that names the cause.
+- `"${SVC_ARN##*:}"` strips the longest prefix ending in `:`, leaving everything after the last colon.
+- The segment check catches the legacy short ARN format (`service/<service>`, two segments), which `register-scalable-target` rejects with an error that does not mention ARN formats.
 
 !!! tip "If Lab 04's Exercise 5 recorded this already, cross-check it"
-    Lab 04 Exercise 5 point 4 asked you to add `USMS_SCALABLE_RESOURCE_ID` to `configs/lab-04.env`,
-    derived from the API. If you did that exercise, the two must agree:
+    The two values must agree. A disagreement means the service was recreated; the value derived now is correct.
 
     ```bash
     echo "derived here  : $RID"
     echo "from lab-04  : ${USMS_SCALABLE_RESOURCE_ID:-<not recorded>}"
     ```
-
-    Two identical strings is a nice moment: you derived the same value twice, a session apart, from the
-    same source. A disagreement means the service was deleted and recreated in between - Lab 05's
-    Step 10 fallback path does exactly that - and the value derived *now* is the correct one.
 
 **Command - part 2, register it**
 
@@ -1139,41 +592,9 @@ aws application-autoscaling register-scalable-target \
        --max-capacity 10
 ```
 
-**What the command does**
-
-```text
-aws
- └── application-autoscaling            the SERVICE - note the hyphen, not "autoscaling"
-      └── register-scalable-target      the OPERATION
-           ├── --service-namespace      ecs
-           ├── --resource-id            the constructed string from part 1
-           ├── --scalable-dimension     ecs:service:DesiredCount
-           ├── --min-capacity           the FLOOR. Nothing may take desiredCount below this
-           ├── --max-capacity           the CEILING. Nothing may take it above this
-           └── --tags                   a plain MAP - the sixth tag convention in three labs
-```
-
-Three things in that command deserve a sentence each.
-
-**`aws application-autoscaling`, not `aws autoscaling`.** Those are two different services with two
-different APIs. `aws autoscaling` is **EC2** Auto Scaling - launch templates, Auto Scaling groups,
-instance refresh, and the predictive scaling from the interlude's fourth row. `aws application-autoscaling`
-is the generic one that scales ECS services, DynamoDB tables and seven other things. Typing the wrong one
-gives you a real command that does something else, which is a worse failure than a typo, and §12.3 is
-about exactly this confusion.
-
-**`--min-capacity` is not a suggestion.** It is enforced by Application Auto Scaling against everything
-it does, and - this is the part worth remembering - **registering the target immediately raises
-`desiredCount` if the service is below the floor.** A registration is not a passive declaration. Part 3
-checks for exactly that.
-
-**`--tags` is a plain map.** `Project=USMS,Name=...` with no `Key=`/`Value=` wrappers, like CloudWatch
-Logs in Lab 04 Step 6 and unlike ECS, IAM, EC2 and Elastic Load Balancing. That is the sixth convention
-across six services in three laboratories, and there is still no rule connecting them. The `||` fallback
-in the command above exists because tag support on `register-scalable-target` is relatively recent: an
-older CLI, or a build that has not implemented it, rejects the flag, and the second invocation registers
-the target without tags. Run `aws application-autoscaling register-scalable-target help` and read the
-`--tags` synopsis if you want to know which you have.
+- `aws application-autoscaling`, not `aws autoscaling` (EC2 Auto Scaling, a different service).
+- `--min-capacity` is enforced: registering raises `desiredCount` immediately if the service is below the floor. Part 3 checks.
+- `--tags` is a plain map (`K=V`). The `||` fallback registers without tags on builds or CLIs that reject the flag.
 
 **Expected result**
 
@@ -1217,13 +638,7 @@ aws application-autoscaling describe-scalable-targets \
 > Example output - your creation time will differ, and `Role` may be absent or empty on a build with no
 > service-linked role.
 
-**What to look for:** four things.
-
-`Min` is `2` and `Max` is `10`. `Dimension` is exactly `ecs:service:DesiredCount`. `Role` names the
-service-linked role from Step 4 - **you did not pass a role ARN**, and Application Auto Scaling filled it
-in for you, which is the concrete payoff of Step 4 and the reason `--role-arn` is not in the command
-above. And `Suspended` has three fields, all `false`, which is the object Step 13 manipulates and the
-reason the verification script in Section 9 asserts that none of them was left `true`.
+`Min` 2, `Max` 10, `Dimension` exactly `ecs:service:DesiredCount`. `Role` names Step 4's role although you passed no `--role-arn`. `Suspended` has three fields, all `false` (Step 13 changes them; Section 8 asserts them).
 
 **Command - part 3, find out what registering it did to the service**
 
@@ -1233,51 +648,13 @@ aws ecs describe-services --cluster "$USMS_ECS_CLUSTER" --services "$USMS_ENROLM
   --output json
 ```
 
-**What to look for:** `Desired` is still `2`. Registration is a no-op on a service that is already inside
-its new bounds, and that is worth confirming rather than assuming - the claim "registering a scalable
-target does not change your capacity" is only true when the service was already above the floor.
-
-If you had left the service at 1, this is the command that would have shown you `Desired` jumping to 2
-with `Pending` at 1, with no policy involved and no alarm having fired. That is Review Question 3, and
-Step 2's insistence on the baseline was so that you would meet it as a fact rather than as a surprise.
+`Desired` is still `2`: registration is a no-op when the service is already inside the bounds. Had it been at 1, this would show `Desired` 2 with no policy involved (Review Question 3).
 
 ---
 
 ### Step 6 - Change the bounds, and learn what a re-registration is
 
-**Purpose**
-
-Registering a scalable target is one command. *Managing* one means knowing that there is no
-`update-scalable-target`, and that the way you change the bounds is to register again - which is a
-different change model from anything you have met so far and worth one deliberate look.
-
-**Run from**
-
-```text
-aws-floci-course/
-```
-
-**Concept first - three change models in three labs**
-
-| Object | To change it you | Because |
-| --- | --- | --- |
-| A task definition (Lab 04) | Register a **new revision**; the old one is untouched forever | It is a versioned blueprint, and rollback must be a pointer change |
-| A target group's health check (Lab 05) | `modify-target-group` - an in-place update, with some fields refused | Some of its configuration is identity and some is behaviour |
-| A scalable target (here) | `register-scalable-target` again, with the new numbers | It is a *registration*, not a resource. There is only ever one per address, and re-registering replaces its contents |
-
-The third is the one to think about. The target's identity is its three-part address - namespace,
-resource ID, dimension - and that address is not something you can change; it names something else
-entirely if you alter it. Everything that is *not* the address is content, and content is replaced
-wholesale. So a second `register-scalable-target` on the same address is an update, and one on a
-different address is a new target.
-
-Two consequences follow, and both are practical:
-
-- **Re-registering does not disturb your policies.** They attach to the address, and the address did not
-  change. You can raise a ceiling in the middle of an incident without deleting anything.
-- **Omitting a parameter does not clear it.** `register-scalable-target` with only `--max-capacity`
-  leaves the minimum as it was. That is unusual - most replace-the-whole-thing APIs would null the field
-  - and it is documented behaviour rather than something to rely on by accident.
+There is no `update-scalable-target`. To change the bounds you register again at the same address (namespace, resource ID, dimension): the content is replaced, attached policies are not disturbed, and a parameter you omit is left as it was.
 
 **Command - part 1, raise the ceiling, then read it back**
 
@@ -1302,8 +679,7 @@ aws application-autoscaling describe-scalable-targets \
 
 > Example output.
 
-**What to look for:** the minimum is still `2`. You passed only `--max-capacity`, and the floor survived.
-That is the "omitting a parameter does not clear it" behaviour, observed rather than trusted.
+The minimum is still `2` although you passed only `--max-capacity`.
 
 **Command - part 2, put it back**
 
@@ -1336,19 +712,14 @@ aws application-autoscaling describe-scalable-targets \
 
 > Example output.
 
-**Verify**
-
-Exactly **one** row, with `Min` 2 and `Max` 10. More than one row means you have registered a second
-target at a slightly different address - almost always a typo in the dimension or a resource ID built by
-hand - and the extra one will quietly do nothing while you wonder why your policies are not firing.
+**Verify:** exactly **one** row with `Min` 2 and `Max` 10. A second row is a target at a slightly different address (a typo), and it will silently do nothing.
 
 ```bash
 aws application-autoscaling describe-scalable-targets --service-namespace ecs \
   --query 'length(ScalableTargets)' --output text
 ```
 
-That must print `1`. If it prints `2`, list them and deregister the wrong one - the danger admonition and
-the exact commands are the last entry in Section 11.
+That must print `1`. If it prints `2`, the last entry in Section 10 removes the wrong one.
 
 ✏️ **Your turn**
 
@@ -1368,9 +739,7 @@ Then answer in one sentence each in notes/lab-06-notes.md:
     API call would have told you it had happened?
 ```
 
-Hint: part 3 of Step 5 already showed you the shape of the answer to (a). For (b), one of the two
-commands you have already run in this step returns the value a monitoring system would compare against
-what it expected, and `CreationTime` is not the field you want.
+Hint: Step 5 part 3 shows the shape of (a); for (b), one command in this step returns the value a monitor would compare.
 
 **Checkpoint 2**
 
@@ -1386,101 +755,16 @@ Application Auto Scaling
       └── policies           NONE YET - this target can be scaled and nothing decides to
 ```
 
-That last line is not a mistake. A scalable target with no policies and no scheduled actions enforces its
-bounds and nothing else. It is the load balancer with no listener from Lab 05 Step 5, in a different
-service.
+A target with no policies enforces its bounds and nothing else.
 
 ---
 
-### Interlude - what target tracking actually does
-
-Target tracking is described everywhere as "like a thermostat", which is accurate and not very useful.
-Here is what it does mechanically, because the mechanics are what you will debug.
-
-You give it one metric and one number. It then, on your behalf and without telling you:
-
-1. **Creates two CloudWatch alarms.** A high alarm that fires when the metric is above the target, and a
-   low alarm that fires when it is far enough below. Their names begin `TargetTracking-` followed by your
-   resource ID.
-2. **Attaches itself to both** as an alarm action, so the alarms invoke the policy.
-3. **Computes a capacity, not an adjustment.** When the high alarm fires, it does not add a fixed number
-   of tasks. It calculates how many tasks would be needed to bring the metric to the target, assuming the
-   metric scales roughly linearly with capacity, and writes that number.
-
-Point 3 is the one that distinguishes it from step scaling and the one that makes it feel intelligent.
-With 4 tasks averaging 80 per cent CPU and a target of 50, the arithmetic is roughly
-`4 x 80 / 50 = 6.4`, rounded up: 7 tasks. It got there in one move, where a step policy adding one task
-at a time would have taken three evaluation cycles.
-
-Three properties follow from that arithmetic and all three matter:
-
-- **It only works on a metric that falls as capacity rises.** CPU per task, requests per target, memory
-  per task: all fine. Total request count across the service is **not** - adding tasks does not reduce it,
-  so the arithmetic runs away and the policy scales to the ceiling and stays there. That failure mode is
-  the single most common target tracking mistake, and it is why the predefined metric is called
-  `ALBRequestCountPerTarget` and not `ALBRequestCount`.
-- **It never scales in past the point where the metric would exceed the target.** Scale-in is
-  deliberately conservative: the policy only removes capacity when doing so still leaves the metric
-  below target, which is why services under target tracking often sit slightly over-provisioned. That is
-  the correct bias.
-- **It respects the floor and the ceiling absolutely.** A computed capacity of 14 against a maximum of 10
-  gives you 10, and the policy will keep saying 14 in its alarms while the target stays at 10 - which
-  looks like the policy is broken and is in fact the ceiling doing its job. Section 11 has the diagnosis.
-
-The two cooldowns are the last piece:
-
-| Field | Value here | Protects against |
-| --- | --- | --- |
-| `ScaleOutCooldown` | 60 | Scaling out twice for one event, because the first new task has not started serving yet and the metric has not moved |
-| `ScaleInCooldown` | 300 | Removing capacity you are about to need, on a metric that dipped for one minute |
-
-Note what a cooldown is *not*: it is not a delay before acting. The policy acts immediately; the cooldown
-governs how soon it may act **again in the same direction**. And note the asymmetry - the AWS default is
-300 for both, and this lab deliberately makes scale-out five times more eager than scale-in, for the
-reason given in §4.3.
-
-The number to size `ScaleOutCooldown` against is the one you measured in Lab 04 Exercise 5: how long a
-task takes to exist, plus Lab 05's 60-second grace period before it counts as capacity. A cooldown
-shorter than that sum is a policy that will scale out twice for one spike, every time.
-
----
+!!! info "What target tracking does"
+    You give it one metric and one target value. It creates **two CloudWatch alarms** (high and low, named `TargetTracking-<resource id>-...`), attaches itself to both, and **computes a capacity** rather than adding a fixed step: 4 tasks at 80 per cent CPU with a target of 50 gives `4 x 80 / 50 = 6.4`, so 7 tasks. The metric must fall as capacity rises (a per-target or per-task metric, never a total), scale-in is deliberately conservative, and the floor and ceiling always win. `ScaleOutCooldown` (60) and `ScaleInCooldown` (300) govern how soon the policy may act **again in the same direction**; size `ScaleOutCooldown` against task start-up plus the 60-second grace period. See [Application Auto Scaling on ECS](../unit2/topic3.md#application-auto-scaling-on-ecs).
 
 ### Step 7 - Create the CPU target tracking policy
 
-**Purpose**
-
-The first policy. It reads the metric Lab 04's Container Insights setting publishes, and it is the one
-almost every real ECS service starts with.
-
-**Run from**
-
-```text
-aws-floci-course/
-```
-
-**Concept first - which metric, and where it comes from**
-
-Application Auto Scaling offers three **predefined** metrics for the `ecs` namespace, and this is the
-table Lab 05 promised you would come back to with its third row filled in:
-
-| Predefined metric | CloudWatch source | Needs | Available to you? |
-| --- | --- | --- | --- |
-| `ECSServiceAverageCPUUtilization` | `AWS/ECS` `CPUUtilization` | Container Insights, per service | **Yes** - Lab 04 Step 4 enabled it |
-| `ECSServiceAverageMemoryUtilization` | `AWS/ECS` `MemoryUtilization` | The same | **Yes** - and Exercise 1 uses it |
-| `ALBRequestCountPerTarget` | `AWS/ApplicationELB` `RequestCountPerTarget` | A load balancer and a target group | **Yes, now** - Lab 05 built both. Step 9 |
-
-"Predefined" means you name the metric type and AWS knows the namespace, the metric name, the dimensions
-and the statistic. The alternative is a **customized** metric specification, in which you supply all five
-yourself - namespace, metric name, dimensions, statistic and unit - and that is what Exercise 2's
-extension explores.
-
-The percentage in `CPUUtilization` for a Fargate task is worth being precise about, because it is not
-what people assume. It is the task's CPU consumption as a percentage of the CPU it **reserved** in the
-task definition, not of a physical core. Lab 04's revision 2 reserves `256` CPU units, a quarter of a
-vCPU. So 80 per cent CPU on one of these tasks means 80 per cent of a quarter of a vCPU - and if you had
-sized the task at `1024` instead, the same real workload would report 20 per cent and no policy would
-fire. **A CPU target is only meaningful relative to a reservation**, which is one of the two reasons the
-next step's metric is better.
+The first policy, on the metric Lab 04's Container Insights setting publishes. ECS offers three predefined metrics: `ECSServiceAverageCPUUtilization` (here), `ECSServiceAverageMemoryUtilization` (Exercise 1) and `ALBRequestCountPerTarget` (Step 9). Fargate CPU is a percentage of the CPU the task **reserved** (256 units here), so a CPU target is only meaningful relative to that reservation.
 
 **Command - part 1, write the policy configuration**
 
@@ -1501,30 +785,11 @@ python3 -m json.tool templates/lab-06-target-tracking-cpu.json > /dev/null && ec
 grep -c '\$' templates/lab-06-target-tracking-cpu.json
 ```
 
-**What the command does**
+!!! warning "Quoted heredoc"
+    `<< 'EOF'` because this document has no variables. Step 9's document has one and must use `<< EOF`. `grep -c '\$'` must print `0` in both cases.
 
-This heredoc is `<< 'EOF'`, **quoted**, because the document contains no variables and must reach disk
-exactly as written. Contrast it with Step 9's document two steps from now, which contains a
-`$RESOURCE_LABEL` and therefore **must** use the unquoted `<< EOF`. Two nearly identical files in the
-same directory, opposite quoting, for opposite reasons - the fifth appearance of this contrast in three
-laboratories, and still the most common silent bug in the course. The `grep -c '\$'` printing `0` is the
-check, and here it must print `0` because there was nothing to expand.
-
-Four fields, and each is a decision:
-
-| Field | Value | Why |
-| --- | --- | --- |
-| `TargetValue` | `50.0` | Half the reservation. Room for a spike to be absorbed while the policy reacts, without paying for idle capacity. `70` would be defensible for a workload that scales gently; `30` for one that spikes violently |
-| `PredefinedMetricType` | `ECSServiceAverageCPUUtilization` | The one metric that exists without extra work |
-| `ScaleOutCooldown` | `60` | Slightly longer than one task's start-up plus the grace period, so one spike produces one scale-out |
-| `ScaleInCooldown` | `300` | Five minutes. Removing capacity is the expensive mistake |
-| `DisableScaleIn` | `false` | Stated explicitly although it is the default, because it is the field that turns this from a scaling policy into a scale-out-only policy, and a reader should not have to know the default to know what you meant |
-
-`TargetValue` is a **float** in the JSON - `50.0`, not `"50"` and not `50`. An integer is accepted and
-coerced, but a *string* is rejected with a message naming a type rather than a field. That is the same
-class of trap as Lab 04's `"cpu": "256"` and Lab 05's `"StatusCode": "200"`, and note that the three
-of them do not agree with each other: ECS wants strings where you expect numbers, ELBv2 wants a string
-status code, and Application Auto Scaling wants a real number. There is no rule. Read the skeleton.
+- `TargetValue` `50.0` is half the reservation, leaving room to absorb a spike while the policy reacts. It is a float; a string is rejected.
+- `DisableScaleIn` `false` is the default, stated so a reader does not have to know it.
 
 **Command - part 2, create the policy**
 
@@ -1544,31 +809,7 @@ CPU_POLICY_ARN=$(aws application-autoscaling put-scaling-policy \
 echo "CPU_POLICY_ARN = $CPU_POLICY_ARN"
 ```
 
-**What the command does**
-
-```text
-aws
- └── application-autoscaling
-      └── put-scaling-policy
-           ├── --service-namespace / --resource-id / --scalable-dimension   the TARGET's address
-           ├── --policy-name        yours; unique per target
-           ├── --policy-type        TargetTrackingScaling | StepScaling
-           └── --target-tracking-scaling-policy-configuration  file://...
-```
-
-`put-scaling-policy` is a **create-or-replace**: running it again with the same name and a different
-configuration updates the policy in place, and it neither versions nor complains. That makes tuning a
-target value a one-command operation, and it makes an accidental overwrite completely silent - which is
-why the configuration lives in a file in `templates/` that Git can show you the history of, rather than
-in your shell history.
-
-The four address parameters are repeated on every policy call, every scheduled action call, and every
-delete. There is no "current target" and no shorthand. Application Auto Scaling is a stateless API over
-a composite key, and this is what that feels like to use.
-
-Note that the policy type and the configuration flag must agree. Passing
-`--step-scaling-policy-configuration` with `--policy-type TargetTrackingScaling` is rejected, and the
-message names the configuration rather than the type, so read it carefully when it happens.
+`put-scaling-policy` is create-or-replace: the same name with a new configuration silently updates the policy. `--policy-type` and the configuration flag must agree. The four address parameters are repeated on every call.
 
 **Expected result**
 
@@ -1580,12 +821,7 @@ CPU_POLICY_ARN = arn:aws:autoscaling:us-east-1:000000000000:scalingPolicy:0a1b2c
 
 > Example output - your UUID will differ.
 
-Look hard at that ARN, because it is the strangest one in the course and it is about to be useful. It
-contains, in order: the service (`autoscaling`, not `application-autoscaling` - the ARN namespace and the
-CLI command name genuinely differ), a UUID, then `resource/ecs/` followed by **the whole resource ID**,
-then `policyName/` and the name. The scalable target's three-part address is embedded in its policies'
-ARNs, which is how CloudWatch can attach an alarm to a policy without knowing anything about ECS. Step 10
-puts that ARN into an alarm and Step 12 reads it back out.
+The ARN uses the `autoscaling` namespace (not `application-autoscaling`) and embeds the whole resource ID. Step 10 puts such an ARN into an alarm.
 
 **Verify**
 
@@ -1618,28 +854,13 @@ aws application-autoscaling describe-scaling-policies \
 
 > Example output - your alarm UUIDs will differ, and on some builds `Alarms` is an empty list.
 
-**What to look for:** the `Alarms` list. **You did not create those.** They appeared as a side effect of
-`put-scaling-policy`, they are named after your resource ID, and they are how this policy will ever hear
-about anything. That list is the single most surprising output in this lab, and Step 8 is about it.
-
-If `Alarms` is empty, record it as a limitation and continue. It changes nothing in Steps 9 to 11 and it
-changes what Step 8 can show you, which Step 8 says.
+**You did not create the `Alarms`.** They appeared as a side effect of `put-scaling-policy`. If the list is empty on your build, record it and continue.
 
 ---
 
 ### Step 8 - Read the two alarms that target tracking created for you
 
-**Purpose**
-
-Two CloudWatch alarms now exist in your account that you did not write. Find them, read them, and
-understand them - because the alternative is finding them in six months, not recognising them, and
-deleting them.
-
-**Run from**
-
-```text
-aws-floci-course/
-```
+Two alarms you did not write now exist. Recognise them, so nobody deletes them later.
 
 **Command - part 1, find them**
 
@@ -1684,29 +905,11 @@ aws cloudwatch describe-alarms \
 > Example output - the exact thresholds, periods and evaluation counts are AWS's to choose and have
 > changed between versions. On a build that creates no managed alarms this returns an empty list.
 
-**What the command does, and what to read in it**
-
-Six things in that output are worth a sentence, and together they are the whole behaviour of a target
-tracking policy.
-
-**`Namespace` is `AWS/ECS` and `Metric` is `CPUUtilization`.** That is what "predefined" bought you: you
-wrote `ECSServiceAverageCPUUtilization` and AWS resolved it into a namespace, a metric name, a statistic
-and - not shown in this projection - the two dimensions `ClusterName` and `ServiceName`. Add
-`Dimensions:Dimensions[].[Name,Value]` to the query and look at them; they are your cluster and your
-service, which is how the alarm knows which of the account's ECS services it is about.
-
-**`Evals` is 3 on the high alarm and 15 on the low one**, at a `Period` of 60. Multiply: the high alarm
-needs the metric above target for **3 minutes** before it fires; the low alarm needs it below for
-**15 minutes**. That asymmetry is baked into target tracking itself, on top of the cooldowns you chose -
-so the real reluctance to scale in is 15 minutes of evaluation plus a 300-second cooldown, and the real
-eagerness to scale out is 3 minutes plus 60. Nobody chose those two numbers; AWS did, and knowing them is
-how you answer "why did it take so long to scale".
-
-**The two thresholds differ** - 50 and 45 in the example. The low alarm's threshold sits below the
-target to create a dead band, so that a metric hovering exactly at the target does not cause the policy
-to scale out and in repeatedly. Without a dead band, every thermostat oscillates.
-
-**`Actions` is 1 on each.** That one action is the policy ARN from Step 7. Confirm it:
+- `Namespace` `AWS/ECS` and `Metric` `CPUUtilization`: the predefined metric resolved for you (add `Dimensions:Dimensions[].[Name,Value]` to see your cluster and service).
+- `Evals` 3 on the high alarm and 15 on the low one at `Period` 60: three minutes to scale out, fifteen to scale in, on top of your cooldowns. AWS chose those numbers.
+- The thresholds differ (50 and 45): a dead band, so a metric at the target does not oscillate.
+- `State` `INSUFFICIENT_DATA` takes no action, so a metric that stops being published means a service that never scales.
+- `Actions` is 1 on each. Confirm it is the Step 7 policy:
 
 ```bash
 aws cloudwatch describe-alarms \
@@ -1714,31 +917,10 @@ aws cloudwatch describe-alarms \
   --query 'MetricAlarms[].AlarmActions[]' --output text | tr '\t' '\n'
 ```
 
-Every line should be your `$CPU_POLICY_ARN`. That is the link that closes the loop: metric to alarm to
-policy to `desiredCount`.
-
-**`State` is `INSUFFICIENT_DATA`.** On real AWS an alarm sits in that state until the metric has enough
-datapoints, and a brand-new alarm on a brand-new policy will show it for a few minutes. It is not an
-error and it does not need fixing. It *is* worth knowing that an alarm in `INSUFFICIENT_DATA` takes no
-action at all - so a service whose metric has stopped being published is a service that will never scale,
-in either direction, silently.
+Every line must be your `$CPU_POLICY_ARN`.
 
 !!! warning "Do not edit or delete these alarms"
-    They belong to the policy. Application Auto Scaling recreates them when the policy changes and
-    deletes them when the policy is deleted, and it does not reconcile changes you make in between.
-
-    Editing one gets you an alarm that will be overwritten without warning at the next
-    `put-scaling-policy`. Deleting one gets you a policy that no longer scales in one direction, with no
-    error anywhere and nothing in `describe-scaling-policies` to show that anything is wrong - the
-    `Alarms` list still names the alarm, because that list records what the policy asked for rather than
-    what exists.
-
-    If you want different thresholds, change `TargetValue` or the cooldowns and let the policy rebuild
-    them. If you want your own alarm with your own thresholds, that is step scaling, and it is Step 10.
-
-    The one thing you *should* do with them is recognise them. An account with fifteen services under
-    target tracking has thirty of these, and a colleague who does not know what `TargetTracking-` means
-    will eventually try to tidy them up.
+    They belong to the policy: Application Auto Scaling recreates them when the policy changes and deletes them with it. An edited alarm is overwritten at the next `put-scaling-policy`; a deleted one leaves a policy that no longer scales in one direction, while `describe-scaling-policies` still lists the alarm. To change thresholds, change `TargetValue` or the cooldowns. For your own alarm, use step scaling (Step 10).
 
 **Command - part 2, prove the naming is derivable**
 
@@ -1749,11 +931,7 @@ aws cloudwatch describe-alarms --alarm-name-prefix "TargetTracking-${RID}" \
   --query 'length(MetricAlarms)' --output text
 ```
 
-**What to look for:** `2` - one high, one low, for one policy. After Step 9 adds a second target tracking
-policy this becomes `4`, and after Exercise 1 adds a third it becomes `6`. Two alarms per target tracking
-policy, always, and their names are derivable from a string you built in Step 5. That derivation is the
-answer if the alarms are not returned on your build: write it out in `notes/lab-06-notes.md` and say what
-each of the two would have contained.
+`2`: two alarms per target tracking policy (4 after Step 9, 6 after Exercise 1). If your build returns none, write out in your notes what the two would have contained.
 
 ✏️ **Your turn**
 
@@ -1771,51 +949,15 @@ Which ONE of the four terms would you change first if that total were unacceptab
 what would it cost you?
 ```
 
-Hint: the first term is in the high alarm's `Period` and `EvaluationPeriods`. The second is the policy
-invocation, which is seconds and can be treated as zero. The third is in Lab 04 Exercise 5's
-measurement. The fourth is a field of the ECS service that Lab 05 Step 10 set, and the reason it exists
-is that without it the task would be killed instead of counted.
+Hint: the four terms are the high alarm's `Period` x `EvaluationPeriods`, policy invocation (about zero), Lab 04 Exercise 5's task start-up, and Lab 05 Step 10's grace period.
 
 ---
 
 ### Step 9 - Create the request-count policy, the row Lab 05 unlocked
 
-**Purpose**
+`ALBRequestCountPerTarget` is the better signal for a web API: it measures the cause (requests) rather than a symptom (CPU), it does not depend on the task's CPU reservation, and it moves the instant load does. CPU is better only for CPU-bound work with variable cost per request (Review Question 7). See [choosing the scaling metric](../unit2/topic3.md#choosing-the-scaling-metric).
 
-`ALBRequestCountPerTarget` is the better scaling signal for a web API, and until Lab 05 there was no
-target group to point it at. This step creates the policy that was previously impossible, and building
-its `ResourceLabel` is the fourth constructed identifier in this architecture.
-
-**Run from**
-
-```text
-aws-floci-course/
-```
-
-**Concept first - why requests beat CPU for this service**
-
-CPU utilisation is a **symptom**. Requests per target is the **cause**. Three consequences:
-
-- **CPU is relative to a reservation you chose arbitrarily.** Step 7 made this point: the same workload
-  reports 80 per cent on a `256`-CPU task and 20 per cent on a `1024`-CPU one. Re-sizing the task
-  silently re-tunes every CPU policy you own. Requests per target means the same thing regardless of task
-  size.
-- **CPU lags.** A request arrives, is queued, is processed, and *then* consumes CPU. Request count moves
-  the instant the load does; CPU moves once the work has started, and for an I/O-bound service it may
-  barely move at all. An enrolment API that spends its time waiting on a database can be completely
-  saturated at 15 per cent CPU, and a CPU policy will watch it fall over.
-- **Requests per target is a number the business already has.** "We expect 1200 concurrent registrations"
-  translates into a target value. "We expect 55 per cent CPU" does not translate into anything.
-
-The one case where CPU is the better of the two is a genuinely CPU-bound workload with variable cost per
-request - a transcript PDF renderer, say, where one request might cost a hundred times another. There,
-request count is a poor proxy for load and CPU is measuring the thing that actually runs out. That is
-Review Question 7.
-
-**Concept first - the `ResourceLabel`, and what it is made of**
-
-`ALBRequestCountPerTarget` is published per target group per load balancer, so the metric specification
-needs to say *which*. It does that with a single string built from fragments of two ARNs:
+The metric needs a `ResourceLabel` built from fragments of two ARNs:
 
 ```text
 app/usms-enrolment-alb/50dc6c495c0c9188/targetgroup/usms-enrolment-tg/73e2d6bc24d8a067
@@ -1827,11 +969,6 @@ arn:aws:elasticloadbalancing:...:loadbalancer/app/usms-enrolment-alb/50dc6c495c0
 arn:aws:elasticloadbalancing:...:targetgroup/usms-enrolment-tg/73e2d6bc24d8a067
                                 |--- and prefix it with the word "targetgroup/" ---|
 ```
-
-The asymmetry is real and is not a documentation error: the load balancer's fragment already begins with
-its type (`app`), while the target group's fragment does not include the word `targetgroup`, so you have
-to put it back. Lab 05's Exercise 5 asked you to notice exactly that and to handle the two suffixes with
-two different parameter expansions.
 
 **Command - part 1, get the label, from Lab 05 if it recorded one and from the API if not**
 
@@ -1863,21 +1000,8 @@ printf '%s' "$RESOURCE_LABEL" | awk -F/ '{
 }'
 ```
 
-**What the command does**
-
-Two different parameter expansions, because the two ARNs need different treatment:
-
-- `"${ALB_ARN_NOW#*:loadbalancer/}"` uses `#` - strip the **shortest** prefix matching
-  `*:loadbalancer/`. The delimiter is a whole word rather than a single character, which is why `##*:`
-  would be wrong here: the load balancer's ARN has no colon after `loadbalancer/`, so `##*:` happens to
-  work, but it stops working the moment you try the same trick on the listener ARN. Say what you mean.
-- `"${TG_ARN_NOW##*:}"` uses `##*:` - strip everything up to the last colon - which is the same
-  expansion Step 5 used on the service ARN, and it works because the target group's ARN ends in exactly
-  the fragment you want, `targetgroup/<name>/<id>`.
-
-The validation counts six segments and checks two of them by name. That first segment, `app`, is the load
-balancer *type*: it would be `net` for a Network Load Balancer, whose metric would be a different one
-entirely. Checking it is how you catch a label built from the wrong load balancer.
+- `#*:loadbalancer/` strips the shortest prefix up to a multi-character delimiter; `##*:` strips up to the last colon.
+- The check requires six segments, `app` first (an NLB would be `net`) and `targetgroup` fourth.
 
 **Command - part 2, the policy configuration**
 
@@ -1900,25 +1024,10 @@ grep -c '\$' templates/lab-06-target-tracking-requests.json
 grep ResourceLabel templates/lab-06-target-tracking-requests.json
 ```
 
-**What the command does**
+!!! warning "Unquoted heredoc"
+    `<< EOF` so `$RESOURCE_LABEL` expands as the file is written. `grep -c '\$'` must print `0`; `1` means the literal text `$RESOURCE_LABEL` reached the file.
 
-`<< EOF`, **unquoted**, because `$RESOURCE_LABEL` must become a real string as the file is written. This
-is the opposite of Step 7's document, two steps earlier, and the check is the same: `grep -c '\$'` must
-print **`0`**. If it prints `1`, you used the quoted form and the file contains the literal text
-`$RESOURCE_LABEL`, which `put-scaling-policy` will reject with a message about the resource label's
-format that says nothing whatever about quoting.
-
-`TargetValue` of `1000.0` means **1000 requests per target per minute**, which is the unit
-`RequestCountPerTarget` is published in - a `Sum` over a one-minute period, per target. Not per second.
-Getting that wrong by a factor of sixty is the most common mistake with this metric, and the symptom is a
-policy that appears never to fire (target set too high) or one that pins the service to the ceiling
-(target set too low).
-
-Is 1000 a defensible number for the USMS enrolment API? Only if you can say what one task can serve. Two
-tasks at 1000 requests per minute each is about 33 requests per second in total, which is a plausible load
-for a student portal at registration time and a plausible capacity for a small container. The honest
-answer is that the number comes from a load test nobody has run yet, and Exercise 4 asks you to say so and
-propose how to get a real one.
+`TargetValue` `1000.0` is **1000 requests per target per minute** (a one-minute `Sum`), not per second. It is a provisional number until a load test measures what one task can serve (Exercise 4).
 
 **Command - part 3, create it**
 
@@ -1973,29 +1082,14 @@ aws application-autoscaling describe-scaling-policies \
 
 > Example output.
 
-**What to look for:** two policies on one target, each with two alarms - four managed alarms now, and
-Step 8's count command will say so. Which raises the question the next paragraph answers.
-
-**Two target tracking policies on one target: what happens when they disagree?**
-
-They will disagree. CPU will say four tasks and requests will say six, and there is exactly one rule:
+Two policies, each with two alarms. When they disagree:
 
 ```text
 SCALE OUT  -> the LARGEST capacity any policy asks for wins
 SCALE IN   -> only when EVERY policy agrees that scaling in is safe
 ```
 
-That is the correct bias and it is worth stating as a design principle rather than as trivia: with
-several signals, the safe reading of "should I have more capacity?" is *any yes*, and the safe reading of
-"can I have less?" is *all yes*. The practical consequence is that adding a second target tracking policy
-can only ever make your service larger or leave it the same, never smaller - so a second policy is a safe
-thing to add to a running system and an unsafe thing to add to a cost estimate.
-
-What you must **not** do is put two target tracking policies on the **same** metric with different
-targets. They are then two thermostats in one room, each undoing the other's work, and the service
-oscillates. Different metrics: fine, and this is the normal arrangement. Same metric: a fault. Exercise 2
-asks you to explain why the same reasoning makes target tracking and step scaling on one metric a bad
-idea, which is the subtler version of the same mistake.
+So a second policy on a **different** metric can only make the service larger. Two target tracking policies on the **same** metric with different targets fight each other and oscillate.
 
 **Checkpoint 3**
 
@@ -2017,40 +1111,9 @@ scalable target   service/usms-ecs-cluster/usms-enrolment-svc   min 2 max 10
 
 ### Step 10 - Create a step scaling policy, and the alarm that drives it
 
-**Purpose**
+Requirement: if the work queue is 100 deep add one task; if it is 200 deep add three. That is a piecewise response with no set point, so target tracking cannot express it, and queue depth does not fall predictably as capacity rises. Because you own the alarm, this is also what makes scaling observable on an emulator.
 
-Target tracking answers "keep this number near that number". This step builds the thing it cannot
-express, and - because you own the alarm - it is also what makes scaling **observable** on a build where
-no metric moves by itself.
-
-**Run from**
-
-```text
-aws-floci-course/
-```
-
-**Concept first - the requirement target tracking cannot express**
-
-Here is the requirement, in one sentence, from the USMS project lead:
-
-> The enrolment service writes each registration onto an internal work queue before confirming it. If the
-> queue is a hundred deep we are slightly behind and one more task will catch up; if it is two hundred
-> deep something is badly wrong and I would rather over-provision than explain it to the registrar.
-
-Target tracking cannot say that. It computes capacity from a ratio, so it can hold a queue near a set
-point, but "one task if it is a bit bad and three if it is very bad" is a **piecewise** response and
-there is no set point in it at all. That is a step function, and step scaling is how you write one.
-
-There is a second reason to reach for step scaling here and it is more practical: the metric is not a
-utilisation. Queue depth does not fall predictably as capacity rises - it falls as the *rate of drain*
-exceeds the *rate of arrival*, which is a different relationship - so the target tracking arithmetic from
-the interlude does not apply and would misbehave if you forced it.
-
-**Concept first - how step adjustments are expressed, and the part everyone gets wrong**
-
-A step scaling policy is a table of adjustments, and the bounds in that table are **relative to the
-alarm's threshold, not absolute metric values.** That single fact is the source of nearly every step
-scaling misconfiguration.
+Step bounds are **relative to the alarm threshold**, not absolute values:
 
 ```text
 alarm threshold = 100
@@ -2063,25 +1126,7 @@ alarm threshold = 100
                 metric 200 and above                      breach of 100 and above
 ```
 
-Read it as: *how far past the threshold are we?* A metric of 150 against a threshold of 100 is a breach
-of 50, which falls in the first interval, so the adjustment is +1. A metric of 260 is a breach of 160,
-which falls in the second, so +3.
-
-Three rules govern the table, and all three are validated at creation time:
-
-- The intervals must not overlap and must not leave a gap.
-- Exactly one interval may omit its upper bound (the open-ended top) and exactly one may omit its lower
-  bound (the open-ended bottom).
-- For a scale-out policy the bounds are non-negative; for a scale-in policy they are non-positive, and
-  the adjustments are negative. Exercise 2 builds the scale-in half.
-
-And two more fields:
-
-| Field | Value here | Meaning |
-| --- | --- | --- |
-| `AdjustmentType` | `ChangeInCapacity` | The adjustment is a number of tasks to add. Also `ExactCapacity` (set it to this) and `PercentChangeInCapacity` (add this percentage, with `MinAdjustmentMagnitude` to stop a 10 per cent increase on 2 tasks rounding to nothing) |
-| `MetricAggregationType` | `Average` | How the metric is aggregated over the alarm's period when deciding which step applies. Also `Minimum` and `Maximum` |
-| `Cooldown` | `60` | As before: how soon this policy may act again. Step scaling has one cooldown, not two, because a step policy is invoked by an alarm rather than deciding a direction for itself |
+Intervals must not overlap or leave a gap; one may omit its upper bound and one its lower. Scale-out bounds are non-negative; scale-in bounds are non-positive with negative adjustments (Exercise 2). `AdjustmentType` `ChangeInCapacity` adds tasks; `MetricAggregationType` `Average`; one `Cooldown` of 60.
 
 **Command - part 1, publish the metric, so that it exists**
 
@@ -2104,27 +1149,8 @@ aws cloudwatch list-metrics --namespace "$METRIC_NS" \
   --output json
 ```
 
-**What the command does**
-
-`put-metric-data` publishes a **custom metric** - a namespace you invented, a metric name you invented,
-and dimensions you invented. That is all a custom metric is: CloudWatch will store any
-namespace-plus-name-plus-dimensions triple you send it, and there is no registration step. The convention
-is `Company/Application` or, here, `USMS/Enrolment`; a namespace beginning `AWS/` is reserved and will be
-rejected.
-
-Three values are published so that the metric exists with more than one datapoint. On a real system these
-would come from the application itself, or from a small agent, and the interesting engineering question is
-not how to publish them but how often: CloudWatch charges per metric and per API call, and a service
-publishing a custom metric per task per second is a line item somebody will notice.
-
-**Note the `--dimensions` syntax, and note that it is not the same as the next command's.**
-`put-metric-data` takes `Service=enrolment`, a plain map. `put-metric-alarm`, in part 3, takes
-`Name=Service,Value=enrolment`. **Two operations in the same service, on the same concept, with different
-shorthand.** That is not a mistake in this lab and it is not a mistake in the CLI; it is two different
-parameter shapes in the service model, given the same flag name. Run
-`aws cloudwatch put-metric-data help` and `aws cloudwatch put-metric-alarm help` and read both synopses
-if you want to see it for yourself. It is the seventh tag-or-dimension convention this course has met, and
-the habit remains the same: read the synopsis, do not guess.
+- A custom metric needs no registration; namespaces beginning `AWS/` are reserved. See [custom metrics](../unit7/topic1.md#custom-metrics-and-the-four-ways-to-publish-them).
+- `put-metric-data --dimensions` takes `Service=enrolment`; `put-metric-alarm` in part 3 takes `Name=Service,Value=enrolment`. Same service, different shorthand: read the synopsis.
 
 **Command - part 2, the step configuration**
 
@@ -2152,7 +1178,7 @@ python3 -m json.tool templates/lab-06-step-scaling-out.json > /dev/null && echo 
 grep -c '\$' templates/lab-06-step-scaling-out.json
 ```
 
-Quoted heredoc again - no variables, nothing to expand, `grep -c '\$'` prints `0`.
+Quoted heredoc again; `grep -c '\$'` prints `0`.
 
 **Command - part 3, create the policy, then the alarm that drives it**
 
@@ -2193,32 +1219,10 @@ aws cloudwatch describe-alarms --alarm-names "$QUEUE_ALARM" \
   --output json
 ```
 
-**What the command does**
-
-**The order matters.** The policy is created first, because the alarm needs the policy's ARN as an alarm
-action and an alarm action that names a policy which does not exist is rejected. Reverse the order and
-you get `ValidationError: Invalid metrics or alarm actions`, which does not point at the ordering.
-
-**`--alarm-actions "$STEP_POLICY_ARN"` is the whole point of the step.** This is the link that target
-tracking made for you in Step 7 and that you make for yourself here. An alarm action can be a scaling
-policy ARN, an SNS topic ARN, an EC2 action, or a Systems Manager action - and the fact that they share
-one field is why you can have one alarm that both scales the service and wakes somebody up. That is
-something target tracking's managed alarms cannot do for you, and it is the third reason to prefer step
-scaling for a signal that matters.
-
-**`--treat-missing-data notBreaching`** decides what the alarm does when no datapoint arrives for a
-period. The four choices are `notBreaching` (treat it as good), `breaching` (treat it as bad),
-`ignore` (keep the current state) and `missing` (go to `INSUFFICIENT_DATA`, the default). For a queue
-depth published by the application, a missing datapoint most likely means the application is not
-publishing - which is a *problem*, not "queue is empty" - so `breaching` has a real argument in its
-favour. `notBreaching` is chosen here because this lab publishes datapoints by hand and does not want the
-alarm firing every time you stop. Say in one sentence in your notes which you would choose on a real
-system, and why. It is Review Question 4.
-
-**`--evaluation-periods 1` at a `--period 60`** means the alarm fires after one minute above the
-threshold. Compare with the 3 minutes the managed high alarm from Step 8 uses. This one is deliberately
-more twitchy, because a backlog is a *worse* signal than a utilisation and waiting three minutes to react
-to it is three minutes of students seeing a spinner.
+- **Policy first**: the alarm needs its ARN. Reversed, you get `ValidationError: Invalid metrics or alarm actions`.
+- `--alarm-actions "$STEP_POLICY_ARN"` is the link target tracking made for you in Step 7. One alarm can also notify an SNS topic, which managed alarms cannot.
+- `--treat-missing-data notBreaching` suits hand-published data; on a real system `breaching` has a strong argument (Review Question 4). See [missing-data treatment](../unit7/topic3.md#missing-data-treatment).
+- `--evaluation-periods 1` at `--period 60` fires after one minute, more eagerly than the managed three.
 
 **Expected result**
 
@@ -2255,100 +1259,19 @@ aws application-autoscaling describe-scaling-policies \
   --output json
 ```
 
-**What to look for:** three things.
-
-`Type` is `StepScaling` and `Steps` has **two** entries, the second with no `MetricIntervalUpperBound`.
-An open-ended top step is what makes the policy able to respond to a metric value you did not anticipate.
-
-`Alarms` contains `usms-enrolment-queue-high` - and this is worth pausing on, because **you never told
-the policy about the alarm.** You told the alarm about the policy, in `--alarm-actions`, and Application
-Auto Scaling discovered the association from the other end. The relationship is stored once and readable
-from both directions, which is convenient and is also why deleting the alarm leaves a policy that still
-claims to have one.
-
-`Adjust` is `ChangeInCapacity`. If it says `ExactCapacity`, you have a policy that sets the count to 1 or
-3 tasks rather than adding them, which at a floor of 2 would be a scale-*in* dressed as a scale-out.
+- `Type` `StepScaling`, two `Steps`, the second with no `MetricIntervalUpperBound` (open-ended top).
+- `Alarms` contains `usms-enrolment-queue-high`, although you only told the alarm about the policy.
+- `Adjust` `ChangeInCapacity`. `ExactCapacity` would set the count to 1 or 3, a scale-in in disguise.
 
 ---
 
 ### Step 11 - Create two scheduled actions
 
-**Purpose**
+The only mechanism that can have capacity ready before enrolment opens.
 
-Everything so far is reactive and therefore late. Enrolment opens at a time printed in the university
-calendar, and this is the only mechanism in Application Auto Scaling that can have the capacity ready
-before the first student arrives.
-
-**Run from**
-
-```text
-aws-floci-course/
-```
-
-**Concept first - a scheduled action changes the bounds, not the count**
-
-This is the detail that makes scheduled scaling compose properly with the policies you have already
-built, and it is easy to miss.
-
-A scheduled action sets `MinCapacity`, `MaxCapacity`, or both. It does not set `desiredCount`. So a
-morning action raising the floor to 4 does two things at once:
-
-```text
-07:44   min 2  max 10   desired 2      the reactive policies own the range 2..10
-07:45   min 4  max 10   desired 4      the floor moved, so the target had to
-                                       -> desiredCount raised BY THE FLOOR, not by a policy
-                                       -> the reactive policies now own the range 4..10
-20:00   min 2  max 10   desired 4      the floor moved down; nothing forces the count down
-                                       -> the CPU and request policies may now scale in to 2
-```
-
-Read the last two lines carefully. Lowering the floor at 20:00 does **not** remove capacity. It gives
-permission for capacity to be removed, and the reactive policies do the removing when their metrics say
-it is safe. That is a much better arrangement than a scheduled action that sets an exact count, because
-it cannot drop you below what the traffic actually needs - if students are still enrolling at 20:00, CPU
-and requests will keep the tasks alive and the floor will simply be irrelevant.
-
-The general principle is worth stating: **scheduled scaling should move the boundaries and let the
-reactive policies move the count.** A scheduled action that sets both min and max to the same value is a
-scheduled action that has switched off your reactive scaling for that window, and people do it by
-accident.
-
-**Concept first - schedule expressions, and time zones versus regions**
-
-Three forms:
-
-| Form | Example | Fires |
-| --- | --- | --- |
-| `at(...)` | `at(2026-09-14T02:00:00)` | Once, at that moment. The action stays behind afterwards and must be deleted |
-| `rate(...)` | `rate(1 hour)` | Repeatedly, at that interval, starting when you create it |
-| `cron(...)` | `cron(45 7 ? * MON-FRI *)` | On a recurring calendar schedule |
-
-The `cron` form has **six** fields, not five:
-
-```text
-cron(minutes hours day-of-month month day-of-week year)
-     45      7     ?             *     MON-FRI     *
-```
-
-The sixth field, year, is the one that surprises anybody who has written a Unix crontab. And there is a
-second difference: `day-of-month` and `day-of-week` cannot both be specified, so one of them must be `?`
-- "no particular value". Writing `*` in both is rejected, and the error message is about the fields
-rather than about the rule.
-
-**Now the part that matters more than the syntax.** Every resource in this course is in `us-east-1`, and
-the university is in Bhutan. Those are different facts about different things, and the schedule is about
-the second one:
-
-- **The region** decides where the tasks run. It is `us-east-1` because `configs/course.env` says so, and
-  it has nothing to do with when anybody enrols.
-- **The time zone** decides what "07:45" means. Application Auto Scaling defaults to **UTC** and accepts
-  `--timezone` with an IANA name.
-
-A schedule of `cron(45 7 ? * MON-FRI *)` with no `--timezone` fires at 07:45 UTC, which is 13:45 in
-Thimphu - six hours after the students arrived. Passing `--timezone Asia/Thimphu` fires it at 07:45 local,
-which is what the requirement said. Being explicit also survives daylight saving in regions that have it,
-because AWS resolves the IANA zone at each firing rather than storing a fixed offset. Bhutan has no
-daylight saving, which makes this a good place to learn the habit without being punished for missing it.
+- A scheduled action sets `MinCapacity` and/or `MaxCapacity`, never `desiredCount`. Raising the floor to 4 at 07:45 pulls the count up; lowering it at 20:00 only **permits** the reactive policies to scale in. Setting min and max equal switches reactive scaling off for that window.
+- Schedule forms: `at(...)` once (stays behind afterwards), `rate(...)`, and `cron(...)` with **six** fields (the last is the year), where one of day-of-month and day-of-week must be `?`.
+- The Region (`us-east-1`) decides where tasks run; the time zone decides what 07:45 means. The default is **UTC**; pass `--timezone Asia/Thimphu`.
 
 **Command - part 1, the morning scale-out**
 
@@ -2402,16 +1325,7 @@ aws application-autoscaling put-scheduled-action \
        --scalable-target-action MinCapacity=2,MaxCapacity=10
 ```
 
-**What the command does**
-
-`--scalable-target-action MinCapacity=4,MaxCapacity=10` is the new bounds, as a single structure in
-shorthand. Note that **both** are given on both actions even though only the minimum changes. Omitting
-`MaxCapacity` leaves it as it was, exactly like `register-scalable-target` in Step 6 - but writing it out
-means the pair of actions reads as a complete statement of the two states rather than as a pair of
-deltas, and somebody reading it in six months does not have to reconstruct the ceiling from another call.
-
-`put-scheduled-action` is a create-or-replace, like `put-scaling-policy`. The same name is the same
-action.
+Both actions state both bounds so they read as complete states. `put-scheduled-action` is create-or-replace.
 
 **Expected result**
 
@@ -2447,14 +1361,7 @@ aws application-autoscaling describe-scheduled-actions \
 
 > Example output - the `Created` column is omitted here for width; yours will show it.
 
-**What to look for:** two rows. The morning action's `Min` is `4` and the evening action's is `2`, and
-both `Max` values are `10`. If `TZ` is empty or `UTC`, you took the fallback path - that is fine, and
-write one sentence in `notes/lab-06-notes.md` recording that you converted the times by hand and what
-would break if the university moved to a zone with daylight saving.
-
-Note that neither action has fired and neither will during this session unless you happen to be at your
-machine at 07:45 on a weekday. That is the nature of scheduled scaling and it is why the "Your turn"
-below exists.
+Two rows: morning `Min` 4, evening `Min` 2, both `Max` 10. An empty or `UTC` `TZ` means you took the fallback; note it, and what daylight saving would break.
 
 ✏️ **Your turn**
 
@@ -2476,9 +1383,7 @@ matters six months later, and which command you would put in the same runbook pa
 the one that created it.
 ```
 
-Hint: `python3 -c "import datetime;print((datetime.datetime.now(datetime.timezone.utc)+datetime.timedelta(minutes=10)).strftime('%Y-%m-%dT%H:%M:%S'))"` gives you a correctly formatted timestamp on both
-macOS and Linux, which `date -d` and `date -v` do not. The `at()` form takes no time zone offset in the
-string - the `--timezone` flag is how you say what it means.
+Hint: `python3 -c "import datetime;print((datetime.datetime.now(datetime.timezone.utc)+datetime.timedelta(minutes=10)).strftime('%Y-%m-%dT%H:%M:%S'))"` gives the timestamp on macOS and Linux; `at()` takes no offset, `--timezone` says what it means.
 
 When you have finished looking at it, remove it - and read this first.
 
@@ -2492,7 +1397,7 @@ When you have finished looking at it, remove it - and read this first.
 
     **Reversible?** Yes. One `put-scheduled-action` recreates it.
 
-    **Effect on later labs:** none, **provided** you also put the floor back to 2. Section 9's script
+    **Effect on later labs:** none, **provided** you also put the floor back to 2. Section 8's script
     asserts `MinCapacity` is 2, and this is the most likely reason for it to fail.
 
 ```bash
@@ -2512,8 +1417,7 @@ aws application-autoscaling describe-scalable-targets --service-namespace ecs --
   --query 'ScalableTargets[0].[MinCapacity,MaxCapacity]' --output text
 ```
 
-**What to look for:** `2` scheduled actions remaining, and `2	10` for the bounds. That second line is the
-point of the admonition: the floor had to be put back by hand.
+`2` scheduled actions remaining, and `2	10` for the bounds: the floor had to be put back by hand.
 
 **Checkpoint 4**
 
@@ -2539,34 +1443,7 @@ scalable target   min 2  max 10
 
 ### Step 12 - Fire the alarm, and prove that something other than you moved the number
 
-**Purpose**
-
-Everything so far has been configuration that reported success. This is the step that tries to close the
-loop. It is the one place in this lab where you can watch `desiredCount` change without typing a number,
-and - following the course's own rule - it is written so that you **prove the property** rather than
-observe a proxy for it.
-
-**Run from**
-
-```text
-aws-floci-course/
-```
-
-**Concept first - create, perturb, read back, applied to a control loop**
-
-The property this lab depends on is: *a metric breach causes capacity to change.* The proof pattern is
-the same shape as Lab 1 Step 14's persistence proof and Lab 04 Step 18's.
-
-```text
-CREATE    a policy, an alarm, and the link between them          Steps 10
-PERTURB   push the metric past the threshold, or force the
-          alarm into ALARM state                                 this step, parts 2 and 3
-READ BACK desiredCount, and describe-scaling-activities          this step, part 4
-```
-
-What would **not** be a proof: observing that `put-scaling-policy` returned an ARN, or that
-`describe-alarms` shows `State: OK`. Both of those were true before anything was connected. The proof has
-to be a number that moved, and a record saying who moved it.
+The one step where `desiredCount` can change without you typing a number. The proof is create (Step 10), perturb (parts 2 and 3), read back (part 4): a number that moved and a record of who moved it. An ARN returned or `State: OK` proves nothing.
 
 **Command - part 1, record the truth before**
 
@@ -2625,19 +1502,9 @@ aws cloudwatch get-metric-statistics \
   --output table
 ```
 
-**What the command does**
+`260` against `100` is a breach of `160`, which falls in the open-ended second interval: **+3 tasks**, from 2 to 5. Write the prediction down before you look. Datapoints come back unordered, hence `sort_by(...,&Timestamp)`.
 
-A value of `260` against a threshold of `100` is a breach of `160`, which falls in the step policy's
-second interval - `MetricIntervalLowerBound: 100` with no upper bound - so the adjustment that *should*
-be applied is **+3 tasks**, taking `desiredCount` from 2 to 5. Predict that before you look, and write
-the prediction down; the value of the exercise is in having predicted it.
-
-`get-metric-statistics` needs an explicit time window and its timestamps are computed with `python3`
-rather than `date`, for the reason the Prerequisites gave. Note the shape of the query: `sort_by` with an
-expression reference, `&Timestamp`, which you met in Lab 05 Step 16 - datapoints come back unordered and
-a table of unordered timestamps is unreadable.
-
-On real AWS you now wait up to a minute for the alarm to evaluate. Watch it:
+On real AWS the alarm takes up to a minute to evaluate. Watch it:
 
 ```bash
 for i in $(seq 1 8); do
@@ -2662,18 +1529,7 @@ aws cloudwatch set-alarm-state \
   || echo "set-alarm-state not supported on this build - go to part 5"
 ```
 
-**What the command does**
-
-`set-alarm-state` writes an alarm's state directly, and **it invokes the alarm's actions exactly as a
-real state change would.** That is not a testing back door bolted on for emulators; it is a documented
-CloudWatch operation whose entire purpose is letting you test an alarm's actions without waiting for the
-condition, and it is how you would verify a production runbook on real AWS without breaking anything.
-
-Two things to know about it. The state you set is temporary: at the alarm's next evaluation, real
-CloudWatch recomputes the state from the metric and overwrites yours - so on real AWS the alarm will fall
-back to `OK` within a minute or two, having already fired its action once. And it is genuinely
-privileged: `cloudwatch:SetAlarmState` on a production alarm is the ability to trigger anything that
-alarm does, which is why it belongs in a policy you have thought about rather than in a wildcard.
+`set-alarm-state` **invokes the alarm's actions** exactly as a real state change would; it is the documented way to test an alarm. Real CloudWatch overwrites the state at the next evaluation. `cloudwatch:SetAlarmState` on a production alarm is a real privilege.
 
 **Command - part 4, read back the number and the record**
 
@@ -2717,18 +1573,7 @@ poll  2  desired=5 running=2 pending=3
 
 > Example output - your timestamps and UUIDs will differ.
 
-**What to look for, and this is the whole lab in one field:** the `Cause` string. It names the alarm, it
-names the policy, and it says which state change triggered it. That sentence is the evidence that
-`desiredCount` was changed by something other than you, and it is the single most valuable output in this
-document. Screenshot it.
-
-`Status` of `Successful` means Application Auto Scaling's `UpdateService` call was accepted. Note what it
-does **not** mean: it does not mean three tasks are running. `pending=3` in the poll above is ECS still
-starting them, and Lab 05's 60-second grace period means they will not receive a request for another
-minute after that. The scaling activity completes long before the capacity exists - which is §4.3's point,
-now visible as two numbers in one line of output.
-
-Other `Status` values worth recognising:
+The `Cause` string names the alarm, the policy and the state change: the evidence that something other than you changed `desiredCount`. Screenshot it. `Successful` means ECS accepted the count, not that tasks are serving; `pending=3` plus the 60-second grace period is Section 4's lateness, visible.
 
 | `StatusCode` | Meaning |
 | --- | --- |
@@ -2788,9 +1633,7 @@ PY
 } | tee outputs/lab-06-scaling-proof.txt
 ```
 
-**Verify**
-
-Read the six blocks as one chain and satisfy yourself that each link names the next:
+**Verify:** each block names the next.
 
 ```text
 metric USMS/Enrolment EnrolmentQueueDepth      (block 1)
@@ -2804,11 +1647,7 @@ metric USMS/Enrolment EnrolmentQueueDepth      (block 1)
   -> so desiredCount should become 5           (block 6, if the loop ran)
 ```
 
-If block 6 says `2`, the chain is proven and the loop did not run; say that, in one sentence, and name
-which of the five services in it your build did not connect. If it says `5`, you have both proofs and the
-`Cause` string from part 4 is your evidence.
-
-`outputs/lab-06-scaling-proof.txt` is evidence for your lab report. Keep it until you have submitted.
+If block 6 says `2`, the chain is proven and the loop did not run; say so and name the link your build did not connect. If it says `5`, you have both proofs. Keep `outputs/lab-06-scaling-proof.txt` until you have submitted.
 
 **Command - part 6, return to the baseline**
 
@@ -2835,22 +1674,9 @@ aws ecs describe-services --cluster "$USMS_ECS_CLUSTER" --services "$USMS_ENROLM
 paste outputs/lab-06-pre-scale.txt outputs/lab-06-post-scale.txt
 ```
 
-**What the command does, and one thing worth arguing about**
+The policies are still watching: if the metric stayed high, the next evaluation would scale out again. So push the metric down **first**, then set the count. A service under a scaling policy has no manual capacity; to hold a count, suspend (Step 13) or set min and max equal.
 
-Setting the desired count back to 2 with `update-service` is a manual override of a scaled value, and it
-is worth being clear about what that means: **the scaling policies are still there and still watching.**
-If the metric were genuinely above the threshold, the next evaluation would scale out again, and you would
-have a fight between a human and a policy that the policy always wins. That is why part 6 pushes the
-metric back down *before* setting the count.
-
-On a real system, "I set the count by hand and it went back up" is a support case that arrives weekly, and
-the answer is always the same: a service under a scaling policy has no manual capacity. If you need the
-count held, the tool is Step 13's suspension, or a `MinCapacity` and `MaxCapacity` set to the same number
-- not `update-service`.
-
-**What to look for:** `Desired` back to `2`, and the `paste` showing the two timestamps. The elapsed time
-between them is roughly how long a full scale-out and manual reset took in your environment, and Exercise
-5 asks you to measure a cleaner version of it.
+`Desired` back to `2`; the `paste` shows both timestamps.
 
 **Checkpoint 5**
 
@@ -2868,21 +1694,7 @@ Scaling observed (path A) or wiring proven (path B)
 
 ### Step 13 - Suspend and resume scaling
 
-**Purpose**
-
-There is a day when you want the scaling to stop and the policies to stay. A deployment you want to
-observe, an incident whose cause you suspect is the scaling itself, a load test whose whole point is to
-see what happens at a fixed size. This step is the switch, and it is three switches rather than one.
-
-**Run from**
-
-```text
-aws-floci-course/
-```
-
-**Concept first - three independent switches, and why they are separate**
-
-The `SuspendedState` structure you saw in Step 5's verify has three booleans:
+Stop the scaling and keep the policies: during a deployment, an incident, or a fixed-size load test.
 
 | Field | When `true`, this stops | Leaves working |
 | --- | --- | --- |
@@ -2890,38 +1702,10 @@ The `SuspendedState` structure you saw in Step 5's verify has three booleans:
 | `DynamicScalingOutSuspended` | Scale-**out** by any policy | Scale-in, and scheduled actions |
 | `ScheduledScalingSuspended` | Scheduled actions | Both directions of dynamic scaling |
 
-The separation is not bureaucracy. Each combination has a real use:
-
-- **Scale-in only, suspended.** The commonest one. You are deploying, or you are in an incident, and you
-  want capacity to be able to grow but never to shrink until you understand what is happening. This is
-  the safe suspension and the one to reach for when in doubt.
-- **Scale-out only, suspended.** A cost freeze, or a runaway policy you have not yet fixed. Note that
-  this is the *dangerous* one: it caps you at your current size while leaving scale-in free, so a quiet
-  hour can shrink you to the floor and you cannot grow back.
-- **Scheduled only, suspended.** A public holiday, or an exam period that has moved. The reactive
-  policies keep working; the calendar stops.
-
-Two properties make this the right tool rather than deleting things:
-
-- **The policies still exist.** `describe-scaling-policies` returns them unchanged, so nothing about your
-  configuration is lost and nothing has to be rebuilt from a runbook at three in the morning.
-- **Suspension is part of the scalable target, not of the policies.** One call suspends everything on
-  that target, which is what you want in an incident - you are not trying to remember which of three
-  policies is the dangerous one.
-
-And one property that makes it dangerous:
+Scale-in suspended is the safe choice when in doubt. Scale-out suspended is the dangerous one: a quiet hour can shrink you to the floor and you cannot grow back. Suspension belongs to the scalable target, so one call covers every policy.
 
 !!! warning "A suspension is invisible unless you go and look for it"
-    Nothing about a suspended target announces itself. `describe-scaling-policies` looks normal, the
-    alarms still change state, and the CloudWatch console still draws the graph. The only place the
-    suspension appears is the `SuspendedState` field of the scalable target.
-
-    A target left with `DynamicScalingOutSuspended: true` after an incident is a service that will not
-    scale out during the next one, and nothing will tell you. That is why Section 9's verification script
-    asserts all three switches are `false`, and why the last command in this step is not optional.
-
-    On a real team, the rule that works is: a suspension is always paired with a reminder to remove it,
-    and the pairing is written down at the moment you suspend, not afterwards.
+    Policies, alarms and graphs all look normal. Only the target's `SuspendedState` shows it. A target left with `DynamicScalingOutSuspended: true` will not scale out in the next incident, which is why Section 8 asserts all three switches are `false` and why part 3 is not optional.
 
 **Command - part 1, suspend scale-in only**
 
@@ -2949,19 +1733,7 @@ aws application-autoscaling describe-scalable-targets \
   --output json
 ```
 
-**What the command does**
-
-Note the operation: **`register-scalable-target` again.** There is no `suspend-scaling` call. Suspension
-is content of the registration, and Step 6's change model applies - the address is unchanged, the content
-is updated, and the two capacity parameters you did not pass survive untouched. That is the third time
-this lab has used a re-registration to change something, and by now it should feel unremarkable.
-
-Passing the state as a document with `file://` rather than as shorthand is a choice, and this is the one
-place in this lab where the shorthand is genuinely fine:
-`--suspended-state DynamicScalingInSuspended=true` is readable and unambiguous. The document is used
-anyway for two reasons: it makes the *other two* switches explicit rather than implied, and it puts the
-suspension into `templates/` where Git will show you when it was turned on and by which commit. For a
-setting whose defining hazard is being forgotten, both of those are worth more than the keystrokes.
+There is no `suspend-scaling` call: suspension is content of the registration (Step 6's change model), so the bounds survive. The document makes all three switches explicit and keeps the intervention in Git as a runbook page.
 
 **Expected result**
 
@@ -2979,9 +1751,7 @@ setting whose defining hazard is being forgotten, both of those are worth more t
 
 > Example output.
 
-**What to look for:** one `true`, two `false`, and the bounds unchanged at 2 and 10. If all three went
-`true`, you passed a document with the wrong values and you have just switched off every form of scaling
-on this service.
+One `true`, two `false`, bounds unchanged. Three `true` means every form of scaling is off.
 
 **Command - part 2, observe that the policies are untouched**
 
@@ -2994,9 +1764,7 @@ aws cloudwatch describe-alarms --alarm-name-prefix "TargetTracking-${RID}" \
   --query 'length(MetricAlarms)' --output text
 ```
 
-**What to look for:** all three policies still listed, and the managed alarm count unchanged. **Nothing
-about the configuration changed** - which is the entire argument for suspending rather than deleting, and
-is worth seeing rather than being told.
+All three policies listed and the managed alarm count unchanged: suspending changes no configuration.
 
 **Command - part 3, resume, and prove it**
 
@@ -3030,29 +1798,14 @@ aws application-autoscaling describe-scalable-targets \
 
 > Example output.
 
-**What to look for:** the `0` on the last line. `SuspendedState.*` is a JMESPath **object projection** -
-the `*` after a dot projects every value of a hash, discarding the keys - so it yields three booleans, and
-`grep -ci true` reports whether any of them is set. One number that must be zero is a better check than
-three fields you have to read, and it is exactly the expression Section 9's script uses. Note that
-`--output text` puts a flat list of scalars on **one** tab-separated line, so what you are counting is
-matching lines rather than matching values - which is why the test is "is it zero" and not "is it three".
-
-The `-i` on that `grep` is not decoration and it is worth one sentence, because getting it wrong produces
-a check that can only pass. `--output text` renders a JSON boolean the way Python does, as **`True`** and
-**`False`** with a capital letter. A case-sensitive `grep -c true` would count zero on a target whose
-scale-out is genuinely suspended, report success, and tell you nothing - the same trap as the persistence
-test described in Lab 1 Step 14, in one letter. Confirm it for yourself:
+The last line must be `0`. `SuspendedState.*` is an object projection (every value, keys discarded). `--output text` prints the three values on **one** line as `True`/`False`, so `grep -ci` counts matching lines and `-i` is essential: a case-sensitive `grep -c true` would always print `0`. Confirm the capitals:
 
 ```bash
 aws application-autoscaling describe-scalable-targets --service-namespace ecs \
   --resource-ids "$RID" --query 'ScalableTargets[0].SuspendedState.*' --output text
 ```
 
-Three words, each beginning with a capital letter.
-
-Note that part 3 uses the shorthand rather than the document, deliberately, so that the file left in
-`templates/` records the *suspended* configuration rather than the resumed one. A template that shows the
-default state teaches nobody anything; a template that shows the intervention is a runbook page.
+Part 3 uses shorthand so that `templates/lab-06-suspended-state.json` keeps the suspended configuration as the runbook artefact.
 
 **Checkpoint 6**
 
@@ -3069,19 +1822,7 @@ Suspension exercised and cleared
 
 ### Step 14 - Prove the whole scaling configuration survives a restart
 
-**Purpose**
-
-The same proof as Lab 2 Step 23, Lab 3 Step 19, Lab 04 Step 18 and Lab 05 Step 16, applied to this
-lab's work. This lab's state spans four services - Application Auto Scaling, CloudWatch, ECS and IAM - and
-a build that persists three of them but not the fourth leaves you with policies attached to a target that
-no longer exists, or an alarm pointing at a policy ARN that has been reissued. Both failures are invisible
-until something needs to scale.
-
-**Run from**
-
-```text
-aws-floci-course/
-```
+The state spans Application Auto Scaling, CloudWatch, ECS and IAM. A build that persists three of them leaves policies on a missing target or an alarm pointing at a reissued ARN, invisible until something needs to scale.
 
 **Command - part 1, record the truth**
 
@@ -3129,13 +1870,7 @@ source configs/lab-04.env
 source configs/lab-05.env
 ```
 
-`floci-down.sh` is `docker compose stop`. It stops the container and keeps the state. It is not
-`docker compose down`, and it is emphatically not `docker compose down -v`, which would delete the volumes
-and with them the entire course.
-
-Note that the six shell variables this lab has been carrying - `RID`, `SDIM`, `CPU_POLICY`,
-`REQ_POLICY`, `STEP_POLICY`, `QUEUE_ALARM` - survived, because the terminal did. That is precisely why
-part 3 does not use them.
+`floci-down.sh` is `docker compose stop`: state kept. Never `docker compose down -v`. The shell variables survived because the terminal did, which is why part 3 does not use them.
 
 **Command - part 3, read it back, deriving the resource ID from the API again**
 
@@ -3194,31 +1929,9 @@ diff outputs/lab-06-pre-restart.txt outputs/lab-06-post-restart.txt \
   || echo "PERSISTENCE FAILED: read the diff above, then run ./scripts/utilities/floci-storage-check.sh"
 ```
 
-**What the command does**
-
-Part 3's first five lines are the entire point of the step. **Every identifier is re-derived from the
-API** rather than reused from the shell variables - which are still sitting there, correct, and would have
-proved only that Bash remembers strings. That is exactly the mistake that made an earlier edition of this
-course's persistence test worthless, described in Lab 1 Step 14.
-
-Three of those derivations are worth reading:
-
-- The resource ID comes from the service ARN by the same parameter expansion Step 5 used. It is derived
-  from ECS, not from Application Auto Scaling, so a build that lost the scalable target entirely would
-  still produce a correct `RID` and then fail loudly on the next call - which is the failure you want.
-- `SDIM` is found by filtering the target list on the resource ID with `?ResourceId=='$RID'` and taking
-  `| [0]`. A raw string literal in single quotes inside a JMESPath filter, in a double-quoted shell
-  string so that `$RID` expands: the pattern from Lab 05 Step 7, in a new place.
-- The policy names are found by *property* rather than by name: the step policy by
-  `?PolicyType=='StepScaling'`, the CPU one by a `contains()` on its name. Finding an object by what it
-  *is* rather than by what you called it is a better test, because it would still work if somebody had
-  renamed it - and it would fail if somebody had changed its type, which is a thing you want to hear about.
-
-**Seven facts across four services** are compared, not one. Note what is deliberately **not** in the
-list: `runningCount`, `pendingCount`, the alarm's `StateValue`, and the scaling activity list. All four
-are legitimately allowed to move across a restart - tasks may be restarted, alarms re-evaluate, and an
-activity list is a log. Comparing a value that is allowed to change would make this check fail for the
-wrong reason. **Compare the configuration, not the weather.**
+- Every identifier is re-derived from the API; reusing the variables would only prove Bash remembers strings (Lab 1 Step 14).
+- Policies are found by property (`PolicyType=='StepScaling'`, `contains()`), so a changed type would fail the check.
+- Only configuration is compared: `runningCount`, alarm state and the activity log may legitimately change.
 
 **Expected result**
 
@@ -3232,13 +1945,7 @@ re-derived:
 PERSISTENCE PROVEN: the scalable target with its bounds and its three suspension switches, all three scaling policies with their full configurations, both scheduled actions with their schedules and bounds, and the custom alarm with its threshold, its missing-data treatment and its one action are all unchanged
 ```
 
-**What to look for:** exactly that line. If you see `PERSISTENCE FAILED`, read the `diff` **before doing
-anything else** - it names *which* of the seven facts did not survive, which is far more useful than a
-general failure. Then run `./scripts/utilities/floci-storage-check.sh`.
-
-One diff that is benign and worth knowing about in advance: on some builds the managed target tracking
-alarms are recreated after a restart with **new UUIDs**. Those alarm names are not in the comparison, on
-purpose, for exactly that reason - but if you added them, this is why it would fail.
+On `PERSISTENCE FAILED`, read the `diff` first; it names which fact did not survive. Then run `./scripts/utilities/floci-storage-check.sh`. Managed alarm names are left out on purpose: some builds recreate them with new UUIDs.
 
 **Checkpoint 7**
 
@@ -3256,19 +1963,7 @@ Persistence proven for Lab 06
 
 ### Step 15 - Close the loop: from one request to one new task
 
-**Purpose**
-
-Five laboratories have each built one layer, and this is the first step in the course from which the
-whole thing is visible at once. Trace it, name every object on the path, and - the part that matters -
-say which of them this lab created. The answer is going to be "one".
-
-**Run from**
-
-```text
-aws-floci-course/
-```
-
-**Command**
+Trace the whole path from metric to serving task and see how little of it this lab created.
 
 ```bash
 echo "== 1. The metric that would start it =="
@@ -3313,18 +2008,7 @@ aws ecs describe-services --cluster "$USMS_ECS_CLUSTER" --services "$USMS_ENROLM
   --query 'services[0].[taskDefinition,length(loadBalancers),length(deployments)]' --output text
 ```
 
-**What the command does**
-
-Seven blocks, one chain, and the seventh is the interesting one.
-
-Blocks 1 to 3 are this lab. Blocks 4 to 6 are Labs 04 and 05, unchanged. Block 7 prints the task
-definition, the load balancer count and the deployment count - and every one of those three values is
-exactly what Lab 05 left behind. **This lab registered no task definition revision, created no service,
-attached no target group and started no deployment.** It added a control loop over an integer, and the
-architecture underneath it did not notice.
-
-That is worth saying out loud because it is the shape of the answer to a question interviewers ask: what
-does auto scaling change about my application? Nothing. It changes how many copies of it there are.
+Blocks 1 to 3 are this lab; blocks 4 to 6 are Labs 04 and 05, unchanged. Block 7 shows the revision, load balancer count and deployment count are exactly what Lab 05 left.
 
 **Expected result**
 
@@ -3361,9 +2045,7 @@ arn:aws:ecs:us-east-1:000000000000:task-definition/usms-enrolment:2	1	1
 > Example output - your IDs will differ, and blocks 5 and 6 may be shorter on builds that do not start
 > containers.
 
-**Verify**
-
-Read it as one sentence and check that every noun in it appears somewhere above:
+**Verify:** check every line has its evidence above.
 
 ```text
 A student clicks Register.
@@ -3378,31 +2060,13 @@ A student clicks Register.
   Nothing about the blueprint, the service or the load balancer changed.    (block 7)
 ```
 
-Nine lines. **This laboratory is responsible for three of them.** Write that sentence in
-`notes/lab-06-notes.md`; it is Review Question 1 and it is the most useful thing in this document.
-
-If block 6 is empty, your build does not start containers and the chain is proven from the control-plane
-blocks; say so. If block 7's task definition does not end `:2` or the deployment count is not `1`,
-something in this lab disturbed Lab 05's work and you should find out what before Section 9 tells you.
+This lab is responsible for three of the nine lines; write that in `notes/lab-06-notes.md` (Review Question 1). If block 6 is empty, your build does not start containers; say so. If block 7 does not show `:2` and `1` deployment, find out what this lab disturbed before Section 8 does.
 
 ---
 
 ### Step 16 - Write `configs/lab-06.env`
 
-**Purpose**
-
-Every shell variable in this terminal dies when you close it, and this lab created eight things whose
-names and ARNs matter. The CloudWatch lab reads three of them and the CloudFormation lab re-declares all
-of them. Record them **by lookup, not from the variables**, so that a populated value in the file is
-evidence the resource actually exists.
-
-**Run from**
-
-```text
-aws-floci-course/
-```
-
-**Command**
+Record every name and ARN **by lookup**, so a populated value is evidence the resource exists.
 
 ```bash
 cat > configs/lab-06.env << EOF
@@ -3457,35 +2121,12 @@ EOF
 grep -n 'export .*=$\|=None$' configs/lab-06.env || echo "all values populated"
 ```
 
-**What the command does**
+!!! warning "Unquoted heredoc"
+    `<< EOF` so every `$(...)` runs now. Quoted, the file would contain six API calls that re-run in every new terminal.
 
-Unquoted heredoc - `<< EOF`, not `<< 'EOF'` - for the same reason as Lab 2 Step 24, Lab 3 Step 22, Lab
-04 Step 20 and Lab 05 Step 18: every `$(...)` must run **now** and the resulting value must land on
-disk. Had this been quoted, the file would contain the text of six API calls, and
-`source configs/lab-06.env` would re-run all of them in every new terminal you ever open. That is the
-sixth appearance of this rule in five laboratories, in its sixth context, and it is deliberate: it
-remains the most common silent bug in the whole course.
-
-Three lines in there repay a close look.
-
-**`awk -F: '{print \$NF}'` has an escaped dollar.** The heredoc is unquoted, so `$NF` would be expanded by
-the shell - to nothing, since it is not a shell variable - and `awk` would receive `{print }` and print
-the whole line. Escaping it as `\$NF` passes a literal dollar through to `awk`. This is the one place in
-the course where you *want* a dollar sign to survive an unquoted heredoc, and it is why the check below
-counts differently from Lab 04's.
-
-**`| grep -E '^arn:' || echo not-created` is a deliberate fallback, not a swallowed error.** If the
-request-count policy could not be created because your build does not implement
-`ALBRequestCountPerTarget`, `describe-scaling-policies` returns an empty list, `--output text` prints
-`None`, and `grep -E '^arn:'` rejects it - so the file records the string `not-created` rather than
-`None`. That matters because the empty-value check greps for `None` and would otherwise flag a limitation
-you have already recorded as though it were a mistake. A file that says `not-created` is telling you
-something true; a file that says `None` is ambiguous between "unsupported" and "you skipped a step".
-
-**`USMS_SCALE_MIN` and `USMS_SCALE_MAX` are read back rather than hard-coded as 2 and 10.** If the
-"Your turn" in Step 11 fired and left the floor at 6, this file says 6 and Section 9's script disagrees
-with it visibly. A file that quietly claims what you intended rather than what exists is worse than no
-file.
+- `awk -F: '{print \$NF}'`: the dollar is escaped so it reaches `awk` instead of being expanded by the shell.
+- `| grep -E '^arn:' || echo not-created` records `not-created` rather than `None` when a policy is unsupported, so the empty-value check does not flag a recorded limitation.
+- `USMS_SCALE_MIN` and `USMS_SCALE_MAX` are read back, so a floor left at 6 shows up here.
 
 **Verify**
 
@@ -3513,30 +2154,13 @@ aws application-autoscaling describe-scalable-targets --service-namespace ecs \
   --query 'ScalableTargets[0].ResourceId' --output text
 ```
 
-**What to look for:** `all values populated`, twelve non-empty lines, and a count of **22** exported
-variables. `bounds` must read `2 .. 10`. `resource id` must be identical to the last line of output -
-three segments beginning `service/` - because a file whose central identifier disagrees with the API is a
-file that will produce a confusing failure in the CloudWatch lab rather than here.
-
-`requests policy arn` reading `not-created` is acceptable and is the documented limitation from Step 9.
-Any other value that is not an ARN beginning `arn:aws:autoscaling:` is not acceptable - find out which
-step did not take.
+`all values populated`, twelve non-empty lines, **22** exports, `bounds` `2 .. 10`, and `resource id` identical to the last line. `requests policy arn` may read `not-created` (Step 9's limitation); anything else that is not an `arn:aws:autoscaling:` ARN means a step did not take.
 
 ---
 
 ### Step 17 - Commit, and repair two stale strings
 
-**Purpose**
-
-Same discipline as every lab: look first, stage explicitly, then commit. And one extra piece of
-housekeeping, because §1 promised it: the cleanup scripts Labs 04 and 05 shipped name a file this lab
-does not create.
-
-**Run from**
-
-```text
-aws-floci-course/
-```
+Look first, stage explicitly, then commit. Also fix the cleanup-order hint in Labs 04 and 05's cleanup scripts, which names a file this lab does not create.
 
 **Command - part 1, repair the two hint strings**
 
@@ -3545,15 +2169,7 @@ grep -n 'lab-04-cleanup.sh' scripts/cleanup/lab-04-cleanup.sh scripts/cleanup/la
   || echo "nothing to repair - your copies already say lab-06-cleanup.sh"
 ```
 
-**What the command does**
-
-Both scripts print a message telling the student to run `scripts/cleanup/lab-04-cleanup.sh` before
-running themselves. Neither script *executes* that name - they only print it - so nothing is broken today.
-But a printed instruction that names a file which does not exist is a defect, and it will be read at the
-end of the course by somebody in a hurry.
-
-If the `grep` found lines, fix them, and note that the fix is a text substitution in a script whose
-behaviour does not change:
+Both scripts only **print** `lab-04-cleanup.sh`; nothing is broken, but the instruction is wrong. If the `grep` found lines, fix them:
 
 ```bash
 for f in scripts/cleanup/lab-04-cleanup.sh scripts/cleanup/lab-05-cleanup.sh; do
@@ -3573,13 +2189,7 @@ done
 grep -n 'lab-06-cleanup.sh' scripts/cleanup/lab-04-cleanup.sh scripts/cleanup/lab-05-cleanup.sh
 ```
 
-`python3` does the substitution rather than `sed -i`, for the reason the course has given twice already:
-GNU `sed` and BSD `sed` disagree about whether `-i` takes an argument, and a `sed -i` that works on Linux
-appends a file called `-e` on macOS. Every file is backed up first, and `bash -n` confirms the script
-still parses - because a text substitution inside a destructive script is exactly the kind of change that
-deserves a syntax check.
-
-Add the two backups to your cleanup list; they are working files, not artefacts.
+`python3` instead of `sed -i` (GNU and BSD disagree). Each file is backed up and re-checked with `bash -n`. Delete the backups once satisfied.
 
 **Command - part 2, look before you add**
 
@@ -3590,17 +2200,10 @@ git check-ignore -v outputs/lab-06-scaling-proof.txt
 git ls-files outputs/
 ```
 
-**What to look for, before typing anything else:**
-
-- No path under `outputs/` appears in `git status --short`.
-- No `.env` at the repository root appears.
-- No `.bak-*` file appears - if one does, it is because `scripts/` is tracked and your backups are inside
-  it. Delete them once you are satisfied, or add `*.bak-*` to `.gitignore` and prove it with
-  `git check-ignore -v`.
-- `configs/lab-06.env` **does** appear. It holds names, ARNs and numbers - no secrets.
-- `git check-ignore -v` names the file, the rule and the line number. **Silence there means the file is
-  not ignored** - stop and fix `.gitignore` before committing anything at all.
-- `git ls-files outputs/` lists `outputs/.gitkeep` and nothing else.
+- No path under `outputs/`, no root `.env` and no `.bak-*` file in `git status --short`.
+- `configs/lab-06.env` **does** appear; it holds no secrets.
+- `git check-ignore -v` names the file, rule and line. Silence means it is not ignored: fix `.gitignore` first.
+- `git ls-files outputs/` lists only `outputs/.gitkeep`.
 
 **Expected result**
 
@@ -3611,10 +2214,7 @@ outputs/.gitkeep
 
 > Example output - your line number may differ.
 
-If `check-ignore` prints nothing, the rule is wrong. It must be `outputs/*` with `!outputs/.gitkeep`,
-never `outputs/` with `!outputs/.gitkeep` - Git cannot re-include a file whose parent directory is
-excluded, so the negation silently does nothing and your `.gitkeep` disappears from the repository while
-your secrets stay ignored for the wrong reason.
+The rule must be `outputs/*` with `!outputs/.gitkeep`, never `outputs/` with `!outputs/.gitkeep`: Git cannot re-include a file under an excluded directory.
 
 **Command - part 3, commit**
 
@@ -3640,16 +2240,7 @@ named lab-04-cleanup.sh; this lab ships lab-06-cleanup.sh."
 git log --oneline -7
 ```
 
-The `git add` names paths explicitly rather than using `git add -A`. That is not fussiness: `git add -A`
-stages whatever happens to be in the working tree, which is exactly how an un-ignored secret - or a
-`.bak-*` file - reaches a commit and, from there, a remote.
-
-The commit message has a body, and the body explains **why** two files this lab did not create are in the
-commit. A reviewer seeing `lab-04-cleanup.sh` in a Lab 06 commit will ask; answering in the message is
-cheaper than answering in a comment thread three days later.
-
-The two script paths in `scripts/` only exist after Section 9. If you commit before building them, drop
-those two lines and add them in a second commit.
+Explicit paths, never `git add -A`. The body explains why two Lab 04 and 05 files are in a Lab 06 commit. The two `scripts/` paths exist only after Section 8; if you commit first, drop them and commit them later.
 
 **Expected result**
 
@@ -3674,48 +2265,11 @@ Lab 06 recorded
 
 ---
 
-## 9. Verification
+## 8. Verification
 
-### 9.1 What this script checks that a naive one would not
+The checks that matter most go beyond existence: no suspension switch left `true`, exactly one scalable target at the expected resource ID, the alarm invoking the step policy, an open-ended top step, `desiredCount` inside the bounds and at the baseline, and no document with an unexpanded variable. `MinCapacity is 2` asserts Lab 04's decision, not a value this lab set. The environment block comes first, as always.
 
-Eight of the checks below are the ones worth having, and they are why "does a scaling policy exist" is
-not enough:
-
-- **`no suspension switch was left true`** - a target left with scale-out suspended after an incident is
-  a service that will not grow during the next one, and nothing anywhere else in the account will
-  mention it. This is the single most valuable check in the script.
-- **`the resource ID is service/<cluster>/<service>`** - a target registered at a resource ID built by
-  hand, with a typo, is a perfectly valid object that will never do anything. It passes every existence
-  check.
-- **`exactly ONE scalable target`** - the same fault seen from the other side. Two targets means one of
-  them is silently inert.
-- **`the alarm invokes the step policy`** - the link *you* made, as opposed to the two AWS made. If it is
-  broken the policy still exists, still describes correctly, and never fires.
-- **`the step policy has an open-ended top interval`** - a step table whose last interval has an upper
-  bound has a metric range in which nothing happens at all, and the range in question is "worse than we
-  planned for".
-- **`desiredCount is inside the bounds`** - catches a manual `update-service` above the ceiling, which
-  ECS accepts and Application Auto Scaling will silently correct at its next evaluation.
-- **`desiredCount is at the baseline`** - catches a Step 11 or Step 12 experiment that was never undone.
-- **`no document contains an unexpanded variable`** - catches a quoted heredoc where an unquoted one was
-  needed, which has now had six opportunities to appear across five laboratories.
-
-And, as in every lab, the environment block comes first: a script that verifies only its own resources
-passes right up until the restart that deletes them.
-
-!!! info "One check deliberately reads a value it did not set"
-    `MinCapacity is 2` asserts a number that came from `configs/lab-04.env` rather than from this lab.
-    That is on purpose. The floor of 2 is Lab 04's architectural decision - one task per Availability
-    Zone - and this lab merely enforces it. A check that asserted "the minimum is whatever this lab put
-    there" would pass no matter what you put there, which is not a check.
-
-### 9.2 Build `scripts/utilities/verify-lab-06.sh`
-
-**Run from**
-
-```text
-aws-floci-course/
-```
+### 8.1 Build `scripts/utilities/verify-lab-06.sh`
 
 {% raw %}```bash
 cat > scripts/utilities/verify-lab-06.sh << 'EOF'
@@ -3964,7 +2518,7 @@ Known benign failures, which you record rather than fight:
 
 Everything else failing is a real problem with your work.
 
-### 9.3 Build the end-of-course cleanup script
+### 8.2 Build the end-of-course cleanup script
 
 !!! danger "DO NOT RUN THIS SCRIPT NOW"
     **What will be deleted:** both scheduled actions, all three scaling policies (and, as a side effect,
@@ -4000,12 +2554,6 @@ Everything else failing is a real problem with your work.
     exist.
 
     It requires you to type `DELETE USMS SCALING` in full before it does anything.
-
-**Run from**
-
-```text
-aws-floci-course/
-```
 
 ````bash
 cat > scripts/cleanup/lab-06-cleanup.sh << 'EOF'
@@ -4127,35 +2675,13 @@ chmod +x scripts/cleanup/lab-06-cleanup.sh
 bash -n scripts/cleanup/lab-06-cleanup.sh && echo "syntax OK - do NOT run it"
 ````
 
-**What to look for:** the words `syntax OK - do NOT run it`. `bash -n` parses a script without executing a
-single command, and it is the only safe way to check a destructive one.
+**What to look for:** `syntax OK - do NOT run it`. `bash -n` parses without executing.
 
-The order is the lesson, and it is a different lesson from Labs 04 and 05 - because here almost none of
-it is enforced by the API, and the reasons are about *observability* rather than about dependencies:
-
-1. **Scheduled actions first.** A scheduled action outliving its target is a calendar entry that will
-   fire, fail, and log the failure somewhere nobody reads. Nothing prevents you leaving one behind, which
-   is exactly why the script deletes them first and then sweeps for any others.
-2. **Then the policies, one at a time and by name.** Deleting a target tracking policy takes its two
-   managed alarms with it, which is the tidy behaviour you want and is also the reason the script does
-   not delete the alarms first: it would be deleting objects that were about to be deleted anyway, and
-   the output would not tell you which.
-3. **Then the alarm you wrote.** Nothing deletes it for you, because nothing created it for you. That
-   symmetry is worth noticing: in this service, the things AWS made on your behalf are cleaned up on your
-   behalf, and the things you made are yours to clean up.
-4. **Deregister the target last.** This is the important one. `deregister-scalable-target` **also deletes
-   every policy and scheduled action attached to the target** - so a one-line teardown is possible and
-   the script deliberately does not use it. Deleting things one at a time, with a line of output each,
-   turns a teardown into a record of what was there. A single call that silently removes six objects is
-   faster and tells you nothing.
-5. **Do not delete the service-linked role, and do not try to delete the metric.** The first is an
-   account-wide resource shared by every ECS service that scales. The second is not possible: CloudWatch
-   has no `delete-metric` operation at all, which surprises everybody once and is worth knowing before
-   you publish a custom metric with a name you would be embarrassed by.
+The order: scheduled actions first (a calendar entry outliving its target fails silently); then the policies one at a time (target tracking takes its managed alarms with it); then the alarm you wrote (nothing deletes it for you); deregister the target **last** (it cascades to every policy and action, which would hide what was there). The service-linked role is account-wide and kept; CloudWatch has no `delete-metric`.
 
 ---
 
-## 10. Checkpoints
+## 9. Checkpoints
 
 | # | After step | What must be true |
 | --- | --- | --- |
@@ -4170,7 +2696,10 @@ it is enforced by the API, and the reasons are about *observability* rather than
 
 ---
 
-## 11. Troubleshooting
+## 10. Troubleshooting
+
+!!! warning "Known issue on Floci 2.0.1"
+    On Floci 2.0.1, scheduled actions are unsupported and alarms do not scale the ECS service. Diagnose first, then use the alternative in [Known Issues - Lab 06](known-issues.md#lab-06-auto-scaling). It states what the alternative does and does not prove.
 
 ??? danger "`ValidationException: Resource ID ... is not valid` on register-scalable-target"
     Almost always one of three things, in this order of frequency.
@@ -4265,7 +2794,7 @@ it is enforced by the API, and the reasons are about *observability* rather than
 
     **A target tracking policy on a metric that does not fall as capacity rises.** Adding tasks does not
     reduce total request count, or queue arrival rate, or the number of items in a database. The
-    arithmetic in the target tracking interlude divides by a number that never improves, so the computed
+    arithmetic in the target tracking info box before Step 7 divides by a number that never improves, so the computed
     capacity climbs until it hits the ceiling. Check which metric the policy is on:
 
     ```bash
@@ -4463,7 +2992,7 @@ it is enforced by the API, and the reasons are about *observability* rather than
 
 ---
 
-## 12. Floci vs Real AWS
+## 11. Floci vs Real AWS
 
 | Feature | Real AWS | Floci | Status |
 | --- | --- | --- | --- |
@@ -4501,97 +3030,12 @@ it is enforced by the API, and the reasons are about *observability* rather than
 | Predictive scaling | **Not available for ECS in any account.** EC2 Auto Scaling only | Not available | Conceptual / Real AWS |
 | `CloudTrail` recording which role changed your capacity | Full, with the service-linked role as the invoker | Not available | Conceptual / Real AWS |
 
-### 12.1 What you actually observed in this lab
+Observable here: the role, target, policies, managed alarms, `ResourceLabel`, step table, custom alarm, scheduled actions, suspension and persistence. Conceptual unless you reached path A: alarm evaluation, scaling activities, the capacity calculation, cooldowns, scheduled firing, and Fargate start latency. Say in your report which list each item ended up in for you.
 
-```text
-OBSERVABLE - you saw this happen
-  a service-linked role, at a path no role you wrote has ever had
-  a resource ID derived from a service ARN by parameter expansion, and validated
-  a scalable target registered, and re-registered twice to change its content
-  MinCapacity surviving a call that passed only MaxCapacity
-  two target tracking policies on one target, on two different metrics
-  a policy ARN with a whole resource ID embedded in the middle of it
-  TWO CloudWatch alarms that appeared without you writing them, named after your resource ID
-  their asymmetric evaluation periods -- 3 for the high alarm, 15 for the low one
-  a ResourceLabel built from fragments of two different ARNs, validated at six segments
-  a step scaling table whose bounds are relative to a threshold, not absolute
-  an alarm whose AlarmActions you populated yourself with a policy ARN
-  a custom metric published into a namespace you invented
-  two scheduled actions, with a cron expression that has six fields and a time zone
-  suspension turned on and off, with every policy left untouched
-  all of it surviving a container restart, with every identifier re-derived from the API
-  the whole nine-line chain from a request to a serving task, in Step 15
+**Where Floci is nicer than reality (traps on real AWS):** capacity appears instantly or never (real Fargate tasks take 20 to 60 seconds plus the grace period); nothing is ever `Unfulfilled` (real scale-outs hit subnet address exhaustion and quotas); alarms never flap; nothing costs money (CloudWatch charges per alarm and per custom metric); suspension has no effect, so its hazard is invisible; and `set-alarm-state` is a real privilege on a production account.
 
-CONCEPTUAL - you reasoned about it, and may not have seen it
-  an alarm changing state because a metric moved            (unless you got it at Step 12)
-  a scaling activity, and its Cause naming the alarm         (unless you got it at Step 12)
-  the target tracking capacity calculation
-  a cooldown suppressing a second scale-out
-  DisableScaleIn preventing a scale-in
-  the 15-minute reluctance of a target tracking scale-in, observed
-  a scheduled action firing at 07:45 and raising the floor
-  suspension actually preventing anything
-  the 20-to-60-second Fargate start latency that every cooldown here is sized against
-  the 60-second grace period delaying when new capacity counts
-  the cost of two extra tasks, four alarms and one custom metric
-```
-
-If your build put you on support path A, several lines move from the second list to the first. Say in your
-report which list each item ended up in **for you**. Being precise about that is worth marks; claiming to
-have observed something you reasoned about is worth negative marks.
-
-### 12.2 Where Floci is nicer than reality, which makes it a trap
-
-- **Capacity appears instantly, or never.** Every cooldown in this lab is sized against a real Fargate
-  task's 20-to-60-second start plus Lab 05's 60-second grace period. On an emulator where a task starts
-  in no time, a 60-second scale-out cooldown looks generous and is in fact barely adequate. A system
-  tuned on an emulator where capacity is free and instant is tuned wrongly in both directions.
-- **Nothing is ever unfulfilled.** On real AWS a scale-out to 10 tasks can fail because the subnet has
-  no addresses left - every `awsvpc` task consumes one - or because a service quota bites. It presents as
-  a scaling activity with `StatusCode: Unfulfilled` and a service that is quietly smaller than the policy
-  asked for. Exercise 4 asks you to work out whether Lab 02's subnets could actually hold your ceiling.
-- **Alarms never flap.** A real metric hovering at the target crosses it repeatedly, which is why target
-  tracking has a dead band and why an aggressive step policy with a one-minute evaluation can scale out
-  and in and out again within ten minutes. That oscillation is the most common complaint about auto
-  scaling and you cannot experience it here.
-- **No cost.** Two extra tasks are the obvious item and the smaller one. CloudWatch charges per alarm per
-  month and per custom metric per month, and this lab created five alarms and one metric. A team that
-  adds target tracking to forty services has added eighty alarms, and somebody eventually asks why the
-  CloudWatch line grew.
-- **Suspension has no effect, so its hazard is invisible.** The most dangerous thing in this lab - a
-  target left with scale-out suspended - cannot hurt you here. That is exactly why Section 9's script
-  asserts it rather than trusting you to notice.
-- **`set-alarm-state` is a testing convenience here and a real privilege there.** On a production account
-  `cloudwatch:SetAlarmState` lets the holder trigger anything any alarm does, including paging a human at
-  three in the morning. Treat the ease of it in this lab as a fact about the lab.
-
-### 12.3 Three different things called auto scaling, and the one Lab 3 promised
-
-This is the confusion the course has been walking towards since Lab 3 Step 20, and it is worth getting
-right because the three services have different APIs, different vocabularies and different jobs.
-
-| | **ECS service auto scaling** | **ECS cluster auto scaling** | **EC2 Auto Scaling** |
-| --- | --- | --- | --- |
-| What it scales | The number of **tasks** in a service | The number of **container instances** behind a capacity provider | The number of **EC2 instances** in an Auto Scaling group |
-| The service | Application Auto Scaling (`aws application-autoscaling`) | ECS capacity providers, which use an Auto Scaling group underneath | EC2 Auto Scaling (`aws autoscaling`) |
-| The object | A scalable target with `ecs:service:DesiredCount` | A capacity provider with a managed scaling configuration | An Auto Scaling group with a launch template |
-| Needs | Nothing but an ECS service | An EC2-backed cluster. **Meaningless on Fargate** | An AMI and a launch template |
-| Predictive scaling | No | No | **Yes** |
-| Health checks and instance replacement | Not its job - ECS does that | Not its job | **Yes**, including replacing an unhealthy instance |
-| This course | **This laboratory** | Not covered. Fargate removes the need | Not covered by Practical 2 or 3 |
-
-**Which one did Lab 3 promise?** Lab 3 Step 20 built `usms-web-golden`, an AMI, and said it would be used
-in a launch template. A launch template is an **EC2 Auto Scaling** object. So that promise belongs to the
-third column, and it is not this lab - which is exactly what Lab 04 said in its §1 and is repeated here
-because it is the single most common misunderstanding about where this material sits.
-
-The three are not alternatives; they compose. A real EC2-backed ECS platform runs all three at once: EC2
-Auto Scaling keeps the instances alive, cluster auto scaling adds instances when tasks cannot be placed,
-and service auto scaling adds tasks when the application is busy. **Fargate deletes the middle two
-columns**, which is the largest single simplification Fargate buys you and a good answer to "why would I
-pay the Fargate premium".
-
-One vocabulary trap to keep straight, because it will cost you time exactly once:
+!!! info "Three things called auto scaling"
+    **ECS service auto scaling** (this lab) changes the task count via Application Auto Scaling. **ECS cluster auto scaling** changes container instances behind a capacity provider and is meaningless on Fargate. **EC2 Auto Scaling** manages Auto Scaling groups from launch templates, which is where Lab 3's golden AMI belongs, and is the only one with predictive scaling. See [Application Auto Scaling and EC2 Auto Scaling](../unit7/topic1.md#application-auto-scaling-and-ec2-auto-scaling) and [the two scaling layers](../unit2/topic3.md#the-two-scaling-layers-revisited).
 
 ```text
 aws autoscaling                 EC2 Auto Scaling - groups, launch templates, instance refresh
@@ -4599,137 +3043,66 @@ aws application-autoscaling     THIS SERVICE - scalable targets in nine namespac
 arn:aws:autoscaling:...         the ARN namespace used by BOTH of them
 ```
 
-The third line is the one that makes it genuinely confusing rather than merely inconvenient: a scaling
-policy created by `aws application-autoscaling` has an ARN in the `autoscaling` namespace. Step 7's ARN
-is the evidence. Look at it again and note that nothing in it says `application`.
-
-### 12.4 One thing this lab is *not*
-
-Nothing in this lab is **load testing**, and every number in it is therefore a guess.
-
-A target of 50 per cent CPU, a target of 1000 requests per target per minute, a queue threshold of 100,
-a ceiling of 10 - every one of those is a plausible number chosen to teach a mechanism, and not one of
-them was derived from measuring the enrolment application. On a real system the order of work is the
-reverse of this laboratory's: you load-test first, find out what one task can actually serve and where it
-falls over, and *then* choose target values that keep you comfortably below that point.
-
-The honest version of the sentence to put in your report is: *the mechanism is correct and the numbers
-are provisional.* Exercise 4 asks you to say how you would get real ones, and it is the part of this lab
-that most resembles the actual job.
+No step in this lab is load testing, so every number in it (target 50, 1000 requests, threshold 100, ceiling 10) is provisional: on a real system you load-test first to find what one task can serve. The mechanism is correct and the numbers are provisional.
 
 ---
 
-## 13. Independent Lab Exercises
+## 12. Independent Lab Exercises
 
-Record commands and output in `labs/lab-06-ecs-autoscaling/exercises.md`. Take screenshots into
-`screenshots/` where an exercise asks for evidence.
+Record commands and output in `labs/lab-06-ecs-autoscaling/exercises.md`; screenshots go in `screenshots/`.
 
 ### Exercise 1 - Basic: a memory policy, and a scale-out-only policy
 
 **Requirements**
 
-Memory pressure and CPU pressure are different failure modes, and a container that is running out of
-memory does not necessarily look busy. Add a third target tracking policy, and make it deliberately
-one-directional.
-
-1. Create `usms-enrolment-memory-target-tracking` on the same scalable target, using the predefined
-   metric `ECSServiceAverageMemoryUtilization`, with a target value of 70, a scale-out cooldown of 60 and
-   a scale-in cooldown of 600.
-2. Set `DisableScaleIn` to `true` on it.
-3. Read back the managed alarm count for the whole target and confirm it went from four to five rather
-   than to six.
-4. Write the configuration to `templates/lab-06-target-tracking-memory.json`, as a document, following
-   this lab's heredoc quoting rule for a file with no variables in it.
+1. Create `usms-enrolment-memory-target-tracking` on the same target: `ECSServiceAverageMemoryUtilization`, target 70, scale-out cooldown 60, scale-in cooldown 600.
+2. Set `DisableScaleIn` to `true`.
+3. Confirm the target's managed alarm count went from four to five, not six.
+4. Write the configuration to `templates/lab-06-target-tracking-memory.json`, using the right heredoc quoting for a file with no variables.
 
 **Constraints**
 
-- Every identifier captured with `$(...)` and `--query`. Nothing copied by hand.
-- Do **not** record the policy in `configs/lab-06.env`. Exercise 4 removes it.
+- Every identifier captured with `$(...)` and `--query`.
+- Do **not** record the policy in `configs/lab-06.env`; Exercise 4 removes it.
 - Do **not** change the scalable target's bounds.
-- Section 9's script must still report `FAIL=0` afterwards. Work out before you start whether it will,
-  and say why.
+- Section 8's script must still report `FAIL=0`; predict whether it will, and why.
 
-**Expected outcome**
-
-Three target tracking policies and one step policy on one scalable target. `describe-scaling-policies`
-shows the new policy with `DisableScaleIn` true, and the managed alarm count for the target is **five**.
+**Expected outcome:** three target tracking policies and one step policy on one target; the new policy shows `DisableScaleIn` true; **five** managed alarms.
 
 **Then answer, in one sentence each:**
 
-- Why five and not six? Name the alarm that was not created and say what its absence means operationally.
-- A memory target of 70 against a CPU target of 50: which of the two will scale this service out first,
-  and what would you need to know about the application to answer that properly rather than by guessing?
-- `DisableScaleIn` true means this policy can only ever grow the service. Given the rule from Step 9 about
-  how several target tracking policies interact, does adding it change the *scale-in* behaviour of the
-  other two policies at all? Justify your answer.
+- Why five and not six? Which alarm was not created, and what does its absence mean?
+- Memory target 70 against CPU target 50: which scales out first, and what would you need to know to answer properly?
+- Does a scale-out-only policy change the *scale-in* behaviour of the other two? Use Step 9's rule.
 
-**Hints**
-
-Step 7 contains every command you need; the only questions are which values change and which field turns
-scale-in off. For the alarm count, re-read the target tracking interlude on what the low alarm is *for* -
-and then think about what a policy that never scales in would do with one.
-
----
+**Hints:** Step 7 has every command. For the alarm count, think about what the low alarm is for.
 
 ### Exercise 2 - Intermediate: the scale-in half of step scaling, and a fight to avoid
 
 **Requirements**
 
-Step 10 built a step policy that only grows. Real step scaling comes in pairs, and building the other
-half is where the sign conventions bite.
-
-1. Create `usms-enrolment-queue-step-in`: a `StepScaling` policy on the same target, `ChangeInCapacity`,
-   `Average`, cooldown 300, with two adjustments - a mild one and a stronger one - that **remove**
-   capacity as the metric falls further below a threshold.
-2. Create `usms-enrolment-queue-low`, a CloudWatch alarm on the same custom metric, firing when the
-   average is **below** 20 for 3 evaluation periods of 60 seconds, whose only action is that policy.
-3. Write the step configuration to `templates/lab-06-step-scaling-in.json`, and state in a comment in
-   `exercises.md` what the sign of every bound and every adjustment is and why.
-4. Publish enough datapoints to take the metric to 5, force the low alarm into `ALARM` with
-   `set-alarm-state`, and record what happened - including "nothing", if that is the answer on your build.
-5. Then delete both objects, in the correct order, each preceded by the four-line danger admonition this
-   lab uses.
+1. Create `usms-enrolment-queue-step-in`: `StepScaling`, `ChangeInCapacity`, `Average`, cooldown 300, with a mild and a stronger adjustment that **remove** capacity as the metric falls further below a threshold.
+2. Create `usms-enrolment-queue-low` on the same custom metric, firing when the average is **below** 20 for 3 periods of 60 seconds, whose only action is that policy.
+3. Write the step configuration to `templates/lab-06-step-scaling-in.json`, and note in `exercises.md` the sign of every bound and adjustment, and why.
+4. Publish datapoints taking the metric to 5, force the low alarm to `ALARM` with `set-alarm-state`, and record what happened (including "nothing").
+5. Delete both objects in the correct order, each preceded by the four-line danger admonition.
 
 **Constraints**
 
-- The bounds on a scale-in step table are **non-positive** and the adjustments are **negative**. Getting
-  either sign wrong produces a policy that is accepted and does the opposite of what you meant; say in
-  one sentence what `MetricIntervalUpperBound: 0` with `ScalingAdjustment: -1` actually means.
-- The cooldown must be longer than the scale-out policy's, and you must say why in one sentence.
-- The floor of 2 must make one of your two adjustments unreachable in practice. Identify which and say
-  so - a step you can prove will never fire is a finding, not a bug.
-- Section 9's script must report `FAIL=0` at the end, which means point 5 is not optional.
+- Scale-in bounds are **non-positive** and adjustments **negative**. Say what `MetricIntervalUpperBound: 0` with `ScalingAdjustment: -1` means.
+- The cooldown must be longer than the scale-out policy's; say why.
+- The floor of 2 makes one adjustment unreachable; identify it.
+- Section 8's script must report `FAIL=0` at the end, so point 5 is not optional.
 
-**Expected outcome**
+**Expected outcome:** a matched pair of step policies observed and cleanly removed, with signs written out and the unreachable step identified.
 
-A matched pair of step policies observed on one target, then removed cleanly, with the sign conventions
-written out and the unreachable step identified.
+**Then answer, in a short paragraph:** someone adds a step scaling policy on **CPU** with their own alarm at 60 per cent, alongside the CPU target tracking policy. Explain what goes wrong, using how target tracking computes capacity, and which policy you would keep (not "whichever fires first").
 
-**Then answer, in a short paragraph:**
-
-You now have, or have had, a CPU **target tracking** policy and a queue **step scaling** policy on one
-service. Suppose somebody added a step scaling policy on **CPU** as well, driven by their own alarm at 60
-per cent. Explain what would go wrong, using the target tracking interlude's description of how it
-computes capacity. Then say which of the two policies you would keep and why - and note that the answer
-is not "whichever fires first".
-
-**Hints**
-
-`aws application-autoscaling put-scaling-policy help` shows the exact shape of `StepAdjustments`. For the
-signs, write the interval table out with the threshold at the centre and the breach as a signed number:
-a metric of 5 against a threshold of 20 is a breach of **-15**, and that tells you immediately which
-bounds it can fall between. For the unreachable step, the arithmetic is `2 + (your larger negative
-adjustment)` compared with `MinCapacity`.
-
----
+**Hints:** `aws application-autoscaling put-scaling-policy help` shows `StepAdjustments`. A metric of 5 against a threshold of 20 is a breach of **-15**. For the unreachable step, compare `2 + (your larger negative adjustment)` with `MinCapacity`.
 
 ### Exercise 3 - Problem solving: a scaling report tool
 
-**Requirements**
-
-Write `scripts/utilities/usms-scaling-report.sh`. Given no arguments, it discovers every scalable target
-in the `ecs` namespace whose resource ID names a cluster beginning `usms-` and prints its complete
-decision table with a computed verdict:
+**Requirements:** write `scripts/utilities/usms-scaling-report.sh`. With no arguments it discovers every scalable target in the `ecs` namespace whose resource ID names a cluster beginning `usms-`, and prints its decision table with a computed verdict:
 
 ```text
 service/usms-ecs-cluster/usms-enrolment-svc   ecs:service:DesiredCount
@@ -4746,8 +3119,7 @@ service/usms-ecs-cluster/usms-enrolment-svc   ecs:service:DesiredCount
   last activity  none recorded
 ```
 
-The verdict on the `bounds` line must be **computed** from the target's own fields, never from a name or
-a tag:
+The verdict must be **computed** from the target's own fields:
 
 | Verdict | When |
 | --- | --- |
@@ -4757,47 +3129,24 @@ a tag:
 | `AT-FLOOR` | `desiredCount` equals `MinCapacity` and more than one policy exists |
 | `ELASTIC` | None of the above |
 
-The five rules are ordered and more than one can be true at once. Evaluate them top to bottom and say in
-a comment why that order is the right one - in particular, why `FROZEN` outranks `AT-CEILING`.
+Evaluate the rules top to bottom and explain in a comment why that order is right, in particular why `FROZEN` outranks `AT-CEILING`.
 
 **Constraints**
 
-- Runs correctly from any directory. Resolve `configs/` from `${BASH_SOURCE[0]}`, as Section 9's script
-  does.
-- Takes no arguments and hard-codes no resource ID, no policy name, no alarm name and no cluster name
-  beyond the `usms-` prefix. Everything is discovered.
-- Must handle a target with no policies, a target with no scheduled actions, a target tracking policy
-  whose `Alarms` list is empty, and a build where `describe-scaling-activities` is unimplemented - without
-  crashing and without printing a blank line where a row should be.
-- A step policy's adjustments must be summarised as a signed list (`+1 / +3`), derived from the
-  configuration rather than restated from this document.
-- `set -uo pipefail`. Decide about `-e` and justify your decision in a comment.
-- Also write the machine-readable form to `outputs/lab-06-scaling-report.json`.
+- Runs correctly from any directory; resolve `configs/` from `${BASH_SOURCE[0]}`.
+- No arguments; no hard-coded resource ID, policy, alarm or cluster name beyond the `usms-` prefix.
+- Handles a target with no policies or no scheduled actions, a target tracking policy with an empty `Alarms` list, and an unimplemented `describe-scaling-activities`, without crashing or printing blank rows.
+- Step adjustments summarised as a signed list (`+1 / +3`), derived from the configuration.
+- `set -uo pipefail`; decide about `-e` and justify it in a comment.
+- Also writes `outputs/lab-06-scaling-report.json`.
 
-**Expected outcome**
+**Expected outcome:** identical output from `~` and from `~/aws-floci-course/labs/lab-06-ecs-autoscaling/`; correct before and after Exercise 1, while suspended, and with min and max both set to 3.
 
-Identical output when run from `~` and from `~/aws-floci-course/labs/lab-06-ecs-autoscaling/`. Correct
-output before and after Exercise 1 adds a third policy, correct output while the target is suspended, and
-correct output if you temporarily set `MinCapacity` and `MaxCapacity` both to 3.
-
-**Hints**
-
-Four levels of discovery - targets, then policies per target, then alarms per policy, then scheduled
-actions per target - plus one more call for the ECS service's current counts. The interesting design
-question is where to stop shelling out and start processing JSON in `python3`, and the answer is probably
-"after the first `describe-scalable-targets`".
-
-The alarm states are the fiddly part: a target tracking policy's `Alarms` list gives you names, and you
-need one `describe-alarms` call to turn names into states. Batch it - `describe-alarms --alarm-names`
-takes several - rather than calling it once per alarm.
-
----
+**Hints:** four levels of discovery (targets, policies, alarms, scheduled actions) plus one ECS call. Process JSON in `python3` after the first `describe-scalable-targets`. Batch alarm lookups: `describe-alarms --alarm-names` takes several names.
 
 ### Exercise 4 - Challenge: the enrolment-week capacity plan
 
-**Requirements**
-
-The USMS project lead writes:
+**Requirements:** the USMS project lead writes:
 
 > Enrolment opens on the 14th and runs for three weeks. Last year the portal fell over in the first
 > twenty minutes and we spent the afternoon on the phone to the registrar. Analytics says we had about
@@ -4809,137 +3158,58 @@ The USMS project lead writes:
 >
 > Also, somebody has left some practice policies on the service from an exercise. Tidy them up.
 
-Produce a written analysis in `labs/lab-06-ecs-autoscaling/exercises.md` covering:
+Write an analysis in `labs/lab-06-ecs-autoscaling/exercises.md` covering:
 
-- **Whether it is solved, in exactly three sentences.** One for what reactive scaling will do well, one
-  for what it will do badly, and one for the first twenty minutes specifically. An answer longer than
-  three sentences has not been thought about enough.
-- **Why forty times traffic is not a scaling problem.** Work out, from this lab's own numbers, how long a
-  reactive policy takes to go from 2 tasks to 10 - including every alarm evaluation, every cooldown, and
-  every task start plus grace period. Show the arithmetic. Then say what the ceiling of 10 implies about
-  whether 40 times traffic is servable at all, given the target value in Step 9.
-- **The ceiling, checked against Lab 02.** Every `awsvpc` task consumes one address in its subnet. Work
-  out how many usable addresses `10.0.3.0/24` and `10.0.4.0/24` actually offer, remembering what AWS
-  reserves in every subnet, and what else is already in them. State the largest ceiling those subnets
-  could support and cite the documentation for the reservation.
-- **A capacity plan**, concretely: the scheduled actions you would add for the three cohort days and for
-  the three-week window, with their exact `cron` expressions and time zone; the bounds each would set;
-  the target values you would change and to what; and what you would do about the ceiling. Say which of
-  your changes are reversible in one command and which are not.
-- **A monthly cost estimate**, **with a citation**: the additional Fargate cost of your plan against the
-  baseline, using current per-vCPU-hour and per-GB-hour prices for the task size in
-  `configs/lab-04.env`; plus the CloudWatch cost of the alarms and custom metrics your plan implies,
-  which most people forget. State every assumption explicitly.
-- **What you need from the project lead.** Name three things, and be specific. One of them must be a
-  measurement nobody has taken; §12.4 says which.
-- **The tidy-up**, with exact commands in the correct dependency order, each preceded by the four-line
-  danger admonition used throughout this lab: `usms-enrolment-memory-target-tracking` from Exercise 1,
-  and anything left over from Exercise 2.
+- **Whether it is solved, in exactly three sentences:** what reactive scaling does well, what it does badly, and the first twenty minutes.
+- **Why forty times traffic is not a scaling problem:** from this lab's numbers, how long a reactive policy takes from 2 tasks to 10 (alarm evaluations, cooldowns, task starts, grace periods), with the arithmetic; then what the ceiling of 10 implies at Step 9's target value.
+- **The ceiling, checked against Lab 02:** usable addresses in `10.0.3.0/24` and `10.0.4.0/24` after AWS's reservation and existing occupants; the largest supportable ceiling, with a citation.
+- **A capacity plan:** the scheduled actions for the three cohort days and the three-week window (exact `cron` and time zone), their bounds, target value changes, and what you would do about the ceiling. Say which changes are reversible in one command.
+- **A monthly cost estimate, with a citation:** additional Fargate cost at current prices for the task size in `configs/lab-04.env`, plus CloudWatch alarm and custom metric cost. State every assumption.
+- **What you need from the project lead:** three specific things, one of them a measurement nobody has taken (Section 11 says which).
+- **The tidy-up:** exact commands in dependency order, each with the four-line danger admonition, for `usms-enrolment-memory-target-tracking` (Exercise 1) and anything left from Exercise 2.
 
-Then execute only the deletions, and confirm `./scripts/utilities/verify-lab-06.sh` reports `FAIL=0`
-afterwards.
+Then execute only the deletions and confirm `./scripts/utilities/verify-lab-06.sh` reports `FAIL=0`.
 
 **Constraints**
 
-- Do not delete anything in Section 16's KEEP column.
-- Every number must have a source or a derivation. "It will scale up" earns nothing; "from a floor of 2,
-  the first scale-out cannot complete before T+N seconds, where N is the following four terms" earns full
-  marks.
-- The address arithmetic must state the number AWS reserves per subnet and cite where that is documented.
-- Your answer must distinguish clearly between **capacity** and **throughput**. A ceiling of 10 tasks at
-  1000 requests per target per minute is a specific number of requests per second, and you should say what
-  it is.
+- Do not delete anything in Section 15's KEEP column.
+- Every number has a source or a derivation.
+- The address arithmetic states AWS's per-subnet reservation and cites it.
+- Distinguish **capacity** from **throughput**: say how many requests per second 10 tasks at 1000 requests per target per minute is.
 
-**Expected outcome**
+**Expected outcome:** an analysis a project lead could act on and a finance team could check, the practice policies gone, and verification passing.
 
-An analysis a project lead could act on and a finance team could check, plus a repository in which the
-practice policies are gone and the verification still passes.
-
-**Hints**
-
-The first bullet's third sentence is the whole exercise, and §4.3 is where it comes from. For the
-arithmetic, Step 8's "Your turn" already built you one of the four terms and Lab 04 Exercise 5 measured
-another. For the address reservation, search the AWS VPC documentation for the subnet sizing rules - the
-number is small, constant, and not what people guess. For the measurement you need from the project lead,
-§12.4 names it in its second paragraph.
-
----
+**Hints:** Section 4 explains the first twenty minutes. Step 8's "Your turn" built one delay term and Lab 04 Exercise 5 measured another. Search the VPC documentation for subnet sizing.
 
 ### Exercise 5 - Integration: the hand-off to Lab 10
 
-**Requirements**
+**Requirements:** Lab 10 creates `usms-student-data`, the bucket Lab 01's `USMSStudentDataReadWrite` has named since day one and Lab 04 attached to `usms-ecs-task-role`. Its first `put-object` needs a real file.
 
-Lab 10 creates `usms-student-data`, the S3 bucket that Lab 01's `USMSStudentDataReadWrite` policy has
-named since the first day of this course and that Lab 04 attached to `usms-ecs-task-role`. Its first
-`put-object` needs a real file, and a scaling history is a real file that a real operations team would
-genuinely archive.
-
-1. Write `scripts/utilities/usms-scaling-history.sh`, which exports this service's complete scaling
-   configuration and history as one JSON document to `outputs/lab-06-scaling-history.json`: the scalable
-   target with its bounds and suspension state, every scaling policy with its full configuration, every
-   scheduled action, every alarm involved with its current state, and every scaling activity
-   `describe-scaling-activities` will return, including the not-scaled ones. Every identifier must be
-   discovered, not typed.
-2. Add a top-level `"generated"` field with a UTC timestamp produced by `python3`, and a `"resourceId"`
-   field derived from the ECS service's ARN. Validate the result with `python3 -m json.tool` and record
-   its size in bytes.
-3. **Measure the one number Lab 10 cannot measure and this lab can.** Record a UTC timestamp, raise
-   `MinCapacity` to 4 by re-registering the target, poll until `runningCount` equals `desiredCount`,
-   record the timestamp again, and write the elapsed seconds to
-   `outputs/lab-06-scale-latency.txt` with both timestamps and the two capacities. Then put the floor
-   back to 2 and confirm the bounds. If your build never starts tasks, say so and record the figure AWS
-   documents for Fargate task start-up instead, cited.
-4. Append two variables to `configs/lab-06.env`, derived rather than typed:
-   `USMS_SCALING_HISTORY_FILE` holding the path from point 1, and `USMS_SCALE_LATENCY_SECONDS` holding
-   the measurement from point 3. Re-run the empty-value check and state the new export count.
-5. Write `outputs/lab-06-lab10-readiness.txt` containing, each on its own labelled line: the scaling
-   history file's path and byte size; the measured or cited scale-out latency; the task role ARN from
-   `configs/lab-04.env`; the exact bucket ARN that role's attached policy names, **read from the policy
-   document rather than typed**; and one sentence naming which of Lab 01's permissions that policy grants
-   on that bucket.
-6. Run `aws s3api head-bucket --bucket usms-student-data` and capture **both** its output and its exit
-   code into the same file. It will fail. Lab 04 Exercise 5 captured the same failure; capture it again,
-   and add one sentence saying what will be different about the same command after Lab 10's Step 1 - and
-   what will be different about `usms-ecs-task-role` at the same instant.
+1. Write `scripts/utilities/usms-scaling-history.sh`, exporting the service's complete scaling configuration and history as one JSON document to `outputs/lab-06-scaling-history.json`: the target with bounds and suspension state, every policy with its configuration, every scheduled action, every alarm involved with its state, and every scaling activity including not-scaled ones. Every identifier discovered.
+2. Add a top-level `"generated"` UTC timestamp (from `python3`) and a `"resourceId"` derived from the service ARN. Validate with `python3 -m json.tool` and record the size in bytes.
+3. **Measure scale-out latency:** record a UTC timestamp, raise `MinCapacity` to 4 by re-registering, poll until `runningCount` equals `desiredCount`, record again, and write the elapsed seconds, both timestamps and both capacities to `outputs/lab-06-scale-latency.txt`. Put the floor back to 2. If tasks never start, cite AWS's Fargate start-up figure instead.
+4. Append `USMS_SCALING_HISTORY_FILE` and `USMS_SCALE_LATENCY_SECONDS` to `configs/lab-06.env`, derived rather than typed. Re-run the empty-value check and state the new export count.
+5. Write `outputs/lab-06-lab10-readiness.txt` with labelled lines: the history file's path and size; the latency; the task role ARN from `configs/lab-04.env`; the bucket ARN that role's policy names, **read from the policy document**; and one sentence naming which Lab 01 permissions it grants on that bucket.
+6. Run `aws s3api head-bucket --bucket usms-student-data` and capture its output **and** exit code into the same file. It will fail. Add one sentence on what changes after Lab 10's Step 1, for the command and for `usms-ecs-task-role`.
 
 **Constraints**
 
-- `usms-scaling-history.sh` must work from any directory and must contain no hard-coded resource ID,
-  policy name or alarm name.
-- Point 5's bucket ARN must be **read from the IAM policy document**, with `get-policy-version`, not
-  typed. A value you typed proves nothing about what the policy actually says.
-- The `head-bucket` failure must be captured **with** its exit code, not suppressed. `|| true` followed by
-  recording `$?` is the pattern; a bare failure under `set -e` aborts the script and loses the evidence.
-- The latency measurement must use `python3` for timestamps, not `date -d` or `date -v`.
-- Point 3 must restore `MinCapacity` to 2. Section 9's script asserts it, and leaving it at 4 is the
-  single most likely way to fail this lab's verification.
-- No script you write here may contain, read or reference an access key. If one does, the exercise is
-  failed regardless of whether it works.
+- `usms-scaling-history.sh` works from any directory with no hard-coded resource ID, policy or alarm name.
+- Point 5's bucket ARN is read with `get-policy-version`, not typed.
+- Capture the `head-bucket` failure with its exit code (`|| true`, then record `$?`); do not let `set -e` abort.
+- Timestamps from `python3`, not `date -d` or `date -v`.
+- Point 3 restores `MinCapacity` to 2; Section 8 asserts it.
+- No script may contain, read or reference an access key.
 
-**Expected outcome**
+**Expected outcome:** a committed export script later labs can call unchanged, a real JSON artefact for Lab 10, a measured or cited latency figure, and a readiness file predicting what `create-bucket` will make true.
 
-A committed export script the CloudWatch and CloudFormation labs can both call unchanged; a real JSON
-artefact for Lab 10's first `put-object`; a measured or honestly cited figure for how long capacity takes
-to appear when a bound moves; and a readiness file from which a Lab 10 reader could predict exactly what
-`create-bucket` is about to make true.
+**Lab 10 uses this:** its first object, and its key point about two IAM policies becoming real at the same instant.
 
-**This is what Lab 10 will use.** Its first object needs content, and its most valuable sentence is the
-one about two IAM policies becoming real at the same instant. Point 6 is the setup for that sentence.
-
-**Hints**
-
-Step 14 already derives every identifier from the API; the export script is that logic plus
-`--output json` and a `python3` step to assemble one document. For point 3, Step 12 part 1's timestamp
-pattern is the skeleton and Step 6 has the re-registration. For point 5, Lab 04 Step 8's **Verify**
-block already reads the policy document with `get-policy` and `get-policy-version` - the bucket ARN is in
-the statement's `Resource`, and note that there are two of them, one for the bucket and one for its
-objects. Say which you recorded and why.
+**Hints:** Step 14 already derives every identifier; add `--output json` and a `python3` assembly step. Step 12 part 1 has the timestamp pattern; Step 6 the re-registration. Lab 04 Step 8's Verify block reads the policy with `get-policy` and `get-policy-version`; there are two `Resource` entries (bucket and objects): say which you recorded.
 
 ---
 
-## 14. Lab Assessment Checklist
-
-Tick these off before you submit. Every one is checkable from your own repository.
+## 13. Lab Assessment Checklist
 
 **Environment**
 
@@ -5014,101 +3284,21 @@ Tick these off before you submit. Every one is checkable from your own repositor
 
 ---
 
-## 15. Review Questions
+## 14. Review Questions
 
-Answer in prose, in your own words, in `notes/lab-06-notes.md`. No command output - these ask whether you
-understood, not whether you typed.
+Answer in prose in `notes/lab-06-notes.md`.
 
-1. Step 15 traced nine lines from a student clicking Register to a task serving the request, and said this
-   laboratory is responsible for three of them. Write out all nine, name which three are this lab's, and
-   then explain in a full paragraph why the other six needed no modification at all. Finish with the one
-   sentence you would use to answer "what does auto scaling change about my application?"
-
-2. A colleague passes the ECS service's full ARN to `--resource-id` and gets a validation error. Explain
-   what the resource ID actually is, why Application Auto Scaling uses a constructed string rather than an
-   ARN, and how the shape of that string differs between the `ecs`, `dynamodb` and `lambda` namespaces.
-   Then name the other three constructed identifiers this architecture uses and say which ARN each is
-   built from.
-
-3. Registering a scalable target with a minimum of 2 against a service running one task raises the count
-   to 2 immediately. Explain which object made that change and how it differs from a scaling policy making
-   the same change. Then describe a plausible three-in-the-morning incident in which somebody uses that
-   behaviour deliberately, and say what evidence would be left behind for the person who takes over at
-   eight.
-
-4. Target tracking created two CloudWatch alarms without telling you; you created a third yourself for the
-   step policy. Explain the practical differences between the two situations - who owns each alarm, what
-   happens when the policy changes, what happens if the alarm is deleted, and what one of them can do that
-   the other cannot. Then argue for `breaching` rather than `notBreaching` as the `TreatMissingData` value
-   for the queue-depth alarm, and say what would go wrong if you were right.
-
-5. §4.3 claims that a reactive scaling policy can never absorb the first minutes of a spike, and calls
-   that arithmetic rather than a flaw. Reconstruct the arithmetic, naming every delay and where each one
-   is configured. Then explain the three consequences the section draws from it, and say which of this
-   lab's five configuration decisions each consequence justifies.
-
-6. You have a CPU target tracking policy at 50 and a request-count target tracking policy at 1000 on one
-   service. Explain what happens when they disagree, in both directions, and why the rule is asymmetric.
-   Then explain why two target tracking policies on the **same** metric is a fault rather than a
-   redundancy, and connect that to why a step scaling policy and a target tracking policy on one metric is
-   the same mistake wearing different clothes.
-
-7. `ALBRequestCountPerTarget` is a better scaling signal than CPU for the enrolment API, and this lab says
-   so three times. State the three reasons in your own words. Then name the one class of workload for
-   which CPU is the better of the two and explain why. Finally, describe what would have to be true about
-   the enrolment application for `ALBRequestCountPerTarget` to scale it **badly** - and say which
-   CloudWatch metric would have shown you that before you chose it.
+1. Step 15 traced nine lines from a student clicking Register to a task serving the request. Write all nine, name the three this lab owns, and explain why the other six needed no change. Finish with your one-sentence answer to "what does auto scaling change about my application?"
+2. A colleague passes the service's full ARN to `--resource-id` and gets a validation error. Explain what the resource ID is, why Application Auto Scaling uses a constructed string, and how it differs between the `ecs`, `dynamodb` and `lambda` namespaces. Name the other constructed identifiers this architecture uses and the ARN each comes from.
+3. Registering a target with minimum 2 against a service running one task raises the count to 2 immediately. Which object made that change, and how does it differ from a policy making it? Describe a 3 a.m. incident where someone uses this deliberately, and the evidence left for the person who takes over at 8.
+4. Target tracking created two alarms; you created a third for the step policy. Compare them: who owns each, what happens when the policy changes or the alarm is deleted, and what one can do that the other cannot. Then argue for `breaching` as the queue alarm's `TreatMissingData`, and say what would go wrong if you were right.
+5. Section 4 says reactive scaling can never absorb the first minutes of a spike. Reconstruct the arithmetic, naming every delay and where it is configured, then explain the three consequences and which of this lab's configuration choices each justifies.
+6. A CPU policy at 50 and a request policy at 1000 disagree. What happens in each direction, and why is the rule asymmetric? Why are two target tracking policies on the **same** metric a fault, and why is a step and a target tracking policy on one metric the same mistake?
+7. Give the three reasons `ALBRequestCountPerTarget` beats CPU for the enrolment API, the workload class where CPU is better, and what would have to be true for `ALBRequestCountPerTarget` to scale this service **badly**, with the metric that would have warned you.
 
 ---
 
-## 16. What We Built
-
-### 16.1 Reflection
-
-Five laboratories built a system. This one added a control loop over a single integer in it, and the most
-useful thing to take away is how thoroughly that integer is the whole interface.
-
-The idea to keep is **separation of the decision from the mechanism**. Application Auto Scaling decides;
-ECS acts; the ECS service maintains the target group; the load balancer routes. Four systems, four jobs,
-and the only thing passing between the first two is a number between 2 and 10. That is why Step 15's
-seventh block matters: the task definition, the load balancer count and the deployment count were exactly
-what Lab 05 left, because a well-separated system does not require you to modify the mechanism in order
-to change the decision. If you ever find yourself editing a task definition in order to change how a
-service scales, something has gone wrong with the design and not with the tool.
-
-The second idea is that **the interesting part of a scaling configuration is the delays, not the
-thresholds.** Everybody argues about whether the CPU target should be 50 or 70. Almost nobody notices that
-the managed high alarm needs three minutes of breach, the low alarm needs fifteen, the scale-out cooldown
-adds sixty seconds, a Fargate task takes another twenty to sixty to exist, and Lab 05's grace period
-withholds it from service for sixty more. Step 8's "Your turn" made you add those up, and the number is
-uncomfortable. A team that knows that number designs a minimum capacity; a team that does not argues about
-target values and is surprised every enrolment week.
-
-The third is a distinction worth carrying out of this course. **Reactive scaling is for load you did not
-predict; scheduled scaling is for load you did.** Enrolment week is in the calendar. Exam results night is
-in the calendar. A reactive policy meeting a known event two minutes late is a system apologising for a
-failure of planning, and the fix is a `cron` expression rather than a lower threshold. That is why Step 11
-is in this lab and not in an appendix, and it is the part of this material a real operations team would
-recognise most quickly.
-
-And the discipline the course keeps returning to, one more time. Every command in Steps 4 to 11 reported
-success and almost none of it was evidence. Step 5 proved the resource ID's shape by counting its segments
-before using it. Step 6 proved the change model by omitting a parameter and reading back the one it did
-not touch. Step 8 proved the alarms existed by finding objects nobody had told you about. Step 12 proved
-the loop by pushing a metric and reading a `Cause` string - or, where the loop does not run, by walking
-six blocks of configuration and saying honestly which proof it got. Step 14 proved persistence by
-re-deriving every identifier from the API after a restart. **A command that appears to succeed is still
-not evidence that it did what you meant** - five laboratories in, that should now be a reflex rather than
-a rule.
-
-One connection worth naming out loud, because it closes something Lab 05 opened. Lab 05 built a target
-group and, in its §12.3, said its own successor scaled on CPU because there had been no load balancer when
-that document was written. Step 9 of this lab filled in the third row of that table. The `ResourceLabel`
-you built there is made of fragments of two ARNs from a laboratory you finished a week ago, and it did not
-require changing a single thing either of them created. That is what a cumulative course is supposed to
-feel like.
-
-### 16.2 KEEP vs CLEAN UP
+## 15. KEEP vs CLEAN UP
 
 ```text
 ╔═══════════════════════ KEEP ════════════════════════╗    ╔═════════════ CLEAN UP ══════════════╗
@@ -5147,19 +3337,9 @@ git status --short
 ./scripts/utilities/verify-lab-06.sh | tail -2
 ```
 
-Keep `outputs/lab-06-scaling-proof.txt` and `outputs/lab-06-scaling-history.json` until Lab 10 has
-consumed the second one.
+Keep `outputs/lab-06-scaling-proof.txt` and `outputs/lab-06-scaling-history.json` until Lab 10 has consumed the second one. Keep `templates/lab-06-suspended-state.json`: it is the runbook for suspending scale-in in an incident.
 
-Note that `templates/lab-06-suspended-state.json` is in the KEEP column even though the suspension it
-describes has been cleared. Keep the document: it is how you would suspend scale-in again in an incident,
-and a runbook page that exists in the repository is worth more than one somebody has to remember to write
-at three in the morning.
-
-Do **not** run `scripts/cleanup/lab-06-cleanup.sh`, `lab-05-cleanup.sh`, `lab-04-cleanup.sh`,
-`lab-03-cleanup.sh` or `lab-02-cleanup.sh`. They are for the end of the course, in the order given in
-Section 9.3.
-
-### 16.3 The architecture you now have
+Do **not** run `scripts/cleanup/lab-06-cleanup.sh`, `lab-05-cleanup.sh`, `lab-04-cleanup.sh`, `lab-03-cleanup.sh` or `lab-02-cleanup.sh`. They are for the end of the course, in the order given in Section 8.2.
 
 ```text
 Lab 01  IAM
@@ -5182,7 +3362,7 @@ Lab 02  NETWORK
 Lab 03  COMPUTE - instances you administer
   usms-web-01   public subnet a   usms-app-sg   usms-ec2-app-profile   usms-web-eip
   usms-db-01    private subnet a  usms-db-sg
-  usms-web-golden  AMI -> EC2 Auto Scaling, which is §12.3's THIRD column and not this lab
+  usms-web-golden  AMI -> EC2 Auto Scaling, which is Section 11's THIRD column and not this lab
 
 Lab 04 COMPUTE - containers you operate
   usms-ecs-cluster                      Container Insights enabled -> the CPU metric exists
@@ -5225,20 +3405,11 @@ Lab 10  Lambda
 
 ---
 
-## 17. Preparation for the Next Lab
+## 16. Preparation for the Next Lab
 
-Lab 07 is next: the same USMS application, rebuilt on Amazon EKS as a second deployment target, so
-that you can compare a managed-scaling control plane against the one you just built by hand. Lab 07
-does not source `configs/lab-06.env` and creates nothing this lab depends on - the relationship is
-conceptual, not a file or resource handoff. Its Step 12 walks the same three numbers -
-`minReplicas`/`maxReplicas`, target CPU, and the scale-up/scale-down windows - as a Kubernetes
-`HorizontalPodAutoscaler`, and asks you to say what changed and what stayed the same. Keep this
-lab's target-tracking policy and its two managed alarms around for exactly that comparison.
+Lab 07 rebuilds the USMS application on Amazon EKS. It does not source `configs/lab-06.env`; the link is conceptual. Its Step 12 expresses the same three numbers (`minReplicas`/`maxReplicas`, target CPU, scale-up/scale-down windows) as a `HorizontalPodAutoscaler`, so keep this lab's CPU target tracking policy and its two managed alarms for that comparison.
 
-Further ahead, Lab 10 (Lambda) is the lab that finally creates `usms-student-data`, and it is the
-moment two IAM policies written in the first laboratory of this course stop being hypothetical. It
-needs nothing from the scaling configuration you just built, and it needs two things from your
-repository.
+Lab 10 (Lambda) creates `usms-student-data` and needs two things from this repository:
 
 | From this lab | Lab 10 uses it for |
 | --- | --- |
@@ -5253,17 +3424,9 @@ repository.
 | Lab 02 `usms-s3-endpoint` | The gateway endpoint that has been on the private route table since Lab 2 and has had nothing to reach |
 | Lab 04 `USMSECSTaskExecution` | Its `logs` statement is scoped to one log group; Lab 10's equivalent scoping decision is about a bucket, and the comparison is worth making |
 
-**The connection worth stating out loud, even though it will not resolve for three more labs.** Lab 01
-wrote a policy for a bucket that did not exist. Lab 03 attached it to an EC2 instance through an
-instance profile. Lab 04 attached the same policy, unchanged, to a Fargate task through a task role.
-Lab 02 built a VPC endpoint whose only purpose is to reach S3 privately. **Four laboratories have
-prepared for one `create-bucket` call**, and when Lab 10 runs it, three separate chains resolve at
-the same instant and not one of them has to be modified.
+- Four labs have prepared for one `create-bucket` call: Lab 01's policy, Lab 03's instance profile, Lab 04's task role and Lab 02's S3 endpoint all resolve at once, unmodified.
 
-That is worth more than any single command in this course. Lab 04 Step 8 asked you to write it down;
-Lab 10 is where you find out it was true.
-
-**Before the next session, confirm all six of these:**
+Before the next session:
 
 ```bash
 cd ~/aws-floci-course
@@ -5286,20 +3449,13 @@ That fourth line is the one that will actually stop you in a later lab. A scalab
 raised floor is a service that costs more than it should and disagrees with `configs/lab-04.env`, and the
 CloudFormation lab will produce a template that bakes the wrong number in.
 
-**Read ahead, five minutes:** find out why an S3 bucket name has to be globally unique across every AWS
-account in the world, and what that means for a course in which every student is creating a bucket called
-`usms-student-data` on their own emulator. Then find out what a **gateway** VPC endpoint is and how it
-differs from an **interface** endpoint - Lab 02 built the first kind, and Lab 10 is where it finally
-carries traffic.
-
-Finally, take a snapshot so that a mistake in Lab 10 is recoverable:
+Take a snapshot so a mistake in Lab 07 or Lab 10 is recoverable:
 
 ```bash
 floci snapshot save lab-06-complete
 ```
 
-If `floci snapshot` is not available on your build, use the filesystem fallback. Stop Floci first -
-archiving a live data directory can capture a half-written file:
+If `floci snapshot` is unavailable, stop Floci first and archive outside the repository:
 
 ```bash
 ./scripts/setup/floci-down.sh
@@ -5308,135 +3464,34 @@ tar -czf ~/floci-data-lab-06.tar.gz -C ~ floci-data
 ls -lh ~/floci-data-lab-06.tar.gz
 ```
 
-The archive lives in your home directory, **outside** the repository, so it is never a commit candidate.
-
 ---
 
-## Appendix A - Command Reference
+## Appendix - New CLI and JMESPath patterns
 
-Every command this lab used, grouped by service.
-
-### Application Auto Scaling - scalable targets
-
-| Command | What it does |
-| --- | --- |
-| `aws application-autoscaling register-scalable-target` | Create **or update** a registration. `--service-namespace`, `--resource-id`, `--scalable-dimension`, `--min-capacity`, `--max-capacity`, `--suspended-state`, `--tags`. There is no `update-scalable-target` |
-| `aws application-autoscaling describe-scalable-targets` | Read them. `--resource-ids` filters; omit it to list the whole namespace. Returns `RoleARN`, `SuspendedState` and `CreationTime` |
-| `aws application-autoscaling deregister-scalable-target` | Remove a registration - **and every policy and scheduled action attached to it** |
-| `aws application-autoscaling list-tags-for-resource` / `tag-resource` / `untag-resource` | Tags on a scalable target, addressed by its `ScalableTargetARN` |
-
-### Application Auto Scaling - policies, schedules and history
-
-| Command | What it does |
-| --- | --- |
-| `aws application-autoscaling put-scaling-policy` | Create or replace a policy. `--policy-type TargetTrackingScaling` with `--target-tracking-scaling-policy-configuration`, or `StepScaling` with `--step-scaling-policy-configuration` |
-| `aws application-autoscaling describe-scaling-policies` | Read them. `--policy-names` filters; the `Alarms` list names every alarm involved, managed or yours |
-| `aws application-autoscaling delete-scaling-policy` | Delete one. A target tracking policy takes its two managed alarms with it |
-| `aws application-autoscaling put-scheduled-action` | Create or replace a scheduled action. `--schedule` with `cron(...)`, `rate(...)` or `at(...)`; `--timezone`; `--scalable-target-action MinCapacity=,MaxCapacity=` |
-| `aws application-autoscaling describe-scheduled-actions` | Read them, with their schedules and time zones |
-| `aws application-autoscaling delete-scheduled-action` | Delete one. **Does not undo a bound it already changed** |
-| `aws application-autoscaling describe-scaling-activities` | The history. `Cause` names the alarm and the policy; `--include-not-scaled-activities` adds the decisions *not* to scale, with `NotScaledReasons` |
-
-### CloudWatch
-
-| Command | What it does |
-| --- | --- |
-| `aws cloudwatch put-metric-data` | Publish a custom metric. `--namespace`, `--metric-name`, `--value`, `--unit`, `--dimensions Name=Value` (a plain map) |
-| `aws cloudwatch list-metrics` | Discover metrics. `--namespace` filters |
-| `aws cloudwatch get-metric-statistics` | Read datapoints. Needs `--start-time`, `--end-time`, `--period`, `--statistics` |
-| `aws cloudwatch put-metric-alarm` | Create or replace an alarm. `--dimensions Name=X,Value=Y` (**not** the same shorthand as `put-metric-data`), `--alarm-actions`, `--treat-missing-data` |
-| `aws cloudwatch describe-alarms` | Read alarms. `--alarm-names` or `--alarm-name-prefix`; `AlarmActions` is the field that proves a link |
-| `aws cloudwatch set-alarm-state` | Force a state **and invoke its actions**. A documented testing operation, and a real privilege |
-| `aws cloudwatch delete-alarms` | Delete one or more. Takes several names in one call |
-| - | **There is no `delete-metric`.** Metrics cannot be deleted; they expire |
-
-### IAM, ECS and ELBv2 used in this lab
-
-| Command | What it does |
-| --- | --- |
-| `aws iam create-service-linked-role --aws-service-name ecs.application-autoscaling.amazonaws.com` | Create the role Application Auto Scaling uses. You choose neither its name nor its policies |
-| `aws iam get-role` | Read it. Note the `/aws-service-role/...` path |
-| `aws iam delete-service-linked-role` | The correct removal. Not `delete-role` |
-| `aws iam get-policy` / `get-policy-version` | Read a customer managed policy document - Exercise 5 point 5 |
-| `aws ecs describe-services` | `serviceArn` for the resource ID; `desiredCount` for everything else |
-| `aws ecs update-service --desired-count` | A manual override, which a policy will undo. Step 12 part 6 says why |
-| `aws elbv2 describe-load-balancers` / `describe-target-groups` | The two ARNs the `ResourceLabel` is built from |
-| `aws elbv2 describe-target-health` | Where a task created by a scaling policy ends up - Step 15 block 6 |
-
-**Six tag and dimension conventions now, across six services, and no rule connects them:**
-
-| Service | Syntax |
-| --- | --- |
-| EC2 | `--tag-specifications 'ResourceType=x,Tags=[{Key=K,Value=V}]'` |
-| ECS | `--tags key=K,value=V` (lower case) |
-| IAM | `--tags Key=K,Value=V` (capitals) |
-| CloudWatch Logs | `--tags K=V` (a plain map) |
-| Elastic Load Balancing | `--tags Key=K,Value=V` (capitals, like IAM) |
-| Application Auto Scaling | `--tags K=V` (a plain map, like CloudWatch Logs) |
-
-And, inside one service, two shapes for the same concept:
-
-| Operation | `--dimensions` syntax |
-| --- | --- |
-| `cloudwatch put-metric-data` | `Service=enrolment` |
-| `cloudwatch put-metric-alarm` | `Name=Service,Value=enrolment` |
-
-Run `aws <service> <operation> help` and read the synopsis. That habit is more durable than memorising any
-of the eight.
-
----
-
-## Appendix B - New JMESPath and CLI patterns introduced
-
-Labs 1 to 05 taught `Key[*].Field`, `[A,B]`, `{X:A}`, `[?filter]`, `| [0]`, `sort_by()` with `&`,
-`length()`, `contains()`, `starts_with()`, `@`, slices, flattening with `[]`, backtick literals, single-
-quoted string literals, `&&` and `||` inside filters, `--filters`, `--generate-cli-skeleton`,
-`--cli-input-json`, `--max-items`, waiters and three kinds of CLI list shorthand. This lab adds:
+Labs 1 to 05 taught `Key[*].Field`, `[A,B]`, `{X:A}`, `[?filter]`, `| [0]`, `sort_by()` with `&`, `length()`, `contains()`, `starts_with()`, `@`, slices, flattening, literals, `--filters`, `--generate-cli-skeleton`, `--cli-input-json`, `--max-items` and waiters. This lab adds:
 
 | Pattern | Meaning | Where it appeared |
 | --- | --- | --- |
-| `SuspendedState.*` | An **object projection**: `*` after a dot yields every *value* of a hash, discarding the keys. Three booleans out of one field | Steps 13, 14, Section 9 |
-| `SuspendedState.* \| grep -ci true` | One number that must be zero, instead of three fields you have to read. `-i` because `--output text` renders a JSON boolean as `True` with a capital letter | Steps 13, 17, Section 9 |
-| `StepAdjustments[-1].MetricIntervalUpperBound` | A **negative index** - JMESPath counts from the end. An absent field reads as `None` under `--output text`, which is how you assert that the top step is open-ended | Section 9 |
+| `SuspendedState.*` | An **object projection**: `*` after a dot yields every *value* of a hash, discarding the keys. Three booleans out of one field | Steps 13, 14, Section 8 |
+| `SuspendedState.* \| grep -ci true` | One number that must be zero, instead of three fields you have to read. `-i` because `--output text` renders a JSON boolean as `True` with a capital letter | Steps 13, 17, Section 8 |
+| `StepAdjustments[-1].MetricIntervalUpperBound` | A **negative index** - JMESPath counts from the end. An absent field reads as `None` under `--output text`, which is how you assert that the top step is open-ended | Section 8 |
 | `ScalableTargets[?ResourceId=='$RID'].ScalableDimension \| [0]` | A raw string literal in single quotes, inside a double-quoted shell string so the variable expands, then a first-match take | Step 14 |
 | `ScalingPolicies[?PolicyType=='StepScaling'].PolicyName \| [0]` | Finding an object by **what it is** rather than by what it was called. A better persistence check than a name lookup | Step 14 |
 | `MetricAlarms[?contains(AlarmName, ` + backtick + `AlarmHigh` + backtick + `)]` | `contains()` with a backtick literal, to pick one of two managed alarms whose names contain a UUID | Step 15 |
-| `--alarm-name-prefix "TargetTracking-$RID"` | A server-side prefix filter whose value you constructed. The managed alarm names are derivable, which is the whole point of Step 8 | Steps 8, 13, 15, Section 9 |
-| `--include-not-scaled-activities` | Application Auto Scaling's best diagnostic: the decisions **not** to scale, with reasons, omitted by default | Section 11 |
+| `--alarm-name-prefix "TargetTracking-$RID"` | A server-side prefix filter whose value you constructed. The managed alarm names are derivable, which is the whole point of Step 8 | Steps 8, 13, 15, Section 8 |
+| `--include-not-scaled-activities` | Application Auto Scaling's best diagnostic: the decisions **not** to scale, with reasons, omitted by default | Section 10 |
 | `--scalable-target-action MinCapacity=4,MaxCapacity=10` | A single nested structure in shorthand, on a flag that takes exactly one | Step 11 |
 | `--suspended-state A=true,B=false,C=false` and `file://...` | The same structure two ways, and a reason to prefer the file for a setting whose hazard is being forgotten | Step 13 |
-| `"${SVC_ARN##*:}"` | Strip the longest `*:` prefix - the last colon-separated field of an ARN. The resource ID, in one expansion | Steps 5, 14, Section 9 |
+| `"${SVC_ARN##*:}"` | Strip the longest `*:` prefix - the last colon-separated field of an ARN. The resource ID, in one expansion | Steps 5, 14, Section 8 |
 | `"${ALB_ARN#*:loadbalancer/}"` | Strip the **shortest** prefix matching a multi-character delimiter. Half of the `ResourceLabel` | Step 9 |
 | `printf '%s' "$X" \| awk -F/ '{print NF}'` | Counting path segments, to validate a constructed identifier before using it | Steps 5, 9 |
 | `awk -F: '{print \$NF}'` inside an **unquoted** heredoc | The one place in the course where a dollar sign must be escaped to survive an unquoted heredoc | Step 16 |
 | `... --output text \| grep -E '^arn:' \|\| echo not-created` | Turning `None` into a meaningful token, so an empty-value check can tell "unsupported" from "you skipped a step" | Step 16 |
 | `python3 -c "import datetime;print(...)"` for every timestamp | GNU `date` and BSD `date` disagree about every flag that matters | Steps 11, 12 |
 | `python3 - "$f" << 'PY'` for an in-place edit | `sed -i` is not portable between GNU and BSD; a backed-up Python read-modify-write is | Step 17 |
-| `cut -d. -f1` on a float from `--output text` | `50.0` compared as `50`, because `--output text` renders a JSON number and `test` compares strings | Section 9 |
+| `cut -d. -f1` on a float from `--output text` | `50.0` compared as `50`, because `--output text` renders a JSON number and `test` compares strings | Section 8 |
 
-### The distinction to keep straight
-
-**Two AWS services whose names are nearly the same, and one ARN namespace shared between them:**
-
-```text
-aws autoscaling                 EC2 Auto Scaling. Groups, launch templates, predictive scaling
-aws application-autoscaling     THIS SERVICE. Scalable targets in nine namespaces, no predictive
-arn:aws:autoscaling:...         used by BOTH - a policy created by the second has an ARN
-                                in the first's namespace, and nothing in it says "application"
-```
-
-**And the four constructed identifiers this architecture now uses, all for the same service:**
-
-```text
-ECS control-plane calls     --cluster usms-ecs-cluster --service usms-enrolment-svc
-ECS tagging calls           --resource-arn arn:aws:ecs:...:service/usms-ecs-cluster/usms-enrolment-svc
-Application Auto Scaling    --resource-id  service/usms-ecs-cluster/usms-enrolment-svc
-ELB request-count metric    ResourceLabel  app/<lb-name>/<lb-id>/targetgroup/<tg-name>/<tg-id>
-```
-
-The third is the suffix of the second. The fourth is built from fragments of two entirely different ARNs.
-Being able to construct each one from the right source, rather than guessing, is Review Question 2 - and
-it is the skill that separates reading AWS documentation from using it.
+Tag and dimension shorthand differs between services, and even between `put-metric-data` (`Service=enrolment`) and `put-metric-alarm` (`Name=Service,Value=enrolment`). Read the synopsis with `aws <service> <operation> help`.
 
 ---
 
@@ -5454,7 +3509,7 @@ it is the skill that separates reading AWS documentation from using it.
 - [`SuspendedState`](https://docs.aws.amazon.com/autoscaling/application/APIReference/API_SuspendedState.html)
 - [Service-linked roles for Application Auto Scaling](https://docs.aws.amazon.com/autoscaling/application/userguide/security_iam_service-with-iam.html)
 - [Automatically scale your Amazon ECS service](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/service-auto-scaling.html)
-- [Amazon ECS cluster auto scaling - the different mechanism §12.3 contrasts](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/cluster-auto-scaling.html)
+- [Amazon ECS cluster auto scaling - the different mechanism Section 11 contrasts](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/cluster-auto-scaling.html)
 - [Amazon ECS CloudWatch metrics, including CPUUtilization and MemoryUtilization](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/cloudwatch-metrics.html)
 - [CloudWatch metrics for your Application Load Balancer, including RequestCountPerTarget](https://docs.aws.amazon.com/elasticloadbalancing/latest/application/load-balancer-cloudwatch-metrics.html)
 - [Using Amazon CloudWatch alarms, including TreatMissingData](https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/AlarmThatSendsEmail.html)
@@ -5469,12 +3524,3 @@ it is the skill that separates reading AWS documentation from using it.
 - [`aws application-autoscaling` CLI reference](https://docs.aws.amazon.com/cli/latest/reference/application-autoscaling/)
 - [`aws cloudwatch` CLI reference](https://docs.aws.amazon.com/cli/latest/reference/cloudwatch/)
 - [JMESPath specification](https://jmespath.org/specification.html)
-
----
-
-*Lab 06 complete, and with it Practical 3. The USMS enrolment service now has an identity, a network, a
-blueprint, a controller, a front door and a control loop - and the only thing this laboratory added to the
-architecture underneath it was a floor, a ceiling, and five objects that argue about one integer between
-them. Lab 10 finally creates `usms-student-data`, the bucket two IAM policies and one VPC endpoint have
-been waiting four laboratories for. Before you start it, run `verify-lab-06.sh` one more time, confirm
-that no suspension switch is set, and check that `describe-scalable-targets` still reports a floor of 2.*

@@ -259,6 +259,7 @@ nav:
 
   - Lab:
       - Lab Overview: Lab/overview.md
+      - Known Issues (Floci 2.0.1): Lab/known-issues.md
       - Lab 01 - IAM: Lab/Lab-01-IAM.md
       - Lab 02 - VPC: Lab/Lab-02-VPC.md
       - Lab 03 - EC2: Lab/Lab-03-EC2.md
