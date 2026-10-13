@@ -202,7 +202,7 @@ Real AWS resources cost money and clutter shared accounts. Every lesson must:
     Bank of <count> questions in `private/quizzes/unit<N>-topic<M>.questions.md` covering <concepts>. Run as many as fit about 25 minutes, then spend 5 minutes reviewing the most-missed questions.
 ```
 
-The lesson page names the quiz and its topics only. **No questions or answers in the lesson page**: the repository is public. The "Open ClassLegend dashboard" button is added automatically.
+The lesson page names the quiz and its topics only. **No questions or answers in the lesson page**: the repository is public. The "Open ClassLegend dashboard" button is added automatically. So is the **Next lesson** button, from the row order in `docs/teach-5t27uuv8/index.md`: add each new lecture's row in teaching order.
 
 ### 2.6 Register the lesson
 

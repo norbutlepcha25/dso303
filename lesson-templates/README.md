@@ -135,6 +135,8 @@ A typical segment reads top to bottom as: notes links, then what to present, the
 
 Standard blocks work too: `!!! warning`, `!!! tip`, `!!! note`, `!!! danger`. Ordinary Markdown (tables, lists, code blocks, Mermaid diagrams, images) works as in the notes.
 
+**Next lesson button.** Every timed lesson gets a **Next lesson** button automatically (after the Quiz segment and in the lesson runner bar), linking to the next timed lesson in the Teaching Area index table. Add the new lesson's row to that table in teaching order; do not write the button by hand.
+
 Content inside a block must be indented four spaces. A code block inside a block is indented four spaces as well:
 
 ````markdown

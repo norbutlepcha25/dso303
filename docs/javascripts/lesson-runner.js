@@ -193,6 +193,17 @@
     timeline.appendChild(b);
   });
 
+  // "Next lesson" button: the hook puts one in the page; mirror it in the bar.
+  var nextLink = article.querySelector('a.next-lesson-link');
+  if (nextLink) {
+    var nb = document.createElement('a');
+    nb.className = 'lr-next-lesson';
+    nb.href = nextLink.getAttribute('href');
+    nb.title = nextLink.textContent.replace(/\s+/g, ' ').trim();
+    nb.textContent = /Teaching Area/.test(nb.title) ? 'Teaching Area \u2192' : 'Next lesson \u2192';
+    bar.querySelector('.lr-buttons').appendChild(nb);
+  }
+
   var h1 = article.querySelector('h1');
   if (h1) h1.insertAdjacentElement('afterend', bar);
   else article.insertBefore(bar, article.firstChild);
