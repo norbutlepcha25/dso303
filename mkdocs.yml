@@ -198,17 +198,17 @@ nav:
       - 3.2 Deploying Applications on Amazon EKS: unit3/topic2.md
       - 3.3 Amazon EKS Advanced Concepts: unit3/topic3.md
 
-#   - Unit 4:
-#       - Overview: unit4/overview.md
-#       - 4.1 Microservices Design Principles: unit4/topic1.md
-#       - 4.2 API Management and Service Mesh: unit4/topic2.md
-#       - 4.3 Resilience in AWS Microservices: unit4/topic3.md
+  - Unit 4:
+      - Overview: unit4/overview.md
+      - 4.1 Microservices Design Principles: unit4/topic1.md
+      - 4.2 API Management and Service Mesh: unit4/topic2.md
+      - 4.3 Resilience in AWS Microservices: unit4/topic3.md
 
-#   - Unit 5:
-#       - Overview: unit5/overview.md
-#       - 5.1 AWS CI/CD Services: unit5/topic1.md
-#       - 5.2 CI/CD Pipelines with CodePipeline and ECR: unit5/topic2.md
-#       - 5.3 Infrastructure as Code: unit5/topic3.md
+  - Unit 5:
+      - Overview: unit5/overview.md
+      - 5.1 AWS CI/CD Services: unit5/topic1.md
+      - 5.2 CI/CD Pipelines with CodePipeline and ECR: unit5/topic2.md
+      - 5.3 Infrastructure as Code: unit5/topic3.md
 
 #   - Unit 6:
 #       - Overview: unit6/overview.md
