@@ -101,6 +101,16 @@ Copy this section into your LMS or class group. Confirm the cluster name and Reg
 aws sts get-caller-identity
 ```
 
+!!! note
+
+    *What do you observe? and What do you think each of those values Mean/*
+
+    UserId — The unique identifier of the IAM user or assumed role session.
+
+    Account — The 12-digit AWS account ID.
+
+    Arn — The Amazon Resource Name identifying the current IAM user or assumed role.
+
 **Step 2: Connect to the EKS cluster**
 
 ```bash
@@ -113,14 +123,20 @@ This writes the cluster's address and how to authenticate into your kubeconfig, 
 
 Your instructor gives you your namespace, for example IAM user `StudentA` uses namespace `student-a`. Replace `student-a` below with yours:
 
+1. Check all the namespace : K get ns
+2. identify your namespace
+
 ```bash
 kubectl config set-context --current --namespace=student-a
 kubectl config view --minify
 ```
+what is the short anme for namespace?
 
 Check that the context shows your namespace.
 
 **Step 4: Create a Deployment**
+
+Name nginx, and image nginx:apline replica=1 ad verify it
 
 ```bash
 kubectl create deployment nginx --image=nginx:alpine --replicas=2
@@ -181,7 +197,7 @@ Both lists should be empty.
 ## Expected errors and what they mean
 
 | Student sees | Meaning | Fix |
-|---|---|---|
+| --- | --- | --- |
 | CloudShell does not open | No CloudShell permission | Check the student group has `AWSCloudShellFullAccess` (Step 2) |
 | `AccessDeniedException` on `update-kubeconfig` | IAM user lacks `eks:DescribeCluster` | Check the inline policy (Step 2) |
 | `error: You must be logged in to the server (Unauthorized)` | No access entry for this IAM user | Add the access entry (Step 3) |

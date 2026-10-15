@@ -1,0 +1,187 @@
+/* "Download PDF" button and print layout.
+   The same @media print rules are used by the browser's "Save as PDF" and by
+   utils/build_pdfs.py, so both produce the same document. */
+
+/* ---------- Button (screen) ---------- */
+
+.md-typeset .pdf-download {
+  float: right;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35em;
+  margin: 0.4rem 0 0.6rem 1rem;
+  padding: 0.35em 0.9em;
+  font-size: 0.7rem;
+  font-weight: 600;
+}
+
+.md-typeset .pdf-download svg {
+  width: 1.1em;
+  height: 1.1em;
+  fill: currentColor;
+}
+
+@media screen and (max-width: 44.9375em) {
+  .md-typeset .pdf-download {
+    float: none;
+    margin: 0 0 0.8rem;
+  }
+}
+
+/* ---------- Print / PDF ---------- */
+
+@media print {
+  @page {
+    size: A4;
+    margin: 18mm 14mm 16mm;
+  }
+
+  /* Only the page content is printed: no header, tabs, navigation,
+     table of contents, footer, banners or controls. */
+  .md-header,
+  .md-tabs,
+  .md-sidebar,
+  .md-sidebar--primary,
+  .md-sidebar--secondary,
+  .md-nav,
+  .md-banner,
+  .md-announce,
+  .md-footer,
+  .md-footer-meta,
+  .md-overlay,
+  .md-toggle,
+  .md-source,
+  .md-source-file,
+  .md-feedback,
+  .md-top,
+  .md-search,
+  .md-dialog,
+  .md-content__button,
+  .md-typeset .pdf-download,
+  .md-clipboard,
+  .md-code__nav,
+  .md-code__button,
+  .headerlink {
+    display: none !important;
+  }
+
+  html,
+  body,
+  .md-container,
+  .md-main,
+  .md-grid,
+  .md-main__inner,
+  .md-content,
+  .md-content__inner {
+    margin: 0 !important;
+    padding: 0 !important;
+    max-width: none !important;
+  }
+
+  .md-content__inner::before {
+    display: none;
+  }
+
+  .md-typeset {
+    font-size: 10.5pt;
+    line-height: 1.55;
+  }
+
+  .md-typeset h1 {
+    margin-top: 0;
+  }
+
+  /* Keep headings with the text that follows them. */
+  .md-typeset h1,
+  .md-typeset h2,
+  .md-typeset h3,
+  .md-typeset h4 {
+    break-after: avoid;
+  }
+
+  /* Do not split small self-contained blocks across pages. */
+  .md-typeset figure,
+  .md-typeset .admonition,
+  .md-typeset details,
+  .md-typeset .mermaid,
+  .md-typeset tr,
+  .md-typeset img {
+    break-inside: avoid;
+  }
+
+  /* Tables: full width, no scroll wrapper, header repeated on each page. */
+  .md-typeset__scrollwrap {
+    overflow: visible !important;
+  }
+
+  .md-typeset__table,
+  .md-typeset table:not([class]) {
+    display: table !important;
+    width: 100% !important;
+  }
+
+  /* Fixed point sizes: color.css sets a 22px root and rem/px sizes for
+     admonitions, tables and code, which would otherwise print oversized. */
+  .md-typeset h1 { font-size: 20pt; }
+  .md-typeset h2 { font-size: 15pt; }
+  .md-typeset h3 { font-size: 12.5pt; }
+  .md-typeset h4 { font-size: 11pt; }
+
+  .md-typeset table:not([class]) th,
+  .md-typeset table:not([class]) td,
+  .md-typeset table td,
+  .md-typeset table th {
+    font-size: 9pt;
+    padding: 0.45em 0.8em;
+  }
+
+  .md-typeset .admonition,
+  .md-typeset .admonition p,
+  .md-typeset .admonition li,
+  .md-typeset .admonition.warning,
+  .md-typeset details,
+  .md-typeset details p,
+  .md-typeset details li {
+    font-size: 9.75pt;
+    line-height: 1.5;
+  }
+
+  .md-typeset .admonition-title,
+  .md-typeset summary {
+    font-size: 10pt;
+  }
+
+  .md-typeset code {
+    font-size: 0.85em;
+  }
+
+  .md-typeset pre > code {
+    font-size: 8.5pt;
+  }
+
+  .md-typeset thead {
+    display: table-header-group;
+  }
+
+  /* Long code lines wrap instead of being cut off at the page edge. */
+  .md-typeset pre > code {
+    white-space: pre-wrap !important;
+    word-break: break-word;
+    overflow: visible !important;
+    max-height: none !important;
+  }
+
+  /* Content tabs: print every tab, not only the selected one. */
+  .md-typeset .tabbed-set > .tabbed-content > .tabbed-block {
+    display: block !important;
+  }
+
+  .md-typeset .tabbed-labels {
+    display: none !important;
+  }
+
+  .md-typeset a {
+    color: inherit;
+    text-decoration: none;
+  }
+}

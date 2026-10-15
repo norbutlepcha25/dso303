@@ -17,6 +17,7 @@ Lesson plans for running DSO303 sessions. This area is unlisted: it is not in th
 | 3 | [3.3 Amazon EKS Advanced Concepts](unit3-topic3-lecture.md) | 120 min | Lecture with console and CLI |
 | 3 | [Shared EKS cluster for class](unit3-shared-eks-cluster.md) | Setup | Create before each Unit 3 lecture, delete after |
 | 3 | [Practical: deploy on EKS in your own namespace](unit3-eks-namespace-practical.md) | Practical | Students deploy in their own namespaces; console setup and handout |
+| 5 | [Unit 5 Workshop: CI/CD Pipelines and Infrastructure as Code](unit5-cicd-iac-workshop.md) | 180 min | Workshop: buildspec defect hunt, pipeline demo, CloudFormation change set |
 
 ## Running a lesson
 

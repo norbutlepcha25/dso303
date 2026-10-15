@@ -1,10 +1,5 @@
 # Unit 3 Lecture: Deploying Applications on Amazon EKS
 
-**Duration:** 2 hours (120 minutes, including a 5-minute break)  
-**Audience:** 4th-year Software Engineering students who know Kubernetes fundamentals and attended the 3.1 lecture  
-**Mode:** Lecture with a console walk-through on the shared cluster, a CLI rollout exercise on Floci, and a ClassLegend quiz  
-**Running scenario:** The USMS student portal must ship a new version during results week without dropping a single request
-
 <div class="lesson-schedule"></div>
 
 ## Before class

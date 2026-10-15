@@ -1,10 +1,5 @@
 # Unit 3 Lecture: Amazon EKS Advanced Concepts
 
-**Duration:** 2 hours (120 minutes, including a 5-minute break)  
-**Audience:** 4th-year Software Engineering students who know Kubernetes fundamentals and attended the 3.1 and 3.2 lectures  
-**Mode:** Lecture with real-console exploration of a shared cluster, CLI practice on Floci, ClassLegend quiz  
-**Running scenario:** USMS, the University Student Management System, now running on EKS, has to decide where each of its workloads should run
-
 <div class="lesson-schedule"></div>
 
 ## Before class

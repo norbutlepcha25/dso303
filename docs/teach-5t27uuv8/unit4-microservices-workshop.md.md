@@ -103,4 +103,4 @@ Concept content: tables, diagrams, short explanations.
 ## Exit ticket { data-minutes="5" }
 
 !!! prompt "Answer individually"
-    1. ...
+    1. ..
