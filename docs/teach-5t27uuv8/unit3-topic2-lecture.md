@@ -56,6 +56,14 @@
 [3.1 Kubernetes objects compared with ECS](../unit3/topic1.md#kubernetes-objects-compared-with-ecs){ .notes-link target="_blank" }
 [3.2 Definition](../unit3/topic2.md#definition){ .notes-link target="_blank" }
 
+lets rock mey na
+
+<figure markdown="span">
+    ![VS](../img/teacher/bc4a14e8-0c5e-4005-bcdd-f64c4153dd4b.webp){width="80%"}
+    <figcaption>Vs code</figcaption>
+</figure>
+
+
 **Quick-fire recall from 3.1 (about 5 minutes).** Ask, take one answer each, move on fast.
 
 1. Which object keeps N identical Pods running: a Pod, a Deployment or a Service?
