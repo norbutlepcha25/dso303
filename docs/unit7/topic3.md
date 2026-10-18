@@ -537,7 +537,7 @@ This expresses ==dependency-aware alerting==: "do not page the orders team about
 | `DisableAlarmActions` API | Named alarms | No; must call `EnableAlarmActions` | Emergency silencing; dangerous if forgotten |
 | Removing actions from the alarm definition | One alarm | No | Converting a paging alarm into a dashboard-only alarm |
 
-During a mute window the alarm continues to evaluate and change state; only its ==actions== are muted. If the alarm is still in `ALARM` when the window ends, the action runs once at that point, so a real problem that outlasts the maintenance window is not lost. EventBridge alarm state-change events are still emitted while muted, so automation driven by EventBridge rules must check for maintenance windows itself.
+During a mute window the alarm continues to evaluate and change state; only its **actions** are muted. If the alarm is still in an alarming state when the window ends, CloudWatch automatically re-triggers the actions that were muted, so a real problem that outlasts the maintenance window is not lost. EventBridge alarm state-change events are still emitted while muted, so automation driven by EventBridge rules must check for maintenance windows itself.
 
 !!! danger "The forgotten disabled alarm"
     `DisableAlarmActions` during an incident is a common emergency measure, and forgetting to re-enable actions is a common cause of the ==next== incident going unnoticed. Prefer mute rules with an explicit end time, and add a periodic compliance check (for example an AWS Config custom rule or a scheduled Lambda function) that reports alarms with actions disabled.

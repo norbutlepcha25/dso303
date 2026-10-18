@@ -130,10 +130,11 @@ extra_javascript:
   - javascripts/filter.js
   - javascripts/preview.js
   - javascripts/pdf-download.js
-  - javascripts/teacher-shortcut.js
+  - javascripts/answers-toggle.js
 
 # Teacher area: docs/teach-5t27uuv8/ is unlisted (not in nav, excluded from
-# search and the sitemap, noindex). See hooks/teacher_pages.py.
+# search and the sitemap, noindex). Playbooks there are password-encrypted, and
+# the build fails if one is not. See hooks/teacher_pages.py.
 hooks:
   - hooks/teacher_pages.py
 
@@ -242,7 +243,6 @@ nav:
 #       - Unit 6: Questions/unit6.md
 #       - Unit 7: Questions/unit7.md
 #       - Unit 8: Questions/unit8.md
-#       - Mid-term Question Pool: Questions/mids.md
 
 #   - Interview Questions:
 #       - Unit 1: interviewquestions/unit1.md
@@ -254,8 +254,6 @@ nav:
 #       - Unit 7: interviewquestions/unit7.md
 #       - Unit 8: interviewquestions/unit8.md
 
-#   # - Sample Answers:
-#   #     - Unit 2: Answers/unit2.md
 
   - Lab:
       - Lab Overview: Lab/overview.md

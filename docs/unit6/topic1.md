@@ -2593,7 +2593,7 @@ Indicative, as of 2026; verify in Service Quotas and the EFS quotas page.
 
 | Limit | Indicative value | Integration implication |
 |-------|------------------|-------------------------|
-| Access points per file system | 1,000 | Caps the number of dynamically provisioned PVCs per file system in `efs-ap` mode |
+| Access points per file system | 10,000 (default; raise through AWS Support) | Caps the number of dynamically provisioned PVCs per file system in `efs-ap` mode |
 | Mount targets per file system per AZ | 1 | One mount target per AZ, shared by all clients in that AZ |
 | NFS client connections per file system | Around 25,000 | Relevant for large Lambda concurrency and large EKS clusters |
 | Open files per client | Around 32,768 | Relevant for connection-heavy application servers |
@@ -2712,7 +2712,7 @@ In dynamic provisioning, the controller does ==not create a new file system==. I
     With `reclaimPolicy: Delete`, the controller deletes the access point. By default it does not delete the directory contents, so data may remain on the file system and continue to cost money. Newer driver versions offer an option to delete the access point root directory; verify the behaviour of your driver version and design explicit data retention rules.
 
 !!! danger "The access point ceiling"
-    Because each dynamically provisioned PVC consumes one access point, a single file system can back at most the access point quota worth of PVCs (indicatively 1,000). A multi-tenant platform expecting more claims must spread them across several StorageClasses, each pointing at a different file system.
+    Because each dynamically provisioned PVC consumes one access point, a single file system can back at most the access point quota worth of PVCs (10,000 by default). A multi-tenant platform expecting more claims must spread them across several StorageClasses, each pointing at a different file system.
 
 ##### Access modes and capacity requests
 

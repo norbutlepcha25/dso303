@@ -868,24 +868,6 @@ Never modify a running resource; replace it from a new definition. The infrastru
 | No permission boundary on pipeline-created roles | A merge can escalate to account administration | Permission boundaries plus policy checks on IAM resources |
 | CDK bootstrap trust relationships never reviewed | Among the most powerful roles in the organisation, unexamined | Review them as part of any multi-account design |
 
-### Certification Traps
-
-| Trap | The reality |
-|---|---|
-| "A stack in `ROLLBACK_COMPLETE` can be updated" | It can **only be deleted** |
-| "Rollback always succeeds" | `UPDATE_ROLLBACK_FAILED` exists, and drift is how you get there |
-| "`DeletionPolicy` covers replacement" | It does not. `UpdateReplacePolicy` is separate and is the one teams omit |
-| "CDK is an alternative to CloudFormation" | CDK **generates** CloudFormation; all its semantics apply |
-| "CDK works without bootstrapping" | `cdk bootstrap` is required per account and Region |
-| "Terraform has automatic rollback" | It does not. A failed apply leaves a partially-applied state you re-plan and re-apply |
-| "Terraform state locking requires DynamoDB" | Native S3 locking via `use_lockfile` replaced that requirement |
-| "`sensitive = true` keeps a value out of state" | It redacts **output**; the value is still in state |
-| "Drift detection corrects drift" | It **reports**; it does not remediate |
-| "Config rules prevent non-compliant resources" | Config is detective, after creation; prevention is **CloudFormation Hooks** or **SCPs** |
-| "StackSets and nested stacks solve the same problem" | StackSets deploy across accounts and Regions; nested stacks decompose one deployment |
-| "Terraform is proprietary now and cannot be used" | BSL restricts competing products, not ordinary use; OpenTofu is the MPL fork |
-| "Workspaces provide environment isolation" | They provide separate state from one configuration  not separate credentials or accounts |
-
 ---
 
 ## Summary

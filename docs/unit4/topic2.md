@@ -394,7 +394,7 @@ flowchart TD
 | Traffic | North–south | East–west, inside ECS | East–west, across VPCs, accounts, compute | East–west, inside EKS |
 | Proxy in your workload | No | Yes, AWS-managed | No | Yes, you operate it |
 | Authorisation | Authorisers, keys, WAF | Security groups; no L7 policy | IAM auth policies | mTLS identity and L7 policy |
-| Traffic shifting | Canary stages | Via separate services | Weighted target groups | Rich, header-aware |
+| Traffic shifting | Canary stages | ECS native blue/green, linear and canary deployments, with header-based test traffic to the new revision | Weighted target groups | Rich, header-aware |
 | Choose when | External consumers need governance | ECS services call each other | Calls cross boundaries or need IAM-based auth | A named requirement only a full mesh meets |
 | Main cost | Per request (REST > HTTP) | Proxy CPU and memory | Hourly plus data processed | Proxies plus a platform team |
 

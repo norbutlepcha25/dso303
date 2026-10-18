@@ -5646,7 +5646,7 @@ chmod +x debug/dc8-setup.sh && ./debug/dc8-setup.sh
 34. A CI/CD pipeline needs to deploy CloudFormation stacks. Design its IAM so the pipeline itself is not an admin.
 35. GitHub Actions must deploy to AWS with no stored secrets. Which STS operation, and what does the trust policy look like?
 
-### 13.3 SAA-C03 certification style
+### 13.3 Multiple-choice design questions
 
 36. A company needs an EC2 application to read from S3 with no credentials stored on the instance. What should a solutions architect recommend?
    **A.** Store an access key in `/etc/aws/credentials` with `chmod 600`

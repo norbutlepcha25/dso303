@@ -265,7 +265,7 @@ Three details carry real weight. **`post_build` runs even when `build` fails**, 
 
 **Important features.** Build phases and reports; local and S3 caching; VPC configuration so builds can reach private resources; batch builds for fan-out (for example, a matrix across runtime versions); build badges; webhook-triggered builds with filter groups; the ability to act as a **self-hosted GitHub Actions runner** so that GitHub-native workflows can execute on CodeBuild compute inside your VPC; and Docker layer caching for container builds.
 
-**Limitations.** A maximum build timeout (8 hours by default); concurrent build quotas per account; no persistent state between builds by design; Docker-in-Docker requires privileged mode, which is a meaningful security decision rather than a checkbox; and Lambda compute has no Docker daemon, so container builds cannot use it.
+**Limitations.** A build timeout of 5 minutes to 36 hours (default 60 minutes); concurrent build quotas per account; no persistent state between builds by design; Docker-in-Docker requires privileged mode, which is a meaningful security decision rather than a checkbox; and Lambda compute has no Docker daemon, so container builds cannot use it.
 
 **Pricing model.** Per build-minute by compute type, with a free-tier allowance; reserved fleets are billed for provisioned capacity regardless of use. Practical guidance: ARM where possible, caching configured deliberately, right-sized compute (a larger instance that halves the build can cost less in total), and reserved capacity only once queue time is demonstrably the constraint.
 
@@ -362,7 +362,7 @@ Two points that matter in practice. **`ApplicationStop` runs from the *previousl
 
 !!! danger "A hook that cannot report failure is worse than no hook"
 
-    A hook Lambda must call `PutLifecycleEventHookExecutionStatus` on every path. If it raises an uncaught exception or times out, CodeDeploy never receives a status and the deployment stalls or, depending on configuration, proceeds. Catch every exception, report `Failed` explicitly on any doubt, and set the Lambda timeout comfortably below the hook's own timeout. A validation gate that fails open provides false confidence, which is worse than the honest absence of a gate.
+    A hook Lambda must call `PutLifecycleEventHookExecutionStatus` on every path. If it raises an uncaught exception or times out, CodeDeploy never receives a status, waits, and marks the deployment failed after one hour, so a broken hook turns every release into an hour-long failure. Catch every exception, report `Failed` explicitly on any doubt, and set the Lambda timeout comfortably below the hook's own timeout. A validation gate that fails open provides false confidence, which is worse than the honest absence of a gate.
 
 **Deployment configurations.**
 
@@ -495,7 +495,7 @@ Read structurally, these divide into three groups. The **producers**  the Git pr
 | **Privileged mode** | On, off | **On only for projects that build container images.** It is a genuine privilege escalation, not a checkbox |
 | **Cache** | None, local (source/Docker layer/custom), S3 | Local Docker-layer caching for image builds; S3 for dependency caches shared across build hosts |
 | **VPC configuration** | None, or subnets and security groups | Required to reach private resources; note that a VPC build needs a NAT path or endpoints for outbound access |
-| **Timeout** | 5 minutes to 8 hours | Tight enough that a hung build fails rather than burning an hour of billing |
+| **Timeout** | 5 minutes to 36 hours (default 60 minutes) | Tight enough that a hung build fails rather than burning an hour of billing |
 | **Queued timeout** | Duration | Bounds how long a build waits for capacity before failing |
 | **Environment variables** | Plaintext, Parameter Store, Secrets Manager | **Never plaintext for secrets.** They appear in configuration, API calls and often logs |
 | **Service role** | An IAM role | Scoped to this project's specific source, artefacts, parameters and ECR repository |
@@ -877,30 +877,6 @@ The desired state in Git, an agent in the cluster reconciling continuously towar
 | Long-lived feature branches with a CI server attached | Deferred integration, which is the problem CI exists to solve | Trunk-based development with feature flags |
 | Termination wait set to zero | The blue environment is gone; manual rollback is a redeploy | Minutes to hours, sized to how fast a problem would surface |
 | No deployment markers on dashboards | Every incident investigation starts from scratch | Overlay deployment events on application metrics |
-
-### Certification Traps
-
-| Trap | The reality |
-|---|---|
-| "CodeCommit is deprecated / unavailable to new customers" | It was closed to new customers in July 2024 and **returned to general availability on 24 November 2025**. Verify current status rather than trusting older material |
-| "CodeDeploy supports in-place deployment for Lambda and ECS" | **Blue/green only** on those platforms. In-place is EC2/On-premises |
-| "`ApplicationStop` runs from the new revision" | It runs from the **previously deployed** revision  the classic stuck-deployment cause |
-| "You can attach a script to `AllowTraffic`" | `DownloadBundle`, `Install` and `AllowTraffic` are reserved for CodeDeploy |
-| "`post_build` only runs if the build succeeded" | It runs regardless; check `$CODEBUILD_BUILD_SUCCEEDING` |
-| "CodeBuild keeps state between builds" | Containers are ephemeral. Only explicitly configured caches and artefacts persist |
-| "Lambda compute in CodeBuild can build Docker images" | No Docker daemon. Use EC2-based compute for image builds |
-| "Canary and linear are alternatives to blue/green" | They are traffic-shifting configurations **on top of** blue/green  both versions run |
-| "CodeDeploy charges per deployment" | Free for EC2, Lambda and ECS; charged per on-premises instance update |
-| "Automatic rollback needs a Lambda function" | It is a deployment-group setting driven by CloudWatch alarms |
-| "ECS blue/green requires CodeDeploy" | Since July 2025 ECS has **built-in** blue/green deployments as well |
-| "A build badge is a monitoring solution" | It is a README image. Alarms are monitoring |
-| "Tagging images `latest` is fine for deployment" | Tag by commit SHA and deploy by digest |
-| "Rebuilding per environment from the same commit is equivalent" | It produces a different artefact; build once and promote |
-| "A canary is safe on its own" | A canary with no CloudWatch alarm is only a delay |
-| "The rollback alarm should watch the whole service" | Dimension it on the **green** target group, or a failing 10 per cent canary barely moves it |
-| "A container health check validates the deployment" | It proves the process started; a smoke test over the test listener proves it works |
-| "Plaintext CodeBuild environment variables are acceptable for secrets" | Use `secrets-manager` or `parameter-store` references |
-| "The build role can hold deploy permissions for simplicity" | Separate the build role from the deploy role |
 
 ---
 

@@ -1034,26 +1034,6 @@ Two target groups and a listener that shifts traffic between them, with pre-traf
 | Reading application logs before service events | Long investigations of problems the API already named | Service events, then desired-versus-running, then `stoppedReason`, then target health, then logs |
 | Cluster per service at scale | Cross-cutting change becomes N changes; no estate-wide view | Cluster per team per environment |
 
-<!-- ### Certification Traps
-
-| Trap | The reality |
-|---|---|
-| "ECS clusters incur an hourly charge like EKS clusters" | ECS has no control-plane or cluster charge; EKS does. The asymmetry is architecturally significant |
-| "Cluster Autoscaler scales ECS tasks" | That is a Kubernetes component. On ECS, Application Auto Scaling scales tasks and capacity provider managed scaling scales instances |
-| "Fargate can run any CPU and memory values" | They must come from the fixed valid matrix |
-| "Fargate solves IP exhaustion" | Each Fargate task still consumes a VPC IP address; Fargate solves instance management, not address space |
-| "Fargate supports DaemonSets or the `DAEMON` strategy" | It does not; per-task collection must use sidecars |
-| "Target type `instance` works with `awsvpc` mode" | `awsvpc` requires target type `ip`; `instance` targets are for `bridge` and `host` modes |
-| "Service Connect requires an internal load balancer" | It requires no load balancer at all; that is much of its value |
-| "AWS App Mesh is the recommended service mesh for new ECS work" | App Mesh is on a deprecation trajectory; use Service Connect within ECS and VPC Lattice across boundaries |
-| "The task execution role is what the application uses to call AWS APIs" | That is the task role; the execution role pulls images, writes logs, and decrypts secrets |
-| "Launch type and capacity provider are the same thing" | Launch type is the simple choice; a capacity provider strategy allows weighted mixes with a guaranteed base |
-| "`base` and `weight` both distribute proportionally" | `base` is an absolute count satisfied first; only the remainder is distributed by weight |
-| "A higher target capacity is always better because it wastes less" | It also removes the headroom that makes task placement immediate; for user-facing services that is a poor trade |
-| "ECS Exec requires SSH access to the container instance" | It uses AWS Systems Manager; no SSH, no bastion, no inbound ports |
-
---- -->
-
 ## Summary
 
 First, **the cluster is a boundary, not a machine, and on ECS it is free**  which changes the shape of good designs. There is no control plane to operate, no version to upgrade, and no hourly charge, so isolation between teams and environments can be obtained by creating another cluster rather than by engineering multi-tenancy inside a shared one. The boundaries worth drawing are the ones that answer who may deploy here, what should fail together, and what should be observed together. The failure mode at both extremes is real: one cluster for everything gives every team a shared blast radius, and one cluster per service turns every cross-cutting change into N changes with no estate-wide view.

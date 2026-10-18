@@ -1,90 +1,40 @@
-"""MkDocs hook: keep the teacher area unlisted.
+"""MkDocs hook: keep the teacher area private.
 
-Every page under TEACHER_DIR is a teacher page. For each one this hook
-  - excludes it from the site search index,
-  - marks it `teacher` (overrides/main.html then adds a noindex robots tag and
-    loads the lesson runner, which student pages never load),
-  - hides the left navigation and right table of contents,
-  - adds a "Next lesson" button to every timed lesson, following the order
-    of the Lessons table in the Teaching Area index,
-and after the build it removes teacher pages from sitemap.xml / sitemap.xml.gz.
+docs/teach-5t27uuv8/ holds only password-encrypted HTML playbooks (StaticCrypt
+output from utils/encrypt-playbooks.sh; plaintext sources live in the
+git-ignored private/teach-src/). The repository is public, so this hook
+  - refuses to build if any file in the folder could be read without the
+    password: an .html page that is not encrypted, or any Markdown page;
+  - removes anything under the folder from sitemap.xml / sitemap.xml.gz.
 
-The pages are also left out of `nav` in mkdocs.yml, so nothing on the public
-site links to them. This is "unlisted", not "secret": the Markdown source is
-in the public repository, so never put quiz answers or anything sensitive in
-a teacher page.
+The short address /teach/ (docs/teach/index.html) redirects to the folder's
+encrypted hub page.
 """
 
 import gzip
 import re
 from pathlib import Path
 
+from mkdocs.exceptions import PluginError
+
 TEACHER_DIR = "teach-5t27uuv8/"
-INDEX_URI = TEACHER_DIR + "index.md"
-TIMED = re.compile(r'data-minutes="\d+"')
 
 
-def _is_teacher(page) -> bool:
-    return page.file.src_uri.startswith(TEACHER_DIR)
-
-
-def _lesson_order(config):
-    """Timed lessons in the order of the Teaching Area index's Lessons table.
-
-    Rows link a page in the teacher folder; pages without timed segments
-    (setup runbooks, stand-alone practicals) are not part of the sequence.
-    """
-    docs = Path(config["docs_dir"])
-    index = docs / INDEX_URI
-    if not index.exists():
-        return []
-    order = []
-    for title, target in re.findall(r"^\|[^|\n]*\|\s*\[([^\]]+)\]\(([^)#\s]+\.md)\)", index.read_text(encoding="utf-8"), re.M):
-        src = docs / TEACHER_DIR / target
-        if src.exists() and TIMED.search(src.read_text(encoding="utf-8")):
-            order.append((target, title))
-    return order
-
-
-def _next_lesson_button(markdown, page, config):
-    """Add a 'Next lesson' button after the Quiz segment of a timed lesson.
-
-    The lesson runner copies the button into its control bar. The last lesson
-    in the table gets a button back to the Teaching Area instead.
-    """
-    if not TIMED.search(markdown) or "next-lesson-link" in markdown:
-        return markdown
-    order = _lesson_order(config)
-    name = page.file.src_uri[len(TEACHER_DIR):]
-    targets = [t for t, _ in order]
-    if name not in targets:
-        return markdown
-    i = targets.index(name)
-    if i + 1 < len(order):
-        target, title = order[i + 1]
-        label = f"Next lesson: {title} &rarr;"
-    else:
-        target, label = "index.md", "Back to the Teaching Area &rarr;"
-    button = f'\n[{label}]({target}){{ .md-button .md-button--primary .next-lesson-link }}\n\n'
-    # Place it at the end of the Quiz segment (before the next level-2 heading),
-    # so it sits where the class ends rather than below the reference sections.
-    quiz = re.search(r"^## Quiz\b.*$", markdown, re.M)
-    if quiz:
-        nxt = re.search(r"^## ", markdown[quiz.end():], re.M)
-        if nxt:
-            cut = quiz.end() + nxt.start()
-            return markdown[:cut] + button.lstrip("\n") + markdown[cut:]
-    return markdown.rstrip("\n") + "\n" + button
-
-
-def on_page_markdown(markdown, page, config, files):
-    if _is_teacher(page):
-        page.meta["teacher"] = True
-        page.meta.setdefault("search", {})["exclude"] = True
-        hide = set(page.meta.get("hide") or [])
-        page.meta["hide"] = sorted(hide | {"navigation", "toc"})
-        markdown = _next_lesson_button(markdown, page, config)
-    return markdown
+def on_pre_build(config):
+    folder = Path(config["docs_dir"]) / TEACHER_DIR
+    if not folder.exists():
+        return
+    readable = [f.name for f in folder.glob("*.md")]
+    readable += [
+        f.name for f in folder.glob("*.html")
+        if "staticrypt" not in f.read_text(encoding="utf-8", errors="ignore")
+    ]
+    if readable:
+        raise PluginError(
+            "Readable teacher file(s) in docs/" + TEACHER_DIR + ": " + ", ".join(sorted(readable))
+            + ". Teacher pages must be encrypted playbooks: put the source in private/teach-src/"
+            " and run ./utils/encrypt-playbooks.sh."
+        )
 
 
 def on_post_build(config):

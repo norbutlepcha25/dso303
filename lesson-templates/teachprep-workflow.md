@@ -37,9 +37,9 @@ Read alongside:
 |---|---|
 | `CLAUDE.md` (or `AGENTS.md`) Part II | Unit-notes content rules, section list, ownership map across units |
 | `CLAUDE.md` Part I §5 | The Floci environment contract for CLI work (scripts, `course.env`, forbidden commands) |
-| `lesson-templates/README.md` | Lesson-plan format: timed segments, block types, notes links, checks |
+| `lesson-templates/README.md` + `.claude/skills/lesson-plan/SKILL.md` | Lesson-plan format: interactive HTML playbook, components, notes links, checks |
 | `docs/unit3/topic1.md` | Style reference for refined notes |
-| `docs/teach-5t27uuv8/unit3-topic1-lecture.md` | Worked example of a lesson plan |
+| `private/teach-src/unit5-cicd-iac.html` | Worked example of a lesson plan (playbook) |
 | `private/classlegend-quiz-template.md` | ClassLegend quiz import format (local only, never committed) |
 
 ---
@@ -97,7 +97,7 @@ After finishing Phase 1 on a topic, add the marker as the file's first line (aft
 
 ### Lesson plans (Phase 2)
 
-If `docs/teach-5t27uuv8/unit<N>-topic<M>-lecture.md` already exists, skip it. If the notes changed since it was written, check its "Notes:" links still resolve and fix only those.
+If `private/teach-src/unit<N>-topic<M>-lecture.html` (or a legacy `.md` in `docs/teach-5t27uuv8/`) already exists, skip it. If the notes changed since it was written, check its notes links still resolve and fix only those.
 
 ### Quiz banks (Phase 3)
 
@@ -145,7 +145,7 @@ Apply to every `docs/unit<N>/topic<M>.md` in the unit **that is not already refi
 
 ## Phase 2: One 2-hour lecture lesson per topic
 
-**File:** `docs/teach-5t27uuv8/unit<N>-topic<M>-lecture.md`. Format: everything in `lesson-templates/README.md` (timed `## Title { data-minutes="N" }` segments, `prompt` / `teacher` / `answer` / `quiz` blocks, notes links).
+**File:** `private/teach-src/unit<N>-topic<M>-lecture.html` (git-ignored plaintext). The user publishes it encrypted with `./utils/encrypt-playbooks.sh`; never write it into `docs/` directly. Format: the interactive HTML playbook in `lesson-templates/README.md` (one `<section class="page" data-minutes="N">` per segment below, Key terms with definitions, the seven-step module cycle, `.ask` / `details.reveal` / `.mcq` / `.hunt` interactions, `.note teacher`, `.quiz`, notes links). The segment table below sets the pages and their minutes.
 
 ### 2.1 Time budget: exactly 120 minutes, quiz always last
 
@@ -158,7 +158,7 @@ The default interleaved structure. Adapt segment titles to the topic, but keep t
 | Hands-on A: console | 15 | Guided task in the real AWS Console, building on Concept A |
 | Concept B | 15 | Second core idea, building on what students just saw |
 | Hands-on B: CLI | 20 | The same or a related task with the CLI against Floci; compare with the console |
-| Break | 5 | `.break` segment |
+| Break | 5 | Break page |
 | Recap and clean-up | 10 | Key-lesson recap, then **students delete their AWS resources** (see 2.4) |
 | **Quiz** | **30** | ClassLegend quiz, always the final segment |
 | **Total** | **120** | |
@@ -167,18 +167,18 @@ Lecture and hands-on together take 90 minutes; never cut the quiz to make room.
 
 ### 2.2 Teaching quality
 
-- **Concept segments:** explain why, then how, then when to use it. Put a short diagram or table on screen (`!!! prompt` or plain content). Give each segment one predict-then-check question with a `???+ answer` block.
-- **Analogies:** use them when the idea is abstract (for example load balancer as a restaurant host), in a `!!! prompt` block. Say in a `!!! teacher` note where the analogy breaks.
-- **Hands-on segments:** numbered steps, each with what to click or type, what students should see, and one "why did that happen?" question. Include a success-criteria checklist (`- [ ]`).
+- **Concept segments:** explain why, then how, then when to use it. Define every new term in a `dl.terms` Key terms list. Put a short diagram or table on screen. Give each segment one predict-then-check `.ask` with a `details.reveal` answer, and at least one instant-check `.mcq`.
+- **Analogies:** use them when the idea is abstract (for example load balancer as a restaurant host), in an `.ask` block. Say in a `.note teacher` where the analogy breaks.
+- **Hands-on segments:** numbered steps, each with what to click or type, what students should see, and one "why did that happen?" question. Include a success-criteria checklist (`.task` checkboxes). Follow the seven-step cycle: explain, Console, reproduce, CLI, verify, troubleshoot, clean up.
 - **Engagement:** a pair discussion in the hook; a prediction before each hands-on; at least one "what would break if..." question per lesson.
-- **Notes links:** every concept and hands-on segment links to the matching section of the refined notes (`{ .notes-link target="_blank" }`). Check that the anchors resolve.
+- **Notes links:** every concept and hands-on segment links to the matching section of the refined notes (`<div class="notes">` links to `../unit<N>/topic<M>.html#anchor`). Check that the anchors resolve.
 - **Running scenario:** reuse the course scenario (the college student portal or USMS) so lessons connect.
 
 ### 2.3 Hands-on environment
 
 | Work | Environment | Rules |
 |---|---|---|
-| **Console** | Real AWS Console (student access provided) | Region `us-east-1` unless the class uses another. Smallest or free-tier-eligible sizes. Never create long-lived access keys; never use root |
+| **Console** | Real AWS Console (student access provided) | Class Region `ap-south-1` (Mumbai). Floci CLI work stays `us-east-1` (the course environment contract). Smallest or free-tier-eligible sizes. Never create long-lived access keys; never use root |
 | **CLI** | Floci (local AWS emulator) | Follow the environment contract in `CLAUDE.md` Part I §5: `./scripts/setup/floci-up.sh`, `configs/course.env`, named profile `floci`. **Never** `floci start`, `docker compose down -v`, `docker volume prune` |
 | **Floci limits** | | Floci accepts any credentials and does not enforce IAM. Never design a task whose success depends on `AccessDenied`. Label Floci-only behaviour with the Floci-limitation admonition from `CLAUDE.md` |
 
@@ -195,18 +195,22 @@ Real AWS resources cost money and clutter shared accounts. Every lesson must:
 
 ### 2.5 Quiz segment (always last, 30 minutes)
 
-```markdown
-## Quiz { data-minutes="30" }
-
-!!! quiz "ClassLegend quiz: <topic title>"
-    Bank of <count> questions in `private/quizzes/unit<N>-topic<M>.questions.md` covering <concepts>. Run as many as fit about 25 minutes, then spend 5 minutes reviewing the most-missed questions.
+```html
+<section class="page" id="quiz" data-title="Quiz" data-minutes="30">
+<div class="card">
+  <h2>ClassLegend quiz</h2>
+  <div class="quiz"><b>ClassLegend quiz: &lt;topic title&gt;</b><br>Covers &lt;concepts&gt;. Run as many as fit about 25 minutes, then review the most-missed for 5 minutes.<br>
+    <a class="action" href="https://classlegend.vercel.app/" target="_blank">Open ClassLegend dashboard</a></div>
+  <p><a class="action secondary" href="unit<N>-topic<M+1>-lecture.html">Next lesson &rarr;</a></p>
+</div>
+</section>
 ```
 
-The lesson page names the quiz and its topics only. **No questions or answers in the lesson page**: the repository is public. The "Open ClassLegend dashboard" button is added automatically. So is the **Next lesson** button, from the row order in `docs/teach-5t27uuv8/index.md`: add each new lecture's row in teaching order.
+The lesson page names the quiz and its topics only. **No ClassLegend questions or answers in the lesson page**: the repository is public. Link the next lecture by hand (or `index.html` for the last one).
 
 ### 2.6 Register the lesson
 
-Add a row per lesson to the Lessons table in `docs/teach-5t27uuv8/index.md` (Unit, Lesson link, `120 min`, `Lecture with console and CLI`).
+Add a `.lesson` row per lesson to the hub `private/teach-src/index.html` (title, `120 min`, `Lecture with console and CLI`), in teaching order.
 
 ---
 
@@ -290,7 +294,7 @@ difficulty: EASY | MEDIUM | HARD
 | Check | How |
 |---|---|
 | Site builds | `mkdocs build` with no new errors |
-| Links and anchors | Every `.md#anchor` link in the changed notes, lesson pages and inbound links from other units resolves (check against the built HTML) |
+| Links and anchors | Every `.md#anchor` link in the changed notes and every `.html#anchor` link in the playbooks resolves (check against the built HTML) |
 | Lessons parse | Each lesson's `data-minutes` values sum to **120**, and the last segment is the 30-minute quiz |
 | Clean-up present | Each lesson has a Recap and clean-up segment, Tag Editor verification and an After-class checklist |
 | No leaks | No quiz questions or answers anywhere under `docs/`; `private/` is git-ignored |

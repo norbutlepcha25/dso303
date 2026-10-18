@@ -1978,6 +1978,9 @@ SNS server-side encryption uses KMS (key types and key policies are explained in
 
 #### Data protection policies
 
+!!! warning "No longer available to new customers"
+    AWS has closed SNS message data protection to new customers; existing users keep it. For new designs, detect and mask sensitive data before publishing (for example in the producer, or with a Lambda or Amazon Macie step) rather than relying on topic policies. See the AWS SNS documentation on the availability change.
+
 A ==data protection policy== on a standard topic uses managed (or custom) data identifiers to detect sensitive data such as names, addresses, credit card numbers or credentials in messages, and applies operations:
 
 | Operation | Effect |
@@ -4297,7 +4300,7 @@ Frequent root causes:
 #### Limitations
 
 - No ordering guarantee and at-least-once delivery, so it is unsuitable where strict sequence is required (use Kinesis or FIFO services).
-- Payload limit of 256 KB per event entry (with 64 KB billing chunks).
+- Payload limit of 1 MB per event (raised from 256 KB in January 2026 in most commercial Regions; 64 KB billing chunks).
 - Maximum five targets per rule and quotas on rules per bus, requiring careful design on busy hubs.
 - Not a high-throughput data pipeline: per-event pricing and invocation quotas make it expensive and constrained for millions of small telemetry records per second.
 - Push-only delivery with limited backpressure; slow consumers need SQS in front.
@@ -4344,7 +4347,7 @@ Indicative, as of 2026; verify in Service Quotas:
 
 | Quota | Typical value |
 |---|---|
-| Event size | 256 KB |
+| Event size | 1 MB (256 KB before January 2026; some Regions still 256 KB) |
 | Entries per `PutEvents` call | 10 |
 | Targets per rule | 5 |
 | Rules per event bus | Around 300 by default (soft) |
@@ -4449,7 +4452,7 @@ This is the integrated decision matrix for Unit VI, combining all four parts of 
 | Transformation | No | No | No | No | Input transformer; Pipes templates | No | Via Connect or stream processing |
 | Throughput | Nearly unlimited | High with high-throughput mode | Very high | Lower, per-topic limits | High, soft per-Region quotas | Linear with shards | Very high, broker-dependent |
 | Typical latency | Milliseconds to poll | Milliseconds | Tens of milliseconds | Tens of milliseconds | Sub-second | About 70 ms (EFO) to around 1 s | Milliseconds |
-| Max message size | 1 MiB (raised from 256 KiB in 2025; see the Amazon SQS part of this section) | 1 MiB | 256 KB | 256 KB | 256 KB | 1 MB historically; larger supported, verify | Configurable (1 MB default) |
+| Max message size | 1 MiB (raised from 256 KiB in 2025; see the Amazon SQS part of this section) | 1 MiB | 256 KB | 256 KB | 1 MB (since January 2026) | 1 MB historically; larger supported, verify | Configurable (1 MB default) |
 | Cross-account | Queue policy | Queue policy | Topic policy | Topic policy | Native, organisation-aware | Stream resource policy | Multi-VPC private connectivity, IAM |
 | AWS service events source | No | No | Some services publish to SNS | No | Yes, native from most services | Some services (CloudWatch Logs, DynamoDB, IoT) | No |
 | Pricing basis | Per request | Per request (higher) | Per publish and delivery | Per publish and delivery (higher) | Per event per hop | Shard-hours or GB | Broker or cluster hours plus storage |
@@ -4794,7 +4797,7 @@ GuardDuty and Security Hub can aggregate findings to a delegated administrator a
 
 - No ordering and at-least-once delivery; consumers must be idempotent and order-independent.
 - Per-event pricing per hop makes it costly for telemetry-scale volumes.
-- 256 KB payload limit and five targets per rule.
+- 1 MB payload limit (since January 2026) and five targets per rule.
 - Push delivery without consumer-controlled backpressure; SQS is needed in front of many consumers.
 - Governance (ownership, catalogue, contracts) requires organisational discipline and tooling beyond the service.
 - Multi-hop routing, quotas in hub accounts and cross-Region design add complexity.

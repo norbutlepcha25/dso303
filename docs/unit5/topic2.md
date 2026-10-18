@@ -801,29 +801,6 @@ A pipeline triggered by pull-request open, deploying to a short-lived namespace 
 | Approval stages used to compensate for missing tests | Slower releases and no additional safety | Approvals for business timing; tests for correctness |
 | Out-of-band `aws ecs update-service` tolerated | The audit chain and artefact guarantee are broken | Alarm on production mutations by non-deploy identities |
 
-### Certification Traps
-
-| Trap | The reality |
-|---|---|
-| "Actions in a stage always run sequentially" | Actions with the same `runOrder` run **in parallel** |
-| "A pipeline can rebuild for each environment" | That violates build-once-deploy-many; promote the artefact |
-| "V1 and V2 differ only in price" | V2 adds variables, triggers with filters, stage conditions, rollback, retry and skipping |
-| "Stage conditions require a Lambda function" | Alarm, deployment-window, variable-check, CodeBuild and Commands rules are built in |
-| "ECR tags are immutable by default" | Repositories are `MUTABLE` unless you set `IMMUTABLE` |
-| "Basic scanning covers application dependencies" | It is weak on language packages; **enhanced** scanning via Inspector covers them and rescans continuously |
-| "One VPC endpoint is enough for private ECR pulls" | `ecr.api`, `ecr.dkr` **and** S3 |
-| "CodePipeline cannot deploy to a private EKS cluster" | The native EKS action, added February 2025, handles private-cluster connectivity |
-| "GitOps is just a pipeline that runs `kubectl`" | It is a pull-based reconciliation loop; drift detection and correction are the distinguishing properties |
-| "Argo CD must be self-managed on EKS" | The **Amazon EKS Capability for Argo CD**, announced November 2025, is AWS-managed |
-| "ECS blue/green requires CodeDeploy" | ECS has had **native** blue/green since July 2025 |
-| "`PARALLEL` execution mode makes pipelines faster" | It runs **executions** concurrently, not actions; against a shared target it is a race |
-| "Deploying by tag is equivalent to deploying by digest" | A tag is resolved at task launch; deploy by digest |
-| "`kubectl apply` exiting zero means the deployment succeeded" | Check rollout status or Argo CD health; sync and health are separate facts |
-| "Grant the pipeline `cluster-admin` on EKS" | Map it to namespace-scoped RBAC through an access entry |
-| "One pipeline service role satisfies separation of duties" | Use per-action `roleArn` overrides, ideally across accounts |
-| "An access-denied reading cross-account artefacts is an S3 problem" | It is usually the **KMS key policy** on the artefact store |
-| "Any lifecycle policy is safe" | One that expires an image a live task definition references breaks scaling and replacement |
-
 ---
 
 ## Summary

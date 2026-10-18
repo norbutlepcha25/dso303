@@ -7,12 +7,12 @@ sends — do not mix the two instruction sets.
 | --- | --- | --- | --- |
 | Bare topic, or explicit "lab" / "LAB" (e.g. `VPC`, `lab: EKS scaling`) | **Lab generation** | Part I (§1–20 below) | `docs/Lab/lab-NN-<topic>.md` |
 | `unit<N> <topic>` or `Unit N: <topic>` (e.g. `unit2 Load Balancing`) | **Unit notes generation** | Part II below | `docs/unit<N>/topic<M>.md` + question files |
-| `teachprep unit<N>` (keywords: `topic<M>`, `lesson topic<M>`, `notes`, `lessons-only`, `refresh`; see the workflow's command table) | **Unit refinement + 2-hour lecture lessons + quizzes** | `lesson-templates/teachprep-workflow.md` (follow it top to bottom) | Refined `docs/unit<N>/topic<M>.md`, `docs/teach-5t27uuv8/unit<N>-topic<M>-lecture.md`, local-only `private/quizzes/unit<N>-topic<M>.questions.md` |
-| "lesson plan", "workshop plan", or a teaching plan to convert | **Lesson plan** (teacher-only) | `lesson-templates/README.md` | `docs/teach-5t27uuv8/unit<N>-<topic>-<format>.md` + row in that folder's `index.md` |
+| `teachprep unit<N>` (keywords: `topic<M>`, `lesson topic<M>`, `notes`, `lessons-only`, `refresh`; see the workflow's command table) | **Unit refinement + 2-hour lecture lessons + quizzes** | `lesson-templates/teachprep-workflow.md` (follow it top to bottom) | Refined `docs/unit<N>/topic<M>.md`, `private/teach-src/unit<N>-topic<M>-lecture.html` (published encrypted), local-only `private/quizzes/unit<N>-topic<M>.questions.md` |
+| "lesson plan", "workshop plan", "playbook", a unit or topic for teaching, or a teaching plan to convert | **Lesson plan** (teacher-only interactive HTML playbook) | `.claude/skills/lesson-plan/SKILL.md` → `lesson-templates/README.md` | `private/teach-src/unit<N>-<topic>.html` (git-ignored), published encrypted to `docs/teach-5t27uuv8/` by `utils/encrypt-playbooks.sh` + `.lesson` row in the hub `private/teach-src/index.html` |
 
 If it's ambiguous which mode applies, ask rather than guess — the output structures are
 incompatible (lab has Steps/Checkpoints/exercises; notes have the section list in Part II; lesson
-plans use timed `## Title { data-minutes="N" }` segments). Lesson plans live in a public repo:
+plans are interactive HTML playbooks with 7-step modules). Lesson plans live in a public repo:
 never include quiz answers, credentials or student data in them.
 
 ---
@@ -1270,6 +1270,29 @@ under a `## <N>.<M> <Topic Title>` heading (topics in numeric order, blocks sepa
 
 Create the file with its H1 if it does not exist, and add it to the Practice Questions /
 Interview Questions nav sections (flag the nav change as described under Output handling).
+
+**Answers are collapsed under every question** so students attempt first, then check (an
+"Expand all answers" button is added automatically). No Exam-Style, Certification-style or
+mid-term question sections. Exact syntax (4-space block indent, 8 for content inside a list item):
+
+```markdown
+1. Practice question text.
+
+    ??? success "Check your answer"
+
+        A good answer covers:
+
+        - **Point:** one sentence (3 to 6 key points a correct answer must contain).
+
+**1. Interview question?**
+
+??? success "Model answer"
+
+    Model answer paragraphs, indented 4 spaces.
+```
+
+Multiple-choice: options as a list (`- **A.** ...`), then `??? success "Answer"` holding
+`**Answer: X.** explanation`.
 
 ### Avoiding duplication across notes
 

@@ -7,8 +7,8 @@ sends — do not mix the two instruction sets.
 | --- | --- | --- | --- |
 | Bare topic, or explicit "lab" / "LAB" (e.g. `VPC`, `lab: EKS scaling`) | **Lab generation** | Part I (§1–20 below) | `docs/Lab/lab-NN-<topic>.md` |
 | `unit<N> <topic>` or `Unit N: <topic>` (e.g. `unit2 Load Balancing`) | **Unit notes generation** | Part II below | `docs/unit<N>/<topic>.md` |
-| `teachprep unit<N>` (keywords: `topic<M>`, `lesson topic<M>`, `notes`, `lessons-only`, `refresh`; see the workflow's command table) | **Unit refinement + 2-hour lecture lessons + quizzes** | `lesson-templates/teachprep-workflow.md` (follow it top to bottom) | Refined `docs/unit<N>/topic<M>.md`, `docs/teach-5t27uuv8/unit<N>-topic<M>-lecture.md`, local-only `private/quizzes/unit<N>-topic<M>.questions.md` |
-| "lesson plan", "workshop plan", or a teaching plan to convert | **Lesson plan** (teacher-only) | `lesson-templates/README.md` | `docs/teach-5t27uuv8/unit<N>-<topic>-<format>.md` |
+| `teachprep unit<N>` (keywords: `topic<M>`, `lesson topic<M>`, `notes`, `lessons-only`, `refresh`; see the workflow's command table) | **Unit refinement + 2-hour lecture lessons + quizzes** | `lesson-templates/teachprep-workflow.md` (follow it top to bottom) | Refined `docs/unit<N>/topic<M>.md`, `private/teach-src/unit<N>-topic<M>-lecture.html` (published encrypted), local-only `private/quizzes/unit<N>-topic<M>.questions.md` |
+| "lesson plan", "workshop plan", "playbook", a unit or topic for teaching, or a teaching plan to convert | **Lesson plan** (teacher-only interactive HTML playbook) | `.claude/skills/lesson-plan/SKILL.md` → `lesson-templates/README.md` | `private/teach-src/unit<N>-<topic>.html` (git-ignored), published encrypted to `docs/teach-5t27uuv8/` by `utils/encrypt-playbooks.sh` + `.lesson` row in the hub `private/teach-src/index.html` |
 
 Lesson plans and the teaching area live in a public repository: never put quiz answers, credentials
 or student data in them. Quiz files go only in the git-ignored `private/` folder.

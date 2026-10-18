@@ -1,0 +1,128 @@
+<!doctype html>
+<!--
+PLAYBOOK TEMPLATE. Guide: lesson-templates/README.md. Worked example: private/teach-src/unit5-cicd-iac.html
+Copy to private/teach-src/unit<N>-<topic>.html (git-ignored), delete this comment, fill in.
+Add a .lesson row to the hub private/teach-src/index.html, then publish both with ./utils/encrypt-playbooks.sh.
+Header: kicker, title, meta chips only. No subtitle line.
+Public repository: no ClassLegend quiz content, credentials or student data.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow">
+<title>Unit N Playbook</title>
+<link rel="stylesheet" href="playbook/playbook.css">
+<script>try{var t=localStorage.getItem("dso303-playbook-theme");if(t)document.documentElement.dataset.theme=t}catch(e){}</script>
+</head>
+<body>
+<header>
+  <small>DSO303 · Unit N · Instructor Playbook</small>
+  <h1>Lesson title</h1>
+  <div class="meta"><span>180 min</span><span>Console + CLI</span><span>Scenario: USMS ...</span><a href="index.html">Teaching Area</a></div>
+</header>
+<div class="runner"></div>
+<div class="layout">
+<nav><a class="back" href="index.html">&larr; Teaching Area</a></nav>
+<main>
+
+<!-- PAGE 1: roadmap (data-minutes = intro time) -->
+<section class="page" id="roadmap" data-title="Teaching roadmap" data-minutes="10">
+<div class="card">
+  <span class="pill">Recommended: N minutes</span>
+  <h2>Workshop plan</h2>
+  <p>How the session runs.</p>
+  <table>
+    <tr><th>Time</th><th>Module</th><th>Student deliverable</th></tr>
+    <tr><td>0–10</td><td>...</td><td>...</td></tr>
+  </table>
+  <h3>Outcomes</h3>
+  <ol><li>...</li></ol>
+  <h3>Before class</h3>
+  <div class="task"><label><input type="checkbox"> Environment check ...</label></div>
+  <div class="note danger"><b>Cost and safety:</b> sandbox account, tagged resources, cleanup.</div>
+</div>
+<div class="card">
+  <h2>The hook</h2>
+  <div class="ask"><b>Discuss in pairs · 3 min</b>Scenario question.</div>
+  <details class="reveal"><summary>What to draw out</summary><div><ul><li>...</li></ul></div></details>
+</div>
+</section>
+
+<!-- MODULE PAGE: repeat per module -->
+<section class="page" id="module-a" data-title="Module title" data-minutes="20">
+<div class="card">
+  <h2>Module 1 — Title</h2>
+  <div class="notes"><a href="../unitN/topicM.html#anchor" target="_blank">N.M Section name</a></div>
+  <h3>Key terms</h3>
+  <dl class="terms">
+    <dt>Term</dt><dd>One-line definition in plain words.</dd>
+  </dl>
+  <div class="note latest" data-date="Month YYYY">Recent change, verified against AWS documentation.</div>
+
+  <div class="phase"><div class="phasehead">Step 1 — Explain briefly <small>5 min</small></div><div class="phasebody">
+    <p>Why it exists, how it works, when to use it.</p>
+    <div class="ask"><b>Predict first</b>Question before showing.</div>
+    <details class="reveal"><summary>Expected answer</summary><div>...</div></details>
+  </div></div>
+  <div class="phase"><div class="phasehead">Step 2 — Demonstrate in Console</div><div class="phasebody">
+    <p>Service → page → what to point at.</p>
+  </div></div>
+  <div class="phase"><div class="phasehead">Step 3 — Students reproduce</div><div class="phasebody">
+    <div class="task"><label><input type="checkbox"> Task.</label></div>
+  </div></div>
+  <div class="phase"><div class="phasehead">Step 4 — Repeat with CLI</div><div class="phasebody">
+<pre><code>aws ... --region "$AWS_REGION"</code></pre>
+    <p class="muted">One line on what the important flags do.</p>
+  </div></div>
+  <div class="phase"><div class="phasehead">Step 5 — Verify</div><div class="phasebody">Success criterion stated as a fact.</div></div>
+  <div class="phase"><div class="phasehead">Step 6 — Troubleshoot</div><div class="phasebody">Symptom → cause → fix.</div></div>
+  <div class="phase"><div class="phasehead">Step 7 — Clean up</div><div class="phasebody">Delete in dependency order. Tag Editor check.</div></div>
+
+  <h3>Check your understanding <span class="mcq-score score"></span></h3>
+  <div class="mcq" data-answer="1">
+    <div class="q">Question?</div>
+    <button class="opt">Option A</button>
+    <button class="opt">Option B (correct: data-answer is the 0-based index)</button>
+    <button class="opt">Option C</button>
+    <div class="why">Why B is right, and why the tempting wrong answer is wrong.</div>
+  </div>
+  <div class="note teacher">What to stress. Transition line to the next module.</div>
+</div>
+</section>
+
+<!-- Optional: click-the-defect exercise. Lines with data-defect are defects. -->
+<!--
+<div class="hunt">
+<span class="ln">version: 0.2</span>
+<span class="ln" data-defect="Why it is wrong and the fix.">  bad line</span>
+</div>
+-->
+
+<section class="page" id="assess" data-title="Assess and troubleshoot" data-minutes="30">
+<div class="card">
+  <h2>Assessment and safe failure injection</h2>
+  <table><tr><th>Scenario</th><th>Expected diagnostic approach</th></tr><tr><td>...</td><td>...</td></tr></table>
+  <div class="quiz"><b>ClassLegend quiz: title</b><br>Topics covered (no questions or answers here).<br>
+    <a class="action" href="https://classlegend.vercel.app/" target="_blank">Open ClassLegend dashboard</a></div>
+  <h3>Exit ticket</h3>
+  <div class="task"><label><input type="checkbox"> I can ...</label></div>
+  <h3>Cleanup checklist</h3>
+  <div class="task"><label><input type="checkbox"> ...</label></div>
+</div>
+</section>
+
+<section class="page" id="coverage" data-title="Coverage checklist">
+<div class="card">
+  <h2>Unit N coverage checklist</h2>
+  <table><tr><th>Topic</th><th>Covered in</th><th>Do not omit</th></tr><tr><td>...</td><td>...</td><td>...</td></tr></table>
+  <h3>Official pages</h3>
+  <ul><li><a href="../unitN/overview.html" target="_blank">Unit N overview</a></li></ul>
+</div>
+</section>
+
+</main></div>
+<footer>DSO303 instructor playbook (teacher only). Commands may create billable resources. Verify current AWS features and pricing before class. Use only authorised sandbox accounts.</footer>
+<script src="playbook/playbook.js"></script>
+</body>
+</html>

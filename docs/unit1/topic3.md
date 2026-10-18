@@ -269,7 +269,7 @@ A **function** is your code (a ZIP package, or a container image up to 10 GB), a
 | Maximum duration | 15 minutes (hard) | Longer jobs go to Fargate, AWS Batch or Step Functions |
 | Memory | 128 MB to 10,240 MB | About one vCPU near 1,769 MB, up to about six at maximum |
 | Package size | 50 MB zipped upload, 250 MB unzipped with layers, 10 GB as an image | Large models need the image path or EFS |
-| Payload | 6 MB synchronous, 256 KB asynchronous (hard) | Store large data in S3 and pass a reference |
+| Payload | 6 MB synchronous, 1 MB asynchronous (hard) | Store large data in S3 and pass a reference |
 | Concurrency | 1,000 per account per Region by default (soft) | Raise it before a launch; it is shared by all functions |
 | Environment variables | 4 KB total | Larger configuration goes in Parameter Store or Secrets Manager |
 | State | No guaranteed environment reuse | Never rely on memory surviving between invocations |

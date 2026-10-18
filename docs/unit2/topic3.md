@@ -165,6 +165,7 @@ The scaling layer is **Application Auto Scaling**, a separate service that regis
 | **Target tracking** | You give a metric and a target value; the service creates and manages CloudWatch alarms and computes the capacity change needed to hold the metric near the target | Almost everything; the default choice |
 | **Step scaling** | You define alarm thresholds and the adjustment for each step | Asymmetric or aggressive responses target tracking cannot express |
 | **Scheduled scaling** | You set minimum and maximum capacity at a time or on a cron schedule | Calendar-driven load; setting a floor before a known peak |
+| **Predictive scaling** | Machine learning forecasts load from at least 24 hours of metric history and scales out ahead of the forecast | Recurring daily or weekly cycles where reactive policies lag |
 
 **Target tracking** is the workhorse and is worth understanding rather than treating as magic. When you create a target-tracking policy, Application Auto Scaling creates two CloudWatch alarms  a high alarm and a low alarm  and continuously computes a desired capacity that would bring the metric to the target, assuming the metric is roughly proportional to load per task. It scales out aggressively and in conservatively by design, and it will not scale in while a scale-out cooldown is active.
 
@@ -402,6 +403,7 @@ Read architecturally, these fall into three groups matching the three loops. **P
 | **Target tracking** | Policy holding a metric near a target value by computing capacity proportionally |
 | **Step scaling** | Policy with explicit adjustments per alarm threshold band |
 | **Scheduled scaling** | Time-based adjustment of minimum and maximum capacity |
+| **Predictive scaling** | Forecast-based policy that adds capacity ahead of recurring load patterns |
 | **`ALBRequestCountPerTarget`** | Requests per target over a period; the standard signal for request-serving services |
 | **`ECSServiceAverageCPUUtilization`** | Predefined CPU metric for target tracking; a `...HighResolution` variant exists for 20-second metrics |
 | **Backlog per task** | Queue depth divided by running task count; the correct queue-consumer signal |
@@ -754,24 +756,6 @@ Read architecturally, this shows the three loops closing at different speeds and
 | Scaling policies clicked into the console | Inconsistent across services, invisible in review, lost on recreation | Infrastructure as code with a shared module |
 | Not reading `describe-scaling-activities` when scaling misbehaves | Long investigations of decisions already logged with reasons | Read it first |
 | Treating a service sitting at maximum capacity as normal | The real problem is masked until something breaks | Alarm on it and investigate |
-
-<!-- ### Certification Traps
-
-| Trap | The reality |
-|---|---|
-| "Placement strategies can prevent a task from being placed" | Constraints filter and can prevent placement; strategies only sort |
-| "`spread` and `binpack` are alternatives" | They are an ordered list applied as successive sort keys; the standard is spread then binpack |
-| "Placement strategies apply on Fargate" | Instance-level strategies and constraints do not; Fargate distributes across the subnets supplied |
-| "The deployment circuit breaker detects a bad release" | It detects tasks that fail to start or fail health checks, not behavioural regressions |
-| "Cluster Autoscaler scales ECS tasks" | That is Kubernetes. On ECS, Application Auto Scaling scales tasks and capacity provider managed scaling scales instances |
-| "Target tracking works with any metric" | It requires a metric that is load *per task* and falls as capacity is added |
-| "`maximumPercent: 100` gives a zero-downtime deployment" | With minimum healthy at 100 it cannot start new tasks at all; with minimum below 100 it reduces capacity |
-| "Blue/green is always safer, so always use it" | It is safer only if validation hooks are written; otherwise it is a costlier rolling update |
-| "Rollback redeploys and rebuilds the previous version" | Rollback points at an existing immutable revision; with CodeDeploy it is a routing change |
-| "Scale-in and scale-out cooldowns should be equal" | Deliberate asymmetry is correct: short out, long in |
-| "Scheduled scaling replaces target tracking" | It sets the floor; target tracking handles variance above it |
-| "`minimumHealthyPercent: 0` is always wrong" | It is correct for singleton tasks that must never run twice concurrently |
-| "A service with three subnets is multi-AZ" | Only if tasks are actually distributed; on EC2 that requires a spread strategy and verification | -->
 
 ---
 
