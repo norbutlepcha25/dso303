@@ -2,6 +2,6 @@
 
 !!! success "Learning Outcome"
 
-     {% for lo in unit1 %}
+     {% for lo in (unit1 or []) %}
      🎯 {{ lo }}
      {% endfor %}
