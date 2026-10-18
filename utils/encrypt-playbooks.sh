@@ -38,8 +38,16 @@ if [ -z "${STATICRYPT_PASSWORD:-}" ]; then
   read -rsp "Repeat password:   " again; echo
   [ "$STATICRYPT_PASSWORD" = "$again" ] || { echo "Passwords differ." >&2; exit 1; }
 fi
+# Short passwords are easier to brute-force offline (the encrypted pages are
+# public), so they need an explicit opt-in: ALLOW_SHORT_PASSWORD=1.
+short=()
 if [ "${#STATICRYPT_PASSWORD}" -lt 14 ]; then
-  echo "Use at least 14 characters (a short phrase is fine)." >&2; exit 1
+  if [ "${ALLOW_SHORT_PASSWORD:-0}" = "1" ]; then
+    echo "Warning: password under 14 characters (ALLOW_SHORT_PASSWORD=1)." >&2
+    short=(--short)
+  else
+    echo "Use at least 14 characters, or set ALLOW_SHORT_PASSWORD=1 to accept a shorter one." >&2; exit 1
+  fi
 fi
 export STATICRYPT_PASSWORD
 
@@ -47,7 +55,7 @@ export STATICRYPT_PASSWORD
 cd "$ROOT"
 rel=()
 for f in "${files[@]}"; do rel+=("${f#"$ROOT"/}"); done
-npx --yes "$STATICRYPT" "${rel[@]}" \
+npx --yes "$STATICRYPT" "${rel[@]}" ${short[@]+"${short[@]}"} \
   --directory "${OUT#"$ROOT"/}" \
   --config .staticrypt.json \
   --remember 30 \

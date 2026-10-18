@@ -93,6 +93,7 @@ details.reveal>div{padding:0 14px 12px}
 .quiz{border-left:4px solid var(--blue);background:var(--bluebg);border-radius:0 9px 9px 0;padding:12px 14px;margin:12px 0}
 .quiz a.action{display:inline-block;text-decoration:none;margin-top:6px}
 footer{max-width:1220px;margin:auto;padding:0 16px 35px;color:var(--muted);font-size:.9rem}
+figure.shot{margin:12px 0}figure.shot img{display:block;max-width:80%;height:auto;border:1px solid var(--line);border-radius:9px}figure.shot figcaption{color:var(--muted);font-size:.88rem;margin-top:4px}
 /* Teaching Area hub (index.html) */
 .hub{max-width:1000px;margin:20px auto;padding:0 16px}
 .unit h2{margin:0 0 10px}
