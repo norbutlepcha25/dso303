@@ -1,0 +1,13 @@
+{#- Footer copyright. The year is the build year, then replaced in the browser
+    with the current year so the footer never shows a stale year. -#}
+<div class="md-copyright">
+  <div class="md-copyright__highlight">
+    &copy; <span class="js-copyright-year">{{ build_date_utc.year }}</span>
+    {{ config.copyright }}
+  </div>
+  <script>
+    document.querySelectorAll(".js-copyright-year").forEach(function (el) {
+      el.textContent = new Date().getFullYear();
+    });
+  </script>
+</div>

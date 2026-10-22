@@ -223,9 +223,9 @@
     ### 4. System Architecture / Design
 
     <figure markdown="span">
-        ![RBS](../img/report/iam.png){width="80%"}
-        <figcaption>IAM Architecture</figcaption>
-        <p align='right' style="font-size:0.8em"><i>Image Source: N/A</i></p>
+        ![IAM in an AWS account: a user, the Admins, Developers and DevOps groups with their members, and a role used by an application, each with attached policies](../img/labs/iam-users-groups-roles.png){width="80%"}
+        <figcaption>IAM Users, Groups and Roles</figcaption>
+        <p align='right' style="font-size:0.8em"><i>Image Source: Ashish Patel, Awesome Cloud (Medium)</i></p>
     </figure>
 
     ### 5. Implementation Procedure
@@ -241,9 +241,9 @@
 
     Create IAM User
     <figure markdown="span">
-        ![RBS](../img/report/ss.png){width="80%"}
-        <figcaption>Screen Shot of user creation</figcaption>
-        <p align='right' style="font-size:0.8em"><i>Image Source: N/A</i></p>
+        ![Terminal running the aws iam create-user command with a user name](../img/labs/aws-cli-create-user.png){width="80%"}
+        <figcaption>Creating an IAM User with the AWS CLI</figcaption>
+        <p align='right' style="font-size:0.8em"><i>Image Source: Screenshot, macOS Terminal (AWS CLI)</i></p>
     </figure>
 
     ---
@@ -275,9 +275,9 @@
     - User Details
 
     <figure markdown="span">
-        ![RBS](../img/report/console.png){width="80%"}
-        <figcaption>AWS console</figcaption>
-        <p align='right' style="font-size:0.8em"><i>Image Source: N/A</i></p>
+        ![IAM users page in the AWS Management Console listing three users](../img/labs/iam-console-users.png){width="80%"}
+        <figcaption>IAM Users in the AWS Management Console</figcaption>
+        <p align='right' style="font-size:0.8em"><i>Image Source: Screenshot, AWS Management Console (IAM)</i></p>
     </figure>
 
     ---

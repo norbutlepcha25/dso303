@@ -101,8 +101,9 @@ USMS needs a **web tier** reachable from the internet, a **data tier** that is n
 ## 5. Architecture
 
 <figure markdown="span">
-    ![archiecture](../img/labs/lab02-vpcArchiecture.jpeg){width="80%"}
-    <figcaption>Architecture of the lab work</figcaption>
+    ![Lab 02 architecture: usms-vpc with public and private subnets, internet gateway, NAT gateway and route tables](../img/labs/lab02-vpc-architecture.jpeg){width="80%"}
+    <figcaption>Lab 02 VPC Architecture</figcaption>
+    <p align='right' style="font-size:0.8em"><i>Image Source: AI generated (Google Gemini)</i></p>
 </figure>
 
 Read the diagram once now and again at the end of the lab.

@@ -310,3 +310,38 @@ figure figcaption {
     text-align: center;
     font-size: 0.8rem;
 }
+
+/* =========================================================
+   House-style figure() and embed() macros (main.py)
+   ========================================================= */
+
+.md-typeset figure.dso-figure,
+.md-typeset figure.dso-embed {
+    margin: 1.5rem auto;
+}
+
+.md-typeset figure.dso-embed {
+    width: 100%;
+    max-width: 100%;
+}
+
+.md-typeset figure.dso-embed > div {
+    margin: 0;
+}
+
+.md-typeset figure.dso-figure img {
+    max-width: 100%;
+    height: auto;
+}
+
+.md-typeset figure.dso-figure > p,
+.md-typeset figure.dso-embed > p {
+    width: 100%;
+    margin: 0.2rem 0 0;
+}
+
+.md-typeset figure.dso-embed > p.dso-embed-intro {
+    width: 100%;
+    margin: 0 0 0.8rem;
+    text-align: left;
+}

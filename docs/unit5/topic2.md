@@ -1,5 +1,11 @@
 # Implementing CI/CD Pipelines on AWS: CodePipeline, ECR and Container Deployment
 
+!!! tip "Classroom demo files"
+    [Download CI/CD source](../downloads/pipeline-source.zip){ download } · [All classroom files](../downloads/cloudboard-classroom.zip){ download }
+
+    Demo code and configuration for the instructor-led pipeline demonstration.
+
+
 ---
 
 ## Definition

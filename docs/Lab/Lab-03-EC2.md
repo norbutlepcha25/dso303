@@ -91,7 +91,11 @@ A two-tier USMS deployment. **`usms-web-01`** sits in `usms-public-subnet-a`, se
 
 ## 5. Architecture
 
-![Architecture](image-1.png)
+<figure markdown="span">
+    ![Lab 03 architecture: usms-web-01 in the public subnet and usms-db-01 in the private subnet of usms-vpc, with the internet gateway, NAT gateway, route tables, security groups and private network ACL](../img/labs/lab03-ec2-architecture.png){width="80%"}
+    <figcaption>Lab 03 EC2 Architecture</figcaption>
+    <p align='right' style="font-size:0.8em"><i>Image Source: AI generated</i></p>
+</figure>
 
 ---
 

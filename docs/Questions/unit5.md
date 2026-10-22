@@ -131,10 +131,10 @@
         A good answer covers:
 
         - **The case against:** deploying less often increases batch size; more changes per release raises the probability of failure, makes the cause harder to find and makes rollback harder, so the proposal worsens the problem.
-        - **DORA evidence:** deployment frequency, lead time, change failure rate and time to restore move together; high performers deploy more often and fail less, so speed and stability are not a trade-off.
+        - **DORA evidence:** the five metrics (deployment frequency, change lead time, failed deployment recovery time, change fail rate, deployment rework rate) tend to move together; teams that deploy more often also fail less and recover faster, so throughput and stability are not a trade-off.
         - **Order of change:** measure the baseline; automate build and deployment (build once, IaC) so a release is not a 20-person event; establish fast rollback (blue/green) and backward-compatible migrations; then trunk-based development and feature flags; then raise frequency in steps (monthly, weekly, daily) with canaries and alarms.
         - **Why that order:** safety before speed; increasing frequency before rollback and automation exist would multiply the existing risk and toil.
-        - **Evidence per step:** deployment duration and people involved, rollback drill times, change failure rate, time to restore and lead time, with agreed criteria for continuing or pausing.
+        - **Evidence per step:** deployment duration and people involved, rollback drill times, change fail rate, deployment rework rate, failed deployment recovery time and change lead time, with agreed criteria for continuing or pausing.
 
 2. Design the complete delivery architecture for a regulated financial-services platform with twelve microservices, a requirement that no individual can both author and deploy a change, an auditor who must be able to prove what was running at any past moment, and a regulatory obligation to patch critical vulnerabilities within 48 hours. Cover source control, build, artefact custody and provenance, deployment strategy, identity separation, audit, and the break-glass path. State explicitly which of the auditor's questions your design can answer instantly and which require investigation.
 

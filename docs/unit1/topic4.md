@@ -1,6 +1,12 @@
 <!-- teachprep:refined 2026-10-11 -->
 # Storage Services  Amazon S3, Amazon EBS, and Amazon EFS
 
+!!! tip "Classroom demo files"
+    [Download website files](../downloads/website-assets.zip){ download } · [All classroom files](../downloads/cloudboard-classroom.zip){ download }
+
+    Demo assets for the instructor-led storage demonstration.
+
+
 !!! info "Scope of this chapter"
     This is the Unit 1 survey of AWS storage: object, block and file storage, what S3, EBS and EFS each are, and how to choose between them. The full treatment of each service is in [6.1 AWS Storage Solutions](../unit6/topic1.md): [Amazon S3](../unit6/topic1.md#object-storage-with-amazon-s3), [Amazon EBS](../unit6/topic1.md#block-storage-with-amazon-ebs) and [Amazon EFS](../unit6/topic1.md#file-storage-with-amazon-efs).
 

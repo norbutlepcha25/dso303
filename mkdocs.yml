@@ -64,8 +64,12 @@ extra_css:
   - stylesheets/aws-icons.css
   - stylesheets/print.css
 
+# The "(c) <year>" prefix is added by overrides/partials/copyright.html,
+# which keeps the year current.
 copyright: |
-  &copy; 2026 <a href="https://github.com/cslivenote" target="_blank" rel="noopener">Norbu Tshering Lepcha</a>
+  <a href="https://github.com/cslivenote" target="_blank" rel="noopener">Norbu Tshering Lepcha</a>
+  &middot; <a href="mailto:norbutsheringlepcha.cst@rub.edu.bt">norbutsheringlepcha.cst@rub.edu.bt</a>
+  <br>SWE &middot; CTD &middot; CST
 
 extra:
   generator: false
@@ -137,6 +141,7 @@ extra_javascript:
 # the build fails if one is not. See hooks/teacher_pages.py.
 hooks:
   - hooks/teacher_pages.py
+  - hooks/aws_service_icons.py
 
 not_in_nav: |
   /teach-5t27uuv8/
@@ -272,6 +277,8 @@ nav:
       - Lab 12 - ECS Pipeline Deploy: Lab/Lab-12-ECSpipeline.md
       - Lab 13 - Monitoring: Lab/Lab-13-monitoring.md
       - Checkpoint 1: Lab/Lab-14-checkpoint.md
+
+  - Classroom files: demos.md
 
   - Class Progress: progress.md
 

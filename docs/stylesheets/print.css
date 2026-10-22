@@ -58,6 +58,14 @@
   .md-dialog,
   .md-content__button,
   .md-typeset .pdf-download,
+  /* Videos and embedded pages cannot play on paper: drop them, together
+     with the lead-in sentence that embed() keeps inside the figure. */
+  .md-typeset figure.dso-embed,
+  .md-typeset .no-print,
+  .md-typeset iframe,
+  .md-typeset .youtube-container,
+  .md-typeset .external-site-container,
+  .md-typeset .embedded-content,
   .md-clipboard,
   .md-code__nav,
   .md-code__button,

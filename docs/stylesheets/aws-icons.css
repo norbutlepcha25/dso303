@@ -358,3 +358,36 @@ body.aws-modal-open {
 .aws-modal-hint kbd {
   font-size: 0.9em;
 }
+
+/* ---------- service icons in the unit notes ----------
+   Added by hooks/aws_service_icons.py: before AWS service names in section
+   headings, and as an icon column in Definition-section service tables. */
+
+.md-typeset .aws-svc {
+  white-space: nowrap;
+}
+
+.md-typeset img.aws-svc-icon {
+  display: inline-block;
+  width: 1.1em;
+  height: 1.1em;
+  margin: 0 0.35em 0 0;
+  vertical-align: -0.15em;
+  border-radius: 0.15em;
+}
+
+/* Material gives every th a 5rem min-width; the icon column needs none. */
+.md-typeset table:not([class]) .aws-svc-col {
+  width: 2rem;
+  min-width: 0;
+  padding-right: 0;
+  vertical-align: top;
+}
+
+.md-typeset img.aws-svc-col-icon {
+  display: block;
+  width: 2rem;
+  height: 2rem;
+  max-width: none;
+  border-radius: 0.2rem;
+}

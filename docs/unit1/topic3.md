@@ -6,8 +6,9 @@
 **Compute** services run your application code. They provide CPU, memory and an execution context for a process. Storage services hold data at rest, networking services move it, and compute services transform it.
 
 <figure markdown="span">
-    ![Overview of the AWS compute services](../img/U1/computeServices.png){width="80%"}
+    ![AWS compute services grouped by category: instances, containers, serverless, edge and hybrid, and cost and capacity management](../img/U1/computeServices.png){width="80%"}
     <figcaption>AWS Compute Services</figcaption>
+    <p align='right' style="font-size:0.8em"><i>Image Source: AI generated</i></p>
 </figure>
 
 AWS offers compute at several **levels of abstraction**. The higher the abstraction, the more of the stack AWS manages, and the less control you keep.
@@ -73,8 +74,9 @@ Each service solved a problem the previous one left open.
 A **hypervisor** partitions one physical server into isolated virtual machines (VMs). Each VM believes it has its own CPU, memory, disks and network. The hypervisor stops one tenant reading another's memory. On AWS, the **Nitro System** moves most of this work onto dedicated hardware.
 
 <figure markdown="span">
-    ![Type 1 and Type 2 hypervisors](../img/U1/hypervisor.webp){width="80%"}
+    ![Type 1 hypervisor running directly on hardware compared with a Type 2 hypervisor running on a host operating system](../img/U1/hypervisor.webp){width="80%"}
     <figcaption>Types of Hypervisor</figcaption>
+    <p align='right' style="font-size:0.8em"><i>Image Source: <a href="https://tecadmin.net/" target="_blank" rel="noopener">TecAdmin</a></i></p>
 </figure>
 
 **Multi-tenancy** means many customers share physical hardware. It is what makes cloud economics work. EC2 tenancy is **shared** by default; **Dedicated Instances** keep your hardware free of other accounts, and **Dedicated Hosts** give you a specific physical server with visible sockets and cores, which matters for per-socket licensing.
@@ -82,8 +84,9 @@ A **hypervisor** partitions one physical server into isolated virtual machines (
 ### Containers versus virtual machines
 
 <figure markdown="span">
-    ![Virtual machine model compared with container model](../img/U1/virtualizationVScontainer.png){width="80%"}
-    <figcaption>Virtual machine model VS Container Model</figcaption>
+    ![Virtual machines each running a guest operating system on a hypervisor, compared with containers sharing one host kernel through a container runtime](../img/U1/virtualizationVScontainer.png){width="80%"}
+    <figcaption>Virtual Machine Model Versus Container Model</figcaption>
+    <p align='right' style="font-size:0.8em"><i>Image Source: AI generated (Google Gemini)</i></p>
 </figure>
 
 A **container** isolates a process at the operating-system level. It has no kernel of its own. Linux **namespaces** give it its own view of processes, network and filesystem; **cgroups** limit its CPU and memory.
@@ -114,8 +117,9 @@ A **container image** is immutable: the image tested in staging is exactly the i
 The model is **declarative**. You do not say "start three containers"; you declare "desired count is three", and a control loop keeps it true, even after failures you never see.
 
 <figure markdown="span">
-    ![Container orchestration across a fleet of hosts](../img/U1/containerOrchestration.png){width="80%"}
-    <figcaption>Modern Container Orchestration</figcaption>
+    ![Container lifecycle under an orchestrator: desired state declared, reconciling, scheduling, running, automated failure recovery, draining and release](../img/U1/containerOrchestration.png){width="80%"}
+    <figcaption>Container Orchestration Lifecycle</figcaption>
+    <p align='right' style="font-size:0.8em"><i>Image Source: AI generated (Google Gemini)</i></p>
 </figure>
 
 ### Serverless

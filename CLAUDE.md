@@ -1320,6 +1320,9 @@ the nav numbering (1.1–1.7, 2.1–2.3, ...), never an older scheme such as 1.2
 - Always explain WHY, HOW, and WHEN — not just WHAT.
 - When relevant, relate the topic to DSO303 module outcomes specifically: cloud-native architecture,
   ECS/EKS, Lambda, microservices, CI/CD, observability, security, AWS service integration.
+- Images and videos: use the `{{ figure(...) }}` and `{{ embed(...) }}` components (step-by-step guide in
+  `utils/media-components.md`); every image and video gets a caption and a source line. Run
+  `python3 utils/image_audit.py` (or the `image-captions` skill) before returning a note.
 - Same MkDocs escaping caution as Part I §16 applies here too: watch for `{{` from
   `docker inspect --format` or similar template syntax inside code blocks, and wrap in
   `{% raw %}...{% endraw %}` if present, since this site also runs `mkdocs-macros-plugin`.

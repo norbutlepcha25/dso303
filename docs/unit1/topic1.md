@@ -8,8 +8,9 @@
 The key mental shift: stop thinking of infrastructure as **hardware** and start thinking of it as **software**.
 
 <figure markdown="span">
-    ![A physical server rack in an on-premises data centre](../img/U1/physicalServer.png){width="80%"}
-    <figcaption>Physical Server Example</figcaption>
+    ![Rows of server racks along an aisle in a data centre](../img/U1/physicalServer.png){width="80%"}
+    <figcaption>Physical Servers in a Data Centre</figcaption>
+    <p align='right' style="font-size:0.8em"><i>Image Source: Unknown (web)</i></p>
 </figure>
 
 ## Why This Service or Concept Exists
@@ -35,8 +36,9 @@ AWS inverts each problem:
 ## Cloud Service Models
 
 <figure markdown="span">
-    ![Cloud service models: IaaS, PaaS and SaaS compared by what the customer manages](../img/U1/CloudServiceModel.png){width="80%"}
-    <figcaption>Cloud Service Model</figcaption>
+    ![Pyramid of cloud service models with IaaS at the base, PaaS in the middle and SaaS at the top, with example products and typical users for each](../img/U1/CloudServiceModel.png){width="80%"}
+    <figcaption>Cloud Service Models</figcaption>
+    <p align='right' style="font-size:0.8em"><i>Image Source: Unknown (web)</i></p>
 </figure>
 
 Each service model is a different split of responsibility. Moving down the table, you manage less and control less.
@@ -59,8 +61,9 @@ Each service model is a different split of responsibility. Moving down the table
 ## Cloud Deployment Models
 
 <figure markdown="span">
-    ![Cloud, hybrid and on-premises deployment models](../img/U1/Deployment.png){width="80%"}
-    <figcaption>Cloud Deployment Model</figcaption>
+    ![Illustrations of the cloud, hybrid and on-premises (private cloud) deployment models](../img/U1/Deployment.png){width="80%"}
+    <figcaption>Cloud Deployment Models</figcaption>
+    <p align='right' style="font-size:0.8em"><i>Image Source: Unknown (web)</i></p>
 </figure>
 
 | Model | What it means | Typical reason |
@@ -252,8 +255,9 @@ The services in steps 3 to 5 are introduced in [1.3](topic3.md), [1.4](topic4.md
 </figure>
 
 <figure markdown="span">
-    ![Example integration of Route 53, CloudFront, load balancer, compute and storage](../img/U1/integration.png){width="80%"}
-    <figcaption>Example: Integrating Different Services</figcaption>
+    ![Multi-Region architecture: Route 53 and CloudFront with ACM, WAF and Shield in front of a private S3 bucket and Application Load Balancers serving ECS across three Availability Zones in two Regions, backed by Aurora Global Database](../img/U1/integration.png){width="80%"}
+    <figcaption>Integrating AWS Services Across Two Regions</figcaption>
+    <p align='right' style="font-size:0.8em"><i>Image Source: AI generated (Google Gemini)</i></p>
 </figure>
 
 ## Design Considerations

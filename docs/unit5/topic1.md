@@ -1,8 +1,8 @@
----
-render_macros: false
----
-
 # AWS CI/CD Services: CodeCommit, CodeBuild and CodeDeploy
+
+!!! tip "Classroom demo files"
+    [Download CI/CD source](../downloads/pipeline-source.zip){ download } · [All classroom files](../downloads/cloudboard-classroom.zip){ download }
+
 
 ---
 
@@ -29,28 +29,67 @@ These are collectively the **AWS Developer Tools** or **AWS Code services**. Arc
 
 ## Why This Service or Concept Exists
 
-### The problem: integration was the bottleneck
-
-Before continuous integration, teams worked on long-lived branches and merged them at the end of a release cycle. The merge  "integration"  was the hardest, least predictable part of the project, precisely because it was deferred. The cost of integrating two branches grows super-linearly with the time they have diverged: more conflicting changes, more forgotten context, more simultaneous unknowns when something breaks.
-
-Continuous integration inverts this. Every developer merges to the mainline at least daily; every merge triggers an automated build and test; the integration cost is paid continuously in small amounts rather than at once in a large one. **The practice is the daily merge and the automated verification; the server is just the thing that runs it.** This is worth stating because teams routinely install a CI server, keep working on three-week feature branches, and conclude that CI does not help.
-
 ### The problem: deployment was the risk
 
 The second problem is the deployment itself. When deployment is manual, slow and risky, the rational response is to deploy less often  which makes each deployment larger, which makes it riskier, which justifies deploying even less often. This is a stable, self-reinforcing bad state, and it is where most organisations start.
 
 The way out is counter-intuitive and it is the central insight of modern delivery: **deploy more often, not less.** A change of ten lines has a small blast radius, is easy to reason about, and is easy to revert. A change of ten thousand lines has none of those properties. Frequency is not opposed to safety; frequency is a *component* of safety, provided each deployment is small, verified, observable and reversible.
 
-The **DORA metrics** capture this, and the key point is that they are measured as a set of four:
+The **DORA metrics** capture this. DORA (DevOps Research and Assessment, now part of Google Cloud) currently defines **five** software delivery performance metrics, grouped into two factors, and the key point is that they are read as a set:
 
-| Metric | What it measures | Why it must be read with the others |
-|---|---|---|
-| **Deployment frequency** | How often you ship to production | Alone, it rewards recklessness |
-| **Lead time for changes** | Commit to running in production | Alone, it rewards skipping verification |
-| **Change failure rate** | Proportion of deployments causing degradation | Alone, it rewards never deploying |
-| **Mean time to restore** | How long to recover from a failed change | Alone, it rewards optimising the incident, not preventing it |
+| Factor | Metric | What it measures | Why it must be read with the others |
+|---|---|---|---|
+| **Throughput** | **Change lead time** | Time from commit in version control to running in production | Alone, it rewards skipping verification |
+| **Throughput** | **Deployment frequency** | How often changes are deployed to production | Alone, it rewards recklessness |
+| **Throughput** | **Failed deployment recovery time** | How long it takes to recover from a deployment that fails and needs immediate intervention | Alone, it rewards optimising the incident, not preventing it |
+| **Instability** | **Change fail rate** | Proportion of deployments that need immediate intervention, such as a rollback or hotfix | Alone, it rewards never deploying |
+| **Instability** | **Deployment rework rate** | Proportion of deployments that are unplanned and made because of a production incident | Alone, it hides the cost of fixing forward: a team can keep change fail rate low by patching rather than rolling back |
 
-The research finding that matters for architecture is that the first two and the last two are **not** in tension in high-performing organisations: the same teams deploy most often *and* fail least often *and* recover fastest. The mechanism is that small, automated, reversible changes improve all four simultaneously. A team deploying monthly cannot recover quickly, because their rollback target is a month of accumulated change.
+!!! info "How the metrics evolved"
+    The original "four keys" were deployment frequency, lead time for changes, change failure rate and mean time to restore (MTTR). DORA then replaced MTTR with **failed deployment recovery time**, because MTTR mixed recovery from deployments with recovery from events the delivery process does not control (a cloud outage, a hardware fault). The 2024 report added **rework rate** as a fifth metric, so that instability is measured both by failures that need intervention and by unplanned follow-up deployments. The 2025 report (*State of AI-assisted Software Development*) stopped ranking teams as low, medium, high and elite, and instead describes **seven team archetypes** that combine delivery performance with factors such as burnout, friction and product performance. Older material that lists four metrics, or uses MTTR, describes the earlier model. See [DORA's metrics guide](https://dora.dev/guides/dora-metrics/).
+
+??? example "Worked example: DORA metrics for an online shopping website"
+    A team runs an online shopping website and ships features, bug fixes and performance improvements through an automated CI/CD pipeline. Each stage of that pipeline produces the timestamps and events from which the five DORA metrics are calculated.
+
+    <figure markdown="span">
+        ![CI/CD pipeline for an online shopping website: code commit, build and test with CodeBuild, image stored in ECR, deployment through CodePipeline to ECS, and monitoring with CloudWatch, with the data source for each of the five DORA metrics and a one-week worked calculation](../img/U5/t1/dora-shopping-pipeline.png){width="100%"}
+        <figcaption>Measuring the Five DORA Metrics in a CI/CD Pipeline</figcaption>
+        <p align='right' style="font-size:0.8em"><i>Image Source: AI generated</i></p>
+    </figure>
+
+    **Where the data comes from.** Commit timestamps come from the repository (CodeCommit or GitHub). Deployment records and their success or failure come from CodePipeline and ECS. Incident start and recovery times come from CloudWatch alarms and logs. Unplanned deployments are identified by linking deployment records to the incidents they fixed.
+
+    **Scenario: one week.** The team deploys to production 10 times. During that week:
+
+    - 2 deployments cause problems for customers.
+    - Each of those failures takes 30 minutes to fix (60 minutes in total).
+    - A change takes an average of 2 hours to travel from commit to production.
+    - 1 deployment is an unplanned fix for a production incident.
+
+    **Calculating the five metrics.**
+
+    | Metric | Formula | Calculation | Result | Meaning |
+    |---|---|---|---|---|
+    | **Deployment frequency** | Total deployments ÷ time period | 10 ÷ 1 week | **10 per week** | The team releases to customers 10 times a week |
+    | **Change lead time** (lead time for changes) | Production deployment time − commit time, averaged | Average across the week's changes | **2 hours** | A committed change reaches production in 2 hours on average |
+    | **Change fail rate** (change failure rate) | Failed deployments ÷ total deployments × 100 | 2 ÷ 10 × 100 | **20%** | 2 in every 10 deployments cause a production problem |
+    | **Failed deployment recovery time** | Total recovery time ÷ failed deployments | 60 minutes ÷ 2 | **30 minutes** | When a deployment breaks the website, service is restored in 30 minutes on average |
+    | **Deployment rework rate** | Unplanned incident-fix deployments ÷ total deployments × 100 | 1 ÷ 10 × 100 | **10%** | 1 in 10 deployments is unplanned rework to address a production incident |
+
+    **Reading the numbers over time.** The team reviews these results, improves its automated tests and deployment process, and measures again the following week.
+
+    | Metric | Week 1 | Week 2 |
+    |---|---|---|
+    | Deployments per week | 10 | 15 |
+    | Average change lead time | 2 hours | 45 minutes |
+    | Change fail rate | 20% | 6.7% (1 of 15) |
+    | Average failed deployment recovery time | 30 minutes | 10 minutes |
+    | Deployment rework rate | 10% | 6.7% (1 of 15) |
+
+    The Week 2 figures are an illustrative improvement scenario, not measured industry benchmarks. In Week 2 the team deploys more often, delivers changes faster, fails less, recovers faster and spends less effort on unplanned fixes, so throughput and stability have improved together.
+
+    !!! warning "Read the metrics as a set"
+        A higher deployment frequency is not an improvement on its own. If Week 2 had shown 15 deployments with a 30% change fail rate, the team would be shipping faster and breaking production more often. DORA metrics measure whether delivery is becoming both faster *and* more reliable.
 
 ### What AWS provides, and what it does not
 
@@ -65,10 +104,6 @@ The research finding that matters for architecture is that the first two and the
 | Rollback | Redeploy the previous version and hope | Automatic rollback on a CloudWatch alarm, with the old version still running |
 | Audit trail | Whatever the shell history retained | CloudTrail on every API call; deployment history per revision |
 
-What AWS does **not** provide is the tests. Every mechanism in this chapter assumes something can tell the difference between a good change and a bad one. A pipeline whose only quality gate is "the build command exited zero" will deploy broken software promptly and reliably.
-
----
-
 ## Core Concepts
 
 ### Continuous integration, delivery and deployment
@@ -79,27 +114,17 @@ These three terms are used interchangeably in conversation and mean distinct thi
 |---|---|---|
 | **Continuous integration** | Every developer merges to the mainline at least daily; every merge is automatically built and tested | A fast, reliable automated test suite; trunk-based development or very short-lived branches |
 | **Continuous delivery** | Every change that passes the pipeline is *deployable* to production at any time; the decision to release is a business decision | Everything CI requires, plus automated deployment, environment parity, and reversible changes |
-| **Continuous deployment** | Every change that passes the pipeline *is* deployed to production, with no human gate | Everything CD requires, plus high confidence in the tests, progressive delivery, and automated rollback |
-
-The progression is cumulative and the step from delivery to deployment is organisational as much as technical. Most regulated organisations stop at continuous **delivery** with an approval action, and that is a legitimate architecture  provided the approval is a genuine decision rather than a ritual signature that nobody has the information to refuse.
-
-!!! tip "The test that tells you which one you have"
-
-    Ask: *if a developer merged a one-line change right now, how long until it is serving production traffic, and what stands between?* If the answer involves a person typing commands, you have neither. If it involves a person clicking approve, you have continuous delivery. If the answer is "about twenty minutes, automatically", you have continuous deployment.
+| **Continuous deployment** | Every change that passes the pipeline *is* deployed to production, with no human gate | Everything CD requires, plus high confidence in the tests, progressive delivery, and automated rollback.
 
 ### Build once, deploy many
 
 An artefact is built **exactly once** from a given commit and then promoted unchanged through every environment: development, staging, production. Environment-specific behaviour comes from **configuration injected at deployment time**  environment variables, Parameter Store, Secrets Manager, ConfigMaps  never from rebuilding.
 
-```mermaid
-flowchart LR
-    C["Commit abc123"] --> B["Build ONCE"]
-    B --> A["Artefact: image sha256:9f2c…<br/>immutable, versioned"]
-    A --> D["Deploy to dev + dev config"]
-    A --> S["Deploy to staging + staging config"]
-    A --> P["Deploy to prod + prod config"]
-    style A fill:#e8f0fe
-```
+<figure markdown="span">
+    ![One commit is built once into an immutable, versioned image that is deployed to dev, staging and production, each with its own configuration](../img/U5/t1/build-once-deploy-many.png){width="80%"}
+    <figcaption>Build Once, Deploy Many</figcaption>
+    <p align='right' style="font-size:0.8em"><i>Image Source: AI generated</i></p>
+</figure>
 
 Violating this has a specific and severe consequence: **you have tested something you are not shipping.** A rebuild can differ through an unpinned dependency, a changed base image, a different build-agent toolchain, or a non-deterministic build step. The property this gives you is the one that makes the whole pipeline meaningful: the thing verified in staging and the thing running in production are byte-identical, so any behavioural difference must come from configuration or data  which narrows an incident investigation enormously.
 
@@ -120,6 +145,8 @@ Two observations that students consistently miss. First, **canary and linear are
 !!! warning "Mixed-version compatibility is a design requirement, not an accident"
 
     Every strategy except all-at-once runs two versions of your application simultaneously, against the same database, the same queues and the same caches. This means **version N and version N+1 must be compatible with each other and with the same schema**. The practical rule is **expand and contract**: add a nullable column, deploy code that writes both old and new, backfill, deploy code that reads new, and only then remove the old column  across several releases. A migration that drops a column in the same release as the code that stops using it makes rollback impossible, which silently disables the safety property the whole pipeline was built to provide.
+
+{{ embed("https://www.youtube.com/watch?v=RThb3koc5DM", "Software Deployment Strategies Used by Netflix, Amazon and Facebook", "ByteMonk, YouTube", intro="The video below walks through these strategies as large organisations use them. Watch it with the table above open, and for each strategy note which column of the table the speaker is emphasising.") }}
 
 ### Feature flags and the separation of deploy from release
 
@@ -152,8 +179,6 @@ CI in the strict sense requires that everyone integrates to one mainline frequen
 
 The alternative  GitFlow with long-lived `develop`, `release` and `feature` branches  was designed for versioned software shipped to customers on a schedule, and it is a poor fit for a continuously deployed service. Its long-lived branches recreate exactly the deferred-integration cost that CI exists to remove. This is a case where the tooling is neutral and the practice decides the outcome.
 
----
-
 ## AWS Service Deep Dive
 
 !!! warning "On quotas, numbers and service status"
@@ -164,14 +189,8 @@ The alternative  GitFlow with long-lived `develop`, `release` and `feature` bran
 
 **Purpose.** Fully managed, private Git repository hosting in which access control is expressed in **IAM** rather than in a separate user directory, and every API call is recorded in **CloudTrail**.
 
-!!! info "Current status  read this before designing around CodeCommit"
-
-    In **July 2024** AWS closed CodeCommit to new customers: existing customers kept full use, but no new account could create a repository. Much course material, many blog posts and a great deal of exam-preparation content was written either side of that change and contradicts itself. On **24 November 2025** AWS **returned CodeCommit to general availability**, reopening new-customer sign-ups, with Git LFS support scheduled for Q1 2026 and regional expansion continuing into Q3 2026. It currently carries a 99.9 per cent uptime SLA.
-
-    Two lessons for an architect, and both are more valuable than the fact itself. First, **verify service availability at design time rather than trusting training material**, because this is exactly the class of fact that goes stale. Second, **a managed service being closed to new customers is a real architectural risk**, and it is a reason to keep the Git provider behind a replaceable boundary  which, since Git is a protocol rather than a product, is unusually easy here.
-
 **Architecture.** Repositories are stored redundantly across multiple Availability Zones in a Region, encrypted at rest with KMS by default. Access is over HTTPS or SSH. Authentication has three forms, and choosing among them is the main design decision:
-
+ 
 | Method | Mechanism | When to use |
 |---|---|---|
 | **IAM + `git-remote-codecommit`** | SigV4 signing using the caller's normal AWS credentials | **The preferred method.** Works with roles, SSO and temporary credentials; nothing long-lived to leak |
@@ -204,7 +223,7 @@ The alternative  GitFlow with long-lived `develop`, `release` and `feature` bran
 
 **The buildspec.** A YAML file, conventionally `buildspec.yml` at the repository root, with a fixed phase structure:
 
-```yaml
+{% raw %}```yaml
 version: 0.2
 
 env:
@@ -249,7 +268,7 @@ artifacts:
 cache:
   paths:
     - '/root/.npm/**/*'
-```
+```{% endraw %}
 
 Three details carry real weight. **`post_build` runs even when `build` fails**, so a `docker push` there will publish an artefact from a failed build unless guarded by `$CODEBUILD_BUILD_SUCCEEDING`. **`CODEBUILD_RESOLVED_SOURCE_VERSION`** is the full commit SHA and is the correct artefact tag: it is immutable, traceable and unambiguous, where `latest` is none of those. And **`exported-variables`** is the supported mechanism for passing a value  such as an image digest  from a build to a later pipeline stage, rather than writing it into a file and hoping.
 
@@ -423,7 +442,7 @@ Read structurally, these divide into three groups. The **producers**  the Git pr
 | **Continuous integration** | Every developer merges to the mainline at least daily, with automated build and test on each merge |
 | **Continuous delivery** | Every passing change is deployable at any time; releasing is a business decision |
 | **Continuous deployment** | Every passing change is deployed automatically, with no human gate |
-| **DORA metrics** | Deployment frequency, lead time for changes, change failure rate, mean time to restore |
+| **DORA metrics** | Five delivery metrics in two factors. Throughput: change lead time, deployment frequency, failed deployment recovery time. Instability: change fail rate, deployment rework rate |
 | **Build once, deploy many** | One artefact per commit, promoted unchanged through environments with injected configuration |
 | **Artefact** | The immutable, versioned output of a build  a container image, a zip, a package |
 | **Immutable artefact** | One that cannot change after creation; identified by content (a digest), not by a movable tag |
@@ -663,12 +682,15 @@ flowchart LR
 
 ### The metrics that matter
 
+The first five rows are the DORA software delivery metrics, using the names and definitions in [DORA's metrics guide](https://dora.dev/guides/dora-metrics/); the rest are pipeline health metrics that explain why the DORA numbers move.
+
 | Metric | Source | What it tells you |
 |---|---|---|
 | **Deployment frequency** | Deployment events, counted | Whether batch size is small. Falling frequency predicts rising failure rate |
-| **Lead time for changes** | Commit timestamp to deployment timestamp | Where the delay actually is  usually review or queueing, rarely the build |
-| **Change failure rate** | Deployments causing rollback or incident, over total | The honest measure of pipeline quality |
-| **Mean time to restore** | Incident start to recovery | Whether rollback works in practice, not just in configuration |
+| **Change lead time** | Commit timestamp to deployment timestamp | Where the delay actually is  usually review or queueing, rarely the build |
+| **Failed deployment recovery time** | Failed deployment to service restored | Whether rollback works in practice, not just in configuration |
+| **Change fail rate** | Deployments needing rollback or hotfix, over total | The honest measure of pipeline quality |
+| **Deployment rework rate** | Unplanned, incident-driven deployments, over total | Whether the team is quietly fixing forward instead of preventing failures |
 | **Build duration, p50 and p95** | CodeBuild metrics | Feedback speed; a p95 far above p50 usually means cache misses |
 | **Build success rate** | CodeBuild metrics | A persistently failing build that nobody fixes has stopped being a gate |
 | **Build queue time** | Build start minus submit time | The only evidence that justifies reserved capacity |
@@ -685,8 +707,6 @@ flowchart LR
 **Deployment markers on dashboards** are a small practice with a large payoff: overlay deployment events on your application metrics so that "this started at 14:32" and "we deployed at 14:31" are visible in one glance. A very large share of incidents are caused by the most recent deployment, and making that correlation immediate removes the first twenty minutes of most investigations.
 
 **CloudTrail answers the audit questions**: who started this deployment, with which role, from where, and against which artefact. Combined with immutable artefacts tagged by commit SHA, this makes "what is running in production and who put it there" a query rather than an investigation.
-
----
 
 ## Integration with Other AWS Services
 
@@ -709,7 +729,7 @@ flowchart LR
 | **Amazon CloudWatch** | Build and deployment metrics, logs, and the alarms that drive automatic rollback |
 | **Amazon EventBridge** | State-change events for notification, automation and pipeline triggering |
 | **AWS CloudTrail** | The audit record of every build, deployment and configuration change |
-| **AWS Systems Manager** | Parameter Store, and Automation runbooks invoked from deployment events |
+| **AWS Systems Manager** | Parameter Store, and Automation runbooks i`nvoked from deployment events |
 | **AWS Organizations and multiple accounts** | Separate accounts per environment; the strongest blast-radius boundary for deployment |
 | **Amazon SNS and AWS Chatbot** | Human notification of build and deployment outcomes |
 
@@ -738,52 +758,6 @@ flowchart TD
 
 Read architecturally, this shows the three groups from earlier working together. The **producers** run left to right across the top: a reviewed change becomes a build that resolves pinned dependencies from CodeArtifact and injects configuration rather than baking it in. The **custodians** sit in the middle: ECR holds the artefact immutably, Inspector and Security Hub judge it, Signer proves where it came from. The **changers** sit on the right: CodeDeploy moves traffic gradually across three different compute platforms with the same model, AppConfig separates release from deployment, and the CloudWatch alarm closes the loop by watching what users experience and pulling the change back automatically when that degrades. The feedback arrow from application metrics to the rollback is the single most important line in the diagram  without it, everything upstream is a faster way to reach production with no way back.
 
----
-
-## Common Architecture Patterns
-
-### Build once, deploy many
-
-One artefact per commit, promoted unchanged through environments with configuration injected at deployment. The foundational pattern; everything else assumes it. Its violation  building per environment  means the thing you tested is not the thing you shipped.
-
-### Immutable infrastructure
-
-Never modify a running server; replace it with a new one built from a new artefact. This makes the running state a function of the artefact plus configuration, eliminates configuration drift, and makes rollback a matter of running the previous artefact. Containers enforce it structurally, which is much of why they displaced configuration-management tooling for application deployment.
-
-### Blue/green with automated rollback
-
-Two environments, traffic switched between them, the previous one kept running through a termination wait, and a CloudWatch alarm on user-visible behaviour authorised to switch back automatically. The canonical safe-deployment pattern, and the reason double capacity during deployment is a good purchase.
-
-### Progressive delivery
-
-Canary and linear traffic shifting combined with feature flags and, where available, cohort targeting. Exposure increases only while the signal stays healthy. The important design work is not the percentages; it is defining the signal that decides whether to continue.
-
-### Expand and contract for schema change
-
-Additive schema change first, code that writes both shapes, backfill, code that reads the new shape, and only then removal  across several releases. The pattern that keeps rollback possible through a data-model change, and the one whose absence silently disables everything else in this chapter.
-
-### Pipeline as code
-
-The pipeline defined in CloudFormation, CDK or Terraform, reviewed and versioned like any other code, and ideally able to update itself ([chapter 5.2](topic2.md)'s self-mutating pipeline). Prevents the pipeline from becoming the new undocumented, hand-configured build server.
-
-### Separation of build and deploy identities
-
-Distinct IAM roles per pipeline stage, so that compromising a build does not grant the ability to deploy. The highest-value IAM structure in a delivery system.
-
-### Trunk-based development with feature flags
-
-Short-lived branches, frequent merges, incomplete work hidden behind flags rather than isolated on branches. The practice that makes continuous integration real rather than nominal.
-
-### Deployment windows and progressive environments
-
-Development, then staging, then a canary environment, then production  with automated promotion gated on signals rather than on calendar dates. The value is that each environment answers a different question; a staging environment that answers none is pure cost.
-
-### GitOps
-
-The desired state in Git, an agent in the cluster reconciling continuously toward it. The dominant pattern for Kubernetes deployment, covered in [chapter 5.2](topic2.md). The distinction from the pipeline model here is push versus pull: CodeDeploy pushes a change; Argo CD pulls the declared state and corrects drift continuously.
-
----
-
 ## Industry Use Cases
 
 | Sector | Delivery requirement | How the services meet it |
@@ -799,7 +773,6 @@ The desired state in Git, an agent in the cluster reconciling continuously towar
 | Industrial IoT | Deployment to intermittently connected edge devices | CodeDeploy on-premises deployments, or Greengrass component deployment |
 | Logistics | Frequent small changes across many services | Trunk-based development, per-service pipelines, automated canaries |
 
----
 
 ## Advantages
 
@@ -884,7 +857,7 @@ The desired state in Git, an agent in the cluster reconciling continuously towar
 
 First, **a pipeline is a risk-management system, not an automation project**. Its value is in what it verifies and what it can undo; the fact that a machine rather than a person types the commands is incidental. Automating a process with no tests and no rollback produces a faster route to production with no way back, which is measurably worse than deploying by hand. Every design decision in this chapter follows from asking what evidence the pipeline collects and what it can reverse.
 
-Second, **deploying more often is how you deploy more safely, and the mechanism is batch size**. A ten-line change is easy to reason about, easy to verify and easy to revert; a ten-thousand-line change is none of these. The DORA finding that the same organisations deploy most frequently *and* fail least often *and* recover fastest is not a paradox: small, automated, reversible changes improve all four metrics through the same mechanism. The organisational instinct  deploy less often because deploying is risky  is a stable, self-reinforcing bad state, and the way out runs in the opposite direction to intuition.
+Second, **deploying more often is how you deploy more safely, and the mechanism is batch size**. A ten-line change is easy to reason about, easy to verify and easy to revert; a ten-thousand-line change is none of these. The DORA finding that the same organisations deploy most frequently *and* fail least often *and* recover fastest is not a paradox: small, automated, reversible changes improve all five metrics through the same mechanism. The organisational instinct  deploy less often because deploying is risky  is a stable, self-reinforcing bad state, and the way out runs in the opposite direction to intuition.
 
 Third, **build once and deploy many is a correctness requirement**. An artefact built separately per environment means you tested something you are not shipping, and the differences  an unpinned dependency, a floating base image, a different toolchain  are silent, intermittent and extremely hard to diagnose. The discipline that follows is concrete: ephemeral build environments, committed lockfiles, base images pinned by digest, artefacts tagged with the commit SHA, deployment by digest, and every environment-specific value injected at deployment rather than baked in.
 

@@ -9,16 +9,17 @@ A **container image** is an immutable, layered, content-addressed filesystem bun
 **Docker** is the toolchain that popularised both, a build tool, a local runtime, and a registry client. The formats it created have since been standardised by the **Open Container Initiative (OCI)** into an image specification, a runtime specification, and a distribution specification, so that "Docker image" is now loosely used for what is properly an **OCI image**, and images built by Docker run on runtimes Docker never touched.
 
 <figure markdown="span">
-    ![3layerglobalinfra](../img/U2/t1/dockercomponents.png){width="80%"}
-    <figcaption>Components of dockers</figcaption>
-
+    ![Docker client, Docker host with the daemon, containers, images, networks and volumes, and image registries such as Docker Hub](../img/U2/t1/dockercomponents.png){width="80%"}
+    <figcaption>Components of Docker</figcaption>
+    <p align='right' style="font-size:0.8em"><i>Image Source: AI generated (Google Gemini)</i></p>
 </figure>
 
 **Amazon Elastic Container Registry (ECR)** is AWS's managed OCI-compliant registry: a private, regional, IAM-authorised store for images, integrated with ECS, EKS, AWS Lambda container images, and AWS App Runner.
 
 <figure markdown="span">
-    ![3layerglobalinfra](../img/U2/t1/ECR.png){width="80%"}
-    <figcaption>Elestic Container Registry</figcaption>
+    ![Amazon Elastic Container Registry service icon](../img/U2/t1/ECR.png){width="80%"}
+    <figcaption>Amazon Elastic Container Registry</figcaption>
+    <p align='right' style="font-size:0.8em"><i>Image Source: <a href="https://aws.amazon.com/architecture/icons/" target="_blank" rel="noopener">AWS Architecture Icons</a></i></p>
 </figure>
 
 **Amazon ECS task definitions** and **services** are the declarative layer that turns an image into a running workload. A task definition is the immutable specification; a service is the controller that keeps a desired number of instances of that specification alive and reachable.
@@ -116,9 +117,9 @@ Three kernel mechanisms, combine to produce a container.
 **Union filesystems** (OverlayFS on modern Linux) stack read-only layers with a thin writable layer on top. Reads fall through the stack to the first layer containing the file; writes are copied up into the writable layer. This is what makes images shareable: fifty containers from the same image share one copy of the read-only layers on disk and in the page cache.
 
 <figure markdown="span">
-    ![3layerglobalinfra](../img/U1/unionFileSystem.png){width="80%"}
-    <figcaption>Union File System</figcaption>
-    <p align='right' style="font-size:0.8em"><i>Image Source: AI Generaed (Google Gemini)</i></p>
+    ![Containers on one host sharing the Linux kernel through namespaces, cgroups and OverlayFS, each with a temporary writable layer above shared read-only image layers](../img/U2/t1/unionFileSystem.png){width="80%"}
+    <figcaption>Union File System and Container Isolation</figcaption>
+    <p align='right' style="font-size:0.8em"><i>Image Source: AI generated (Google Gemini)</i></p>
 </figure>
 
 !!! danger "The writable layer is not storage"

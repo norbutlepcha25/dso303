@@ -42,6 +42,9 @@ PREPARE_PAGE = """
 async () => {
   // Collapsible blocks would print closed.
   document.querySelectorAll('article details').forEach(d => d.setAttribute('open', ''));
+  // Videos and embedded pages are not printed (print.css hides them); remove
+  // them so the renderer does not wait on YouTube or third-party pages.
+  document.querySelectorAll('figure.dso-embed, .no-print, article iframe').forEach(e => e.remove());
   // Lazy images are not fetched by the print renderer unless forced.
   const images = [...document.querySelectorAll('img')];
   images.forEach(img => img.setAttribute('loading', 'eager'));
