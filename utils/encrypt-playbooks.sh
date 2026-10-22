@@ -38,16 +38,14 @@ if [ -z "${STATICRYPT_PASSWORD:-}" ]; then
   read -rsp "Repeat password:   " again; echo
   [ "$STATICRYPT_PASSWORD" = "$again" ] || { echo "Passwords differ." >&2; exit 1; }
 fi
-# Short passwords are easier to brute-force offline (the encrypted pages are
-# public), so they need an explicit opt-in: ALLOW_SHORT_PASSWORD=1.
+[ -n "$STATICRYPT_PASSWORD" ] || { echo "Password must not be empty." >&2; exit 1; }
+# Short passwords are accepted, with a warning: the encrypted pages are public,
+# so a short password is easier to guess offline. --short tells StaticCrypt
+# not to prompt about it.
 short=()
 if [ "${#STATICRYPT_PASSWORD}" -lt 14 ]; then
-  if [ "${ALLOW_SHORT_PASSWORD:-0}" = "1" ]; then
-    echo "Warning: password under 14 characters (ALLOW_SHORT_PASSWORD=1)." >&2
-    short=(--short)
-  else
-    echo "Use at least 14 characters, or set ALLOW_SHORT_PASSWORD=1 to accept a shorter one." >&2; exit 1
-  fi
+  echo "Warning: password is under 14 characters; it is easier to brute-force." >&2
+  short=(--short)
 fi
 export STATICRYPT_PASSWORD
 

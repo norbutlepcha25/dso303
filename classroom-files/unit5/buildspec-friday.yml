@@ -1,0 +1,26 @@
+# The "Friday" buildspec: it runs and goes green, but it is not safe.
+# Find what can go wrong and how you would fix it. Do not use it in a real pipeline.
+version: 0.2
+env:
+  variables:
+    NODE_ENV: production
+    DB_PASSWORD: Usms-Enrol-2026!
+    REGISTRY: 111122223333.dkr.ecr.ap-south-1.amazonaws.com
+phases:
+  install:
+    commands:
+      - npm install
+  pre_build:
+    commands:
+      - aws ecr get-login-password | docker login --username AWS --password-stdin "$REGISTRY"
+  build:
+    commands:
+      - npm test || true
+      - docker build -t "$REGISTRY/usms-enrolment:latest" .
+  post_build:
+    commands:
+      - docker push "$REGISTRY/usms-enrolment:latest"
+      - aws ecs update-service --cluster usms-cluster --service usms-enrolment-svc --force-new-deployment
+artifacts:
+  files:
+    - '**/*'

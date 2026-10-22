@@ -3,9 +3,6 @@
 !!! tip "Classroom demo files"
     [Download CI/CD source](../downloads/pipeline-source.zip){ download } · [All classroom files](../downloads/cloudboard-classroom.zip){ download }
 
-    Demo code and configuration for the instructor-led pipeline demonstration.
-
-
 ---
 
 ## Definition

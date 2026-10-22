@@ -1,0 +1,12 @@
+version: 0.2
+phases:
+  install:
+    runtime-versions:
+      python: 3.12
+  build:
+    commands:
+      - python3 check_site.py
+artifacts:
+  base-directory: site
+  files:
+    - '**/*'

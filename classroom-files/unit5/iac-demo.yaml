@@ -1,0 +1,25 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: DSO303 Unit 5 IaC demo - one private, tagged S3 bucket
+Parameters:
+  BucketSuffix:
+    Type: String
+  Owner:
+    Type: String
+Resources:
+  ExportsBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub 'dso303-u5-${AWS::AccountId}-${BucketSuffix}'
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      Tags:
+        - Key: Course
+          Value: DSO303
+        - Key: Owner
+          Value: !Ref Owner
+Outputs:
+  BucketName:
+    Value: !Ref ExportsBucket

@@ -1,0 +1,14 @@
+{
+  "name": "usms-enrolment",
+  "version": "1.0.0",
+  "private": true,
+  "description": "USMS enrolment service: DSO303 Unit 5 CI/CD demo app",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

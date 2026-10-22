@@ -28,7 +28,7 @@ Playbooks are **encrypted** before they are published, with StaticCrypt (AES-256
 | Not Markdown pages, `noindex` meta | Never in `nav`, search or `sitemap.xml`; search engines asked not to index |
 | Encrypted hub at a short address | `/dso303/teach/` redirects to the hub; unlock once with "Remember this device" and every lesson opens for 30 days on that browser. No link from the student site |
 
-**Password.** Choose one passphrase of 14+ characters and use it for every playbook. It is never stored in the repository. Keep it in a password manager. Changing it means re-running the script for every playbook. Anyone who has the password can read every playbook, so do not share it with students or type it on a projected screen.
+**Password.** Choose one passphrase and use it for every playbook. 14+ characters is recommended; a shorter one is accepted with a warning, but is easier to guess because the encrypted pages are public. It is never stored in the repository. Keep it in a password manager. Changing it means re-running the script for every playbook. Anyone who has the password can read every playbook, so do not share it with students or type it on a projected screen.
 
 **Limits.** The `/teach/` redirect page is public but contains nothing except the link. Content committed before encryption (the old Markdown lessons) stays in Git history.
 
