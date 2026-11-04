@@ -314,6 +314,9 @@ CloudWatch Logs offers two log classes for general use, chosen when the log grou
 
 A third class, ==Delivery==, exists for AWS Lambda logs that are delivered directly to Amazon S3 or Amazon Data Firehose rather than stored in CloudWatch Logs; it is not a general-purpose class.
 
+!!! note "Infrequent Access is being renamed Essentials"
+    AWS has renamed the Infrequent Access class ==Essentials== (a name change only, with no change to features or pricing). Both `INFREQUENT_ACCESS` and `ESSENTIALS` are accepted when creating a log group, and from December 2026 read APIs such as `DescribeLogGroups` return `ESSENTIALS`. These notes keep the older name, which you will still meet in most documentation and tooling. Since March 2026 the class also supports OpenSearch PPL and SQL queries.
+
 !!! warning "The log class is permanent"
     Because a log group's class cannot be changed after creation, choose it before the first log line arrives. A useful rule: if anything automatic depends on the log group (an alarm via a metric filter, a subscription to OpenSearch, EMF metrics, Live Tail during incidents), it must be ==Standard==. Infrequent Access suits high-volume debug, audit or access logs that are only queried when someone asks a question.
 
@@ -660,7 +663,7 @@ CloudWatch Logs is a regional service built across multiple Availability Zones; 
 | Setting | Options | Architect's guidance |
 |---------|---------|----------------------|
 | Name | Up to 512 characters, hierarchical by convention | `/ecs/<env>/<service>`, `/aws/lambda/<function>`, `/eks/<cluster>/application`; consistent prefixes enable prefix-based queries and policies |
-| Log class | `STANDARD`, `INFREQUENT_ACCESS` | Standard when anything automatic depends on the group |
+| Log class | `STANDARD`, `INFREQUENT_ACCESS` (also accepted as `ESSENTIALS`, its new name) | Standard when anything automatic depends on the group |
 | Retention | 1 day to 10 years, never expire | Always set explicitly |
 | KMS key | None (AWS owned) or customer managed key ARN | Customer managed key for regulated data or separation of duties |
 | Deletion protection | Enabled or disabled | Enable for audit and security log groups |
@@ -1451,7 +1454,7 @@ Since December 2024 Logs Insights accepts three languages. They query the same d
 |--------|------------------|----------------|----------------|
 | Style | Pipe-based, purpose-built for logs | Pipe-based, from OpenSearch | Declarative SQL |
 | Strengths | Concise, `pattern`, `diff`, `anomaly`, `filterIndex`, comparison queries, broad command set | Familiar to OpenSearch users; `eval`, `where`, `head`, joins; same syntax as in OpenSearch Dashboards | Familiar to every database student; `GROUP BY`, `HAVING`, window functions, joins, JSON functions |
-| Log class support | Standard and Infrequent Access | Standard only | Standard only |
+| Log class support | Standard and Infrequent Access | Standard and Infrequent Access (since March 2026) | Standard and Infrequent Access (since March 2026) |
 | Concurrency quota | 100 concurrent queries per account (including dashboard queries) | 15 concurrent PPL or SQL queries per account | Shared with PPL |
 | Best for | Day-to-day investigation | Teams standardising on OpenSearch | Analysts and complex relational questions |
 
@@ -1589,7 +1592,7 @@ Key architectural properties:
 - ==Concurrency quotas== (100 QL, 15 PPL or SQL per account), shared with dashboards; many dashboards refreshing automatically can starve interactive users.
 - ==No persistent materialisation.== Each query recomputes from raw data; repeated heavy dashboards are better served by metrics or OpenSearch.
 - ==Regional.== No single query spans Regions without centralisation.
-- ==Language feature gaps.== Some commands are exclusive to one language; PPL and SQL do not support Infrequent Access log groups.
+- ==Language feature gaps.== Some commands are exclusive to one language (for example `filterIndex` and comparison queries are Logs Insights QL only); PPL and SQL have supported Infrequent Access log groups since March 2026.
 - ==Field indexes cover recent data only== (30 days from ingestion) and only after the policy exists.
 
 #### Pricing Model and recommendations
@@ -2042,7 +2045,7 @@ filter event = "MessageProcessed"
 | 10,000-row result limit | Scheduled queries to S3, export, Athena |
 | Concurrency quotas | Metric-based dashboards; reserve capacity for incidents |
 | Results kept 7 days | Export evidence |
-| PPL and SQL only on Standard class | Use QL for Infrequent Access groups |
+| Some features (`filterIndex`, comparison queries) only in Logs Insights QL | Use QL for indexed and comparison queries |
 | Field indexes forward-only and 30-day coverage | Create indexes early; full scans for older data |
 | Regional scope | Centralise logs |
 | Recomputes every time | OpenSearch or metrics for repeated heavy analytics |

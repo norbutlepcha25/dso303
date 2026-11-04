@@ -60,7 +60,7 @@ AWS offers three storage services rather than one because object, block and file
 | Metadata | Rich, user-defined, stored with the object | None beyond the block address | POSIX attributes: owner, mode, timestamps |
 | Concurrent writers | Many, last write wins per key | Normally one host; Multi-Attach is a special case | Many, coordinated by the file system |
 | Typical latency | Tens of milliseconds first byte | Sub-millisecond to low single-digit milliseconds | Low single-digit milliseconds |
-| Scale ceiling | Effectively unlimited | Per-volume ceiling, currently 64 TiB for most types | Petabyte-scale, elastic |
+| Scale ceiling | Effectively unlimited | Per-volume ceiling, currently 64 TiB for gp3 and io2 Block Express, 16 TiB for the other types | Petabyte-scale, elastic |
 | AWS service | Amazon S3 | Amazon EBS, instance store | Amazon EFS, Amazon FSx |
 
 !!! note "Storage is not the same as a database"
@@ -105,7 +105,7 @@ Data can be perfectly durable and temporarily unavailable, for instance during a
 | S3 Standard-IA | 99.999999999 percent | 99.9 percent | Three or more AZs |
 | S3 One Zone-IA | 99.999999999 percent within the AZ | 99.5 percent | One AZ |
 | S3 Glacier Deep Archive | 99.999999999 percent | 99.99 percent after restore | Three or more AZs |
-| S3 Express One Zone | High within the AZ | 99.95 percent | One AZ |
+| S3 Express One Zone | 99.999999999 percent within the AZ | 99.95 percent | One AZ |
 | EBS gp3 and io2 volume | Annual failure rate between 0.1 and 0.2 percent for gp3; io2 is designed for 99.999 percent durability | 99.8 to 99.999 percent depending on type | One AZ |
 | EBS snapshot | Same multi-AZ durability as S3 | Regional | Regional |
 | EFS Standard (Regional) | Designed for eleven nines | 99.99 percent | Three or more AZs |
@@ -405,7 +405,7 @@ The integration and advanced features are:
 | S3 Express One Zone | High-performance, single-AZ directory buckets | ML training, shuffle data, low-latency caches |
 | Mountpoint for Amazon S3 | A file client that presents a bucket as a local mount, with a CSI driver for Kubernetes | Legacy or file-based tools reading large datasets |
 | S3 Object Lambda | Transforms data on GET through a Lambda function behind an Object Lambda Access Point | On-the-fly redaction or format conversion (see availability note) |
-| S3 Vectors | Vector buckets and indexes for storing and querying embeddings | Retrieval-augmented generation and semantic search (a recent addition; verify Regional availability) |
+| S3 Vectors | Vector buckets and indexes for storing and querying embeddings | Retrieval-augmented generation and semantic search (generally available since December 2025, with up to two billion vectors per index; verify Regional availability) |
 
 !!! warning "S3 Object Lambda availability"
     During 2025 AWS announced that S3 Object Lambda would no longer be available to new customers, while existing customers could continue to use it. Treat Object Lambda as a legacy pattern for new designs. Equivalent designs include transforming data at write time into a derived bucket, serving transformed content through CloudFront with a Lambda-backed origin, or exposing an API Gateway and Lambda endpoint that reads from S3. Verify current status in the AWS documentation before designing around it.
@@ -421,7 +421,7 @@ The integration and advanced features are:
 | S3 Glacier Instant Retrieval | Archive needing millisecond access | 90 days | 128 KiB | Per GiB retrieved, higher than IA | Three or more | Milliseconds |
 | S3 Glacier Flexible Retrieval | Archive, minutes to hours acceptable | 90 days | 40 KiB | Per GiB and per request, varies by retrieval tier | Three or more | Expedited in one to five minutes, Standard in three to five hours, Bulk in five to twelve hours |
 | S3 Glacier Deep Archive | Long-term retention, rarely accessed | 180 days | 40 KiB | Per GiB retrieved | Three or more | Standard in around twelve hours, Bulk in up to forty-eight hours |
-| S3 Express One Zone | Latency-sensitive, very high request rate | One hour | 512 KiB | None, but higher request charges | One, in a directory bucket | Single-digit milliseconds |
+| S3 Express One Zone | Latency-sensitive, very high request rate | None | None | Per GiB uploaded and retrieved, with lower request charges than S3 Standard | One, in a directory bucket | Single-digit milliseconds |
 
 The Glacier name now refers to storage classes within S3 rather than to a separate service for new designs. Objects in Glacier Flexible Retrieval and Glacier Deep Archive must be ==restored== before they can be read, which creates a temporary copy in a readable class for a specified number of days; Glacier Instant Retrieval needs no restore.
 
@@ -550,7 +550,7 @@ The following values are indicative, as of 2026. Verify them in Service Quotas a
 | General purpose buckets per account | 10,000 by default, adjustable upwards |
 | Directory buckets per account | 100 by default, adjustable |
 | Table buckets per Region per account | Small default quota, adjustable |
-| Maximum object size | 5 TB for general purpose buckets (check current documentation for any increase) |
+| Maximum object size | 50 TB since December 2025 (previously 5 TB), in all commercial Regions; objects above 5 GB require multipart upload |
 | Maximum single PUT | 5 GB; use multipart upload above this |
 | Parts per multipart upload | 10,000 |
 | Part size range | 5 MiB to 5 GiB; the last part may be smaller |
@@ -810,7 +810,7 @@ Since 2023, all new objects are encrypted at rest by default with SSE-S3. S3 off
 | SSE-S3 | S3, with AWS owned keys | Default for non-regulated data |
 | SSE-KMS | A KMS key, AWS managed (`aws/s3`) or customer managed | Audit of key use, separation of duties, cross-account control |
 | DSSE-KMS | A KMS key, with two independent layers of encryption applied by S3 | Requirements mandating dual-layer encryption |
-| SSE-C | The caller supplies the key on every request; S3 does not store it | Rare legacy requirements; verify current default blocking on new buckets |
+| SSE-C | The caller supplies the key on every request; S3 does not store it | Rare legacy requirements; since April 2026 SSE-C is disabled by default on new general purpose buckets and must be enabled explicitly with `PutBucketEncryption` |
 | Client-side encryption | The application encrypts before upload | S3 must never see plaintext |
 
 When a bucket uses SSE-KMS, a consumer needs both S3 permissions and KMS permissions (`kms:Decrypt` for reads; `kms:GenerateDataKey` for writes) on the key, and the key policy must allow the principal. For cross-account access, both the key policy in the owning account and the identity policy in the consuming account must allow the KMS action. Enabling S3 Bucket Keys reduces KMS request volume and cost, by up to 99 percent. Key policies, envelope encryption and Bucket Key side effects are covered in [8.3 Encryption at Rest with AWS KMS](../unit8/topic3.md#encryption-at-rest-with-aws-kms).
@@ -1401,8 +1401,8 @@ Local instance store solves none of these, because its data is lost when the ins
 
 | Type | Media | Size range | Max IOPS per volume | Max throughput per volume | IOPS model | Best-suited workloads |
 |---|---|---|---|---|---|---|
-| gp3 | SSD | 1 GiB to 64 TiB | 16,000 | 1,000 MiB/s | 3,000 IOPS and 125 MiB/s baseline included, provisioned independently of size | Default for boot volumes, most databases, application servers |
-| gp2 | SSD | 1 GiB to 64 TiB | 16,000 | 250 MiB/s | 3 IOPS per GiB, burst to 3,000 for small volumes | Legacy general purpose; superseded by gp3 |
+| gp3 | SSD | 1 GiB to 64 TiB | 80,000 | 2,000 MiB/s | 3,000 IOPS and 125 MiB/s baseline included, provisioned independently of size | Default for boot volumes, most databases, application servers |
+| gp2 | SSD | 1 GiB to 16 TiB | 16,000 | 250 MiB/s | 3 IOPS per GiB, burst to 3,000 for small volumes | Legacy general purpose; superseded by gp3 |
 | io1 | SSD | 4 GiB to 16 TiB | 64,000 | 1,000 MiB/s | Provisioned, up to 50 IOPS per GiB | Legacy high-performance; superseded by io2 |
 | io2 Block Express | SSD | 4 GiB to 64 TiB | 256,000 | 4,000 MiB/s | Provisioned, up to 1,000 IOPS per GiB | Mission-critical relational databases, SAP HANA, Oracle |
 | st1 | HDD | 125 GiB to 16 TiB | 500 | 500 MiB/s | Throughput-oriented with burst credits | Big data, log processing, data warehouses, sequential reads |
@@ -1415,7 +1415,7 @@ Local instance store solves none of these, because its data is lost when the ins
 
 | Concept | Meaning |
 |---------|---------|
-| IOPS | Input/output operations per second, measured against a 16 KiB unit on SSD types and a 1 MiB unit on HDD types; a single 128 KiB request counts as several IOPS on SSD |
+| IOPS | Input/output operations per second, quoted against a 16 KiB I/O on SSD types and a 1 MiB I/O on HDD types; EBS counts each SSD operation up to 256 KiB as one IOPS, so a single 1,024 KiB request counts as four |
 | Throughput | Bytes per second transferred: IOPS multiplied by I/O size, up to the volume and instance ceilings |
 | Burst bucket | The credit mechanism that lets gp2, st1 and sc1 exceed baseline performance for limited periods; sustained load exhausts the credits and performance drops abruptly to baseline |
 | Provisioned performance | gp3, io1 and io2 deliver consistent provisioned performance with no credit mechanism |
@@ -1720,7 +1720,7 @@ Values are indicative, as of 2026; verify in Service Quotas and the EBS document
 | Elastic Volumes modifications | One modification per volume in a cooling period |
 | Fast Snapshot Restore | Limited number of snapshots per Region enabled concurrently; credit-based volume creation rate |
 | ECS task-attached EBS volumes | One EBS volume per task at the time of writing |
-| Maximum volume size | 64 TiB for gp3, gp2 and io2 Block Express; 16 TiB for io1, st1 and sc1 |
+| Maximum volume size | 64 TiB for gp3 and io2 Block Express; 16 TiB for gp2, io1, st1 and sc1 |
 | Multi-Attach instances per volume | 16 |
 | IOPS to size ratio | 500 to 1 for gp3, 1,000 to 1 for io2 |
 
@@ -2556,7 +2556,7 @@ EFS pricing has several dimensions. Values are indicative, as of 2026; verify in
 | Write latency | Low single-digit milliseconds, since writes are durably stored across AZs before acknowledgement |
 | Per-client throughput | Bounded by the client's network bandwidth and NFS concurrency, typically up to around 1.5 GiB/s per client with efs-utils; verify current documentation |
 | Aggregate throughput with Elastic | Scales to tens of GiB/s for reads and several GiB/s for writes per file system in larger Regions |
-| Aggregate IOPS | Hundreds of thousands of read IOPS with Elastic throughput and General Purpose mode |
+| Aggregate IOPS | Hundreds of thousands of read IOPS by default with Elastic throughput and General Purpose mode, raisable on request to up to 2.5 million read and 500,000 write IOPS per file system |
 
 !!! note "Why aggregate numbers mislead beginners"
     The headline throughput figures are for many clients in parallel. A single Python process reading files one by one sees per-operation latency, not aggregate throughput. Parallelism is the key to EFS performance; see Performance Optimization.
@@ -3486,7 +3486,7 @@ Stateless microservices on ECS and EKS (Chapters [1.7](../unit1/topic7.md) and [
 
 | Option | Nature | Choose when |
 |--------|--------|-------------|
-| ElastiCache for Valkey, node-based | Open-source, Redis OSS compatible engine (Valkey 7.2 and 8.x on ElastiCache as of 2026); priced lower than Redis OSS; performance improvements such as enhanced multi-threaded I/O | Default for new designs with predictable load and a need for control over node types, shards and parameter groups |
+| ElastiCache for Valkey, node-based | Open-source, Redis OSS compatible engine (Valkey 7.2, 8.x and 9.x on ElastiCache as of 2026); priced lower than Redis OSS; performance improvements such as enhanced multi-threaded I/O | Default for new designs with predictable load and a need for control over node types, shards and parameter groups |
 | ElastiCache Serverless for Valkey | No nodes or shards to manage; scales memory and compute automatically; billed by GB-hour of data stored and ElastiCache Processing Units (ECPUs); low minimum data charge for Valkey compared with Redis OSS | Spiky or unknown workloads, new services, many small caches per microservice, teams without cache operations expertise |
 | ElastiCache for Redis OSS | Original engine | Existing deployments; features or versions not yet available on Valkey; an in-place engine upgrade from Redis OSS to Valkey is supported for many versions |
 | ElastiCache for Memcached | Multi-threaded, simple key-value, no replication | Pure, disposable object caching where simplicity and multi-threading matter and data structures are unnecessary |
@@ -3574,11 +3574,11 @@ In the node-based models, nodes are placed in a ==cache subnet group== (a set of
 | RBAC users and user groups | Per-application users with command and key-pattern permissions |
 | Encryption in transit and at rest | TLS and KMS |
 | Backups and snapshots | Point-in-time snapshots to warm a new cluster or migrate |
-| Vector search | Recent Valkey versions on ElastiCache support vector similarity search for semantic caching of generative AI responses; verify engine and deployment support |
+| Vector search | Vector similarity search for semantic caching of generative AI responses, generally available since October 2025 on Valkey 8.2 node-based clusters; Valkey 9.0 adds full-text and hybrid search; verify deployment support |
 
 #### Limitations
 
-- Asynchronous replication means failover can lose the latest writes.
+- Asynchronous replication means failover can lose the latest writes, unless the optional Multi-AZ transaction log introduced with ElastiCache for Valkey 9.0 (May 2026) is enabled in synchronous mode; verify deployment support before relying on it.
 - Multi-key operations in cluster mode require keys in the same hash slot (use hash tags such as `{user:42}:cart`).
 - Online scaling in cluster mode migrates hash slots between shards, which can cause brief elevated latency.
 - Memcached offers no replication, persistence, failover or backup at all.
@@ -3896,7 +3896,7 @@ Treat cached data with the same classification as its source. Personal data in a
 #### Logging and compliance
 
 - CloudTrail records control plane actions such as `CreateUser`, `ModifyReplicationGroup` and `CreateServerlessCache`.
-- Slow logs and engine logs can be delivered to CloudWatch Logs or Kinesis Data Firehose for node-based clusters.
+- Slow logs and engine logs can be delivered to CloudWatch Logs or Amazon Data Firehose for node-based clusters.
 - AWS Config rules can detect caches without encryption or without automatic backups.
 
 ### Performance Optimization

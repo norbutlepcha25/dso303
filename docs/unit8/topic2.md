@@ -395,7 +395,7 @@ Three deployment models are common:
 | Combined | Centralised egress and east-west inspection, distributed ingress inspection next to internet-facing ALBs | Balances control and latency | Most complex to operate |
 
 !!! warning "Symmetric routing through inspection"
-    Stateful firewalls must see both directions of a flow. In a centralised Transit Gateway design, enable ==appliance mode== on the inspection VPC attachment so that the Transit Gateway keeps both directions of a flow in the same Availability Zone. Without it, the return traffic can arrive at a different firewall endpoint, which has no state for the flow and drops it, producing intermittent failures that are extremely hard to diagnose. Network Firewall also supports native Transit Gateway attachment, which simplifies this model; verify the current options in the documentation.
+    Stateful firewalls must see both directions of a flow. In a centralised Transit Gateway design, enable ==appliance mode== on the inspection VPC attachment so that the Transit Gateway keeps both directions of a flow in the same Availability Zone. Without it, the return traffic can arrive at a different firewall endpoint, which has no state for the flow and drops it, producing intermittent failures that are extremely hard to diagnose. Since mid-2025 Network Firewall can also be attached natively to a Transit Gateway (a transit gateway-attached firewall, available in all Regions where both services exist), which removes the need to build and route an inspection VPC yourself.
 
 Route 53 Resolver DNS Firewall attaches ==rule groups== to VPCs. Each rule references a ==domain list== (customer-defined or AWS managed, such as lists for malware, botnet command and control and aggregated threat intelligence) and specifies an action: `ALLOW`, `BLOCK` (responding with `NODATA`, `NXDOMAIN` or an override answer) or `ALERT`. Advanced rules can detect DNS tunnelling and domain generation algorithm patterns without a list. A VPC-level setting chooses ==fail-open== (queries are allowed if DNS Firewall is impaired, favouring availability) or ==fail-closed== (queries are blocked, favouring security).
 
@@ -478,7 +478,7 @@ Terms already defined in [Chapter 1.6](../unit1/topic6.md#important-aws-terminol
 | Egress | Default allow all, or explicit rules | Remove the default outbound rule on sensitive tiers and add explicit rules |
 | Rule description | Free text | Record requirement and change reference; audited by reviewers |
 | Tags | Key-value pairs | Tag owner, service and environment; Firewall Manager and Config scope by tag |
-| VPC associations and sharing | Associate a group with additional VPCs in the same Region, share groups with participant accounts in a shared VPC | Reduces duplication in multi-VPC designs; verify current support |
+| VPC associations and sharing | Associate a group with additional VPCs in the same Region, share groups with participant accounts in a shared VPC | Reduces duplication in multi-VPC designs; available since October 2024, sharing is through AWS RAM within one organisation, and default security groups cannot be shared |
 
 #### Network Firewall configuration
 
@@ -1054,7 +1054,7 @@ Architectural lessons:
 
 ==AWS WAF is a managed web application firewall that inspects HTTP and HTTPS requests forwarded by integrated AWS services and allows, blocks, counts or challenges each request according to the rules in a web access control list (web ACL).== WAF operates at layer 7 and sees the request line, headers, cookies, query string, body, client IP address and TLS fingerprint.
 
-==AWS Shield is a managed distributed denial of service (DDoS) protection service.== ==Shield Standard== is automatically applied at no extra charge to all AWS customers and protects against the most common network and transport layer attacks. ==Shield Advanced== is a paid subscription adding enhanced detection and mitigation for specific protected resources, application-layer DDoS mitigation integrated with WAF, access to the Shield Response Team, cost protection and visibility.
+==AWS Shield is a managed distributed denial of service (DDoS) protection service.== ==Shield Standard== is automatically applied at no extra charge to all AWS customers and protects against the most common network and transport layer attacks. ==Shield Advanced== is a paid subscription adding enhanced detection and mitigation for specific protected resources, application-layer DDoS mitigation integrated with WAF, access to the Shield Response Team, cost protection and visibility. A separate capability, AWS Shield network security director (in preview since June 2025), analyses VPC network configurations and reports missing or misconfigured network security controls; it is a posture assessment tool, not a DDoS mitigation.
 
 WAF can be associated with the following resource types (verify the current list, which grows over time):
 
@@ -1067,9 +1067,12 @@ WAF can be associated with the following resource types (verify the current list
 | Amazon Cognito user pool | Regional | Protects sign-in and sign-up endpoints from abuse |
 | AWS App Runner service | Regional | Managed container web services |
 | AWS Verified Access instance | Regional | Protects zero trust access to internal applications |
-| AWS Amplify hosted applications | Global, through CloudFront | Verify current support |
+| AWS Amplify Hosting applications | Global, through CloudFront | Generally available since March 2025; Amplify adds a per-app monthly fee on top of WAF charges |
 
 WAF does ==not== attach to Network Load Balancers, Classic Load Balancers, EC2 instances directly or API Gateway HTTP and WebSocket APIs.
+
+!!! note "Current AWS WAF, not WAF Classic"
+    These notes describe the current AWS WAF (the `wafv2` API). The original AWS WAF Classic reached end of support on 30 September 2025, and its resources are not compatible with the current service. In 2025 AWS also introduced a new WAF console experience in which web ACLs are presented as protection packs with recommended rule sets per workload type; the underlying web ACL, its rules and the API are unchanged.
 
 ### Why This Service or Concept Exists
 
@@ -1574,8 +1577,8 @@ flowchart TB
 - ==Protect the evidence.== Logs in a separate, immutable archive are what make incident response and compliance possible.
 - ==Security controls can cause outages.== Stage changes, use Count mode and reachability tests, and treat network security configuration with the same engineering discipline as application code.
 
-!!! tip "Preparing for the examination and for practice"
-    For examinations and AWS Associate-level certifications, be able to decide, for a given scenario, ==which layer should stop the threat, which service implements that layer, how it is configured, how its effect is observed, and how it is governed across accounts==. Classic discriminators include: security groups (stateful, allow-only, per ENI) versus NACLs (stateless, allow and deny, per subnet); WAF (layer 7, HTTP) versus Shield (DDoS, layers 3, 4 and 7) versus Network Firewall (VPC traffic, IPS and domain filtering); GuardDuty (detection) versus Detective (investigation) versus Security Hub (posture and aggregation). In DSO303 projects, a design that shows tiered subnets, chained security groups, no inbound administrative ports, endpoint policies, Flow Logs to a protected bucket, and CloudFront with WAF in front of a cloaked origin demonstrates more security maturity than a long list of enabled services.
+!!! tip "Applying this in design and practice"
+    In a design review, a practical assessment or a technical interview, be able to decide, for a given scenario, ==which layer should stop the threat, which service implements that layer, how it is configured, how its effect is observed, and how it is governed across accounts==. Classic discriminators include: security groups (stateful, allow-only, per ENI) versus NACLs (stateless, allow and deny, per subnet); WAF (layer 7, HTTP) versus Shield (DDoS, layers 3, 4 and 7) versus Network Firewall (VPC traffic, IPS and domain filtering); GuardDuty (detection) versus Detective (investigation) versus Security Hub (posture and aggregation). In DSO303 projects, a design that shows tiered subnets, chained security groups, no inbound administrative ports, endpoint policies, Flow Logs to a protected bucket, and CloudFront with WAF in front of a cloaked origin demonstrates more security maturity than a long list of enabled services.
 
 !!! question "Practice and interview questions"
     Questions for this topic are kept separately: [Practice questions](../Questions/unit8.md#82-network-security) · [Interview questions](../interviewquestions/unit8.md#82-network-security).

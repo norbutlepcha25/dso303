@@ -174,7 +174,7 @@ Protection measures for the root user:
 
 | Measure | Why |
 |---------|-----|
-| Enable MFA, preferably a phishing-resistant FIDO2 security key or passkey; register more than one device | AWS now enforces root MFA for management and standalone accounts; multiple devices avoid lockout |
+| Enable MFA, preferably a phishing-resistant FIDO2 security key or passkey; register more than one device | Since June 2025 AWS enforces root MFA for all account types, including organisation member accounts that still have root credentials; multiple devices avoid lockout |
 | Delete or never create root access keys | Root keys cannot be restricted by IAM policies in a standalone account |
 | Use a distribution-list email address owned by the organisation | A root email tied to one employee's mailbox leaves with that employee |
 | Store the password in a controlled vault with a documented break-glass procedure | Root is needed rarely but must be available in an emergency |
@@ -302,7 +302,7 @@ A ==confused deputy== is a more-privileged entity tricked into acting on behalf 
 | On-premises servers | IAM Roles Anywhere with X.509 certificates from a trusted CA | `rolesanywhere.amazonaws.com` | Credential helper process | This part |
 
 !!! warning "Task role versus task execution role"
-    The ==task execution role== is used by the ECS agent before your code runs (image pull, secrets injection, log delivery); the ==task role== is used by your application code. Confusing the two is a classic examination trap. See [2.2 Amazon ECS](../unit2/topic2.md#security-considerations) for the full treatment of the ECS roles.
+    The ==task execution role== is used by the ECS agent before your code runs (image pull, secrets injection, log delivery); the ==task role== is used by your application code. Confusing the two is a common and costly mistake. See [2.2 Amazon ECS](../unit2/topic2.md#security-considerations) for the full treatment of the ECS roles.
 
 #### IRSA versus EKS Pod Identity
 
@@ -471,7 +471,7 @@ Selected default IAM quotas (==verify current values in the Service Quotas conso
 | Roles per account | 1,000 (adjustable) |
 | Access keys per user | 2 |
 | MFA devices per user or root | 8 |
-| Role trust policy size | 2,048 characters (adjustable up to 4,096) |
+| Role trust policy size | 2,048 characters (adjustable up to 8,192 since May 2026) |
 | Role maximum session duration | 12 hours |
 | Role chaining session duration | 1 hour |
 | Instance profiles per account | 1,000 (adjustable) |
@@ -948,12 +948,14 @@ Explicit deny precedence, default deny, conditions, boundaries, session policies
 |------|---------|------|
 | Managed policy document size | 6,144 characters | Whitespace not counted |
 | Managed policy versions retained | 5 | Delete old versions before creating more |
-| Managed policies attached per user, group or role | 10 | Adjustable up to 20 |
-| Customer managed policies per account | 1,500 | Adjustable |
+| Managed policies attached per role | 20 | Default raised from 10 in August 2026; adjustable up to 25 |
+| Managed policies attached per user | 10 | Adjustable up to 20 |
+| Managed policies attached per group | 10 | Not adjustable beyond 10 |
+| Customer managed policies per account | 1,500 | Adjustable up to 10,000 |
 | Inline policy aggregate per role | 10,240 characters | |
 | Inline policy aggregate per user | 2,048 characters | |
 | Inline policy aggregate per group | 5,120 characters | |
-| Session policy packed size | Limited; STS reports `PackedPolicySize` | Session tags share this budget |
+| Session policy size | 2,048 characters for the inline JSON plus managed policy ARNs (at most 10 ARNs) | Session policies and tags also count against the session token size, which STS reports as `SessionTokenUtilization` (the older `PackedPolicySize` is deprecated) |
 | Access Analyzer analyzers | Per Region per account or organisation | Verify in Service Quotas |
 
 ### Important AWS Terminology
@@ -1243,7 +1245,7 @@ SCPs are the preventive guardrail for ==principals==. Their properties are preci
 | Does not apply to | The ==management account==; ==service-linked roles==; principals outside the organisation accessing your resources (that is what RCPs are for) |
 | Inheritance | Effective SCP permissions at an account are the ==intersection== of the SCPs at the root, every OU on the path and the account: an action must be allowed at every level |
 | Default | `FullAWSAccess` is attached to every node when SCPs are enabled; removing it without a replacement allow denies everything |
-| Policy language | Uses IAM policy grammar without `Principal`; since 2025 SCPs support the full IAM policy language, including conditions and `NotResource` in allow statements (verify current documentation) |
+| Policy language | Uses IAM policy grammar without `Principal`; since September 2025 SCPs support the full IAM policy language, including conditions, individual resource ARNs and `NotAction` in `Allow` statements, and `NotResource` |
 | Effect timing | Immediate for new requests after propagation; existing sessions are also constrained |
 
 ```mermaid
@@ -1600,8 +1602,8 @@ flowchart TB
 - ==Use accounts for isolation and organisations for governance.== Small, single-purpose accounts with central guardrails give both autonomy and safety.
 - ==Audit everything, and make the audit tamper-resistant.== An organisation trail in a protected log archive turns every decision into evidence.
 
-!!! tip "Preparing for the examination and for practice"
-    For examinations and AWS Associate-level certifications, be able to take a scenario and state ==which principal makes the request, how it obtained credentials, which policies apply, how they are evaluated, and which organisation guardrail would prevent the failure==. Be ready to explain task role versus task execution role, trust policy versus permissions policy, SCP versus RCP versus permissions boundary, and why cross-account access needs both sides. In DSO303 projects, a design in which every service has its own role, pipelines are keyless, policies are validated in CI and CloudTrail is centralised demonstrates far more security maturity than any single advanced feature.
+!!! tip "Applying this in design and practice"
+    In a design review, a practical assessment or a technical interview, be able to take a scenario and state ==which principal makes the request, how it obtained credentials, which policies apply, how they are evaluated, and which organisation guardrail would prevent the failure==. Be ready to explain task role versus task execution role, trust policy versus permissions policy, SCP versus RCP versus permissions boundary, and why cross-account access needs both sides. In DSO303 projects, a design in which every service has its own role, pipelines are keyless, policies are validated in CI and CloudTrail is centralised demonstrates far more security maturity than any single advanced feature.
 
 !!! question "Practice and interview questions"
     Questions for this topic are kept separately: [Practice questions](../Questions/unit8.md#81-aws-identity-and-access-management) · [Interview questions](../interviewquestions/unit8.md#81-aws-identity-and-access-management).

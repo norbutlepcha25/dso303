@@ -307,7 +307,7 @@ To provide a managed relational database that preserves full SQL compatibility, 
 | **MariaDB** | MySQL fork |
 | **Oracle** | Bring Your Own Licence or Licence Included |
 | **Microsoft SQL Server** | Multiple editions; Licence Included or BYOL under specific terms |
-| **IBM Db2** | Available in RDS with BYOL |
+| **IBM Db2** | Bring Your Own Licence, or hourly licensing from IBM through AWS Marketplace |
 
 !!! tip "Choosing an Engine"
     For a greenfield cloud-native application with no licence constraints, **Aurora PostgreSQL** is the strong default: PostgreSQL's extension ecosystem (including `pgvector` for embeddings, `PostGIS` for geospatial and `pg_stat_statements` for query analysis) combined with Aurora's storage architecture is difficult to beat. Choose Oracle or SQL Server only when an existing application genuinely requires them; the licence cost frequently exceeds the infrastructure cost.
@@ -328,10 +328,10 @@ Aurora: a fleet of compute instances sharing a distributed, log-structured, six-
 | Manual snapshots | Both | Retained until explicitly deleted; copyable across Regions and accounts |
 | Encryption at rest with KMS | Both | Must be enabled at creation for RDS; cannot be added in place |
 | IAM database authentication | Both (MySQL and PostgreSQL) | Short-lived token instead of a password |
-| Performance Insights | Both | Database load visualised by wait event and by SQL statement |
+| CloudWatch Database Insights (successor to the Performance Insights console) | Both | Database load visualised by wait event and by SQL statement |
 | Enhanced Monitoring | Both | OS-level metrics at up to 1-second granularity |
 | RDS Proxy | Both | Connection pooling and multiplexing |
-| Blue/Green Deployments | RDS and Aurora (MySQL and PostgreSQL) | A synchronised staging environment for low-risk upgrades and schema changes |
+| Blue/Green Deployments | RDS for MySQL, MariaDB and PostgreSQL; Aurora MySQL and PostgreSQL, including Aurora Global Database | A synchronised staging environment for low-risk upgrades and schema changes |
 | Aurora Serverless v2 | Aurora only | Fine-grained automatic capacity scaling |
 | Aurora Global Database | Aurora only | Cross-Region replication with sub-second typical lag |
 | Aurora Backtrack | Aurora MySQL only | Rewind the cluster in place to a prior point without a restore |
@@ -415,7 +415,7 @@ Most RDS limits are **soft quotas** adjustable through AWS Support, and several 
 | Manual snapshots per Region | 100 | Yes |
 | Read replicas per source (engine-dependent) | 5 or 15 | Sometimes |
 | Aurora Replicas per cluster | 15 | No |
-| Aurora cluster storage maximum | 128 TiB for recent engine versions | No |
+| Aurora cluster storage maximum | 256 TiB on supported engine versions (128 TiB on older versions) | No |
 | Backup retention | 1 to 35 days | No  use manual snapshots or AWS Backup for longer |
 | Maximum database connections | Determined by a formula based on instance memory | Configurable via parameter group |
 | Security groups per DB instance | Small, engine-independent limit | Yes |
@@ -424,7 +424,7 @@ Most RDS limits are **soft quotas** adjustable through AWS Support, and several 
 
 | Scenario | Recommended Configuration |
 |---|---|
-| Production OLTP | Aurora PostgreSQL, Multi-AZ with at least one reader, encryption on, 14–35 day backup retention, RDS Proxy, Performance Insights enabled |
+| Production OLTP | Aurora PostgreSQL, Multi-AZ with at least one reader, encryption on, 14–35 day backup retention, RDS Proxy, Database Insights enabled |
 | Development and test | Aurora Serverless v2 with a low minimum ACU, or a small single-AZ RDS instance, 1-day backups |
 | Read-heavy public content | Aurora with several readers behind the reader endpoint, plus ElastiCache in front |
 | Reporting isolation | A dedicated read replica or a custom endpoint targeting reporting-sized readers |
@@ -754,7 +754,7 @@ Aurora DSQL is a serverless, distributed SQL database with PostgreSQL compatibil
 
 #### Aurora zero-ETL integration with Amazon Redshift
 
-A zero-ETL integration replicates data from an Aurora cluster (and, on supported versions, RDS for MySQL and RDS for PostgreSQL; verify current sources) into an Amazon Redshift provisioned cluster or Redshift Serverless workgroup, typically within seconds of commit. AWS manages the initial seeding and the continuous replication; you create the integration and then a database in Redshift from it.
+A zero-ETL integration replicates data from an Aurora cluster (and, on supported versions, RDS for MySQL, RDS for PostgreSQL and RDS for Oracle; verify current sources) into an Amazon Redshift provisioned cluster or Redshift Serverless workgroup, typically within seconds of commit. AWS manages the initial seeding and the continuous replication; you create the integration and then a database in Redshift from it.
 
 | Aspect | Detail |
 |---|---|
@@ -839,10 +839,10 @@ The `pgvector` extension, available on Aurora PostgreSQL and RDS for PostgreSQL,
 |---|---|---|---|
 | CloudWatch metrics | Instance-level metrics such as CPU, connections, latency, replica lag | 1 minute (some at higher resolution) | Is the database healthy? |
 | Enhanced Monitoring | Operating system metrics and process list, collected by an agent | 1 to 60 seconds | Is the host CPU, memory or I/O saturated, and by which process? |
-| Performance Insights | Database load (average active sessions) by wait event, SQL, user and host | Seconds | Which queries and waits are consuming the database? |
+| Performance Insights (API and metrics) | Database load (average active sessions) by wait event, SQL, user and host; since 31 July 2026 viewed through Database Insights rather than its own console | Seconds | Which queries and waits are consuming the database? |
 | CloudWatch Database Insights | A consolidated database observability experience in CloudWatch with fleet-level views, per-instance dashboards, and in the Advanced mode, deeper SQL-level analysis and longer retention | Seconds to minutes | Which databases in the fleet are unhealthy, and why? |
 
-CloudWatch metric, alarm and dashboard mechanics are covered in [7.1 Monitoring](../unit7/topic1.md#infrastructure-and-application-monitoring-with-amazon-cloudwatch); this table covers only the database-specific tools. AWS has been consolidating Performance Insights capabilities into CloudWatch Database Insights. New designs should plan on Database Insights (Standard or Advanced mode) as the primary tool and verify the current status of the standalone Performance Insights experience.
+CloudWatch metric, alarm and dashboard mechanics are covered in [7.1 Monitoring](../unit7/topic1.md#infrastructure-and-application-monitoring-with-amazon-cloudwatch); this table covers only the database-specific tools. AWS has consolidated Performance Insights into CloudWatch Database Insights: the Performance Insights console experience reached end of life on 31 July 2026 and now redirects to Database Insights. The Performance Insights API and its retention settings are preserved; execution plans and on-demand analysis are available only in Database Insights Advanced mode. Plan on Database Insights as the primary tool.
 
 !!! tip "Connect database load to application traces"
     Database load alone tells you which SQL is expensive. A trace from AWS X-Ray or the AWS Distro for OpenTelemetry tells you which API call issued it. Instrument JDBC or `psycopg` calls with ADOT so that trace spans carry the SQL operation, then correlate the span with the Database Insights top-SQL view. This turns "the database is slow" into "the `GET /orders` endpoint issues an unindexed query".
@@ -954,7 +954,7 @@ Terms such as Multi-AZ, read replica, ACU, PITR, cluster endpoint and RDS Proxy 
 | Parameter group | Custom groups allow tuning of `max_connections`, `work_mem`, `shared_buffers`, timeouts, and logging. Note that static parameters require a reboot |
 | Option group | Engine-specific features such as Oracle Transparent Data Encryption, SQL Server Audit, or MariaDB audit plugin |
 | Encryption at rest | Enable at creation with a KMS key; it cannot be enabled in place (see [8.3 Data Protection](../unit8/topic3.md#encryption-at-rest-with-aws-kms)) |
-| Performance Insights | Enable it. The retention period beyond the free tier is billable but the diagnostic value is high |
+| Database Insights | Enable it. Standard mode is the baseline; Advanced mode (execution plans, on-demand analysis, 15 months of metrics) is billable but its diagnostic value is high for production |
 | Deletion protection | Enable in production; it prevents accidental deletion through the API or console |
 | Aurora Serverless v2 capacity range | Minimum and maximum Aurora Capacity Units; the minimum determines both cost floor and cold-scaling behaviour |
 
@@ -2404,7 +2404,7 @@ IAM identity policies with fine-grained conditions, resource-based policies with
 | `BatchGetItem` | 100 items or 16 MB |
 | `BatchWriteItem` | 25 put or delete requests or 16 MB |
 | Tables per Region | 2,500 (adjustable) |
-| PITR window | 35 days |
+| PITR window | Configurable per table, 1 to 35 days (default 35) |
 | DynamoDB Streams retention | 24 hours |
 | Kinesis Data Streams for DynamoDB retention | Up to 365 days |
 | Stream readers per shard | Recommended at most two concurrent consumers |
@@ -4454,7 +4454,7 @@ flowchart TB
 | Redshift Managed Storage (RMS) | For RA3 nodes and Serverless: durable storage in S3 with high-performance local SSD caching of hot blocks; storage scales independently of compute |
 | Result cache | Caches results of repeated identical queries on the leader node when underlying data has not changed |
 
-==RA3 node types== (for example `ra3.large`, `ra3.xlplus`, `ra3.4xlarge` and `ra3.16xlarge`, indicative as of 2026) are the current generation for provisioned clusters. Older ==DC2== dense-compute nodes with local storage are legacy; AWS recommends migrating to RA3 or Serverless.
+==RA3 node types== (for example `ra3.large`, `ra3.xlplus`, `ra3.4xlarge` and `ra3.16xlarge`, indicative as of 2026) are the current generation for provisioned clusters. Older ==DC2== dense-compute nodes with local storage are deprecated (announced April 2025); AWS directs customers to migrate to RA3 or Serverless.
 
 ##### Redshift Serverless
 
@@ -4479,7 +4479,7 @@ flowchart LR
 | Namespace | Collection of database objects and users, plus storage, encryption key and snapshots |
 | Workgroup | Collection of compute resources, network configuration and limits, associated with one namespace |
 | RPU | Redshift Processing Unit, the unit of Serverless compute; indicatively each RPU provides about 16 GB of memory |
-| Base capacity | The RPU level at which queries start; default 128 RPUs; configurable from a small minimum (indicatively 8, with lower minimums introduced in some configurations) up to several hundred RPUs (indicatively 512 or more) in steps |
+| Base capacity | The RPU level at which queries start; default 128 RPUs; configurable from a small minimum (4 RPUs in most Regions since 2025, previously 8) up to several hundred RPUs (indicatively 512 or more) in steps |
 | Maximum capacity | Optional ceiling on RPUs the workgroup may scale to |
 | AI-driven scaling and optimisation | Optional mode in which you set a price-performance target and Redshift adjusts capacity and optimisations; verify current availability |
 | Usage limits | Daily, weekly or monthly RPU-hour limits with alert, log or disable actions |
@@ -4629,7 +4629,7 @@ Indicative, as of 2026; verify in Service Quotas and the Redshift documentation.
 | Limit | Indicative value |
 |-------|------------------|
 | Nodes per provisioned cluster | Up to 128 for large RA3 node types (lower for smaller types) |
-| Serverless base capacity | From a small minimum (about 8 RPUs) to 512 RPUs or more |
+| Serverless base capacity | From a small minimum (4 RPUs in most Regions, 8 in others) to 512 RPUs or more |
 | Manual WLM queues | Up to 8 user queues; total concurrency slots up to 50 |
 | Tables per cluster | Tens of thousands (for example about 200,000 for large node types) |
 | Columns per table | 1,600 |
@@ -4701,7 +4701,7 @@ Terms such as OLTP, OLAP, VPC, KMS, IAM role and Multi-AZ are defined in [Chapte
 |--------|---------|----------|
 | Deployment | Provisioned or Serverless | Serverless for variable or new workloads; provisioned RA3 for steady high utilisation |
 | Node type and count (provisioned) | RA3 sizes; number of nodes | Size compute for workload; storage scales independently in RMS |
-| Base RPUs (Serverless) | Small minimum up to hundreds of RPUs | Start low for development (for example 8 to 32); raise for heavy ETL or large joins |
+| Base RPUs (Serverless) | Small minimum up to hundreds of RPUs | Start low for development (for example 4 to 32); raise for heavy ETL or large joins |
 | Max RPUs (Serverless) | Optional ceiling | Always set in shared or student accounts |
 | Usage limits | RPU-hours per day, week or month; action alert, log or turn off user queries | Prevent runaway cost |
 | Multi-AZ | On or off (provisioned RA3) | On for business-critical warehouses |

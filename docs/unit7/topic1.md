@@ -115,7 +115,7 @@ In the AWS architecture map CloudWatch belongs to the ==Management and Governanc
 | Investigations | AI-assisted incident analysis | [Section 7.3.2](../unit7/topic3.md#automated-incident-response-with-aws-lambda) |
 
 !!! note "CloudWatch is not one product"
-    CloudWatch began in 2009 as a simple metrics service for EC2. It has grown into an umbrella for more than a dozen capabilities. When an exam question or colleague says "CloudWatch", ask which capability is meant. Each has its own pricing dimension, and each appears as a separate line on the bill.
+    CloudWatch began in 2009 as a simple metrics service for EC2. It has grown into an umbrella for more than a dozen capabilities. When a design document or colleague says "CloudWatch", ask which capability is meant. Each has its own pricing dimension, and each appears as a separate line on the bill.
 
 ### Why This Service or Concept Exists
 
@@ -288,7 +288,7 @@ stateDiagram-v2
 | Detailed monitoring | 1 minute | Charged as custom metrics | Auto Scaling groups that must react quickly, production workloads |
 
 !!! warning "What EC2 cannot see"
-    The hypervisor measures what it can see from outside the guest: CPU, network, disk operations on instance store, and status checks. It ==cannot see memory usage or file-system usage inside the guest operating system==. A classic exam and interview question asks why there is no memory metric for EC2 by default. The answer is the CloudWatch agent, described below.
+    The hypervisor measures what it can see from outside the guest: CPU, network, disk operations on instance store, and status checks. It ==cannot see memory usage or file-system usage inside the guest operating system==. A common interview question asks why there is no memory metric for EC2 by default. The answer is the CloudWatch agent, described below.
 
 #### Custom metrics and the four ways to publish them
 
@@ -470,7 +470,7 @@ flowchart TB
 | `EphemeralStorageUtilized` (ECS on Fargate) | Tasks that fill their ephemeral storage fail in confusing ways |
 
 !!! info "OpenTelemetry-based Container Insights for EKS"
-    In April 2026 AWS launched, in public preview, ==OTel Container Insights for Amazon EKS==, which sends Container Insights metrics over OTLP with up to 150 descriptive labels and supports PromQL querying in CloudWatch. At the time of writing it is available in a limited set of Regions and free during preview. Treat it as the likely future direction and check the Container Insights documentation for its current status before using it in a design.
+    In April 2026 AWS launched, in public preview, ==OTel Container Insights for Amazon EKS==, which sends Container Insights metrics over OTLP with up to 150 descriptive labels and supports PromQL querying in CloudWatch. In June 2026 it was launched in all commercial Regions except Middle East (UAE), Middle East (Bahrain) and Israel (Tel Aviv), priced per GB ingested. It requires a recent version of the CloudWatch Observability EKS add-on, which can publish the classic and OTel metrics side by side during migration. Treat it as the likely future direction and check the Container Insights documentation for its current status before using it in a design.
 
 #### Lambda Insights (recap)
 
@@ -499,7 +499,7 @@ It adds an automatically discovered ==application map== of services and dependen
 | Amazon ECS | ADOT SDK in the container plus the CloudWatch agent as a sidecar or daemon; service and environment names set by configuration |
 | Amazon EC2 | ADOT SDK plus the CloudWatch agent |
 | AWS Lambda | Enabled per function; uses an ADOT Lambda layer |
-| Languages | Java, Python, Node.js and .NET (check the documentation for current additions) |
+| Languages | Java, Python, Node.js and .NET with ADOT; Go, Ruby and PHP through upstream OpenTelemetry zero-code instrumentation with Transaction Search enabled (check the documentation for current additions) |
 
 ```mermaid
 flowchart LR
@@ -1295,7 +1295,7 @@ AWS responded by publishing the ==AWS Distro for OpenTelemetry (ADOT)== and, in 
 | From 25 February 2027 | End of support: no updates; existing releases remain downloadable |
 
 !!! warning "What this means for DSO303 projects"
-    New services in this module should be instrumented with ==OpenTelemetry (ADOT or upstream OpenTelemetry SDKs)== and export to X-Ray through the CloudWatch agent, an ADOT collector or the X-Ray OTLP endpoint. You will still meet the X-Ray SDK and daemon in existing code, older tutorials, AWS Academy materials and certification questions, so you must understand their concepts, which map directly onto OpenTelemetry concepts. Plan migrations of existing X-Ray SDK code before February 2027.
+    New services in this module should be instrumented with ==OpenTelemetry (ADOT or upstream OpenTelemetry SDKs)== and export to X-Ray through the CloudWatch agent, an ADOT collector or the X-Ray OTLP endpoint. You will still meet the X-Ray SDK and daemon in existing code, older tutorials and AWS Academy materials, so you must understand their concepts, which map directly onto OpenTelemetry concepts. Plan migrations of existing X-Ray SDK code before February 2027.
 
 #### Benefits over older methods
 

@@ -303,7 +303,7 @@ When creating a customer managed key you choose a ==key spec== (the type of key 
 | RSA | `RSA_2048`, `RSA_3072`, `RSA_4096` | `ENCRYPT_DECRYPT` or `SIGN_VERIFY` | Encryption by parties outside AWS using the public key; signatures |
 | Elliptic curve | `ECC_NIST_P256`, `ECC_NIST_P384`, `ECC_NIST_P521`, `ECC_SECG_P256K1` | `SIGN_VERIFY` or `KEY_AGREEMENT` | Digital signatures (JWT, code signing, documents), ECDH key agreement |
 | HMAC | `HMAC_224`, `HMAC_256`, `HMAC_384`, `HMAC_512` | `GENERATE_VERIFY_MAC` | Tokens, message integrity, deterministic identifiers |
-| Post-quantum signatures | ML-DSA key specs (newer; availability may vary) | `SIGN_VERIFY` | Future-proof signing; verify current Regional availability |
+| Post-quantum signatures | `ML_DSA_44`, `ML_DSA_65`, `ML_DSA_87` (generally available since June 2025) | `SIGN_VERIFY` | Quantum-resistant signing for long-lived signatures such as firmware and documents |
 | China Regions | `SM2` and SM4-based symmetric | Various | Regulatory requirements in China Regions |
 
 !!! info "Why AWS services only accept symmetric keys"
@@ -334,7 +334,7 @@ Reasons to import:
 - The organisation wants an independent, offline copy of key material for escrow.
 - The organisation wants to set an ==expiration time== after which KMS deletes the material automatically, or to delete it immediately with `DeleteImportedKeyMaterial`.
 
-Trade-offs: ==you become responsible for the durability of the key material==. If KMS deletes it (expiry or deletion) and you have lost your copy, data is unrecoverable. Automatic rotation is not available for imported material; rotation must be performed by importing new material with on-demand rotation where supported (a relatively recent capability; verify current support), or by creating a new key and re-encrypting.
+Trade-offs: ==you become responsible for the durability of the key material==. If KMS deletes it (expiry or deletion) and you have lost your copy, data is unrecoverable. Automatic rotation is not available for imported material; rotation must be performed by importing new material and calling on-demand rotation (supported for symmetric keys since June 2025), or by creating a new key and re-encrypting.
 
 #### Custom key stores: CloudHSM and external key store
 
@@ -457,7 +457,7 @@ Condition keys let the key policy express ==how== and ==from where== a key may b
 |---------------|------------|-----------|
 | Automatic rotation | Symmetric customer managed keys with KMS-generated material | Off by default; when enabled, rotation period is configurable from ==90 to 2,560 days== (default 365) |
 | AWS managed keys | `aws/*` keys | Rotated automatically every year; cannot be changed |
-| On-demand rotation | Symmetric customer managed keys, including, more recently, keys with imported material | `RotateKeyOnDemand` rotates immediately, independent of the automatic schedule; a limited number of on-demand rotations per key is allowed (verify quota) |
+| On-demand rotation | Symmetric customer managed keys, including (since June 2025) keys with imported material | `RotateKeyOnDemand` rotates immediately, independent of the automatic schedule; at most 10 on-demand rotations per key |
 | Not supported | Asymmetric keys, HMAC keys, keys in custom key stores | Rotate manually: create a new key, update aliases and applications, keep the old key for decryption or verification |
 
 ```mermaid
@@ -495,7 +495,7 @@ flowchart LR
 | SSE-S3 | S3 (AWS owned keys) | No | No per-object key audit | Baseline; default for every new object since 2023 |
 | SSE-KMS | KMS key: AWS managed `aws/s3` or customer managed | Yes | CloudTrail `GenerateDataKey` and `Decrypt` events | Separate permission to read data (needs S3 and KMS access), audit, cross-account, crypto-shredding |
 | DSSE-KMS | KMS key, with two independent layers of encryption applied by S3 | Yes | Yes | Compliance frameworks requiring dual-layer encryption (for example some US government standards) |
-| SSE-C | You supply the key with every request; S3 does not store it | No | No | Legacy requirements to manage keys entirely outside AWS; AWS has announced that SSE-C is blocked by default on new buckets, so verify current behaviour before designing with it |
+| SSE-C | You supply the key with every request; S3 does not store it | No | No | Legacy requirements to manage keys entirely outside AWS; since April 2026 SSE-C is disabled by default on new buckets (and on existing buckets in accounts with no SSE-C objects), and must be explicitly re-enabled through the bucket encryption configuration before it can be used |
 | Client-side encryption | Your application (often with KMS through the Encryption SDK or S3 Encryption Client) | Optional | Yes if KMS is used | S3 must never see plaintext; end-to-end confidentiality |
 
 !!! tip "SSE-KMS creates a second authorisation layer"
@@ -869,7 +869,7 @@ Key terms:
 - ==Subject Alternative Name (SAN)==: the list of hostnames a certificate is valid for; wildcards such as `*.example.com` cover one label level.
 - ==SNI (Server Name Indication)==: the client includes the requested hostname in `ClientHello`, allowing one IP address or load balancer to present different certificates for different domains. ALB, NLB and CloudFront use SNI to select among multiple certificates.
 - ==Forward secrecy==: ephemeral key exchange ensures that compromise of a server's long-term private key does not reveal past sessions.
-- ==Certificate validity==: industry rules (the CA/Browser Forum) are progressively shortening the maximum validity of public certificates, from 398 days to 200 days from 2026 and towards 47 days by 2029. Automation such as ACM renewal becomes mandatory rather than optional.
+- ==Certificate validity==: industry rules (the CA/Browser Forum) are progressively shortening the maximum validity of public certificates, from 398 days to 200 days from 15 March 2026, 100 days from March 2027 and 47 days by 2029. ACM adopted the first step in February 2026: new and renewed ACM public certificates are valid for 198 days (previously 395) and are renewed 45 days before expiry, while ACM private certificates remain at 395 days. Automation such as ACM renewal becomes mandatory rather than optional.
 
 #### Public and private certificates
 
@@ -955,7 +955,7 @@ In ordinary TLS only the server presents a certificate. In ==mutual TLS (mTLS)==
 
 | Option | Encryption and identity | Status and notes |
 |--------|------------------------|------------------|
-| AWS App Mesh | Envoy sidecars with TLS and mTLS using ACM Private CA or file certificates | ==Being discontinued: AWS announced end of support on 30 September 2026==; new designs should not use it, and existing users should migrate |
+| AWS App Mesh | Envoy sidecars with TLS and mTLS using ACM Private CA or file certificates | ==Discontinued: AWS ended support on 30 September 2026==; new designs must not use it, and any remaining users should migrate |
 | Amazon VPC Lattice | Managed application networking across VPCs and accounts; HTTPS listeners with ACM certificates, IAM authentication policies (SigV4) for service-to-service authorisation, TLS passthrough option | AWS-recommended successor for many App Mesh use cases on ECS, EKS, Lambda and EC2 |
 | Amazon ECS Service Connect | Service discovery and proxying for ECS; optional TLS with certificates from AWS Private CA, rotated automatically | Suitable for ECS-only estates |
 | Istio or Linkerd on EKS | Automatic mTLS between pods using mesh-issued workload certificates, optionally chained to AWS Private CA (for example through cert-manager with the AWS Private CA issuer) | Most feature-rich; highest operational effort ([Chapter 3.3](../unit3/topic3.md)) |
@@ -966,7 +966,7 @@ A ==TLS security policy== on a load balancer or CloudFront determines the protoc
 
 | Service | Example policy names | Guidance |
 |---------|---------------------|----------|
-| ALB and NLB | `ELBSecurityPolicy-TLS13-1-2-2021-06` (TLS 1.3 and 1.2, default for new listeners), `ELBSecurityPolicy-TLS13-1-3-2021-06` (TLS 1.3 only), FIPS and post-quantum hybrid variants | Use a TLS 1.2+ policy; TLS 1.3-only where all clients support it; FIPS policies for regulated workloads |
+| ALB and NLB | `ELBSecurityPolicy-TLS13-1-2-Res-PQ-2025-09` (TLS 1.3 and 1.2 with hybrid post-quantum ML-KEM key exchange; the console default for new ALB listeners), `ELBSecurityPolicy-TLS13-1-2-2021-06` (TLS 1.3 and 1.2), `ELBSecurityPolicy-TLS13-1-3-2021-06` (TLS 1.3 only), FIPS variants; listeners created through the CLI, CloudFormation or CDK without a policy still default to the older `ELBSecurityPolicy-2016-08`, so set the policy explicitly in IaC | Use a TLS 1.2+ policy; TLS 1.3-only where all clients support it; FIPS policies for regulated workloads |
 | CloudFront viewer | `TLSv1.2_2021` and newer | TLS 1.2 minimum |
 | API Gateway custom domains | TLS 1.2 security policies, with newer enhanced policies | Avoid TLS 1.0 policies |
 
@@ -1481,8 +1481,8 @@ flowchart TB
 - ==Everything as code.== IAM policies, security groups, key policies, certificates and secret definitions belong in reviewed infrastructure as code ([Chapter 5.3](../unit5/topic3.md)), so that security posture is repeatable, testable and auditable.
 - ==Security enables delivery.== Well-designed guardrails let teams deploy quickly and safely; controls that require manual exceptions are bypassed.
 
-!!! tip "Preparing for the examination and for practice"
-    For examinations and AWS Associate-level certifications, be able to state for a given scenario ==which key type and key policy protect the data, how envelope encryption and Bucket Keys affect cost and throttling, where TLS terminates and where the certificate lives (including the us-east-1 rule), how client identity is proven, where the credential is stored and how it rotates, and which log proves that the control worked==. In DSO303 projects, an architecture diagram that marks every encrypted hop, every KMS key with its owner, and every secret with its rotation schedule demonstrates more security maturity than a long list of enabled services.
+!!! tip "Applying this in design and practice"
+    In a design review, a practical assessment or a technical interview, be able to state for a given scenario ==which key type and key policy protect the data, how envelope encryption and Bucket Keys affect cost and throttling, where TLS terminates and where the certificate lives (including the us-east-1 rule), how client identity is proven, where the credential is stored and how it rotates, and which log proves that the control worked==. In DSO303 projects, an architecture diagram that marks every encrypted hop, every KMS key with its owner, and every secret with its rotation schedule demonstrates more security maturity than a long list of enabled services.
 
 !!! question "Practice and interview questions"
     Questions for this topic are kept separately: [Practice questions](../Questions/unit8.md#83-data-protection-and-encryption) · [Interview questions](../interviewquestions/unit8.md#83-data-protection-and-encryption).

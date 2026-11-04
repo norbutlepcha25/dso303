@@ -1550,8 +1550,8 @@ Diagnosis is typically the longest phase of an incident, because the responder m
 | Output | Observations, a topology of affected resources, and root-cause hypotheses in natural language that engineers accept or discard to steer the analysis |
 | Remediation | Suggests relevant SSM Automation runbooks and AWS re:Post articles, and can run a selected runbook |
 | Records | An investigation feed with notes, and an automatically generated incident report capturing findings, timeline and recommended actions |
-| Configuration | One investigation group per account, with an IAM role that defines what the investigation may read, retention and optional encryption with a KMS key; cross-account analysis through cross-account observability |
-| Quotas | Indicatively, two concurrent active investigations per group and 150 enhanced (AI-analysed) investigations per account per month |
+| Configuration | One investigation group per account per Region, with an IAM role that defines what the investigation may read, retention and optional encryption with a KMS key; cross-account analysis through cross-account observability |
+| Quotas | Two concurrent active investigations and 150 AI-assisted investigations per month, per account per Region (neither adjustable at the time of writing) |
 | Cost | No additional charge for the feature itself; queries it runs on your behalf may incur normal CloudWatch charges |
 
 To start an investigation automatically, add the investigation group ARN as an alarm action. An optional deduplication string groups related alarms into one investigation instead of opening several:
@@ -3205,8 +3205,8 @@ flowchart LR
 - ==Evidence beats intuition.== Performance, cost and reliability decisions should be justified by telemetry, experiments and recommendations, and recorded next to the configuration they change.
 - ==Balance insight and cost.== Observability typically costs a modest share of infrastructure spend; spend it on the signals that shorten incidents and improve designs, and cut the noise.
 
-!!! tip "Preparing for the examination and for practice"
-    For examinations and AWS Associate-level certifications, be able to explain, for a given scenario, ==which signal detects the problem, which alarm configuration avoids false positives, which service routes the event, which executor responds, and which tool proves the fix==. In DSO303 projects, a small, complete loop (an SLO with burn-rate alarms, an enriched chat notification, an automated rollback and a load-tested, right-sized service) demonstrates more architectural maturity than a large collection of unconnected dashboards.
+!!! tip "Applying this in design and practice"
+    In a design review, a practical assessment or a technical interview, be able to explain, for a given scenario, ==which signal detects the problem, which alarm configuration avoids false positives, which service routes the event, which executor responds, and which tool proves the fix==. In DSO303 projects, a small, complete loop (an SLO with burn-rate alarms, an enriched chat notification, an automated rollback and a load-tested, right-sized service) demonstrates more architectural maturity than a large collection of unconnected dashboards.
 
 !!! question "Practice and interview questions"
     Questions for this topic are kept separately: [Practice questions](../Questions/unit7.md#73-observability-and-alerting) · [Interview questions](../interviewquestions/unit7.md#73-observability-and-alerting).

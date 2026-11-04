@@ -881,7 +881,7 @@ sequenceDiagram
 | FIFO | Scales up to the number of active message groups; messages within a group are processed in order, one batch at a time |
 
 !!! note "Provisioned mode"
-    AWS has introduced a provisioned mode for SQS event source mappings, in which you configure minimum and maximum pollers for faster, more predictable scaling of high-volume queues. It is charged differently from the default mode. Verify the current behaviour and pricing in the Lambda Developer Guide before relying on it.
+    In November 2025 AWS made a provisioned mode for SQS event source mappings generally available, in which you configure minimum and maximum event pollers for faster, more predictable scaling of high-volume queues (AWS cites up to three times faster scaling and up to 20,000 concurrent executions). It is billed in Event Poller Units rather than being included in the default mode. Verify the current limits and pricing in the Lambda Developer Guide before relying on it.
 
 ##### Maximum concurrency versus reserved concurrency
 
@@ -1340,7 +1340,7 @@ FIFO topics extend ordered, deduplicated semantics across fan-out:
 
 - Every published message has a ==message group ID==. Messages in the same group are delivered to each subscribed queue ==in the order published==.
 - Every message has a ==deduplication ID== (explicit or derived by content-based deduplication, a SHA-256 hash of the body). Duplicates published within the ==5-minute== deduplication interval are accepted but not delivered.
-- FIFO topics deliver only to ==SQS queues==. AWS originally required FIFO queues; AWS documentation now also describes delivering from FIFO topics to standard queues, in which case ordering and deduplication are not preserved in the standard queue. Verify current support for your design.
+- FIFO topics deliver only to ==SQS queues==. AWS originally required FIFO queues; since September 2023 FIFO topics can also deliver to standard queues, in which case ordering and deduplication are not preserved in the standard queue.
 - FIFO topics support far fewer subscriptions per topic (documented at 100) than standard topics.
 
 ```mermaid
@@ -2062,7 +2062,7 @@ Delivery status logging complements metrics by recording the outcome of each del
 
 #### Amazon SQS
 
-The fan-out pattern described in Core Concepts. SNS standard topics deliver to SQS standard queues (and can deliver to FIFO queues, but without ordering guarantees); FIFO topics deliver to SQS queues with ordering preserved in FIFO queues. SNS standard topics can also feed SQS fair queues by setting a message group ID, which helps multi-tenant consumers (the Amazon SQS part of this section).
+The fan-out pattern described in Core Concepts. SNS standard topics deliver to SQS standard queues; FIFO topics deliver to both SQS FIFO and standard queues, with ordering and deduplication preserved only in the FIFO queues. When order matters, pair a FIFO topic with FIFO queues. SNS standard topics can also feed SQS fair queues by setting a message group ID, which helps multi-tenant consumers (the Amazon SQS part of this section).
 
 #### AWS Lambda
 
@@ -2477,7 +2477,7 @@ A Kinesis ==record== is the unit of data stored in a stream. It consists of:
 | Sequence number | Kinesis | Unique, increasing identifier within the shard |
 | Approximate arrival timestamp | Kinesis | Time the stream accepted the record |
 
-The maximum payload size was 1 MB for most of the service's history. AWS has since announced support for larger records (up to 10 MiB); treat any size above 1 MB as a design exception, check the current quota for your stream, and prefer the ==claim-check pattern== ([Message size and the claim-check pattern](#message-size-and-the-claim-check-pattern) in the Amazon SQS part) for large objects.
+The maximum payload size was 1 MB for most of the service's history. In October 2025 AWS added support for larger records (up to 10 MiB), enabled per stream with the `UpdateMaxRecordSize` API; the default remains 1 MiB, and consumers must be checked before the limit is raised. Treat any size above 1 MB as a design exception, check the current setting for your stream, and prefer the ==claim-check pattern== ([Message size and the claim-check pattern](#message-size-and-the-claim-check-pattern) in the Amazon SQS part) for large objects.
 
 #### Shards, partition keys and the hash key space
 
@@ -2705,7 +2705,7 @@ A write request is authenticated with SigV4, checked against the shard's through
 
 !!! note "On-demand is not infinitely elastic instantaneously"
 
-    On-demand mode scales by provisioning shards behind the scenes, so a sudden traffic increase to more than double the previous peak within minutes can still throttle. For a known event such as a product launch or an examination-results day, pre-warm by switching to provisioned mode with generous shards, or by generating the expected peak in advance, then switch back. AWS has also introduced options to pre-provision baseline capacity for on-demand streams; check current documentation.
+    On-demand mode scales by provisioning shards behind the scenes, so a sudden traffic increase to more than double the previous peak within minutes can still throttle. For a known event such as a product launch or an examination-results day, pre-warm by switching to provisioned mode with generous shards, or by generating the expected peak in advance, then switch back. Since November 2025, On-demand Advantage mode also lets you set warm throughput on an on-demand stream so that a known peak is absorbed instantly, with committed-usage pricing aimed at larger aggregate volumes (since July 2026 warm throughput can also be lowered again); check current documentation and pricing.
 
 ##### Resharding
 
@@ -2799,7 +2799,7 @@ Indicative, as of 2026; verify in Service Quotas:
 |---|---|
 | Write per shard | 1 MB/s or 1,000 records/s |
 | Read per shard, shared | 2 MB/s and 5 transactions/s |
-| `PutRecords` batch | 500 records per request, with a total request size limit (historically 5 MB) |
+| `PutRecords` batch | 500 records per request, with a total request size limit (5 MiB historically; 10 MiB since October 2025) |
 | Enhanced fan-out consumers per stream | 20 by default (check whether increased for your account) |
 | Retention | 24 hours to 8,760 hours (365 days) |
 | Shards per account per Region | Soft limit, several hundred by default depending on Region |
@@ -4442,8 +4442,8 @@ This is the integrated decision matrix for Unit VI, combining all four parts of 
 | Dimension | SQS Standard | SQS FIFO | SNS Standard | SNS FIFO | EventBridge | Kinesis Data Streams | Amazon MSK |
 |---|---|---|---|---|---|---|---|
 | Primary abstraction | Work queue | Ordered work queue | Pub/sub topic | Ordered pub/sub topic | Content-based event router | Sharded log | Partitioned log (Kafka) |
-| Interaction style | Pull, competing consumers | Pull, competing per group | Push | Push to SQS FIFO | Push to targets | Pull or push (EFO) | Pull, consumer groups |
-| Consumers per message | One | One | Many subscriptions | Many SQS FIFO subscriptions | Up to 5 targets per rule, many rules | Many independent | Many consumer groups |
+| Interaction style | Pull, competing consumers | Pull, competing per group | Push | Push to SQS queues (FIFO for ordering) | Push to targets | Pull or push (EFO) | Pull, consumer groups |
+| Consumers per message | One | One | Many subscriptions | Many SQS subscriptions (FIFO or standard) | Up to 5 targets per rule, many rules | Many independent | Many consumer groups |
 | Ordering | Best effort | Per message group | None | Per message group | None | Per shard | Per partition |
 | Deduplication | None | 5-minute window | None | 5-minute window | None | None | Idempotent and transactional producers |
 | Retention | Up to 14 days, until deleted | Up to 14 days | None | Archive and replay available | None; archive optional | 24 hours to 365 days | Configurable; tiered storage for long retention |
@@ -4452,7 +4452,7 @@ This is the integrated decision matrix for Unit VI, combining all four parts of 
 | Transformation | No | No | No | No | Input transformer; Pipes templates | No | Via Connect or stream processing |
 | Throughput | Nearly unlimited | High with high-throughput mode | Very high | Lower, per-topic limits | High, soft per-Region quotas | Linear with shards | Very high, broker-dependent |
 | Typical latency | Milliseconds to poll | Milliseconds | Tens of milliseconds | Tens of milliseconds | Sub-second | About 70 ms (EFO) to around 1 s | Milliseconds |
-| Max message size | 1 MiB (raised from 256 KiB in 2025; see the Amazon SQS part of this section) | 1 MiB | 256 KB | 256 KB | 1 MB (since January 2026) | 1 MB historically; larger supported, verify | Configurable (1 MB default) |
+| Max message size | 1 MiB (raised from 256 KiB in 2025; see the Amazon SQS part of this section) | 1 MiB | 256 KiB by default; up to 1 MiB by topic setting (since September 2026, limited protocols) | 256 KiB by default; up to 1 MiB by topic setting (since September 2026, limited protocols) | 1 MB (since January 2026) | 1 MiB by default; up to 10 MiB per stream (since October 2025) | Configurable (1 MB default) |
 | Cross-account | Queue policy | Queue policy | Topic policy | Topic policy | Native, organisation-aware | Stream resource policy | Multi-VPC private connectivity, IAM |
 | AWS service events source | No | No | Some services publish to SNS | No | Yes, native from most services | Some services (CloudWatch Logs, DynamoDB, IoT) | No |
 | Pricing basis | Per request | Per request (higher) | Per publish and delivery | Per publish and delivery (higher) | Per event per hop | Shard-hours or GB | Broker or cluster hours plus storage |
