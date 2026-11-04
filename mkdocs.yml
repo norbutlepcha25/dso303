@@ -216,23 +216,23 @@ nav:
       - 5.2 CI/CD Pipelines with CodePipeline and ECR: unit5/topic2.md
       - 5.3 Infrastructure as Code: unit5/topic3.md
 
-#   - Unit 6:
-#       - Overview: unit6/overview.md
-#       - 6.1 AWS Storage Solutions: unit6/topic1.md
-#       - 6.2 AWS Database Services: unit6/topic2.md
-#       - 6.3 Messaging and Event Streaming: unit6/topic3.md
+  - Unit 6:
+      - Overview: unit6/overview.md
+      - 6.1 AWS Storage Solutions: unit6/topic1.md
+      - 6.2 AWS Database Services: unit6/topic2.md
+      - 6.3 Messaging and Event Streaming: unit6/topic3.md
 
-#   - Unit 7:
-#       - Overview: unit7/overview.md
-#       - 7.1 Monitoring Cloud-Native Applications: unit7/topic1.md
-#       - 7.2 Centralized Logging: unit7/topic2.md
-#       - 7.3 Observability and Alerting: unit7/topic3.md
+  - Unit 7:
+      - Overview: unit7/overview.md
+      - 7.1 Monitoring Cloud-Native Applications: unit7/topic1.md
+      - 7.2 Centralized Logging: unit7/topic2.md
+      - 7.3 Observability and Alerting: unit7/topic3.md
 
-#   - Unit 8:
-#       - Overview: unit8/overview.md
-#       - 8.1 AWS Identity and Access Management: unit8/topic1.md
-#       - 8.2 Network Security: unit8/topic2.md
-#       - 8.3 Data Protection and Encryption: unit8/topic3.md
+  - Unit 8:
+      - Overview: unit8/overview.md
+      - 8.1 AWS Identity and Access Management: unit8/topic1.md
+      - 8.2 Network Security: unit8/topic2.md
+      - 8.3 Data Protection and Encryption: unit8/topic3.md
 
 #   - Services:
 #       - Overview: Services/overview.md
