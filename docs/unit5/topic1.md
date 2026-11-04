@@ -401,9 +401,9 @@ Two points that matter in practice. **`ApplicationStop` runs from the *previousl
 
 **Security features.** A service role permitting CodeDeploy to act on your resources, an instance profile on EC2 targets permitting the agent to fetch revisions from S3, KMS encryption of revision bundles, and CloudTrail coverage. On ECS and Lambda there is no agent and therefore no instance-level credential to protect, which is a quiet but real security advantage.
 
-!!! note "ECS now has built-in blue/green, and the choice matters"
+!!! note "ECS now has built-in blue/green, linear and canary, and the choice matters"
 
-    Since **July 2025**, Amazon ECS supports **built-in blue/green deployments** natively in the ECS service deployment controller, with lifecycle hooks and bake-time monitoring, without CodeDeploy. This gives three options for an ECS deployment: the ECS rolling update (simple, no extra capacity, slow rollback; its settings and circuit breaker are covered in [2.3](../unit2/topic3.md#deployment-the-rolling-update)), **ECS native blue/green** (self-contained in the service definition, no second service to configure), and **CodeDeploy blue/green** (more hook types, integration with CodePipeline's deploy action, and the same model as your EC2 and Lambda deployments). For new ECS-only workloads the native option is now usually simpler; CodeDeploy remains the better answer when you want one deployment model across EC2, Lambda and ECS, or when you need its hook and rollback integration with an existing pipeline.
+    Since **July 2025**, Amazon ECS supports **built-in blue/green deployments** natively in the ECS service deployment controller, with lifecycle hooks and bake-time monitoring, without CodeDeploy. Built-in **linear and canary** strategies followed in **October 2025** for services behind an Application Load Balancer or using ECS Service Connect, and were extended to **Network Load Balancers in February 2026**. This gives three options for an ECS deployment: the ECS rolling update (simple, no extra capacity, slow rollback; its settings and circuit breaker are covered in [2.3](../unit2/topic3.md#deployment-the-rolling-update)), **ECS native blue/green** (self-contained in the service definition, no second service to configure), and **CodeDeploy blue/green** (more hook types, integration with CodePipeline's deploy action, and the same model as your EC2 and Lambda deployments). For new ECS-only workloads the native option is now usually simpler; CodeDeploy remains the better answer when you want one deployment model across EC2, Lambda and ECS, or when you need its hook and rollback integration with an existing pipeline.
 
 ---
 
@@ -482,7 +482,7 @@ Read structurally, these divide into three groups. The **producers**  the Git pr
 | **Test listener** | A separate ALB listener for validating green before production traffic reaches it |
 | **Task set** | The ECS construct holding the blue or green group of tasks within one service |
 | **Automatic rollback** | Reverting on deployment failure, hook failure, or a CloudWatch alarm |
-| **ECS native blue/green** | Built-in ECS blue/green deployments, available since July 2025, without CodeDeploy |
+| **ECS native blue/green** | Built-in ECS blue/green deployments, available since July 2025, without CodeDeploy; built-in linear and canary followed in October 2025 |
 | **SBOM** | Software bill of materials: the dependency inventory that answers "are we affected by this CVE?" |
 | **AWS Signer** | Artefact signing, so deployment can verify what the build produced |
 | **AWS CodeArtifact** | Managed package registry with controlled upstream repositories |
@@ -706,7 +706,7 @@ The first five rows are the DORA software delivery metrics, using the names and 
 
 **Deployment markers on dashboards** are a small practice with a large payoff: overlay deployment events on your application metrics so that "this started at 14:32" and "we deployed at 14:31" are visible in one glance. A very large share of incidents are caused by the most recent deployment, and making that correlation immediate removes the first twenty minutes of most investigations.
 
-**CloudTrail answers the audit questions**: who started this deployment, with which role, from where, and against which artefact. Combined with immutable artefacts tagged by commit SHA, this makes "what is running in production and who put it there" a query rather than an investigation.
+**CloudTrail answers the audit questions**: who started this deployment, with which role, from where, and against which artefact. Combined with immutable artefacts tagged by commit SHA, this makes "what is running in production and who put it there" a query rather than an investigation. 
 
 ## Integration with Other AWS Services
 

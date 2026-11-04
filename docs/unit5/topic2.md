@@ -258,15 +258,15 @@ For ECR the equivalent is a **repository policy** granting the target accounts p
 | Action type | Providers |
 |---|---|
 | **Source** | CodeCommit, CodeConnections (GitHub, GitHub Enterprise, GitLab, Bitbucket), S3, ECR |
-| **Build** | CodeBuild, Commands (inline shell without a CodeBuild project), Jenkins |
+| **Build** | CodeBuild, Commands (inline shell without a CodeBuild project), ECRBuildAndPublish (build and push an image to ECR without a buildspec), Jenkins |
 | **Test** | CodeBuild, Device Farm, third-party |
-| **Deploy** | CodeDeploy, ECS (standard and blue/green), **EKS**, CloudFormation, CloudFormation StackSets, S3, Elastic Beanstalk, Service Catalog, AppConfig, OpsWorks |
+| **Deploy** | CodeDeploy, ECS (standard and blue/green), **EKS**, CloudFormation, CloudFormation StackSets, S3, Elastic Beanstalk, Service Catalog, AppConfig |
 | **Approval** | Manual approval with an SNS notification |
 | **Invoke** | Lambda, Step Functions, EventBridge, Inspector scan |
 
 Two of these deserve note. The **Commands action** runs shell commands inline without defining a CodeBuild project, which removes a great deal of boilerplate for small steps  at the cost of having no reusable, versioned project definition. The **EKS deploy action**, added in February 2025, applies Kubernetes manifests to a cluster **including clusters in private VPCs**, with CodePipeline establishing connectivity itself rather than requiring you to run build compute inside the VPC; it is available in all CodePipeline Regions except GovCloud and China.
 
-**Important features.** V2 variables and parameterised executions; triggers with branch, tag and file-path filters; stage-level conditions with alarm, deployment-window, variable-check, Lambda and CodeBuild rules; automated stage rollback; stage retry and manual skipping; execution modes; manual transition disabling to hold changes at a stage boundary; cross-account and cross-Region actions; and EventBridge events for every state change.
+**Important features.** V2 variables and parameterised executions; triggers with branch, tag and file-path filters; stage-level conditions with alarm, deployment-window, variable-check, Lambda, CodeBuild and Commands rules; automated stage rollback; stage retry and manual skipping; execution modes; manual transition disabling to hold changes at a stage boundary; cross-account and cross-Region actions; and EventBridge events for every state change.
 
 **Limitations.** Quotas on stages per pipeline, actions per stage, and concurrent executions. Artefacts move through S3, so very large artefacts add latency at every stage. The action-type catalogue is broad but finite, and anything outside it needs a Lambda or CodeBuild action. Pipeline definitions are verbose in raw JSON, which is one of the strongest arguments for defining them with CDK ([chapter 5.3](topic3.md)). And a pipeline is a Regional resource: multi-Region delivery means either cross-Region actions or a pipeline per Region.
 
@@ -301,7 +301,7 @@ ECR is not a general-purpose artefact store: language packages belong in AWS Cod
 
 **The ECS blue/green deploy action via CodeDeploy** takes `appspec.yaml` and `taskdef.json` and drives the traffic-shifting deployment of [chapter 5.1](../unit5/topic1.md#aws-codedeploy): two target groups, a test listener, lifecycle hooks, canary shifting and alarm-triggered rollback.
 
-**ECS native blue/green**, available since July 2025, moves that capability into the ECS service's own deployment controller, removing the need for a separate CodeDeploy application and deployment group; the choice between it and CodeDeploy is set out in [5.1](../unit5/topic1.md#aws-codedeploy).
+**ECS native blue/green**, available since July 2025, moves that capability into the ECS service's own deployment controller, removing the need for a separate CodeDeploy application and deployment group; native **linear and canary** strategies followed in October 2025 (Application Load Balancer and Service Connect, Network Load Balancer from February 2026); the choice between it and CodeDeploy is set out in [5.1](../unit5/topic1.md#aws-codedeploy).
 
 **The EKS deploy action** applies Kubernetes manifests to a named cluster, handling connectivity to private clusters itself. It requires the pipeline's role to be mapped to Kubernetes RBAC  through an EKS access entry or `aws-auth`  with permission to create and update the objects in question.
 
@@ -385,7 +385,7 @@ Read structurally, these divide into the same three groups as [chapter 5.1](topi
 | **`imagedefinitions.json`** | The artefact file mapping container names to image URIs for the standard ECS deploy action |
 | **`taskdef.json` and `appspec.yaml`** | The artefacts a CodeDeploy ECS blue/green action consumes |
 | **Task set** | The blue or green group of tasks within one ECS service during a deployment |
-| **ECS native blue/green** | Built-in ECS blue/green deployments, available since July 2025, without CodeDeploy |
+| **ECS native blue/green** | Built-in ECS blue/green deployments, available since July 2025, without CodeDeploy; native linear and canary since October 2025 |
 | **EKS deploy action** | The CodePipeline action applying manifests to an EKS cluster, including private clusters |
 | **EKS access entry** | The modern mechanism mapping an IAM principal to Kubernetes RBAC |
 | **GitOps** | Desired state in Git, reconciled continuously by an in-cluster agent |
@@ -433,7 +433,7 @@ Repository settings  tag mutability, scan configuration, lifecycle rules, encryp
 
 | Setting | Options | How to decide |
 |---|---|---|
-| **ECS deployment mechanism** | Rolling update, ECS native blue/green, CodeDeploy blue/green | Rolling below production; **native blue/green** for an ECS-only estate; **CodeDeploy** when one model must span EC2, Lambda and ECS. Rolling-update settings and the circuit breaker are in [2.3](../unit2/topic3.md#deployment-configuration) |
+| **ECS deployment mechanism** | Rolling update, ECS native blue/green, linear or canary, CodeDeploy blue/green | Rolling below production; **native blue/green** for an ECS-only estate; **CodeDeploy** when one model must span EC2, Lambda and ECS. Rolling-update settings and the circuit breaker are in [2.3](../unit2/topic3.md#deployment-configuration) |
 | **Image reference in the task definition** | Tag or digest | **Digest.** A tag is resolved at task launch, so a rolling replacement can silently pick up different content |
 | **EKS deployment mechanism** | CodePipeline EKS action, CodeBuild with `kubectl`, GitOps with Argo CD | **GitOps** for anything multi-cluster, multi-team or long-lived; the EKS action for simple single-cluster cases |
 | **Argo CD sync policy** | Manual, automated; `prune`, `selfHeal` | `automated` with `selfHeal` for drift correction; `prune` deliberately, since it deletes resources removed from Git |
