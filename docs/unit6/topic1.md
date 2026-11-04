@@ -45,7 +45,7 @@ flowchart TD
 
 ### The Three Storage Abstractions
 
-AWS offers three storage services rather than one because object, block and file storage make ==mutually incompatible trade-offs==:
+AWS offers three storage services rather than one because object, block and file storage make **mutually incompatible trade-offs**:
 
 - Object storage achieves near-infinite scale and extreme durability because it gives up in-place mutation, POSIX semantics and low-latency small random writes. Every object is written whole, erasure-coded across devices and identified by a key in a flat namespace, so you cannot open an object, seek to byte 4,096 and overwrite four bytes.
 - Block storage achieves sub-millisecond latency and true random access because it presents a narrow interface (read block N, write block N) to one host at a time in the common case. It cannot span Availability Zones, because synchronous block replication across tens of kilometres would destroy the latency guarantee.
@@ -94,8 +94,8 @@ Ranked from least to most operationally demanding: S3 requires almost nothing be
 
 Students frequently conflate these two figures. They measure different failure modes and are engineered by different mechanisms.
 
-- ==Durability== is the probability that stored data is not lost. S3 Standard is designed for 99.999999999 percent (eleven nines) annual durability, achieved by erasure-coding each object across devices in at least three Availability Zones.
-- ==Availability== is the probability that stored data can be *accessed* at a given moment. S3 Standard has a 99.99 percent availability design target with a 99.9 percent Service Level Agreement.
+- **Durability** is the probability that stored data is not lost. S3 Standard is designed for 99.999999999 percent (eleven nines) annual durability, achieved by erasure-coding each object across devices in at least three Availability Zones.
+- **Availability** is the probability that stored data can be *accessed* at a given moment. S3 Standard has a 99.99 percent availability design target with a 99.9 percent Service Level Agreement.
 
 Data can be perfectly durable and temporarily unavailable, for instance during a control plane disruption. A design requiring high availability may therefore need a second Region or a cached copy, even though single-Region durability is already extraordinary.
 
@@ -113,7 +113,7 @@ Data can be perfectly durable and temporarily unavailable, for instance during a
 | Instance store | None; ephemeral | Tied to the instance | One host |
 
 !!! note "Interpreting eleven nines"
-    Eleven nines of annual durability means that if you store ten million objects, you should statistically expect to lose one object every ten thousand years. The figure describes AWS device and facility failure. It does ==not== protect against a user or application deleting the data, a misconfigured policy, or ransomware. Those risks are addressed by versioning, MFA Delete, Object Lock, replication to a separate account and AWS Backup vaults, as discussed in each part below.
+    Eleven nines of annual durability means that if you store ten million objects, you should statistically expect to lose one object every ten thousand years. The figure describes AWS device and facility failure. It does **not** protect against a user or application deleting the data, a misconfigured policy, or ransomware. Those risks are addressed by versioning, MFA Delete, Object Lock, replication to a separate account and AWS Backup vaults, as discussed in each part below.
 
 | Failure scenario | S3 impact | EBS impact | EFS impact |
 |---|---|---|---|
@@ -130,9 +130,9 @@ Data can be perfectly durable and temporarily unavailable, for instance during a
 
 Every AWS storage service separates two subsystems, and conflating them is a common source of architectural error.
 
-The ==control plane== handles resource lifecycle: creating buckets, creating and attaching volumes, creating mount targets, modifying configuration. Control plane operations are low-volume, often Regional, involve consensus and metadata updates, and take seconds to minutes. The ==data plane== moves bytes: `GetObject`, `PutObject`, block reads and writes, NFS operations. Data plane operations are extremely high-volume, designed for minimal dependencies, and take microseconds to milliseconds.
+The **control plane** handles resource lifecycle: creating buckets, creating and attaching volumes, creating mount targets, modifying configuration. Control plane operations are low-volume, often Regional, involve consensus and metadata updates, and take seconds to minutes. The **data plane** moves bytes: `GetObject`, `PutObject`, block reads and writes, NFS operations. Data plane operations are extremely high-volume, designed for minimal dependencies, and take microseconds to milliseconds.
 
-AWS engineers data planes for ==static stability==: the ability to keep operating correctly while the control plane is impaired. This is why a running EC2 instance keeps reading and writing its EBS volume during a Regional control plane event even though new instances cannot be launched.
+AWS engineers data planes for **static stability**: the ability to keep operating correctly while the control plane is impaired. This is why a running EC2 instance keeps reading and writing its EBS volume during a Regional control plane event even though new instances cannot be launched.
 
 | Aspect | Control plane | Data plane |
 |---|---|---|
@@ -226,9 +226,9 @@ AWS has repeatedly added integration features to S3 because customers began usin
 
 #### Consistency model
 
-Since December 2020, S3 provides ==strong read-after-write consistency== for all `PUT` and `DELETE` operations on all objects, in all Regions, with no performance penalty and no opt-in. A successful `PUT` is immediately visible to any subsequent `GET`, `LIST` or `HEAD`, and overwrites and deletes are also strongly consistent. Code that sleeps or retries after a write "to wait for consistency" can be deleted. Two caveats remain:
+Since December 2020, S3 provides **strong read-after-write consistency** for all `PUT` and `DELETE` operations on all objects, in all Regions, with no performance penalty and no opt-in. A successful `PUT` is immediately visible to any subsequent `GET`, `LIST` or `HEAD`, and overwrites and deletes are also strongly consistent. Code that sleeps or retries after a write "to wait for consistency" can be deleted. Two caveats remain:
 
-- Bucket ==configuration== changes (policies, lifecycle rules, replication rules) remain eventually consistent and may take time to propagate.
+- Bucket **configuration** changes (policies, lifecycle rules, replication rules) remain eventually consistent and may take time to propagate.
 - Cross-Region Replication is asynchronous and gives no consistency guarantee at the destination; S3 Replication Time Control provides a fifteen-minute Service Level Agreement for the vast majority of objects, but is still asynchronous.
 
 #### S3 as a shared data plane
@@ -256,7 +256,7 @@ No cloud-native workload should hold long-lived access keys. Each compute platfo
 | CodeBuild project | Service role | Container credentials endpoint |
 | Human user | IAM Identity Center permission set, or S3 Access Grants | Federated sign-in |
 
-The AWS SDKs use a ==default credential provider chain== that discovers these sources automatically. Application code should therefore construct an S3 client without passing credentials explicitly. The same container image then runs unchanged on a laptop (using a developer profile), in ECS, in EKS and in CodeBuild.
+The AWS SDKs use a **default credential provider chain** that discovers these sources automatically. Application code should therefore construct an S3 client without passing credentials explicitly. The same container image then runs unchanged on a laptop (using a developer profile), in ECS, in EKS and in CodeBuild.
 
 #### Event sources
 
@@ -267,7 +267,7 @@ S3 can announce changes through two integration channels:
 | S3 Event Notifications | Per-bucket notification configuration with event types and optional prefix and suffix filters | Lambda, SQS standard queues, SNS standard topics |
 | Amazon EventBridge integration | A single bucket-level switch that sends all supported events to the default event bus | Any EventBridge target, filtered by rules |
 
-Both channels provide ==at-least-once delivery==. Consumers must therefore be idempotent, a principle introduced in [Chapter 1.7](../unit1/topic7.md).
+Both channels provide **at-least-once delivery**. Consumers must therefore be idempotent, a principle introduced in [Chapter 1.7](../unit1/topic7.md).
 
 #### Access abstraction layers
 
@@ -423,10 +423,10 @@ The integration and advanced features are:
 | S3 Glacier Deep Archive | Long-term retention, rarely accessed | 180 days | 40 KiB | Per GiB retrieved | Three or more | Standard in around twelve hours, Bulk in up to forty-eight hours |
 | S3 Express One Zone | Latency-sensitive, very high request rate | None | None | Per GiB uploaded and retrieved, with lower request charges than S3 Standard | One, in a directory bucket | Single-digit milliseconds |
 
-The Glacier name now refers to storage classes within S3 rather than to a separate service for new designs. Objects in Glacier Flexible Retrieval and Glacier Deep Archive must be ==restored== before they can be read, which creates a temporary copy in a readable class for a specified number of days; Glacier Instant Retrieval needs no restore.
+The Glacier name now refers to storage classes within S3 rather than to a separate service for new designs. Objects in Glacier Flexible Retrieval and Glacier Deep Archive must be **restored** before they can be read, which creates a temporary copy in a readable class for a specified number of days; Glacier Instant Retrieval needs no restore.
 
 !!! danger "Minimum duration charges are a real budget trap"
-    An object stored in Standard-IA and deleted after five days is billed for thirty days. An object in Glacier Deep Archive deleted after a week is billed for one hundred and eighty days. Lifecycle rules that transition short-lived data to colder classes can therefore ==increase== cost. Always compare the expected object lifetime with the minimum storage duration before writing a transition rule.
+    An object stored in Standard-IA and deleted after five days is billed for thirty days. An object in Glacier Deep Archive deleted after a week is billed for one hundred and eighty days. Lifecycle rules that transition short-lived data to colder classes can therefore **increase** cost. Always compare the expected object lifetime with the minimum storage duration before writing a transition rule.
 
 ```mermaid
 graph TD
@@ -515,7 +515,7 @@ S3 cost for integration-heavy architectures is dominated by more than storage. T
 
 #### Scaling Behaviour
 
-S3 scales without provisioning, but the scaling is ==adaptive rather than instantaneous==. When a prefix receives a sustained increase in traffic, S3 splits the underlying index partitions. During the transition, clients may receive HTTP 503 Slow Down responses. Well-behaved clients retry with exponential backoff and jitter, and S3 converges on the new rate. Architects should therefore:
+S3 scales without provisioning, but the scaling is **adaptive rather than instantaneous**. When a prefix receives a sustained increase in traffic, S3 splits the underlying index partitions. During the transition, clients may receive HTTP 503 Slow Down responses. Well-behaved clients retry with exponential backoff and jitter, and S3 converges on the new rate. Architects should therefore:
 
 - distribute high-rate keys across multiple prefixes, for example by date and a hash component;
 - ramp traffic gradually for large backfills where possible;
@@ -845,7 +845,7 @@ S3 access should never require secrets, because all AWS compute platforms delive
 | AWS Config rules | Continuously checks bucket settings such as encryption, public access and versioning |
 | IAM Access Analyzer | Identifies buckets shared outside the account or organisation |
 
-CloudTrail records management events by default, but ==not== data events such as `GetObject`, because their volume and cost would be substantial; enable data events for sensitive buckets and deliver them to a separate, locked logging account. Regulatory retention, such as SEC Rule 17a-4, is met with Object Lock in Compliance mode.
+CloudTrail records management events by default, but **not** data events such as `GetObject`, because their volume and cost would be substantial; enable data events for sensitive buckets and deliver them to a separate, locked logging account. Regulatory retention, such as SEC Rule 17a-4, is met with Object Lock in Compliance mode.
 
 !!! danger "The three classic storage security failures"
     First, a bucket policy with `"Principal": "*"` and no condition, which exposes data to the internet; Block Public Access exists to prevent this. Second, an EBS snapshot shared publicly, which exposes an entire disk image including any credentials baked into it (see [Network, public exposure and logging](#network-public-exposure-and-logging)). Third, an over-broad role attached to a workload, allowing a compromised web application to read every bucket in the account. All three are configuration errors, detectable with IAM Access Analyzer and AWS Config.
@@ -1103,7 +1103,7 @@ CloudFront OAC signs requests to the S3 origin with SigV4, allowing the bucket t
 
 #### S3 as the Terraform state backend
 
-[Chapter 5.3](../unit5/topic3.md) introduced Terraform. Remote state belongs in S3 with versioning and encryption enabled. Recent Terraform versions support ==native S3 state locking== using a lock file written with conditional writes, which removes the need for a separate DynamoDB lock table. The DynamoDB-based locking arguments are deprecated in recent versions.
+[Chapter 5.3](../unit5/topic3.md) introduced Terraform. Remote state belongs in S3 with versioning and encryption enabled. Recent Terraform versions support **native S3 state locking** using a lock file written with conditional writes, which removes the need for a separate DynamoDB lock table. The DynamoDB-based locking arguments are deprecated in recent versions.
 
 ```hcl
 terraform {
@@ -1172,7 +1172,7 @@ Compute should be placed in the same Availability Zone as the directory bucket t
 | Replication to consumer account | Replicate data into a bucket owned by the consumer | Isolation or Regional locality |
 
 !!! warning "Both sides must allow cross-account access"
-    Within one account, either an identity policy or a resource policy can grant access. Across accounts, ==both== the identity policy in the caller's account ==and== the resource policy in the bucket's account must allow the action, and the KMS key policy must allow it too when SSE-KMS is used.
+    Within one account, either an identity policy or a resource policy can grant access. Across accounts, **both** the identity policy in the caller's account **and** the resource policy in the bucket's account must allow the action, and the KMS key policy must allow it too when SSE-KMS is used.
 
 #### Governance at scale
 
@@ -1347,7 +1347,7 @@ Amazon S3 is far more than a place to keep files. In a cloud-native architecture
 ## Block Storage with Amazon EBS
 
 !!! note "EBS in one paragraph"
-    An EBS volume is network-attached block storage that lives in one Availability Zone and attaches to EC2 instances in that zone. Volumes are replicated within the zone, can be resized and retuned online with Elastic Volumes, and are backed up with incremental snapshots stored regionally. Capacity is billed as ==provisioned, not consumed==: a 500 GiB volume holding 10 GiB costs the same as a full one, and volumes can grow but never shrink.
+    An EBS volume is network-attached block storage that lives in one Availability Zone and attaches to EC2 instances in that zone. Volumes are replicated within the zone, can be resized and retuned online with Elastic Volumes, and are backed up with incremental snapshots stored regionally. Capacity is billed as **provisioned, not consumed**: a 500 GiB volume holding 10 GiB costs the same as a full one, and volumes can grow but never shrink.
 
 ### Definition
 
@@ -1423,11 +1423,11 @@ Local instance store solves none of these, because its data is lost when the ins
 | Elastic Volumes | Online changes to size, type, IOPS and throughput while the volume stays attached; the file system must then be grown with `growpart` and `xfs_growfs` or `resize2fs` |
 | Multi-Attach | io1 and io2 volumes can attach to up to sixteen Nitro-based instances in the same Availability Zone; there is no coordination, so a cluster-aware file system is mandatory |
 
-Scaling is ==vertical and explicit==: EBS never scales automatically. Architects monitor `VolumeQueueLength`, `BurstBalance` and throughput metrics and adjust deliberately. SSD types are IOPS devices and HDD types are throughput devices; HDD types perform poorly for small random I/O.
+Scaling is **vertical and explicit**: EBS never scales automatically. Architects monitor `VolumeQueueLength`, `BurstBalance` and throughput metrics and adjust deliberately. SSD types are IOPS devices and HDD types are throughput devices; HDD types perform poorly for small random I/O.
 
 #### Instance store versus EBS
 
-==Instance store== is NVMe or SSD storage physically attached to the host serving an EC2 instance. It offers the highest possible I/O performance because there is no network in the path, but its data is ==ephemeral==: it is lost when the instance stops, hibernates or terminates, and when the underlying hardware fails. It is not a durable storage service and has no snapshot mechanism. EBS, by contrast, persists independently of the instance.
+**Instance store** is NVMe or SSD storage physically attached to the host serving an EC2 instance. It offers the highest possible I/O performance because there is no network in the path, but its data is **ephemeral**: it is lost when the instance stops, hibernates or terminates, and when the underlying hardware fails. It is not a durable storage service and has no snapshot mechanism. EBS, by contrast, persists independently of the instance.
 
 !!! danger "Instance store data loss is a design property, not a failure"
     Architects use instance store deliberately for scratch space, caches, temporary shuffle data in Spark, or replicated distributed databases such as Cassandra that maintain their own redundancy across nodes. Placing a single-copy production database on instance store is a design error, not bad luck.
@@ -1660,7 +1660,7 @@ Figures are indicative, as of 2026; verify in the AWS Pricing Calculator.
 
 #### Performance Characteristics
 
-Volume-level limits are given in [Volume types](#volume-types). In integrated systems the most common bottleneck is instead the ==instance's EBS bandwidth==, because all EBS traffic of an instance shares its dedicated EBS network path.
+Volume-level limits are given in [Volume types](#volume-types). In integrated systems the most common bottleneck is instead the **instance's EBS bandwidth**, because all EBS traffic of an instance shares its dedicated EBS network path.
 
 | Factor | Explanation |
 |--------|-------------|
@@ -2282,13 +2282,13 @@ Amazon EBS is the persistence layer that allows stateful systems to run on dispo
 ## File Storage with Amazon EFS
 
 !!! note "EFS in one paragraph"
-    EFS is a Regional, elastic, POSIX-compliant file system accessed over NFSv4.0/4.1 on TCP port 2049. Clients reach it through a ==mount target== (an elastic network interface) in each Availability Zone. Regional file systems store data redundantly across multiple AZs; One Zone file systems store data in a single AZ. It bills for ==consumed== rather than provisioned capacity, which makes it economical for sparse or unpredictable data but more expensive than EBS for large, dense, hot data sets.
+    EFS is a Regional, elastic, POSIX-compliant file system accessed over NFSv4.0/4.1 on TCP port 2049. Clients reach it through a **mount target** (an elastic network interface) in each Availability Zone. Regional file systems store data redundantly across multiple AZs; One Zone file systems store data in a single AZ. It bills for **consumed** rather than provisioned capacity, which makes it economical for sparse or unpredictable data but more expensive than EBS for large, dense, hot data sets.
 
 ### Definition
 
 ==Amazon EFS as an integration service== is a fully managed, serverless, elastic NFS file system that multiple compute clients (EC2 instances, ECS tasks, EKS pods, Fargate tasks and Lambda execution environments) can mount concurrently, with read-after-write consistency for a given client and close-to-open consistency across clients, as expected from NFS.
 
-Within an AWS architecture, EFS sits in the data tier alongside Amazon S3 and Amazon EBS, but it plays a distinctive role: it is the only one of the three that offers ==shared, concurrent, POSIX-semantics access across Availability Zones== to many compute clients at once, without the application having to change its file I/O code.
+Within an AWS architecture, EFS sits in the data tier alongside Amazon S3 and Amazon EBS, but it plays a distinctive role: it is the only one of the three that offers **shared, concurrent, POSIX-semantics access across Availability Zones** to many compute clients at once, without the application having to change its file I/O code.
 
 ```mermaid
 flowchart LR
@@ -2324,7 +2324,7 @@ flowchart LR
 
 #### The paradox of stateless compute
 
-Cloud-native design, as taught in Units I to IV, pushes state out of compute. Containers are disposable, pods are rescheduled, Fargate tasks have no durable local disk, and Lambda execution environments are reclaimed at will. Most state therefore belongs in databases, caches and object storage. However, a significant class of software still assumes a ==hierarchical, mutable, shared file system==:
+Cloud-native design, as taught in Units I to IV, pushes state out of compute. Containers are disposable, pods are rescheduled, Fargate tasks have no durable local disk, and Lambda execution environments are reclaimed at will. Most state therefore belongs in databases, caches and object storage. However, a significant class of software still assumes a **hierarchical, mutable, shared file system**:
 
 | Workload | Why it needs a file system |
 |----------|---------------------------|
@@ -2349,7 +2349,7 @@ Rewriting all of these to use an object API is often uneconomic. EFS exists so t
 
 #### Why AWS integrated EFS so deeply with container and serverless platforms
 
-AWS added EFS support to ECS on Fargate (platform version 1.4.0), to Lambda (2020), and to EKS through the open-source EFS CSI driver, later packaged as an EKS add-on. The motivation is architectural: ==if compute becomes serverless, storage that requires a server would become the bottleneck of the design==. By making EFS mountable by any managed compute service, AWS allows an architect to keep the whole stack free of servers to patch.
+AWS added EFS support to ECS on Fargate (platform version 1.4.0), to Lambda (2020), and to EKS through the open-source EFS CSI driver, later packaged as an EKS add-on. The motivation is architectural: **if compute becomes serverless, storage that requires a server would become the bottleneck of the design**. By making EFS mountable by any managed compute service, AWS allows an architect to keep the whole stack free of servers to patch.
 
 ### Core Concepts
 
@@ -2416,8 +2416,8 @@ Common Linux mount options include `nfsvers=4.1`, `rsize=1048576`, `wsize=104857
 
 EFS implements NFSv4.1 semantics. Two properties shape how applications must be written:
 
-- ==Close-to-open consistency==: when one client closes a file and another client subsequently opens it, the second client sees the data written by the first. While both hold the file open, the second client may see stale cached data.
-- ==Advisory locking==: NFS byte-range locks (`fcntl`/`flock` mapped to NFSv4 locks) work across clients, but only if every writer uses them. EFS does not enforce mandatory locking.
+- **Close-to-open consistency**: when one client closes a file and another client subsequently opens it, the second client sees the data written by the first. While both hold the file open, the second client may see stale cached data.
+- **Advisory locking**: NFS byte-range locks (`fcntl`/`flock` mapped to NFSv4 locks) work across clients, but only if every writer uses them. EFS does not enforce mandatory locking.
 
 !!! warning "EFS is not a database"
     Running SQLite, or a database engine that expects local-disk fsync latency, on EFS across several writers is a frequent cause of corruption and poor performance. Shared file systems suit content, artefacts and models; transactional state belongs in RDS, Aurora or DynamoDB.
@@ -2431,7 +2431,7 @@ Every NFS request carries a numeric POSIX user ID (uid) and group ID (gid). EFS 
 | Access point | Overrides the uid/gid presented by the client with a fixed identity, and confines the client to a root directory | EFS service side, regardless of what the client claims |
 | IAM authorisation | Requires the client to present AWS credentials when mounting, evaluated against the file system policy and identity policies | At mount time, through efs-utils or the platform's mount helper |
 
-Combining the two gives ==defence in depth==: IAM decides whether the workload may mount at all and with which permissions (read, write, root), and the access point decides which directory and identity it sees.
+Combining the two gives **defence in depth**: IAM decides whether the workload may mount at all and with which permissions (read, write, root), and the access point decides which directory and identity it sees.
 
 #### IAM actions for EFS clients
 
@@ -2484,8 +2484,8 @@ In the integration context, EFS provides a ==shared persistence layer for comput
 
 EFS separates a distributed metadata layer (directories, inodes, attributes, locks) from a distributed data layer. Both are spread across multiple AZs for Regional file systems. Clients speak NFS to a mount target in their own AZ; the mount target forwards requests to the storage fleet. This architecture explains two properties that matter throughout this part:
 
-1. ==Every file operation is a network round trip==, including metadata operations such as `stat()`, `open()` and `readdir()`. Workloads dominated by small-file metadata operations therefore perform very differently from workloads streaming large files.
-2. ==Throughput and IOPS scale with the aggregate of many clients==, not with any single client. A single NFS client is limited by its own network bandwidth and by the concurrency it generates.
+1. **Every file operation is a network round trip**, including metadata operations such as `stat()`, `open()` and `readdir()`. Workloads dominated by small-file metadata operations therefore perform very differently from workloads streaming large files.
+2. **Throughput and IOPS scale with the aggregate of many clients**, not with any single client. A single NFS client is limited by its own network bandwidth and by the concurrency it generates.
 
 ```mermaid
 sequenceDiagram
@@ -2575,7 +2575,7 @@ EFS pricing has several dimensions. Values are indicative, as of 2026; verify in
 | Regional | Data and metadata stored redundantly across multiple AZs; mount targets in each AZ | Production workloads that must survive an AZ failure |
 | One Zone | Stored in a single AZ; lower price | Development, reproducible data, or workloads already pinned to one AZ |
 
-A Regional file system survives AZ failure only if ==clients in surviving AZs have their own mount target==. A common design flaw is to create a mount target in one subnet only.
+A Regional file system survives AZ failure only if **clients in surviving AZs have their own mount target**. A common design flaw is to create a mount target in one subnet only.
 
 #### Security Features
 
@@ -2690,7 +2690,7 @@ The driver mounts with TLS by default (`encryptInTransit` volume attribute defau
 
 ##### Dynamic provisioning with `efs-ap`
 
-In dynamic provisioning, the controller does ==not create a new file system==. It creates a new ==access point== on an existing file system for each PVC. Each access point receives:
+In dynamic provisioning, the controller does ==not create a new file system==. It creates a new **access point** on an existing file system for each PVC. Each access point receives:
 
 - A root directory under a configurable `basePath`, created with `directoryPerms`.
 - A POSIX uid and gid drawn from the range `gidRangeStart` to `gidRangeEnd`, so that each PVC's files are owned by a unique identity and one tenant cannot read another's directory even if both mount the same file system.
@@ -2716,7 +2716,7 @@ In dynamic provisioning, the controller does ==not create a new file system==. I
 
 ##### Access modes and capacity requests
 
-EFS volumes are normally requested with `ReadWriteMany`. The `storage` value in the PVC is required by Kubernetes but ==is not enforced by EFS==, because EFS is elastic. Architects must therefore enforce quotas by other means, such as monitoring `StorageBytes`, directory-level scripts, or per-tenant file systems.
+EFS volumes are normally requested with `ReadWriteMany`. The `storage` value in the PVC is required by Kubernetes but **is not enforced by EFS**, because EFS is elastic. Architects must therefore enforce quotas by other means, such as monitoring `StorageBytes`, directory-level scripts, or per-tenant file systems.
 
 #### Amazon ECS and AWS Fargate EFS volumes
 
@@ -2729,17 +2729,17 @@ EFS volumes are normally requested with `ReadWriteMany`. The `storage` value in 
 | `authorizationConfig.accessPointId` | Mount through an access point | Always set in production |
 | `authorizationConfig.iam` | `ENABLED` makes the mount use the task role | Enable, and grant only the needed client actions |
 
-Fargate requires platform version 1.4.0 or later for EFS. The Fargate task's ENI must be able to reach the mount target on TCP 2049, so the ==mount target security group must allow inbound 2049 from the task security group==.
+Fargate requires platform version 1.4.0 or later for EFS. The Fargate task's ENI must be able to reach the mount target on TCP 2049, so the **mount target security group must allow inbound 2049 from the task security group**.
 
 !!! tip "Task role, not task execution role"
-    With `iam: ENABLED`, the credentials presented to EFS come from the ==task role== (`taskRoleArn`), which represents the application. The task execution role is used by the agent to pull images and write logs. Placing EFS permissions on the execution role is a common mistake.
+    With `iam: ENABLED`, the credentials presented to EFS come from the **task role** (`taskRoleArn`), which represents the application. The task execution role is used by the agent to pull images and write logs. Placing EFS permissions on the execution role is a common mistake.
 
 #### AWS Lambda file system configuration
 
 | Setting | Constraint |
 |---------|-----------|
 | VPC configuration | The function must be attached to private subnets in a VPC that contains EFS mount targets in the same AZs |
-| File system reference | Lambda mounts EFS through an ==access point ARN==, not a raw file system ID |
+| File system reference | Lambda mounts EFS through an **access point ARN**, not a raw file system ID |
 | Local mount path | Must begin with `/mnt/`, for example `/mnt/models` |
 | Execution role | Needs `elasticfilesystem:ClientMount` (and `ClientWrite` for writes) plus the VPC network interface permissions, typically via `AWSLambdaVPCAccessExecutionRole` |
 | Security groups | Function SG must be allowed on port 2049 by the mount target SG |
@@ -2773,7 +2773,7 @@ A file system policy is evaluated together with identity policies. The most usef
 
 #### Scalability
 
-EFS removes storage capacity planning, but it does not remove ==client-side and metadata scaling limits==. When scaling to thousands of pods or Lambda environments, consider connection counts against the per-file-system limit, the access point quota for dynamic provisioning, and the directory structure. Design the directory tree so that no single directory holds hundreds of thousands of entries.
+EFS removes storage capacity planning, but it does not remove **client-side and metadata scaling limits**. When scaling to thousands of pods or Lambda environments, consider connection counts against the per-file-system limit, the access point quota for dynamic provisioning, and the directory structure. Design the directory tree so that no single directory holds hundreds of thousands of entries.
 
 #### Availability
 
@@ -2892,7 +2892,7 @@ EFS itself does not use passwords, which is an advantage: authentication is IAM 
 
 #### Understanding metadata-heavy workloads
 
-The single most important performance insight for EFS is the difference between ==data-heavy== and ==metadata-heavy== workloads.
+The single most important performance insight for EFS is the difference between **data-heavy** and **metadata-heavy** workloads.
 
 | Workload type | Example | Dominant cost | EFS behaviour |
 |---------------|---------|---------------|---------------|
@@ -3228,11 +3228,11 @@ Amazon EFS is the shared file layer that allows cloud-native compute to remain d
 The key architectural lessons are:
 
 - ==Shared storage is a deliberate exception to statelessness==, justified for content, models, caches and legacy software, not for transactional data.
-- ==Access points are the unit of isolation== on a shared file system; in EKS dynamic provisioning, one access point per PVC with a unique uid/gid delivers multi-tenant isolation, bounded by the access point quota.
-- ==Performance depends on the shape of the workload==: large parallel reads perform well, while small-file and metadata-heavy workloads suffer from network round trips.
-- ==Elastic throughput converts capacity planning into byte accounting==, which is ideal for spiky demand but must be monitored for repeated large reads.
-- ==Backups and replication solve different problems==; production designs need both, and access points and policies must also exist in the DR Region.
-- ==The choice between EFS, FSx and Mountpoint for S3 is driven by protocol, semantics, performance and operational model==, not by familiarity.
+- **Access points are the unit of isolation** on a shared file system; in EKS dynamic provisioning, one access point per PVC with a unique uid/gid delivers multi-tenant isolation, bounded by the access point quota.
+- **Performance depends on the shape of the workload**: large parallel reads perform well, while small-file and metadata-heavy workloads suffer from network round trips.
+- **Elastic throughput converts capacity planning into byte accounting**, which is ideal for spiky demand but must be monitored for repeated large reads.
+- **Backups and replication solve different problems**; production designs need both, and access points and policies must also exist in the DR Region.
+- **The choice between EFS, FSx and Mountpoint for S3 is driven by protocol, semantics, performance and operational model**, not by familiarity.
 
 ## Caching Strategies with Amazon ElastiCache
 
@@ -3241,9 +3241,9 @@ The key architectural lessons are:
 
 ### Definition
 
-A ==caching strategy== is the set of architectural decisions that determine what data is stored in a faster, closer, cheaper-to-read tier; where in the request path that tier sits; how data enters and leaves it; how long it remains valid; and how the system behaves when the cache is empty, stale or unavailable.
+A **caching strategy** is the set of architectural decisions that determine what data is stored in a faster, closer, cheaper-to-read tier; where in the request path that tier sits; how data enters and leaves it; how long it remains valid; and how the system behaves when the cache is empty, stale or unavailable.
 
-==Amazon ElastiCache== is the AWS managed service that provides the in-memory application cache tier for such strategies. It supports the Valkey, Redis OSS and Memcached engines, in two deployment models: node-based clusters, where the architect chooses node types and shard counts, and ElastiCache Serverless, where capacity scales automatically and is billed by stored data and processing units.
+**Amazon ElastiCache** is the AWS managed service that provides the in-memory application cache tier for such strategies. It supports the Valkey, Redis OSS and Memcached engines, in two deployment models: node-based clusters, where the architect chooses node types and shard counts, and ElastiCache Serverless, where capacity scales automatically and is billed by stored data and processing units.
 
 In an AWS architecture, ElastiCache sits between the compute tier (Lambda, ECS, EKS, EC2) and the system of record (Aurora, RDS, DynamoDB, or external APIs), inside private subnets of a VPC.
 
@@ -3275,7 +3275,7 @@ A cache exists to exploit two properties of real workloads:
 
 #### Why caching is a strategy, not a component
 
-Beginners often treat a cache as a component to add when a database is slow. Architects treat caching as a strategy because a cache changes ==correctness== (clients may read stale data), ==availability== (the system may now depend on the cache), ==cost== (a cache may allow a smaller database or may be pure overhead), and ==failure modes== (stampedes, hot keys, cold starts after failover). Every cached item is a small consistency contract between the writer and the readers.
+Beginners often treat a cache as a component to add when a database is slow. Architects treat caching as a strategy because a cache changes **correctness** (clients may read stale data), **availability** (the system may now depend on the cache), **cost** (a cache may allow a smaller database or may be pure overhead), and **failure modes** (stampedes, hot keys, cold starts after failover). Every cached item is a small consistency contract between the writer and the readers.
 
 #### Why AWS provides managed caches
 
@@ -3311,20 +3311,20 @@ flowchart TD
 ```
 
 !!! tip "Layered caching is normal"
-    Production systems usually combine layers: CloudFront for public assets, a short in-process cache for configuration, and ElastiCache for shared query results. The danger is ==stacked TTLs==: if CloudFront caches for 60 seconds, the service caches locally for 30 seconds and ElastiCache holds data for 300 seconds, the worst-case staleness seen by a user is the sum, not the maximum. Design end-to-end freshness budgets.
+    Production systems usually combine layers: CloudFront for public assets, a short in-process cache for configuration, and ElastiCache for shared query results. The danger is **stacked TTLs**: if CloudFront caches for 60 seconds, the service caches locally for 30 seconds and ElastiCache holds data for 300 seconds, the worst-case staleness seen by a user is the sum, not the maximum. Design end-to-end freshness budgets.
 
 #### Caching patterns and the decision table
 
 Three foundational patterns govern how data enters the cache and how writes reach the system of record.
 
-- ==Cache-aside==, also called lazy loading: the application checks the cache and, on a miss, reads the database and populates the cache (see [Chapter 1.5](../unit1/topic5.md#cache-aside-with-a-read-through-fallback)). Only requested data is ever cached, so the cache stays small and relevant, and a cache failure degrades performance without breaking correctness. The costs are three trips on every miss (cache, database, cache write) and the risk of serving stale data until the TTL expires or the key is invalidated.
-- ==Write-through==: the application writes to the database and the cache together, so the cache is not stale for keys written this way. The costs are extra latency on every write and a cache filled with data that may never be read, which wastes memory; write-through is therefore usually combined with a TTL so that cold entries age out.
-- ==Write-behind==, also called write-back: the application writes to the cache, and the cache contents are flushed to the database asynchronously. This gives the lowest write latency but risks data loss, and it is rarely appropriate with a pure cache as the intermediary unless durability is guaranteed by other means (see the warning below).
+- **Cache-aside**, also called lazy loading: the application checks the cache and, on a miss, reads the database and populates the cache (see [Chapter 1.5](../unit1/topic5.md#cache-aside-with-a-read-through-fallback)). Only requested data is ever cached, so the cache stays small and relevant, and a cache failure degrades performance without breaking correctness. The costs are three trips on every miss (cache, database, cache write) and the risk of serving stale data until the TTL expires or the key is invalidated.
+- **Write-through**: the application writes to the database and the cache together, so the cache is not stale for keys written this way. The costs are extra latency on every write and a cache filled with data that may never be read, which wastes memory; write-through is therefore usually combined with a TTL so that cold entries age out.
+- **Write-behind**, also called write-back: the application writes to the cache, and the cache contents are flushed to the database asynchronously. This gives the lowest write latency but risks data loss, and it is rarely appropriate with a pure cache as the intermediary unless durability is guaranteed by other means (see the warning below).
 
 Two further patterns complete the set.
 
-- ==Read-through==: the application asks the cache, and the cache itself loads from the database on a miss. ElastiCache does not load from databases on its own; read-through is implemented by a library or data-access layer that wraps the cache (for example a caching repository class), or by services with built-in read-through such as DAX.
-- ==Refresh-ahead==: the cache refreshes popular entries before they expire, so that readers rarely experience a miss. It is implemented with background refresh jobs, scheduled Lambda functions, or probabilistic early recomputation.
+- **Read-through**: the application asks the cache, and the cache itself loads from the database on a miss. ElastiCache does not load from databases on its own; read-through is implemented by a library or data-access layer that wraps the cache (for example a caching repository class), or by services with built-in read-through such as DAX.
+- **Refresh-ahead**: the cache refreshes popular entries before they expire, so that readers rarely experience a miss. It is implemented with background refresh jobs, scheduled Lambda functions, or probabilistic early recomputation.
 
 | Pattern | Read path | Write path | Staleness | Miss penalty | Complexity | Best when |
 |---------|-----------|------------|-----------|--------------|------------|-----------|
@@ -3338,11 +3338,11 @@ Two further patterns complete the set.
     In write-behind, the cache temporarily holds the only copy of recent writes. A node failure before persistence loses data unless the cache is itself durable. If write-behind semantics are required for business-critical data, use Amazon MemoryDB, or persist through a durable queue such as SQS or Kinesis rather than relying on an in-memory buffer.
 
 !!! note "Delete, do not update, on write"
-    In cache-aside, the safer invalidation on write is to ==delete the key== rather than write the new value. Two concurrent writers updating the cache can interleave so that the older value is written last, leaving the cache permanently stale until TTL expiry. Deleting forces the next reader to load the current database value. The remaining race (a reader loads an old value just before a writer deletes) is bounded by the TTL, which is one reason every cached key should have a TTL.
+    In cache-aside, the safer invalidation on write is to **delete the key** rather than write the new value. Two concurrent writers updating the cache can interleave so that the older value is written last, leaving the cache permanently stale until TTL expiry. Deleting forces the next reader to load the current database value. The remaining race (a reader loads an old value just before a writer deletes) is bounded by the TTL, which is one reason every cached key should have a TTL.
 
 #### TTL design
 
-A TTL is a business decision expressed in seconds: ==how stale may this data be before it causes harm?==
+A TTL is a business decision expressed in seconds: **how stale may this data be before it causes harm?**
 
 | Data | Change frequency | Harm from staleness | Indicative TTL |
 |------|-----------------|--------------------|----------------|
@@ -3356,9 +3356,9 @@ A TTL is a business decision expressed in seconds: ==how stale may this data be 
 
 Three TTL design rules:
 
-1. ==Every key has a TTL==, even when invalidation exists. TTL is the safety net for missed invalidation events and for write races.
-2. ==Add jitter==. If a batch job populates 100,000 keys with a TTL of exactly 3,600 seconds, they all expire in the same second. Randomise, for example `ttl = base + random(0, 0.1 * base)`.
-3. ==Separate logical expiry from physical expiry== for refresh-ahead: store the value with a longer physical TTL but record a soft expiry timestamp inside the value; readers that see a soft-expired value can serve it while triggering a refresh.
+1. **Every key has a TTL**, even when invalidation exists. TTL is the safety net for missed invalidation events and for write races.
+2. **Add jitter**. If a batch job populates 100,000 keys with a TTL of exactly 3,600 seconds, they all expire in the same second. Randomise, for example `ttl = base + random(0, 0.1 * base)`.
+3. **Separate logical expiry from physical expiry** for refresh-ahead: store the value with a longer physical TTL but record a soft expiry timestamp inside the value; readers that see a soft-expired value can serve it while triggering a refresh.
 
 #### Invalidation strategies
 
@@ -3413,7 +3413,7 @@ Versioned keys are particularly useful in CI/CD ([Chapter 5.2](../unit5/topic2.m
 
 #### Stampede protection
 
-A ==cache stampede== (also called a thundering herd) happens when a very popular key expires or is evicted: thousands of concurrent requests miss at the same moment and all query the database at once, which can saturate it and turn a cache miss into an outage. TTL jitter prevents keys from expiring in lockstep, but it does not protect a single hot key.
+A **cache stampede** (also called a thundering herd) happens when a very popular key expires or is evicted: thousands of concurrent requests miss at the same moment and all query the database at once, which can saturate it and turn a cache miss into an outage. TTL jitter prevents keys from expiring in lockstep, but it does not protect a single hot key.
 
 The simplest guard is a short-lived distributed lock. On a miss, a request tries `SET lock:key token NX PX 5000`; only the request that acquires the lock recomputes the value and writes it back with a jittered TTL, while the others wait briefly and re-read the key, serve a stale copy, or, as a last resort, fall through to the database rather than fail the request. The lock's own expiry guarantees that a crashed lock holder cannot block the key forever. A safe release checks the token before deleting the lock.
 
@@ -3447,11 +3447,11 @@ flowchart TD
 
 #### Negative caching
 
-When a key does not exist in the database, a naive cache-aside implementation queries the database on every request for that key. Attackers or bugs requesting random identifiers can therefore bypass the cache entirely (cache penetration). ==Negative caching== stores a sentinel such as `__NOT_FOUND__` with a short TTL. When the item is later created, the create path must delete the sentinel, or the short TTL bounds the delay. For very large key spaces under attack, a Bloom filter (available through the Valkey Bloom module in recent Valkey versions on ElastiCache; verify engine version support) can reject identifiers that certainly do not exist.
+When a key does not exist in the database, a naive cache-aside implementation queries the database on every request for that key. Attackers or bugs requesting random identifiers can therefore bypass the cache entirely (cache penetration). **Negative caching** stores a sentinel such as `__NOT_FOUND__` with a short TTL. When the item is later created, the create path must delete the sentinel, or the short TTL bounds the delay. For very large key spaces under attack, a Bloom filter (available through the Valkey Bloom module in recent Valkey versions on ElastiCache; verify engine version support) can reject identifiers that certainly do not exist.
 
 #### Hot keys
 
-A hot key is a single key receiving a disproportionate share of traffic, for example a flash-sale product. In cluster mode, one key maps to one hash slot on one shard, so ==adding shards does not help a hot key==.
+A hot key is a single key receiving a disproportionate share of traffic, for example a flash-sale product. In cluster mode, one key maps to one hash slot on one shard, so **adding shards does not help a hot key**.
 
 | Mitigation | How it works | Trade-off |
 |------------|--------------|-----------|
@@ -3538,7 +3538,7 @@ flowchart LR
     APP2["EKS client with slot map"] --> CFG
 ```
 
-In the node-based models, nodes are placed in a ==cache subnet group== (a set of private subnets in the VPC) and protected by security groups, in the same way as an RDS instance.
+In the node-based models, nodes are placed in a **cache subnet group** (a set of private subnets in the VPC) and protected by security groups, in the same way as an RDS instance.
 
 #### Valkey and Redis OSS Versus Memcached
 
@@ -3782,7 +3782,7 @@ Caches scale reads cheaply, but they also concentrate load. Design for hot keys 
 
 #### Availability and the dependency trap
 
-If the database is sized assuming a 95 percent hit ratio, the cache has silently become a ==hard dependency==: a cache failure or cold restart sends twenty times the expected load to the database, which may fail in turn. Mitigations:
+If the database is sized assuming a 95 percent hit ratio, the cache has silently become a **hard dependency**: a cache failure or cold restart sends twenty times the expected load to the database, which may fail in turn. Mitigations:
 
 - Size the database to survive a degraded hit ratio, or implement load shedding and request prioritisation.
 - Use Multi-AZ replicas so failover keeps the cache warm.
@@ -4052,7 +4052,7 @@ flowchart LR
 
 #### Caching for generative AI workloads
 
-A newer integration is ==semantic caching== in front of Amazon Bedrock. Prompts are embedded, and a vector similarity search in ElastiCache (Valkey vector search) finds previously answered prompts that are sufficiently similar; the stored response is returned instead of invoking the model. This reduces latency and inference cost, but requires careful similarity thresholds and must not return one user's private response to another.
+A newer integration is **semantic caching** in front of Amazon Bedrock. Prompts are embedded, and a vector similarity search in ElastiCache (Valkey vector search) finds previously answered prompts that are sufficiently similar; the stored response is returned instead of invoking the model. This reduces latency and inference cost, but requires careful similarity thresholds and must not return one user's private response to another.
 
 ### Common Architecture Patterns
 
@@ -4157,12 +4157,12 @@ Caching is an architectural strategy, not a component. A cloud-native system off
 The key architectural lessons are:
 
 - ==Choose the pattern from the read-write profile==: cache-aside as the default, write-through for read-after-write data, write-behind only with a durable buffer, and refresh-ahead for predictably hot, expensive data.
-- ==TTL is a business decision with a safety-net role==; every key needs one, with jitter.
-- ==Invalidation belongs to events in microservices==: DynamoDB Streams, EventBridge and outbox events decouple writers from caches; versioned keys make bulk invalidation and deployments safe.
-- ==Protect the system of record==: locks, probabilistic early expiration and request coalescing stop stampedes; negative caching stops penetration; key replication and client-side caching tame hot keys; circuit breakers and capacity headroom prevent the cache from becoming a hidden single point of failure.
-- ==ElastiCache is also a shared state service== for sessions, rate limits, leaderboards and ephemeral pub/sub; where the in-memory data is the system of record, MemoryDB provides durability.
-- ==Integrate securely and efficiently==: VPC placement, TLS, IAM authentication with per-service RBAC users, cluster-aware clients, small long-lived connection pools, and observability built on hit ratio, evictions and EngineCPUUtilization.
-- ==Default to Valkey, and choose Serverless or node-based by workload shape==; use Global Datastore for multi-Region reads with an understanding of its eventual consistency.
+- **TTL is a business decision with a safety-net role**; every key needs one, with jitter.
+- **Invalidation belongs to events in microservices**: DynamoDB Streams, EventBridge and outbox events decouple writers from caches; versioned keys make bulk invalidation and deployments safe.
+- **Protect the system of record**: locks, probabilistic early expiration and request coalescing stop stampedes; negative caching stops penetration; key replication and client-side caching tame hot keys; circuit breakers and capacity headroom prevent the cache from becoming a hidden single point of failure.
+- **ElastiCache is also a shared state service** for sessions, rate limits, leaderboards and ephemeral pub/sub; where the in-memory data is the system of record, MemoryDB provides durability.
+- **Integrate securely and efficiently**: VPC placement, TLS, IAM authentication with per-service RBAC users, cluster-aware clients, small long-lived connection pools, and observability built on hit ratio, evictions and EngineCPUUtilization.
+- **Default to Valkey, and choose Serverless or node-based by workload shape**; use Global Datastore for multi-Region reads with an understanding of its eventual consistency.
 
 ## Section Summary
 
@@ -4170,10 +4170,10 @@ Section 6.1 treated storage as an integration problem rather than a catalogue of
 
 Four lessons carry forward into Sections [6.2](../unit6/topic2.md) and [6.3](../unit6/topic3.md):
 
-- ==Access pattern selects the service==, and scope (host, Availability Zone, Region) selects the availability ceiling.
+- **Access pattern selects the service**, and scope (host, Availability Zone, Region) selects the availability ceiling.
 - ==Every workload receives its own identity== (task role, Pod Identity association, execution role) scoped to the exact buckets, volumes, access points and cache users it needs.
-- ==Storage emits events and metrics==; S3 notifications, snapshot events and cache metrics are inputs to the event-driven and observability designs of [Section 6.3](../unit6/topic3.md) and Unit V.
-- ==Caches and replicas are copies, not truth==; the system of record must always be identifiable, which is the subject of [Section 6.2](../unit6/topic2.md).
+- **Storage emits events and metrics**; S3 notifications, snapshot events and cache metrics are inputs to the event-driven and observability designs of [Section 6.3](../unit6/topic3.md) and Unit V.
+- **Caches and replicas are copies, not truth**; the system of record must always be identifiable, which is the subject of [Section 6.2](../unit6/topic2.md).
 
 !!! question "Practice and interview questions"
     Questions for this topic are kept separately: [Practice questions](../Questions/unit6.md#61-aws-storage-solutions) · [Interview questions](../interviewquestions/unit6.md#61-aws-storage-solutions).

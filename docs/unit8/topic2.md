@@ -8,9 +8,9 @@
 
 ## Defence in Depth for the Network: Layers from Edge to Workload
 
-In a traditional data centre, network security was organised around a single ==perimeter==: a pair of firewalls at the internet edge, a "trusted" internal network behind it and perhaps a demilitarised zone (DMZ) for web servers. Anything inside the perimeter was implicitly trusted. That model failed repeatedly in practice, because once an attacker obtained one foothold (a phished laptop, a vulnerable web server, a leaked credential) they could move laterally across a flat internal network with almost no resistance.
+In a traditional data centre, network security was organised around a single **perimeter**: a pair of firewalls at the internet edge, a "trusted" internal network behind it and perhaps a demilitarised zone (DMZ) for web servers. Anything inside the perimeter was implicitly trusted. That model failed repeatedly in practice, because once an attacker obtained one foothold (a phished laptop, a vulnerable web server, a leaked credential) they could move laterally across a flat internal network with almost no resistance.
 
-Cloud-native systems make the perimeter model even weaker. A single application may consist of an API Gateway, a CloudFront distribution, dozens of ECS tasks or Kubernetes pods whose IP addresses change every deployment, Lambda functions, managed databases, and calls to AWS APIs such as S3, DynamoDB and SQS that are reached over HTTPS rather than over the VPC. There is no single wire on which to place a firewall. Security must therefore be ==layered==, with each layer assuming that the layer outside it may already have failed.
+Cloud-native systems make the perimeter model even weaker. A single application may consist of an API Gateway, a CloudFront distribution, dozens of ECS tasks or Kubernetes pods whose IP addresses change every deployment, Lambda functions, managed databases, and calls to AWS APIs such as S3, DynamoDB and SQS that are reached over HTTPS rather than over the VPC. There is no single wire on which to place a firewall. Security must therefore be **layered**, with each layer assuming that the layer outside it may already have failed.
 
 ```mermaid
 flowchart TB
@@ -47,7 +47,7 @@ flowchart TB
     L4 -.-> O
 ```
 
-The layers are not redundant copies of one another. Each has a different ==vantage point== and therefore stops different attacks:
+The layers are not redundant copies of one another. Each has a different **vantage point** and therefore stops different attacks:
 
 | Layer | Sees | Stops well | Cannot see or stop |
 |-------|------|-----------|--------------------|
@@ -58,7 +58,7 @@ The layers are not redundant copies of one another. Each has a different ==vanta
 | Identity and data (IAM, TLS, KMS) | Principal, action, resource, context | Use of stolen network access to reach data without credentials | Nothing at the packet level; it depends on correct policy |
 
 !!! note "Network controls and identity controls answer different questions"
-    A security group answers ==can this packet reach this port?== An IAM policy answers ==may this principal perform this action on this resource?== A mature design needs both. Network controls reduce the attack surface and slow an attacker down; identity controls decide whether a request that does arrive is legitimate. [Section 8.1](../unit8/topic1.md) describes the identity side of the data perimeter; this section describes the network side, and the two meet in VPC endpoint policies and in conditions such as `aws:SourceVpce` and `aws:SourceVpc`.
+    A security group answers ==can this packet reach this port?== An IAM policy answers **may this principal perform this action on this resource?** A mature design needs both. Network controls reduce the attack surface and slow an attacker down; identity controls decide whether a request that does arrive is legitimate. [Section 8.1](../unit8/topic1.md) describes the identity side of the data perimeter; this section describes the network side, and the two meet in VPC endpoint policies and in conditions such as `aws:SourceVpce` and `aws:SourceVpc`.
 
 ### Threat modelling the network
 
@@ -74,11 +74,11 @@ Before choosing services, an architect should enumerate what can go wrong. A lig
 | Elevation of privilege | Lateral movement from a compromised web tier to the database or to the instance metadata service | Tiered subnets, micro-segmentation with security groups per task or pod, IMDSv2, NetworkPolicy |
 
 !!! example "A realistic attack chain"
-    An attacker finds a server-side request forgery (SSRF) flaw in a public web application. They use it to call internal addresses, discover an administration service on port 8081 that was reachable from the whole VPC because its security group allowed `10.0.0.0/16`, exploit it, install a cryptocurrency miner that downloads its payload from a public domain, and finally copy customer files to an S3 bucket in their own account. Every link in that chain could have been broken by a control in this section: a WAF rule blocking SSRF patterns, a security group that referenced only the specific caller, egress filtering denying unknown domains, DNS Firewall blocking the mining pool, an S3 endpoint policy allowing only buckets in the organisation, and GuardDuty findings on Flow Logs and DNS logs raising an alarm within minutes. Defence in depth means the attacker must succeed at ==every== step; the defender needs to succeed at only one.
+    An attacker finds a server-side request forgery (SSRF) flaw in a public web application. They use it to call internal addresses, discover an administration service on port 8081 that was reachable from the whole VPC because its security group allowed `10.0.0.0/16`, exploit it, install a cryptocurrency miner that downloads its payload from a public domain, and finally copy customer files to an S3 bucket in their own account. Every link in that chain could have been broken by a control in this section: a WAF rule blocking SSRF patterns, a security group that referenced only the specific caller, egress filtering denying unknown domains, DNS Firewall blocking the mining pool, an S3 endpoint policy allowing only buckets in the organisation, and GuardDuty findings on Flow Logs and DNS logs raising an alarm within minutes. Defence in depth means the attacker must succeed at **every** step; the defender needs to succeed at only one.
 
 ### Perimeter security versus zero trust
 
-==Zero trust== is an architectural principle stating that no request is trusted merely because of its network location. Every request must be authenticated, authorised and encrypted, and access is granted per request with the least privilege necessary. On AWS, zero trust does not mean that network controls are abandoned. It means that network controls are no longer the ==only== decision point.
+**Zero trust** is an architectural principle stating that no request is trusted merely because of its network location. Every request must be authenticated, authorised and encrypted, and access is granted per request with the least privilege necessary. On AWS, zero trust does not mean that network controls are abandoned. It means that network controls are no longer the **only** decision point.
 
 | Aspect | Perimeter model | Zero trust model on AWS |
 |--------|-----------------|--------------------------|
@@ -94,7 +94,7 @@ Before choosing services, an architect should enumerate what can go wrong. A lig
 
 ### The shared responsibility model for the network
 
-AWS is responsible for the security ==of== the network: the physical network, the hypervisor-level isolation that prevents one customer from seeing another customer's packets, the enforcement of security groups and NACLs in the Nitro system, and baseline DDoS protection through Shield Standard. The customer is responsible for security ==in== the network: route tables, which subnets are public, the content of every security group and NACL, which endpoints exist and what their policies allow, whether flow logs are enabled, and whether WAF is configured. Almost every real network-related breach on AWS has been a customer-side configuration failure, most often an overly permissive security group or an unintended internet path, rather than a failure of the AWS network itself.
+AWS is responsible for the security **of** the network: the physical network, the hypervisor-level isolation that prevents one customer from seeing another customer's packets, the enforcement of security groups and NACLs in the Nitro system, and baseline DDoS protection through Shield Standard. The customer is responsible for security **in** the network: route tables, which subnets are public, the content of every security group and NACL, which endpoints exist and what their policies allow, whether flow logs are enabled, and whether WAF is configured. Almost every real network-related breach on AWS has been a customer-side configuration failure, most often an overly permissive security group or an unintended internet path, rather than a failure of the AWS network itself.
 
 ---
 
@@ -104,7 +104,7 @@ AWS is responsible for the security ==of== the network: the physical network, th
 
 ==Secure VPC design is the practice of arranging accounts, VPCs, subnets, routes, gateways and endpoints so that every network path that exists is intended, minimal and observable, and every path that is not intended is impossible by construction.==
 
-==A security group is a stateful, allow-only virtual firewall enforced by the AWS Nitro system on each elastic network interface (ENI), whose rules can refer to CIDR blocks, managed prefix lists or other security groups.== All of a group's rules are evaluated and any matching allow rule permits the traffic; there are no deny rules, and the return traffic of an allowed flow is permitted automatically. From a security perspective, a security group is best understood as a ==workload-level identity for network policy==: membership of `sg-orders-api` says "this ENI belongs to the orders API", and rules referencing that group express who may talk to the orders API regardless of IP addresses.
+**A security group is a stateful, allow-only virtual firewall enforced by the AWS Nitro system on each elastic network interface (ENI), whose rules can refer to CIDR blocks, managed prefix lists or other security groups.** All of a group's rules are evaluated and any matching allow rule permits the traffic; there are no deny rules, and the return traffic of an allowed flow is permitted automatically. From a security perspective, a security group is best understood as a **workload-level identity for network policy**: membership of `sg-orders-api` says "this ENI belongs to the orders API", and rules referencing that group express who may talk to the orders API regardless of IP addresses.
 
 In the AWS architecture map, both sit in the Networking and Content Delivery category but are governed from the Security, Identity and Compliance category through AWS Firewall Manager, AWS Security Hub and AWS Config.
 
@@ -204,17 +204,17 @@ flowchart TB
 
 #### Tiered subnets as a security control
 
-[Chapter 1.6](../unit1/topic6.md#subnets-and-availability-zones) introduced public, private and isolated subnets as a routing concept. From a security perspective they encode ==invariants==:
+[Chapter 1.6](../unit1/topic6.md#subnets-and-availability-zones) introduced public, private and isolated subnets as a routing concept. From a security perspective they encode **invariants**:
 
 - Only load balancers, NAT gateways and, where unavoidable, edge appliances live in public subnets. No application instance, task or database ever has a public IP address.
 - Application subnets can initiate outbound connections only through a controlled egress path (NAT gateway, Network Firewall or proxy) and only to approved destinations.
-- Data subnets have ==no route to the internet in either direction==. Their only paths are to the application tier and to VPC endpoints.
+- Data subnets have **no route to the internet in either direction**. Their only paths are to the application tier and to VPC endpoints.
 
 These invariants can be checked mechanically: an AWS Config rule can assert that no ENI in a data subnet has a public IP, that data subnet route tables contain no `0.0.0.0/0` route, and Network Access Analyzer can prove that no path exists from the internet gateway to any database ENI.
 
 #### Micro-segmentation for containers
 
-In the `awsvpc` network mode ([Chapter 2.2](../unit2/topic2.md)), each ECS task receives its own ENI and therefore its own security groups. This is what makes ==per-service micro-segmentation== possible on ECS: two tasks on the same EC2 container instance, or two Fargate tasks in the same subnet, can have entirely different network policies.
+In the `awsvpc` network mode ([Chapter 2.2](../unit2/topic2.md)), each ECS task receives its own ENI and therefore its own security groups. This is what makes **per-service micro-segmentation** possible on ECS: two tasks on the same EC2 container instance, or two Fargate tasks in the same subnet, can have entirely different network policies.
 
 For Amazon EKS the picture is more nuanced, because many pods share a node:
 
@@ -226,7 +226,7 @@ For Amazon EKS the picture is more nuanced, because many pods share a node:
 | Service mesh or VPC Lattice authorisation | Envoy sidecars or the Lattice data plane | Per request, per identity | Workload identities, IAM principals | Layer 7, identity-based authorisation ([Chapter 4.2](../unit4/topic2.md)) |
 
 !!! tip "Choosing between security groups for pods and NetworkPolicy"
-    Use ==NetworkPolicy== as the default for pod-to-pod rules inside a cluster, because policies are written in Kubernetes terms (labels and namespaces), are portable and are enforced without consuming ENIs. Use ==security groups for pods== when a pod must be recognised by an AWS resource outside the cluster, for example so that an Aurora security group can allow only `sg-payments-pods` rather than every node in the cluster. Security groups for pods require Nitro-based instance types, the VPC CNI with `ENABLE_POD_ENI=true`, and consume branch network interfaces, which limits pod density per node; verify supported instance types and limits in the EKS documentation.
+    Use **NetworkPolicy** as the default for pod-to-pod rules inside a cluster, because policies are written in Kubernetes terms (labels and namespaces), are portable and are enforced without consuming ENIs. Use **security groups for pods** when a pod must be recognised by an AWS resource outside the cluster, for example so that an Aurora security group can allow only `sg-payments-pods` rather than every node in the cluster. Security groups for pods require Nitro-based instance types, the VPC CNI with `ENABLE_POD_ENI=true`, and consume branch network interfaces, which limits pod density per node; verify supported instance types and limits in the EKS documentation.
 
 A Kubernetes NetworkPolicy that implements "default deny, then allow only the orders API to reach the payments service" looks like this:
 
@@ -293,15 +293,15 @@ spec:
 
 #### Connection tracking and why it matters for security
 
-Security groups are stateful because the Nitro system keeps a ==connection-tracking table== for each ENI. When an allowed flow is created, an entry keyed by the 5-tuple (protocol, source IP, source port, destination IP, destination port) is recorded, and return packets matching that entry are permitted regardless of the rules in the opposite direction. Two consequences are important for security engineers.
+Security groups are stateful because the Nitro system keeps a **connection-tracking table** for each ENI. When an allowed flow is created, an entry keyed by the 5-tuple (protocol, source IP, source port, destination IP, destination port) is recorded, and return packets matching that entry are permitted regardless of the rules in the opposite direction. Two consequences are important for security engineers.
 
-First, ==removing a rule does not necessarily terminate an existing tracked connection==. If an attacker has an established SSH session that was permitted by a rule allowing a specific address, deleting that rule stops new connections, but the tracked session can continue until it closes or times out. Traffic permitted by rules allowing all traffic in both directions (`0.0.0.0/0` for all protocols) may be ==untracked==: they skip the tracking table, which slightly improves performance, and they are affected immediately by rule changes. The practical lesson for incident response is that ==security group changes alone are not a reliable way to cut an active attacker off==; [Part 8.2.2](#network-acls-and-vpc-flow-logs) shows how a network ACL, which is stateless, stops traffic on the next packet.
+First, **removing a rule does not necessarily terminate an existing tracked connection**. If an attacker has an established SSH session that was permitted by a rule allowing a specific address, deleting that rule stops new connections, but the tracked session can continue until it closes or times out. Traffic permitted by rules allowing all traffic in both directions (`0.0.0.0/0` for all protocols) may be **untracked**: they skip the tracking table, which slightly improves performance, and they are affected immediately by rule changes. The practical lesson for incident response is that **security group changes alone are not a reliable way to cut an active attacker off**; [Part 8.2.2](#network-acls-and-vpc-flow-logs) shows how a network ACL, which is stateless, stops traffic on the next packet.
 
 Second, connection tracking consumes resources on the instance's network interface. Each instance type has a connection tracking allowance, and when it is exceeded new connections are dropped. The ENA driver exposes a `conntrack_allowance_exceeded` statistic that can be published to CloudWatch. High-connection workloads such as NAT instances, proxies or DNS resolvers under attack are most affected. AWS also allows configuring shorter idle timeouts for tracked connections per ENI (for example the TCP established timeout, which defaults to several days), which can reduce exhaustion during floods; verify current defaults and ranges in the EC2 documentation.
 
 #### Egress control and data exfiltration
 
-Ingress receives most attention because attacks arrive from outside. Yet almost every serious breach ends with ==egress==: malware calling home, credentials being sent to an attacker, data being copied out. A default "allow all outbound" security group combined with a NAT gateway gives a compromised workload unrestricted internet access.
+Ingress receives most attention because attacks arrive from outside. Yet almost every serious breach ends with **egress**: malware calling home, credentials being sent to an attacker, data being copied out. A default "allow all outbound" security group combined with a NAT gateway gives a compromised workload unrestricted internet access.
 
 AWS offers several egress controls, which are complementary:
 
@@ -318,7 +318,7 @@ AWS offers several egress controls, which are complementary:
 
 #### VPC endpoint policies as a data perimeter
 
-[Chapter 1.6](../unit1/topic6.md#vpc-endpoints) presented VPC endpoints mainly as a cost and routing feature. From a security perspective, an endpoint is a ==policy enforcement point== for every AWS API call that passes through it. An endpoint policy is a resource-based IAM policy attached to the endpoint; a request succeeds only if the caller's identity policy, the endpoint policy and the target resource's policy all allow it ([Section 8.1](../unit8/topic1.md) explains policy evaluation).
+[Chapter 1.6](../unit1/topic6.md#vpc-endpoints) presented VPC endpoints mainly as a cost and routing feature. From a security perspective, an endpoint is a **policy enforcement point** for every AWS API call that passes through it. An endpoint policy is a resource-based IAM policy attached to the endpoint; a request succeeds only if the caller's identity policy, the endpoint policy and the target resource's policy all allow it ([Section 8.1](../unit8/topic1.md) explains policy evaluation).
 
 The AWS data perimeter model combines three types of control:
 
@@ -328,7 +328,7 @@ The AWS data perimeter model combines three types of control:
 | Resource perimeter | My identities can access only trusted resources | Endpoint policies, SCPs | `aws:ResourceOrgID`, `aws:ResourceAccount` |
 | Network perimeter | My resources are accessed only from expected networks | Resource policies, SCPs, RCPs | `aws:SourceVpc`, `aws:SourceVpce`, `aws:SourceIp`, `aws:ViaAWSService` |
 
-The network half of this design has two directions. An ==endpoint policy== on the S3 gateway endpoint prevents a compromised workload from copying data to an attacker's bucket, because the attacker's bucket is outside `aws:ResourceOrgID`. A ==bucket policy== with `aws:SourceVpce` prevents stolen credentials from being used from the internet to read the bucket, because requests arriving from outside the endpoint are denied. An endpoint policy can allow only named buckets; in production, the condition `"StringEquals": {"aws:ResourceOrgID": "o-exampleorgid"}` generalises this to every bucket the organisation owns.
+The network half of this design has two directions. An **endpoint policy** on the S3 gateway endpoint prevents a compromised workload from copying data to an attacker's bucket, because the attacker's bucket is outside `aws:ResourceOrgID`. A **bucket policy** with `aws:SourceVpce` prevents stolen credentials from being used from the internet to read the bucket, because requests arriving from outside the endpoint are denied. An endpoint policy can allow only named buckets; in production, the condition `"StringEquals": {"aws:ResourceOrgID": "o-exampleorgid"}` generalises this to every bucket the organisation owns.
 
 #### Administrative access without bastions
 
@@ -346,7 +346,7 @@ A bastion host, a hardened instance in a public subnet accepting SSH from admini
 
 #### VPC Lattice in brief
 
-Amazon VPC Lattice is an application networking service that connects services across VPCs and accounts without peering or Transit Gateway routes. A ==service network== groups services; VPCs are associated with the service network; clients reach services by name. Security is layered: security groups on the VPC association control which clients in a VPC may use the service network, and ==auth policies== (IAM resource policies) on the service network and on each service authorise requests by IAM principal, with requests signed using SigV4. Lattice therefore brings identity-based, zero-trust authorisation to east-west HTTP, gRPC and TCP traffic without sidecars. [Chapter 4.2](../unit4/topic2.md) compares it with service meshes; for this section, remember that Lattice is one way to ==remove network-level trust from service-to-service calls== altogether.
+Amazon VPC Lattice is an application networking service that connects services across VPCs and accounts without peering or Transit Gateway routes. A **service network** groups services; VPCs are associated with the service network; clients reach services by name. Security is layered: security groups on the VPC association control which clients in a VPC may use the service network, and **auth policies** (IAM resource policies) on the service network and on each service authorise requests by IAM principal, with requests signed using SigV4. Lattice therefore brings identity-based, zero-trust authorisation to east-west HTTP, gRPC and TCP traffic without sidecars. [Chapter 4.2](../unit4/topic2.md) compares it with service meshes; for this section, remember that Lattice is one way to **remove network-level trust from service-to-service calls** altogether.
 
 ### AWS Service Deep Dive
 
@@ -364,7 +364,7 @@ The core network security services in this part are security groups (whose rule 
 
 #### Architecture
 
-AWS Network Firewall is deployed as a ==firewall== resource with a ==firewall endpoint== in a dedicated subnet in each Availability Zone. Traffic is steered to the endpoint by route tables. A ==firewall policy== contains ==stateless rule groups==, evaluated first for simple fast decisions, and ==stateful rule groups==, which track flows and can use domain lists, five-tuple rules or Suricata-compatible intrusion prevention signatures.
+AWS Network Firewall is deployed as a **firewall** resource with a **firewall endpoint** in a dedicated subnet in each Availability Zone. Traffic is steered to the endpoint by route tables. A **firewall policy** contains **stateless rule groups**, evaluated first for simple fast decisions, and **stateful rule groups**, which track flows and can use domain lists, five-tuple rules or Suricata-compatible intrusion prevention signatures.
 
 ```mermaid
 flowchart LR
@@ -395,13 +395,13 @@ Three deployment models are common:
 | Combined | Centralised egress and east-west inspection, distributed ingress inspection next to internet-facing ALBs | Balances control and latency | Most complex to operate |
 
 !!! warning "Symmetric routing through inspection"
-    Stateful firewalls must see both directions of a flow. In a centralised Transit Gateway design, enable ==appliance mode== on the inspection VPC attachment so that the Transit Gateway keeps both directions of a flow in the same Availability Zone. Without it, the return traffic can arrive at a different firewall endpoint, which has no state for the flow and drops it, producing intermittent failures that are extremely hard to diagnose. Since mid-2025 Network Firewall can also be attached natively to a Transit Gateway (a transit gateway-attached firewall, available in all Regions where both services exist), which removes the need to build and route an inspection VPC yourself.
+    Stateful firewalls must see both directions of a flow. In a centralised Transit Gateway design, enable **appliance mode** on the inspection VPC attachment so that the Transit Gateway keeps both directions of a flow in the same Availability Zone. Without it, the return traffic can arrive at a different firewall endpoint, which has no state for the flow and drops it, producing intermittent failures that are extremely hard to diagnose. Since mid-2025 Network Firewall can also be attached natively to a Transit Gateway (a transit gateway-attached firewall, available in all Regions where both services exist), which removes the need to build and route an inspection VPC yourself.
 
-Route 53 Resolver DNS Firewall attaches ==rule groups== to VPCs. Each rule references a ==domain list== (customer-defined or AWS managed, such as lists for malware, botnet command and control and aggregated threat intelligence) and specifies an action: `ALLOW`, `BLOCK` (responding with `NODATA`, `NXDOMAIN` or an override answer) or `ALERT`. Advanced rules can detect DNS tunnelling and domain generation algorithm patterns without a list. A VPC-level setting chooses ==fail-open== (queries are allowed if DNS Firewall is impaired, favouring availability) or ==fail-closed== (queries are blocked, favouring security).
+Route 53 Resolver DNS Firewall attaches **rule groups** to VPCs. Each rule references a **domain list** (customer-defined or AWS managed, such as lists for malware, botnet command and control and aggregated threat intelligence) and specifies an action: `ALLOW`, `BLOCK` (responding with `NODATA`, `NXDOMAIN` or an override answer) or `ALERT`. Advanced rules can detect DNS tunnelling and domain generation algorithm patterns without a list. A VPC-level setting chooses **fail-open** (queries are allowed if DNS Firewall is impaired, favouring availability) or **fail-closed** (queries are blocked, favouring security).
 
-Gateway Load Balancer operates at layer 3. It receives traffic through ==GWLB endpoints== placed in the traffic path by route tables, encapsulates packets using GENEVE on UDP port 6081, and distributes flows across a target group of appliances with flow stickiness. The appliances inspect and return traffic to the GWLB, which forwards it on. GWLB lets organisations run commercial next-generation firewalls they already license while keeping cloud-native scaling and health checking.
+Gateway Load Balancer operates at layer 3. It receives traffic through **GWLB endpoints** placed in the traffic path by route tables, encapsulates packets using GENEVE on UDP port 6081, and distributes flows across a target group of appliances with flow stickiness. The appliances inspect and return traffic to the GWLB, which forwards it on. GWLB lets organisations run commercial next-generation firewalls they already license while keeping cloud-native scaling and health checking.
 
-AWS Firewall Manager requires AWS Organizations, an administrator account and AWS Config enabled in member accounts. Administrators define ==policies== scoped by account, organisational unit, resource type and tags. Firewall Manager continuously applies the policy to in-scope resources, reports non-compliance and can auto-remediate.
+AWS Firewall Manager requires AWS Organizations, an administrator account and AWS Config enabled in member accounts. Administrators define **policies** scoped by account, organisational unit, resource type and tags. Firewall Manager continuously applies the policy to in-scope resources, reports non-compliance and can auto-remediate.
 
 #### Important Features
 
@@ -429,7 +429,7 @@ AWS Firewall Manager requires AWS Organizations, an administrator account and AW
 
 #### Performance, Scaling and Availability
 
-Security groups are enforced in the Nitro card and add no measurable latency; the practical limits are the connection tracking and packets-per-second allowances of each instance type, and the quotas on groups per ENI and rules per group. Network Firewall endpoints scale automatically to tens of gigabits per second per Availability Zone and add small latency (more with TLS inspection); strict rule ordering with a small, specific rule set performs and reasons best. DNS Firewall adds negligible latency inside the Resolver, and GWLB performance depends on the appliance fleet behind it. Firewall endpoints are ==zonal==: a highly available design places one endpoint per AZ and routes each AZ to its local endpoint. Session Manager and Instance Connect Endpoint are regional managed services whose interface endpoints should exist in every AZ. All of these services are managed through privileged IAM actions recorded in CloudTrail, with configuration history in AWS Config.
+Security groups are enforced in the Nitro card and add no measurable latency; the practical limits are the connection tracking and packets-per-second allowances of each instance type, and the quotas on groups per ENI and rules per group. Network Firewall endpoints scale automatically to tens of gigabits per second per Availability Zone and add small latency (more with TLS inspection); strict rule ordering with a small, specific rule set performs and reasons best. DNS Firewall adds negligible latency inside the Resolver, and GWLB performance depends on the appliance fleet behind it. Firewall endpoints are **zonal**: a highly available design places one endpoint per AZ and routes each AZ to its local endpoint. Session Manager and Instance Connect Endpoint are regional managed services whose interface endpoints should exist in every AZ. All of these services are managed through privileged IAM actions recorded in CloudTrail, with configuration history in AWS Config.
 
 #### Service Limits
 
@@ -516,7 +516,7 @@ Terms already defined in [Chapter 1.6](../unit1/topic6.md#important-aws-terminol
 | Operational complexity | Distributed firewalls are simpler to route but harder to govern; centralised inspection is easier to govern but harder to troubleshoot |
 
 !!! example "Worked decision: centralised or distributed egress inspection"
-    A company has 60 VPCs across 25 accounts, all needing outbound internet access to a small set of SaaS APIs, with a regulatory requirement to log and filter egress by domain. Distributed Network Firewalls would require at least 120 endpoints (two AZs each), each charged hourly. A centralised egress VPC attached to the Transit Gateway needs perhaps three endpoints, at the cost of Transit Gateway data processing on egress bytes. For low-volume API egress the centralised model is cheaper and easier to govern. The same company also serves high-volume media from one VPC; for that VPC, ingress inspection is deployed locally beside the ALB to avoid hairpinning traffic through the hub. The answer is a ==combined model==, justified by traffic volumes, not by habit.
+    A company has 60 VPCs across 25 accounts, all needing outbound internet access to a small set of SaaS APIs, with a regulatory requirement to log and filter egress by domain. Distributed Network Firewalls would require at least 120 endpoints (two AZs each), each charged hourly. A centralised egress VPC attached to the Transit Gateway needs perhaps three endpoints, at the cost of Transit Gateway data processing on egress bytes. For low-volume API egress the centralised model is cheaper and easier to govern. The same company also serves high-volume media from one VPC; for that VPC, ingress inspection is deployed locally beside the ALB to avoid hairpinning traffic through the hub. The answer is a **combined model**, justified by traffic volumes, not by habit.
 
 ### AWS Best Practices
 
@@ -533,15 +533,15 @@ The AWS Well-Architected Framework Security pillar describes infrastructure prot
 
 ### Security Considerations
 
-- ==IAM for network changes.== Actions such as `ec2:AuthorizeSecurityGroupIngress`, `ec2:CreateRoute`, `ec2:ModifyVpcEndpoint` and `network-firewall:UpdateFirewallPolicy` are privileged. Restrict them to pipeline roles, and use permission boundaries and SCPs ([Section 8.1](../unit8/topic1.md)) to prevent workload teams from creating internet paths.
-- ==Least privilege.== Apply it to rules (ports and sources), to egress (destinations) and to endpoints (actions and resources).
-- ==Encryption.== Network controls do not replace encryption. Use TLS between services even inside private subnets ([Section 8.3](../unit8/topic3.md)); VPC encryption controls can be used to audit and enforce that traffic within and between VPCs is encrypted; verify current feature availability.
-- ==KMS and Secrets Manager.== Access to KMS and Secrets Manager from private subnets should go through interface endpoints with endpoint policies restricting use to the organisation's principals.
-- ==Security groups and NACLs.== Security groups carry the application policy; NACLs carry coarse guardrails and emergency containment ([Part 8.2.2](#network-acls-and-vpc-flow-logs)).
-- ==Private versus public resources.== Nothing but load balancers and gateways should be public. Use CloudFront VPC origins or origin-facing prefix lists so that even the ALB is reachable only through CloudFront.
-- ==Instance metadata.== Require IMDSv2 on all instances and set the hop limit to 1 for instances that do not run containers, so SSRF flaws cannot easily steal role credentials ([Section 8.1](../unit8/topic1.md)).
-- ==Logging.== Record every change (CloudTrail, Config), every flow (Flow Logs), every DNS query (Resolver query logs) and every firewall decision (Network Firewall logs), delivered to a protected log archive.
-- ==Compliance.== PCI DSS, for example, requires segmentation of the cardholder data environment and restriction of inbound and outbound traffic to what is necessary; account and VPC segmentation plus explicit security groups provide the evidence auditors expect.
+- **IAM for network changes.** Actions such as `ec2:AuthorizeSecurityGroupIngress`, `ec2:CreateRoute`, `ec2:ModifyVpcEndpoint` and `network-firewall:UpdateFirewallPolicy` are privileged. Restrict them to pipeline roles, and use permission boundaries and SCPs ([Section 8.1](../unit8/topic1.md)) to prevent workload teams from creating internet paths.
+- **Least privilege.** Apply it to rules (ports and sources), to egress (destinations) and to endpoints (actions and resources).
+- **Encryption.** Network controls do not replace encryption. Use TLS between services even inside private subnets ([Section 8.3](../unit8/topic3.md)); VPC encryption controls can be used to audit and enforce that traffic within and between VPCs is encrypted; verify current feature availability.
+- **KMS and Secrets Manager.** Access to KMS and Secrets Manager from private subnets should go through interface endpoints with endpoint policies restricting use to the organisation's principals.
+- **Security groups and NACLs.** Security groups carry the application policy; NACLs carry coarse guardrails and emergency containment ([Part 8.2.2](#network-acls-and-vpc-flow-logs)).
+- **Private versus public resources.** Nothing but load balancers and gateways should be public. Use CloudFront VPC origins or origin-facing prefix lists so that even the ALB is reachable only through CloudFront.
+- **Instance metadata.** Require IMDSv2 on all instances and set the hop limit to 1 for instances that do not run containers, so SSRF flaws cannot easily steal role credentials ([Section 8.1](../unit8/topic1.md)).
+- **Logging.** Record every change (CloudTrail, Config), every flow (Flow Logs), every DNS query (Resolver query logs) and every firewall decision (Network Firewall logs), delivered to a protected log archive.
+- **Compliance.** PCI DSS, for example, requires segmentation of the cardholder data environment and restriction of inbound and outbound traffic to what is necessary; account and VPC segmentation plus explicit security groups provide the evidence auditors expect.
 
 ### Integration with Other AWS Services
 
@@ -585,21 +585,21 @@ flowchart LR
 
 ### Industry Use Cases
 
-- ==Payment processors== isolate the cardholder data environment in dedicated accounts and VPCs with explicit egress allow-lists, reducing PCI DSS audit scope to a small set of workloads.
-- ==Healthcare platforms== run analytics on patient records in walled-garden VPCs with S3 access permitted only through endpoints restricted to organisation-owned buckets, satisfying data residency and exfiltration requirements.
-- ==Software-as-a-service providers== use one security group per microservice and security groups for pods on EKS so that each tenant-facing service can reach only its own data stores.
-- ==Financial institutions== deploy centralised inspection with third-party firewalls behind Gateway Load Balancer, reusing existing firewall expertise and licences while adopting cloud-native scaling.
-- ==Universities and research institutions== replace SSH bastions for student and researcher access with Session Manager, gaining session logs and removing internet-exposed hosts.
-- ==Media companies== combine CloudFront with origin-facing prefix lists so their ALBs are never reachable directly, preventing attackers from bypassing edge protection.
+- **Payment processors** isolate the cardholder data environment in dedicated accounts and VPCs with explicit egress allow-lists, reducing PCI DSS audit scope to a small set of workloads.
+- **Healthcare platforms** run analytics on patient records in walled-garden VPCs with S3 access permitted only through endpoints restricted to organisation-owned buckets, satisfying data residency and exfiltration requirements.
+- **Software-as-a-service providers** use one security group per microservice and security groups for pods on EKS so that each tenant-facing service can reach only its own data stores.
+- **Financial institutions** deploy centralised inspection with third-party firewalls behind Gateway Load Balancer, reusing existing firewall expertise and licences while adopting cloud-native scaling.
+- **Universities and research institutions** replace SSH bastions for student and researcher access with Session Manager, gaining session logs and removing internet-exposed hosts.
+- **Media companies** combine CloudFront with origin-facing prefix lists so their ALBs are never reachable directly, preventing attackers from bypassing edge protection.
 
 ### Advantages
 
-- ==Distributed enforcement.== Security groups are enforced at every ENI with no central bottleneck, so fine-grained policy scales with the fleet.
-- ==Identity-based network policy.== Security group referencing and Kubernetes labels express intent rather than addresses, which remains correct under elasticity.
-- ==Policy as code.== Every control is an API resource, reviewable, testable and reproducible across environments.
-- ==Continuous governance.== Config, Security Hub, Firewall Manager and BPA detect and prevent drift across an organisation.
-- ==Managed inspection.== Network Firewall and DNS Firewall provide IPS and domain filtering without operating appliances.
-- ==Reduced attack surface.== Session Manager, Instance Connect Endpoint, VPC endpoints and CloudFront VPC origins allow designs with no inbound internet exposure except the edge.
+- **Distributed enforcement.** Security groups are enforced at every ENI with no central bottleneck, so fine-grained policy scales with the fleet.
+- **Identity-based network policy.** Security group referencing and Kubernetes labels express intent rather than addresses, which remains correct under elasticity.
+- **Policy as code.** Every control is an API resource, reviewable, testable and reproducible across environments.
+- **Continuous governance.** Config, Security Hub, Firewall Manager and BPA detect and prevent drift across an organisation.
+- **Managed inspection.** Network Firewall and DNS Firewall provide IPS and domain filtering without operating appliances.
+- **Reduced attack surface.** Session Manager, Instance Connect Endpoint, VPC endpoints and CloudFront VPC origins allow designs with no inbound internet exposure except the edge.
 
 ### Limitations
 
@@ -634,13 +634,13 @@ Secure VPC design turns the networking mechanics of [Chapter 1.6](../unit1/topic
 
 Architectural lessons:
 
-- ==Draw the communication matrix first.== Every rule should correspond to a documented requirement; everything else is denied.
-- ==Segment by blast radius.== Put the strongest boundaries (accounts, VPCs) around the most valuable data and the least trusted workloads.
-- ==Security groups are identities.== Reference groups, one per service role, and never allow the whole VPC.
-- ==Control egress deliberately.== Attackers must get data out; make that path narrow, filtered and logged, including DNS.
-- ==Endpoints are enforcement points.== Endpoint and bucket policies turn private connectivity into a data perimeter.
-- ==Remove inbound administration.== Session Manager and Instance Connect Endpoint are more secure and cheaper than bastions.
-- ==Govern continuously.== Preventive guardrails plus continuous detection beat periodic audits.
+- **Draw the communication matrix first.** Every rule should correspond to a documented requirement; everything else is denied.
+- **Segment by blast radius.** Put the strongest boundaries (accounts, VPCs) around the most valuable data and the least trusted workloads.
+- **Security groups are identities.** Reference groups, one per service role, and never allow the whole VPC.
+- **Control egress deliberately.** Attackers must get data out; make that path narrow, filtered and logged, including DNS.
+- **Endpoints are enforcement points.** Endpoint and bucket policies turn private connectivity into a data perimeter.
+- **Remove inbound administration.** Session Manager and Instance Connect Endpoint are more secure and cheaper than bastions.
+- **Govern continuously.** Preventive guardrails plus continuous detection beat periodic audits.
 
 ## Network ACLs and VPC Flow Logs
 
@@ -648,7 +648,7 @@ Architectural lessons:
 
 ==A network ACL used as a security guardrail is a stateless, subnet-level set of numbered allow and deny rules that enforces coarse invariants and emergency containment independent of the security groups of individual workloads.==
 
-==VPC Flow Logs is a VPC feature that captures metadata about IP traffic flowing to and from network interfaces in a VPC, a subnet or a specific ENI, and delivers aggregated flow records to Amazon CloudWatch Logs, Amazon S3 or Amazon Data Firehose.== Flow Logs record ==metadata, not payloads==: who talked to whom, on which ports and protocols, how much, when, and whether the traffic was accepted or rejected.
+**VPC Flow Logs is a VPC feature that captures metadata about IP traffic flowing to and from network interfaces in a VPC, a subnet or a specific ENI, and delivers aggregated flow records to Amazon CloudWatch Logs, Amazon S3 or Amazon Data Firehose.** Flow Logs record **metadata, not payloads**: who talked to whom, on which ports and protocols, how much, when, and whether the traffic was accepted or rejected.
 
 In the AWS architecture map, both belong to Amazon VPC. Flow Logs are also a foundational data source for the Security, Identity and Compliance services GuardDuty, Detective and Security Lake.
 
@@ -658,10 +658,10 @@ In the AWS architecture map, both belong to Amazon VPC. Flow Logs are also a fou
 
 Security groups carry application intent and are managed by the teams that own the workloads. That is exactly why a second, independent control is valuable:
 
-1. ==Separation of duties.== A central network or security team can own the NACLs, enforced through IAM and SCPs, while application teams own their security groups. A mistake in a team's security group cannot violate an invariant that the NACL enforces.
-2. ==Explicit deny.== Security groups cannot deny. When a specific address range must be blocked across a whole subnet, for example during an attack, a NACL deny rule does it.
-3. ==Immediate effect.== NACLs are stateless; they do not track connections. A new deny rule stops matching packets immediately, including packets of established connections, which is not true of removing a security group rule ([Part 8.2.1](#vpc-design-and-security-groups)).
-4. ==Compliance.== Some frameworks and auditors expect a subnet-level control in addition to host-level controls, as evidence of defence in depth.
+1. **Separation of duties.** A central network or security team can own the NACLs, enforced through IAM and SCPs, while application teams own their security groups. A mistake in a team's security group cannot violate an invariant that the NACL enforces.
+2. **Explicit deny.** Security groups cannot deny. When a specific address range must be blocked across a whole subnet, for example during an attack, a NACL deny rule does it.
+3. **Immediate effect.** NACLs are stateless; they do not track connections. A new deny rule stops matching packets immediately, including packets of established connections, which is not true of removing a security group rule ([Part 8.2.1](#vpc-design-and-security-groups)).
+4. **Compliance.** Some frameworks and auditors expect a subnet-level control in addition to host-level controls, as evidence of defence in depth.
 
 #### Why flow logs are essential security evidence
 
@@ -671,7 +671,7 @@ Preventive controls fail: rules are misconfigured, credentials are stolen, softw
 
 #### How network ACLs evaluate traffic
 
-A network ACL is associated with subnets (each subnet has exactly one NACL) and filters every packet that crosses the subnet boundary. Its rules are an ordered list: evaluation walks the rules in ascending rule-number order and ==stops at the first match==, whether that rule allows or denies. The implicit final rule, numbered `*`, denies everything. This first-match model is what makes deny rules meaningful: a deny at rule 90 blocks traffic that an allow at rule 100 would otherwise permit. Rules are numbered with gaps (for example 100, 200, 300) so that new rules can be inserted later without renumbering. Rule sources and destinations are CIDR blocks; unlike security group rules they cannot reference a security group. The default NACL of a VPC allows all traffic in both directions, whereas a newly created custom NACL denies everything until rules are added.
+A network ACL is associated with subnets (each subnet has exactly one NACL) and filters every packet that crosses the subnet boundary. Its rules are an ordered list: evaluation walks the rules in ascending rule-number order and **stops at the first match**, whether that rule allows or denies. The implicit final rule, numbered `*`, denies everything. This first-match model is what makes deny rules meaningful: a deny at rule 90 blocks traffic that an allow at rule 100 would otherwise permit. Rules are numbered with gaps (for example 100, 200, 300) so that new rules can be inserted later without renumbering. Rule sources and destinations are CIDR blocks; unlike security group rules they cannot reference a security group. The default NACL of a VPC allows all traffic in both directions, whereas a newly created custom NACL denies everything until rules are added.
 
 Because a NACL keeps no connection state, a rule change applies to the very next packet, including packets of established connections; this is what makes NACLs useful for containment (below). For an inbound request, the NACL is evaluated as the packet enters the subnet and before the ENI's security group; the reply passes the security group automatically but must be allowed again by the NACL's outbound rules.
 
@@ -692,7 +692,7 @@ stateDiagram-v2
 
 #### The ephemeral-port return path
 
-A client connecting to a server on port 443 uses a random, short-lived, high-numbered ==ephemeral source port==. The server's reply is sourced from port 443 but ==destined== for that ephemeral port. Because NACLs are stateless, an outbound rule for port 443 does not cover the reply; the outbound rules must allow destination ports `1024-65535` (the exact range depends on the client operating system). The same applies in reverse for connections the workload initiates: responses from the remote server arrive on an ephemeral port and must be allowed inbound.
+A client connecting to a server on port 443 uses a random, short-lived, high-numbered **ephemeral source port**. The server's reply is sourced from port 443 but **destined** for that ephemeral port. Because NACLs are stateless, an outbound rule for port 443 does not cover the reply; the outbound rules must allow destination ports `1024-65535` (the exact range depends on the client operating system). The same applies in reverse for connections the workload initiates: responses from the remote server arrive on an ephemeral port and must be allowed inbound.
 
 !!! danger "The classic NACL failure"
     A team adds a custom NACL allowing inbound TCP 443 and outbound TCP 443, and every HTTPS request hangs. The requests arrive, but every reply is dropped by the outbound rules because it is destined for the client's ephemeral port, not port 443. The symptom is a timeout rather than a refusal, which sends teams looking in the wrong place. This is why security groups should carry the application policy and NACLs should stay coarse.
@@ -711,7 +711,7 @@ What NACLs should not be used for: expressing per-service application policy (se
 
 #### Designing NACL deny lists
 
-Because rules are evaluated from the lowest number and the first match wins, deny rules must be numbered ==below== the allow rules they override. A practical numbering convention reserves ranges:
+Because rules are evaluated from the lowest number and the first match wins, deny rules must be numbered **below** the allow rules they override. A practical numbering convention reserves ranges:
 
 | Rule number range | Purpose |
 |-------------------|---------|
@@ -722,7 +722,7 @@ Because rules are evaluated from the lowest number and the first match wins, den
 | `*` | Implicit final deny, always present |
 
 !!! warning "Stateless means both directions"
-    A deny rule on inbound traffic from an attacker's CIDR stops their requests. If the attacker is instead the ==destination== of outbound connections, for example a command-and-control server, the deny must be on the outbound rules. For full isolation of a CIDR, add deny rules in both directions. Remember also that the ephemeral-port rules described above must remain in place for legitimate return traffic.
+    A deny rule on inbound traffic from an attacker's CIDR stops their requests. If the attacker is instead the **destination** of outbound connections, for example a command-and-control server, the deny must be on the outbound rules. For full isolation of a CIDR, add deny rules in both directions. Remember also that the ephemeral-port rules described above must remain in place for legitimate return traffic.
 
 #### Quarantine and incident containment
 
@@ -747,7 +747,7 @@ sequenceDiagram
     L->>EB: "Publish containment event for ticketing and chat"
 ```
 
-The isolation security group stops new connections; the NACL deny, being stateless, cuts off any established tracked connections to the attacker's address at once. If the entire subnet is suspected, for example an application subnet containing only the affected Auto Scaling group, the responder can associate a pre-built ==quarantine NACL== with the subnet, which denies everything except traffic to and from a forensics subnet.
+The isolation security group stops new connections; the NACL deny, being stateless, cuts off any established tracked connections to the attacker's address at once. If the entire subnet is suspected, for example an application subnet containing only the affected Auto Scaling group, the responder can associate a pre-built **quarantine NACL** with the subnet, which denies everything except traffic to and from a forensics subnet.
 
 !!! danger "Containment has side effects"
     A NACL applies to every ENI in the subnet, including load balancer nodes, interface endpoints, NAT gateways and other services that happen to share it. Quarantining a shared subnet can cause a wider outage than the incident. This is a strong argument for subnet designs that separate workloads by function, and for responders to prefer per-instance isolation security groups plus targeted NACL deny rules over whole-subnet quarantine, unless the subnet is dedicated to the compromised workload.
@@ -785,7 +785,7 @@ The default format contains the version 2 fields: `version`, `account-id`, `inte
 
 Flow Logs deliberately omit some traffic, and a security analyst must know the gaps:
 
-- Traffic to the Amazon-provided DNS server (Route 53 Resolver); use ==Resolver query logs== instead.
+- Traffic to the Amazon-provided DNS server (Route 53 Resolver); use **Resolver query logs** instead.
 - Instance metadata service traffic to `169.254.169.254` and Amazon Time Sync traffic.
 - DHCP traffic, and traffic to the reserved VPC router address.
 - Windows license activation traffic to AWS.
@@ -808,7 +808,7 @@ flowchart LR
     SL --> SIEM["Subscribers: SIEM, OpenSearch, partner tools"]
 ```
 
-==Amazon GuardDuty== is a managed threat detection service that analyses foundational data sources: CloudTrail management events, VPC Flow Logs and Route 53 Resolver DNS query logs, plus optional protection plans (S3, EKS audit logs, Runtime Monitoring for EC2, ECS and EKS, RDS login activity, Lambda network activity, Malware Protection). Crucially, GuardDuty ==obtains flow log and DNS data through an independent, duplicated stream== directly from AWS; you do not need to enable Flow Logs for GuardDuty to work, and disabling your flow logs does not blind GuardDuty. It uses threat intelligence, machine learning and anomaly detection to produce findings, and its extended threat detection correlates multiple signals into attack sequence findings.
+**Amazon GuardDuty** is a managed threat detection service that analyses foundational data sources: CloudTrail management events, VPC Flow Logs and Route 53 Resolver DNS query logs, plus optional protection plans (S3, EKS audit logs, Runtime Monitoring for EC2, ECS and EKS, RDS login activity, Lambda network activity, Malware Protection). Crucially, GuardDuty ==obtains flow log and DNS data through an independent, duplicated stream== directly from AWS; you do not need to enable Flow Logs for GuardDuty to work, and disabling your flow logs does not blind GuardDuty. It uses threat intelligence, machine learning and anomaly detection to produce findings, and its extended threat detection correlates multiple signals into attack sequence findings.
 
 Examples of network-derived GuardDuty findings:
 
@@ -823,11 +823,11 @@ Examples of network-derived GuardDuty findings:
 | `Behavior:EC2/TrafficVolumeUnusual` | Unusually large outbound traffic volume to a remote host |
 | `Behavior:EC2/NetworkPortUnusual` | Communication on a port the instance does not normally use |
 
-==Amazon Detective== ingests GuardDuty findings, VPC Flow Logs, CloudTrail and EKS audit logs into a ==behaviour graph== and provides visualisations that let an investigator pivot from a finding to the instance's normal and abnormal traffic, the IP addresses involved and the related API activity. Detective answers "what else did this entity do?", which is slow and error-prone to reconstruct by hand.
+**Amazon Detective** ingests GuardDuty findings, VPC Flow Logs, CloudTrail and EKS audit logs into a **behaviour graph** and provides visualisations that let an investigator pivot from a finding to the instance's normal and abnormal traffic, the IP addresses involved and the related API activity. Detective answers "what else did this entity do?", which is slow and error-prone to reconstruct by hand.
 
-==Amazon Security Lake== centralises security data from AWS sources (CloudTrail, VPC Flow Logs, Route 53 Resolver logs, Security Hub findings, EKS audit logs, WAF logs and others) and third-party sources into an S3-based data lake in a delegated administrator account, normalised to the ==Open Cybersecurity Schema Framework (OCSF)== in Parquet. Subscribers such as SIEM tools query or receive the data. Security Lake removes the need for each tool to parse each log format differently.
+**Amazon Security Lake** centralises security data from AWS sources (CloudTrail, VPC Flow Logs, Route 53 Resolver logs, Security Hub findings, EKS audit logs, WAF logs and others) and third-party sources into an S3-based data lake in a delegated administrator account, normalised to the **Open Cybersecurity Schema Framework (OCSF)** in Parquet. Subscribers such as SIEM tools query or receive the data. Security Lake removes the need for each tool to parse each log format differently.
 
-==Traffic Mirroring== copies actual packets from the ENI of a Nitro-based instance to a mirror target (another ENI, a Network Load Balancer or a Gateway Load Balancer endpoint), encapsulated in VXLAN on UDP port 4789, according to a ==mirror filter==. It provides full packet capture for intrusion detection systems and forensic analysis, at the cost of per-session charges and doubled traffic. Use it selectively, for specific suspect workloads or high-value segments, not as a default.
+**Traffic Mirroring** copies actual packets from the ENI of a Nitro-based instance to a mirror target (another ENI, a Network Load Balancer or a Gateway Load Balancer endpoint), encapsulated in VXLAN on UDP port 4789, according to a **mirror filter**. It provides full packet capture for intrusion detection systems and forensic analysis, at the cost of per-session charges and doubled traffic. Use it selectively, for specific suspect workloads or high-value segments, not as a default.
 
 | Need | Flow Logs | Traffic Mirroring | Network Firewall logs | Resolver query logs |
 |------|-----------|-------------------|-----------------------|---------------------|
@@ -959,12 +959,12 @@ NACL evaluation adds no measurable latency, and Flow Log generation happens in t
 
 ### Security Considerations
 
-- ==IAM.== Restrict `ec2:CreateNetworkAclEntry`, `ec2:ReplaceNetworkAclAssociation` and `ec2:DeleteFlowLogs` to network, security and incident-response roles. Deny `ec2:DeleteFlowLogs`, `logs:DeleteLogGroup` on flow log groups, and `guardduty:DeleteDetector` or `guardduty:DisassociateFromAdministratorAccount` with SCPs.
-- ==Least privilege for analysts.== Analysts need read access to the log archive through Athena workgroups and Lake Formation permissions, not write access.
-- ==Encryption and KMS.== Encrypt log buckets with SSE-KMS keys whose key policies allow the delivery service to encrypt and restrict decryption to analyst roles ([Section 8.3](../unit8/topic3.md)).
-- ==Integrity.== S3 Object Lock in compliance mode for regulated retention prevents deletion even by administrators.
-- ==Privacy.== Flow Logs contain IP addresses, which may be personal data under laws such as the GDPR; define retention and access accordingly.
-- ==Compliance.== PCI DSS, ISO 27001 and similar frameworks require network logging, log protection and log review; GuardDuty, Security Hub and documented Athena hunting queries provide evidence.
+- **IAM.** Restrict `ec2:CreateNetworkAclEntry`, `ec2:ReplaceNetworkAclAssociation` and `ec2:DeleteFlowLogs` to network, security and incident-response roles. Deny `ec2:DeleteFlowLogs`, `logs:DeleteLogGroup` on flow log groups, and `guardduty:DeleteDetector` or `guardduty:DisassociateFromAdministratorAccount` with SCPs.
+- **Least privilege for analysts.** Analysts need read access to the log archive through Athena workgroups and Lake Formation permissions, not write access.
+- **Encryption and KMS.** Encrypt log buckets with SSE-KMS keys whose key policies allow the delivery service to encrypt and restrict decryption to analyst roles ([Section 8.3](../unit8/topic3.md)).
+- **Integrity.** S3 Object Lock in compliance mode for regulated retention prevents deletion even by administrators.
+- **Privacy.** Flow Logs contain IP addresses, which may be personal data under laws such as the GDPR; define retention and access accordingly.
+- **Compliance.** PCI DSS, ISO 27001 and similar frameworks require network logging, log protection and log review; GuardDuty, Security Hub and documented Athena hunting queries provide evidence.
 
 ### Integration with Other AWS Services
 
@@ -993,21 +993,21 @@ NACL evaluation adds no measurable latency, and Flow Log generation happens in t
 
 ### Industry Use Cases
 
-- ==Banks== retain Flow Logs for multiple years with Object Lock to satisfy regulators and use Athena hunting queries to evidence continuous monitoring.
-- ==E-commerce companies== automate containment of instances flagged by GuardDuty for cryptocurrency mining, one of the most common post-compromise activities.
-- ==Managed security service providers== consume Security Lake data from customer organisations in OCSF, avoiding a separate parser for each AWS log type.
-- ==Telecommunications providers== use Transit Gateway Flow Logs to understand and secure traffic among hundreds of VPCs and on-premises networks.
-- ==Incident response teams== use Traffic Mirroring temporarily on suspect workloads to capture packets for malware analysis.
-- ==Universities== use Flow Logs in teaching and research environments to detect compromised student instances used for scanning.
+- **Banks** retain Flow Logs for multiple years with Object Lock to satisfy regulators and use Athena hunting queries to evidence continuous monitoring.
+- **E-commerce companies** automate containment of instances flagged by GuardDuty for cryptocurrency mining, one of the most common post-compromise activities.
+- **Managed security service providers** consume Security Lake data from customer organisations in OCSF, avoiding a separate parser for each AWS log type.
+- **Telecommunications providers** use Transit Gateway Flow Logs to understand and secure traffic among hundreds of VPCs and on-premises networks.
+- **Incident response teams** use Traffic Mirroring temporarily on suspect workloads to capture packets for malware analysis.
+- **Universities** use Flow Logs in teaching and research environments to detect compromised student instances used for scanning.
 
 ### Advantages
 
-- ==Independent guardrails.== NACLs enforce invariants that application teams cannot override.
-- ==Immediate containment.== Stateless deny rules stop even established connections.
-- ==Agentless, tamper-resistant telemetry.== Flow Logs are produced outside the instance and can be delivered to another account.
-- ==Rich context.== Custom fields attribute flows to subnets, instances, ECS tasks and AWS services, and explain paths and rejections.
-- ==Managed detection.== GuardDuty analyses network and DNS telemetry without customers building detection pipelines.
-- ==Scalable analytics.== Athena, Security Lake and Detective scale from one VPC to an entire organisation.
+- **Independent guardrails.** NACLs enforce invariants that application teams cannot override.
+- **Immediate containment.** Stateless deny rules stop even established connections.
+- **Agentless, tamper-resistant telemetry.** Flow Logs are produced outside the instance and can be delivered to another account.
+- **Rich context.** Custom fields attribute flows to subnets, instances, ECS tasks and AWS services, and explain paths and rejections.
+- **Managed detection.** GuardDuty analyses network and DNS telemetry without customers building detection pipelines.
+- **Scalable analytics.** Athena, Security Lake and Detective scale from one VPC to an entire organisation.
 
 ### Limitations
 
@@ -1038,15 +1038,15 @@ NACL evaluation adds no measurable latency, and Flow Log generation happens in t
 
 ### Summary
 
-Network ACLs are the stateless, subnet-level complement to security groups. Their security value lies in ==independent guardrails== owned by a central team, ==explicit deny== for known-bad ranges, and ==immediate containment==, because a stateless deny stops even established connections. They are the wrong tool for application policy or large dynamic block lists. VPC Flow Logs provide agentless, tamper-resistant metadata about every flow. Custom formats add the fields that make security analysis possible, Parquet and partitions make Athena hunting fast and cheap, and delivery to an immutable log archive protects the evidence. GuardDuty analyses network and DNS telemetry independently to produce findings, Detective supports investigation, Security Lake normalises data to OCSF, and Traffic Mirroring captures packets when metadata is not enough.
+Network ACLs are the stateless, subnet-level complement to security groups. Their security value lies in **independent guardrails** owned by a central team, **explicit deny** for known-bad ranges, and **immediate containment**, because a stateless deny stops even established connections. They are the wrong tool for application policy or large dynamic block lists. VPC Flow Logs provide agentless, tamper-resistant metadata about every flow. Custom formats add the fields that make security analysis possible, Parquet and partitions make Athena hunting fast and cheap, and delivery to an immutable log archive protects the evidence. GuardDuty analyses network and DNS telemetry independently to produce findings, Detective supports investigation, Security Lake normalises data to OCSF, and Traffic Mirroring captures packets when metadata is not enough.
 
 Architectural lessons:
 
-- ==Separate guardrails from intent.== Security groups express what teams need; NACLs and SCPs express what must never happen.
+- **Separate guardrails from intent.** Security groups express what teams need; NACLs and SCPs express what must never happen.
 - ==Design for containment before the incident.== Reserved rule ranges, isolation groups, dedicated subnets and rehearsed runbooks make containment fast and safe.
-- ==Log everything, protect the logs.== `ALL` traffic, 60-second intervals where it matters, custom fields, and an archive the workload account cannot touch.
-- ==Detection is layered too.== Managed detection (GuardDuty), structured hunting (Athena), investigation (Detective) and normalisation (Security Lake) serve different needs.
-- ==Metadata first, packets when necessary.== Flow Logs cover everything cheaply; Traffic Mirroring is a targeted instrument.
+- **Log everything, protect the logs.** `ALL` traffic, 60-second intervals where it matters, custom fields, and an archive the workload account cannot touch.
+- **Detection is layered too.** Managed detection (GuardDuty), structured hunting (Athena), investigation (Detective) and normalisation (Security Lake) serve different needs.
+- **Metadata first, packets when necessary.** Flow Logs cover everything cheaply; Traffic Mirroring is a targeted instrument.
 
 ## AWS WAF and Shield for Application Protection
 
@@ -1054,7 +1054,7 @@ Architectural lessons:
 
 ==AWS WAF is a managed web application firewall that inspects HTTP and HTTPS requests forwarded by integrated AWS services and allows, blocks, counts or challenges each request according to the rules in a web access control list (web ACL).== WAF operates at layer 7 and sees the request line, headers, cookies, query string, body, client IP address and TLS fingerprint.
 
-==AWS Shield is a managed distributed denial of service (DDoS) protection service.== ==Shield Standard== is automatically applied at no extra charge to all AWS customers and protects against the most common network and transport layer attacks. ==Shield Advanced== is a paid subscription adding enhanced detection and mitigation for specific protected resources, application-layer DDoS mitigation integrated with WAF, access to the Shield Response Team, cost protection and visibility. A separate capability, AWS Shield network security director (in preview since June 2025), analyses VPC network configurations and reports missing or misconfigured network security controls; it is a posture assessment tool, not a DDoS mitigation.
+**AWS Shield is a managed distributed denial of service (DDoS) protection service.** **Shield Standard** is automatically applied at no extra charge to all AWS customers and protects against the most common network and transport layer attacks. **Shield Advanced** is a paid subscription adding enhanced detection and mitigation for specific protected resources, application-layer DDoS mitigation integrated with WAF, access to the Shield Response Team, cost protection and visibility. A separate capability, AWS Shield network security director (in preview since June 2025), analyses VPC network configurations and reports missing or misconfigured network security controls; it is a posture assessment tool, not a DDoS mitigation.
 
 WAF can be associated with the following resource types (verify the current list, which grows over time):
 
@@ -1069,7 +1069,7 @@ WAF can be associated with the following resource types (verify the current list
 | AWS Verified Access instance | Regional | Protects zero trust access to internal applications |
 | AWS Amplify Hosting applications | Global, through CloudFront | Generally available since March 2025; Amplify adds a per-app monthly fee on top of WAF charges |
 
-WAF does ==not== attach to Network Load Balancers, Classic Load Balancers, EC2 instances directly or API Gateway HTTP and WebSocket APIs.
+WAF does **not** attach to Network Load Balancers, Classic Load Balancers, EC2 instances directly or API Gateway HTTP and WebSocket APIs.
 
 !!! note "Current AWS WAF, not WAF Classic"
     These notes describe the current AWS WAF (the `wafv2` API). The original AWS WAF Classic reached end of support on 30 September 2025, and its resources are not compatible with the current service. In 2025 AWS also introduced a new WAF console experience in which web ACLs are presented as protection packs with recommended rule sets per workload type; the underlying web ACL, its rules and the API are unchanged.
@@ -1085,7 +1085,7 @@ Security groups can allow only port 443 to a load balancer, but port 443 is wher
 - a shopper viewing products from a scraper copying the entire catalogue,
 - a real traffic spike from an HTTP flood designed to exhaust application capacity.
 
-Fixing vulnerabilities in code remains the primary defence, but organisations run large portfolios of applications, third-party components and legacy systems, and new vulnerabilities (for example the Log4j `JNDI` injection of 2021) appear faster than every application can be patched. A web application firewall provides a ==shared, centrally updated layer== that can block exploit attempts within hours of disclosure, buy time for patching, and absorb automated abuse that no single application should need to handle.
+Fixing vulnerabilities in code remains the primary defence, but organisations run large portfolios of applications, third-party components and legacy systems, and new vulnerabilities (for example the Log4j `JNDI` injection of 2021) appear faster than every application can be patched. A web application firewall provides a **shared, centrally updated layer** that can block exploit attempts within hours of disclosure, buy time for patching, and absorb automated abuse that no single application should need to handle.
 
 #### The problem: attacks larger than the application
 
@@ -1150,11 +1150,11 @@ flowchart TB
 
 #### Web ACL capacity units
 
-Every rule consumes ==web ACL capacity units (WCUs)== reflecting its processing cost. Simple IP set rules cost little; regex pattern sets and text transformations cost more; managed rule groups have fixed published capacities (for example the Core rule set is several hundred WCUs). A web ACL includes a base capacity (1,500 WCUs at the time of writing) in its standard price; web ACLs can exceed it up to a higher maximum at additional cost per request. Verify the current base, maximum and pricing, because these have changed.
+Every rule consumes **web ACL capacity units (WCUs)** reflecting its processing cost. Simple IP set rules cost little; regex pattern sets and text transformations cost more; managed rule groups have fixed published capacities (for example the Core rule set is several hundred WCUs). A web ACL includes a base capacity (1,500 WCUs at the time of writing) in its standard price; web ACLs can exceed it up to a higher maximum at additional cost per request. Verify the current base, maximum and pricing, because these have changed.
 
 #### Request inspection limits
 
-WAF inspects the request body only up to a limit: by default 8 KB for ALB and AppSync, and 16 KB for CloudFront, API Gateway, Cognito, App Runner and Verified Access, with the option to raise the CloudFront-family limit in increments at extra cost. Each rule specifies ==oversize handling==: `CONTINUE` (inspect what is available), `MATCH` or `NO_MATCH`. Attackers can pad a malicious payload beyond the inspected size, so rules for sensitive endpoints should treat oversize bodies as a match or use a size constraint rule to block bodies larger than the application expects.
+WAF inspects the request body only up to a limit: by default 8 KB for ALB and AppSync, and 16 KB for CloudFront, API Gateway, Cognito, App Runner and Verified Access, with the option to raise the CloudFront-family limit in increments at extra cost. Each rule specifies **oversize handling**: `CONTINUE` (inspect what is available), `MATCH` or `NO_MATCH`. Attackers can pad a malicious payload beyond the inspected size, so rules for sensitive endpoints should treat oversize bodies as a match or use a size constraint rule to block bodies larger than the application expects.
 
 #### AWS Managed Rules
 
@@ -1172,11 +1172,11 @@ WAF inspects the request body only up to a limit: by default 8 KB for ALB and Ap
 | Account Creation Fraud Prevention (ACFP) | Fake account creation on the registration endpoint | Sign-up flows abused for promotions or spam |
 | Anti-DDoS rule group | Application-layer DDoS detection and mitigation based on traffic baselines | Web ACLs that need automatic layer 7 DDoS response; verify availability |
 
-Bot Control, ATP and ACFP are ==intelligent threat mitigation== rule groups with additional subscription and per-request charges. ATP and ACFP work best with the ==WAF client application integration== SDKs (JavaScript or mobile), which obtain tokens that prove a real client executed the challenge.
+Bot Control, ATP and ACFP are **intelligent threat mitigation** rule groups with additional subscription and per-request charges. ATP and ACFP work best with the **WAF client application integration** SDKs (JavaScript or mobile), which obtain tokens that prove a real client executed the challenge.
 
 #### Rate-based rules
 
-A rate-based rule counts requests per ==aggregation key== over an ==evaluation window== and applies its action to keys that exceed a limit, until their rate falls below the limit again.
+A rate-based rule counts requests per **aggregation key** over an **evaluation window** and applies its action to keys that exceed a limit, until their rate falls below the limit again.
 
 | Setting | Options | Guidance |
 |---------|---------|----------|
@@ -1186,11 +1186,11 @@ A rate-based rule counts requests per ==aggregation key== over an ==evaluation w
 | Action | Block, Count, CAPTCHA, Challenge, custom response with `429` | `429 Too Many Requests` with `Retry-After` is friendlier for API clients |
 
 !!! note "Rate limiting at several layers"
-    [Chapter 4.2](../unit4/topic2.md) described API Gateway throttling and usage plans, and [Chapter 4.3](../unit4/topic3.md) described load shedding. These are complementary. WAF rate-based rules stop abusive clients ==before== they consume API Gateway or application capacity and are keyed on network and request characteristics; API Gateway usage plans enforce ==per-customer contractual quotas== keyed on API keys; application-level limits enforce business rules. A robust design uses WAF for abuse, API Gateway for tenancy and the application for business logic.
+    [Chapter 4.2](../unit4/topic2.md) described API Gateway throttling and usage plans, and [Chapter 4.3](../unit4/topic3.md) described load shedding. These are complementary. WAF rate-based rules stop abusive clients **before** they consume API Gateway or application capacity and are keyed on network and request characteristics; API Gateway usage plans enforce **per-customer contractual quotas** keyed on API keys; application-level limits enforce business rules. A robust design uses WAF for abuse, API Gateway for tenancy and the application for business logic.
 
 #### CAPTCHA and Challenge
 
-The `CAPTCHA` action presents a puzzle to the client; the `Challenge` action runs a silent browser interrogation. Both issue a ==token== stored in a cookie with a configurable ==immunity time==; subsequent requests with a valid token pass without another challenge. `Challenge` is invisible to humans in real browsers and suits suspicious-but-uncertain traffic; `CAPTCHA` adds friction and suits high-risk actions such as repeated failed logins. Neither works for non-browser API clients, which should receive `Block` or `429` instead.
+The `CAPTCHA` action presents a puzzle to the client; the `Challenge` action runs a silent browser interrogation. Both issue a **token** stored in a cookie with a configurable **immunity time**; subsequent requests with a valid token pass without another challenge. `Challenge` is invisible to humans in real browsers and suits suspicious-but-uncertain traffic; `CAPTCHA` adds friction and suits high-risk actions such as repeated failed logins. Neither works for non-browser API clients, which should receive `Block` or `429` instead.
 
 #### Safe rollout with Count mode and labels
 
@@ -1206,7 +1206,7 @@ flowchart LR
     F --> G["Promote configuration through environments with IaC"]
 ```
 
-Labels make exclusions precise. For example, instead of disabling the Core rule set's `SizeRestrictions_BODY` rule entirely because a file upload endpoint legitimately sends large bodies, override that rule to `Count` and add a custom rule that blocks requests carrying its label ==unless== the path is `/api/uploads`. The rule still protects every other path.
+Labels make exclusions precise. For example, instead of disabling the Core rule set's `SizeRestrictions_BODY` rule entirely because a file upload endpoint legitimately sends large bodies, override that rule to `Count` and add a custom rule that blocks requests carrying its label **unless** the path is `/api/uploads`. The rule still protects every other path.
 
 #### AWS Shield: DDoS across layers
 
@@ -1306,7 +1306,7 @@ Shield Standard is always-on and inline at every AWS edge location and Regional 
 
 #### Performance, Scaling, Availability and Security
 
-WAF adds a small inspection latency, typically a few milliseconds at most, growing with regex, text transformations and body inspection. At CloudFront, blocked requests are rejected at the edge, which reduces origin load during attacks. Rate-based rules react within their evaluation window plus a short propagation delay, so the first seconds of a flood reach the origin, which caching and auto scaling must absorb. WAF and Shield scale automatically with the integrated services; the architect's concerns are WCU capacity, rule and IP set quotas, and the origin's capacity for traffic that legitimately passes. The ALB fail-open attribute chooses behaviour if a WAF decision cannot be obtained. Web ACL changes are CloudTrail-logged and should be made through IaC; WAF logs can contain `Authorization` headers and cookies, so configure ==redacted fields==.
+WAF adds a small inspection latency, typically a few milliseconds at most, growing with regex, text transformations and body inspection. At CloudFront, blocked requests are rejected at the edge, which reduces origin load during attacks. Rate-based rules react within their evaluation window plus a short propagation delay, so the first seconds of a flood reach the origin, which caching and auto scaling must absorb. WAF and Shield scale automatically with the integrated services; the architect's concerns are WCU capacity, rule and IP set quotas, and the origin's capacity for traffic that legitimately passes. The ALB fail-open attribute chooses behaviour if a WAF decision cannot be obtained. Web ACL changes are CloudTrail-logged and should be made through IaC; WAF logs can contain `Authorization` headers and cookies, so configure **redacted fields**.
 
 #### Service Limits
 
@@ -1377,18 +1377,18 @@ WAF adds a small inspection latency, typically a few milliseconds at most, growi
 | Cost Optimisation | Shared web ACLs, scope-down statements, log filtering, Shield Advanced only where justified and then organisation-wide |
 | Sustainability | Blocking malicious traffic at the edge avoids wasted origin compute |
 
-The AWS Best Practices for DDoS Resiliency guidance adds architecture principles: ==minimise the attack surface== (few, well-defined entry points; origins not publicly reachable), ==be ready to scale== (CloudFront, auto scaling, serverless), ==know normal traffic== (baselines and alarms) and ==have a plan== (runbooks, SRT engagement, contacts).
+The AWS Best Practices for DDoS Resiliency guidance adds architecture principles: **minimise the attack surface** (few, well-defined entry points; origins not publicly reachable), **be ready to scale** (CloudFront, auto scaling, serverless), **know normal traffic** (baselines and alarms) and **have a plan** (runbooks, SRT engagement, contacts).
 
 ### Security Considerations
 
-- ==IAM.== Restrict `wafv2:UpdateWebACL`, `wafv2:UpdateIPSet`, `wafv2:DisassociateWebACL` and `shield:DeleteProtection`; an attacker or careless engineer who can disassociate a web ACL removes protection silently. Use SCPs to protect Firewall Manager-managed resources.
-- ==Least privilege for automation.== Responders that update IP sets should have permission only for specific IP set ARNs.
-- ==Encryption.== WAF logs in S3 should be encrypted with SSE-KMS; TLS termination at CloudFront and ALB uses ACM certificates ([Section 8.3](../unit8/topic3.md)).
-- ==Secrets Manager.== Store and rotate the CloudFront-to-origin secret header value.
-- ==Security groups.== ALB security groups should allow only the CloudFront origin-facing prefix list when CloudFront is used.
-- ==Private versus public resources.== Prefer CloudFront VPC origins so origins have no public endpoint at all.
-- ==Logging.== Enable WAF logging to the log archive; enable Shield Advanced event notifications through EventBridge and CloudWatch alarms on `DDoSDetected`.
-- ==Compliance.== PCI DSS requires public-facing web applications to be protected by an automated technical solution that detects and prevents web-based attacks, or by regular vulnerability assessment; a managed WAF with logging is the usual evidence.
+- **IAM.** Restrict `wafv2:UpdateWebACL`, `wafv2:UpdateIPSet`, `wafv2:DisassociateWebACL` and `shield:DeleteProtection`; an attacker or careless engineer who can disassociate a web ACL removes protection silently. Use SCPs to protect Firewall Manager-managed resources.
+- **Least privilege for automation.** Responders that update IP sets should have permission only for specific IP set ARNs.
+- **Encryption.** WAF logs in S3 should be encrypted with SSE-KMS; TLS termination at CloudFront and ALB uses ACM certificates ([Section 8.3](../unit8/topic3.md)).
+- **Secrets Manager.** Store and rotate the CloudFront-to-origin secret header value.
+- **Security groups.** ALB security groups should allow only the CloudFront origin-facing prefix list when CloudFront is used.
+- **Private versus public resources.** Prefer CloudFront VPC origins so origins have no public endpoint at all.
+- **Logging.** Enable WAF logging to the log archive; enable Shield Advanced event notifications through EventBridge and CloudWatch alarms on `DDoSDetected`.
+- **Compliance.** PCI DSS requires public-facing web applications to be protected by an automated technical solution that detects and prevents web-based attacks, or by regular vulnerability assessment; a managed WAF with logging is the usual evidence.
 
 ### Integration with Other AWS Services
 
@@ -1432,21 +1432,21 @@ flowchart LR
 
 ### Industry Use Cases
 
-- ==Online retailers== use Bot Control and rate-based rules to stop inventory hoarding bots during product launches and sales, and ATP to reduce credential stuffing.
-- ==Gaming companies== subscribe to Shield Advanced to protect game login and matchmaking endpoints from DDoS extortion attacks, with Global Accelerator in front of UDP game servers.
-- ==Banks and fintechs== use WAF managed rules plus custom rules for PCI DSS evidence, and ACFP to reduce fraudulent account openings.
-- ==Media and news organisations== rely on CloudFront caching, Shield and WAF to survive traffic spikes and politically motivated DDoS attacks during major events.
-- ==Public sector agencies== use Firewall Manager to apply a mandated WAF baseline across hundreds of accounts.
-- ==SaaS providers== apply virtual patching through WAF within hours of framework vulnerability disclosures, protecting many customer-facing applications at once.
+- **Online retailers** use Bot Control and rate-based rules to stop inventory hoarding bots during product launches and sales, and ATP to reduce credential stuffing.
+- **Gaming companies** subscribe to Shield Advanced to protect game login and matchmaking endpoints from DDoS extortion attacks, with Global Accelerator in front of UDP game servers.
+- **Banks and fintechs** use WAF managed rules plus custom rules for PCI DSS evidence, and ACFP to reduce fraudulent account openings.
+- **Media and news organisations** rely on CloudFront caching, Shield and WAF to survive traffic spikes and politically motivated DDoS attacks during major events.
+- **Public sector agencies** use Firewall Manager to apply a mandated WAF baseline across hundreds of accounts.
+- **SaaS providers** apply virtual patching through WAF within hours of framework vulnerability disclosures, protecting many customer-facing applications at once.
 
 ### Advantages
 
-- ==Protection at the edge.== Malicious requests and floods are stopped before consuming regional or origin capacity.
-- ==Managed intelligence.== AWS Managed Rules, IP reputation and Bot Control incorporate threat intelligence that no single organisation could gather.
-- ==Programmability.== Web ACLs, rule groups and IP sets are APIs, enabling IaC, automation and rapid response.
-- ==Integrated DDoS protection.== Shield Standard is free and always on; Shield Advanced adds expertise and financial protection.
-- ==Central governance.== Firewall Manager ensures every in-scope resource is protected, including newly created ones.
-- ==Rich telemetry.== Full request logs and per-rule metrics support tuning, forensics and compliance.
+- **Protection at the edge.** Malicious requests and floods are stopped before consuming regional or origin capacity.
+- **Managed intelligence.** AWS Managed Rules, IP reputation and Bot Control incorporate threat intelligence that no single organisation could gather.
+- **Programmability.** Web ACLs, rule groups and IP sets are APIs, enabling IaC, automation and rapid response.
+- **Integrated DDoS protection.** Shield Standard is free and always on; Shield Advanced adds expertise and financial protection.
+- **Central governance.** Firewall Manager ensures every in-scope resource is protected, including newly created ones.
+- **Rich telemetry.** Full request logs and per-rule metrics support tuning, forensics and compliance.
 
 ### Limitations
 
@@ -1485,11 +1485,11 @@ AWS WAF inspects HTTP requests at CloudFront, ALB, API Gateway REST APIs, AppSyn
 Architectural lessons:
 
 - ==Stop attacks as far from the origin as possible.== CloudFront plus WAF plus Shield at the edge, and origins reachable only through the edge.
-- ==Baseline, then specialise.== Managed rule groups on every internet-facing resource; bot, fraud and rate rules scoped to the paths that need them.
-- ==Count before you block.== Logs, sampled requests and labels turn tuning into evidence-based engineering.
-- ==Rate limit in layers.== WAF for abuse, API Gateway for tenancy, the application for business rules.
-- ==Plan for DDoS before it happens.== Minimise attack surface, be ready to scale, know normal traffic, and have runbooks, health checks and contacts.
-- ==Govern centrally.== Firewall Manager ensures protection follows new resources automatically.
+- **Baseline, then specialise.** Managed rule groups on every internet-facing resource; bot, fraud and rate rules scoped to the paths that need them.
+- **Count before you block.** Logs, sampled requests and labels turn tuning into evidence-based engineering.
+- **Rate limit in layers.** WAF for abuse, API Gateway for tenancy, the application for business rules.
+- **Plan for DDoS before it happens.** Minimise attack surface, be ready to scale, know normal traffic, and have runbooks, health checks and contacts.
+- **Govern centrally.** Firewall Manager ensures protection follows new resources automatically.
 
 ## Section Summary
 
@@ -1568,17 +1568,17 @@ flowchart TB
 
 ### Closing architectural lessons for Section 8.2
 
-- ==Assume every layer can fail.== Edge, VPC boundary, subnet, workload and identity controls must each hold even when the layer outside it has been bypassed.
+- **Assume every layer can fail.** Edge, VPC boundary, subnet, workload and identity controls must each hold even when the layer outside it has been bypassed.
 - ==Least privilege applies to packets too.== Every path should correspond to a documented requirement; default deny is the only safe starting point.
-- ==Identity beats addresses.== Security group references, pod labels, IAM auth policies and endpoint policies express intent that survives elasticity; IP lists do not.
-- ==Egress is where breaches end.== Filter outbound traffic, including DNS, and use endpoint policies so that stolen data has nowhere to go.
-- ==Prevent, detect and contain.== Guardrails (BPA, SCPs, Firewall Manager) prevent; Flow Logs, GuardDuty and Config detect; NACLs, isolation groups and WAF IP sets contain, ideally automatically and always audited.
-- ==Stop attacks at the edge.== CloudFront, WAF and Shield in front of cloaked origins protect capacity and reduce cost during attacks.
-- ==Protect the evidence.== Logs in a separate, immutable archive are what make incident response and compliance possible.
-- ==Security controls can cause outages.== Stage changes, use Count mode and reachability tests, and treat network security configuration with the same engineering discipline as application code.
+- **Identity beats addresses.** Security group references, pod labels, IAM auth policies and endpoint policies express intent that survives elasticity; IP lists do not.
+- **Egress is where breaches end.** Filter outbound traffic, including DNS, and use endpoint policies so that stolen data has nowhere to go.
+- **Prevent, detect and contain.** Guardrails (BPA, SCPs, Firewall Manager) prevent; Flow Logs, GuardDuty and Config detect; NACLs, isolation groups and WAF IP sets contain, ideally automatically and always audited.
+- **Stop attacks at the edge.** CloudFront, WAF and Shield in front of cloaked origins protect capacity and reduce cost during attacks.
+- **Protect the evidence.** Logs in a separate, immutable archive are what make incident response and compliance possible.
+- **Security controls can cause outages.** Stage changes, use Count mode and reachability tests, and treat network security configuration with the same engineering discipline as application code.
 
 !!! tip "Applying this in design and practice"
-    In a design review, a practical assessment or a technical interview, be able to decide, for a given scenario, ==which layer should stop the threat, which service implements that layer, how it is configured, how its effect is observed, and how it is governed across accounts==. Classic discriminators include: security groups (stateful, allow-only, per ENI) versus NACLs (stateless, allow and deny, per subnet); WAF (layer 7, HTTP) versus Shield (DDoS, layers 3, 4 and 7) versus Network Firewall (VPC traffic, IPS and domain filtering); GuardDuty (detection) versus Detective (investigation) versus Security Hub (posture and aggregation). In DSO303 projects, a design that shows tiered subnets, chained security groups, no inbound administrative ports, endpoint policies, Flow Logs to a protected bucket, and CloudFront with WAF in front of a cloaked origin demonstrates more security maturity than a long list of enabled services.
+    In a design review, a practical assessment or a technical interview, be able to decide, for a given scenario, **which layer should stop the threat, which service implements that layer, how it is configured, how its effect is observed, and how it is governed across accounts**. Classic discriminators include: security groups (stateful, allow-only, per ENI) versus NACLs (stateless, allow and deny, per subnet); WAF (layer 7, HTTP) versus Shield (DDoS, layers 3, 4 and 7) versus Network Firewall (VPC traffic, IPS and domain filtering); GuardDuty (detection) versus Detective (investigation) versus Security Hub (posture and aggregation). In DSO303 projects, a design that shows tiered subnets, chained security groups, no inbound administrative ports, endpoint policies, Flow Logs to a protected bucket, and CloudFront with WAF in front of a cloaked origin demonstrates more security maturity than a long list of enabled services.
 
 !!! question "Practice and interview questions"
     Questions for this topic are kept separately: [Practice questions](../Questions/unit8.md#82-network-security) · [Interview questions](../interviewquestions/unit8.md#82-network-security).

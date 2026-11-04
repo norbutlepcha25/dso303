@@ -8,9 +8,9 @@
 
 ## Monitoring, Observability and the Three Signals
 
-Students frequently use "monitoring" and "observability" as synonyms. Architects distinguish them. ==Monitoring== is the practice of collecting predefined measurements and comparing them with expectations: CPU is above 80 per cent, the error rate exceeds 1 per cent, the health check failed. It answers questions you knew to ask in advance. ==Observability== is a property of a system: the degree to which its internal state can be inferred from the telemetry it emits. An observable system lets an engineer answer ==new questions== during an incident ("why are only customers in one tenant, on one app version, seeing slow checkouts?") without deploying new code.
+Students frequently use "monitoring" and "observability" as synonyms. Architects distinguish them. **Monitoring** is the practice of collecting predefined measurements and comparing them with expectations: CPU is above 80 per cent, the error rate exceeds 1 per cent, the health check failed. It answers questions you knew to ask in advance. **Observability** is a property of a system: the degree to which its internal state can be inferred from the telemetry it emits. An observable system lets an engineer answer **new questions** during an incident ("why are only customers in one tenant, on one app version, seeing slow checkouts?") without deploying new code.
 
-Cloud-native systems require observability because their failure modes are emergent. A monolith on one server fails in a few recognisable ways. Thirty microservices on ECS, EKS and Lambda, connected by queues and event buses ([Chapter 6.3](../unit6/topic3.md)), fail in combinations nobody predicted. Monitoring tells you ==that== something is wrong; observability lets you discover ==what== and ==why==.
+Cloud-native systems require observability because their failure modes are emergent. A monolith on one server fails in a few recognisable ways. Thirty microservices on ECS, EKS and Lambda, connected by queues and event buses ([Chapter 6.3](../unit6/topic3.md)), fail in combinations nobody predicted. Monitoring tells you **that** something is wrong; observability lets you discover **what** and **why**.
 
 The telemetry that makes a system observable is conventionally grouped into three signals, with a fourth increasingly recognised:
 
@@ -57,14 +57,14 @@ flowchart LR
 
 ### Two classic methods for choosing what to measure
 
-Before choosing tools, an architect decides ==what to measure==. Two frameworks cover almost every component:
+Before choosing tools, an architect decides **what to measure**. Two frameworks cover almost every component:
 
 | Method | Applies to | Measures | Example on AWS |
 |--------|-----------|----------|----------------|
 | RED | Request-driven services (APIs, microservices, functions) | Rate, Errors, Duration | ALB `RequestCount`, `HTTPCode_Target_5XX_Count`, `TargetResponseTime` p99 |
 | USE | Resources (CPU, memory, disks, network, connection pools, queues) | Utilisation, Saturation, Errors | Container Insights CPU and memory utilisation, SQS `ApproximateAgeOfOldestMessage`, RDS `DatabaseConnections` |
 
-Google's Site Reliability Engineering practice adds ==traffic== to form the "four golden signals" (latency, traffic, errors, saturation), which is essentially RED plus the saturation part of USE. [Chapter 1.3](../unit1/topic3.md) already recommended a RED dashboard per service; this section explains how the underlying metrics are produced, stored and queried.
+Google's Site Reliability Engineering practice adds **traffic** to form the "four golden signals" (latency, traffic, errors, saturation), which is essentially RED plus the saturation part of USE. [Chapter 1.3](../unit1/topic3.md) already recommended a RED dashboard per service; this section explains how the underlying metrics are produced, stored and queried.
 
 ### Layers of monitoring in a cloud-native stack
 
@@ -88,7 +88,7 @@ flowchart TB
 | Dependency | Is the queue backing up? Is DynamoDB throttling? | Vended service metrics |
 
 !!! note "Monitor from the outside in"
-    The most important question is always the outermost one: ==is the user being served?== An internal metric can be green while every user fails (an expired certificate, a DNS mistake, a broken CDN rule). Start with user-facing signals, then drill inwards. This ordering is why this part discusses Synthetics and RUM alongside infrastructure metrics.
+    The most important question is always the outermost one: **is the user being served?** An internal metric can be green while every user fails (an expired certificate, a DNS mistake, a broken CDN rule). Start with user-facing signals, then drill inwards. This ordering is why this part discusses Synthetics and RUM alongside infrastructure metrics.
 
 ---
 
@@ -98,9 +98,9 @@ flowchart TB
 
 ==Amazon CloudWatch is the regional, fully managed monitoring and observability service of AWS that collects, stores, aggregates and visualises metrics, logs, traces and events from AWS resources, applications and users, and acts on them through alarms and automation.==
 
-In this part the focus is ==CloudWatch metrics==: time-ordered sets of numeric data points, each identified by a namespace, a metric name and a set of dimensions. Almost every AWS service publishes metrics to CloudWatch automatically. Applications add their own business and technical metrics. Higher-level capabilities (Container Insights, Lambda Insights, Application Signals, Synthetics, RUM) are, underneath, ==producers of CloudWatch metrics, logs and traces== with curated dashboards on top.
+In this part the focus is **CloudWatch metrics**: time-ordered sets of numeric data points, each identified by a namespace, a metric name and a set of dimensions. Almost every AWS service publishes metrics to CloudWatch automatically. Applications add their own business and technical metrics. Higher-level capabilities (Container Insights, Lambda Insights, Application Signals, Synthetics, RUM) are, underneath, **producers of CloudWatch metrics, logs and traces** with curated dashboards on top.
 
-In the AWS architecture map CloudWatch belongs to the ==Management and Governance== category, alongside AWS CloudTrail (API audit), AWS Config (resource configuration history), AWS Systems Manager and AWS Trusted Advisor. It is the operational backbone that every other service reports into.
+In the AWS architecture map CloudWatch belongs to the **Management and Governance** category, alongside AWS CloudTrail (API audit), AWS Config (resource configuration history), AWS Systems Manager and AWS Trusted Advisor. It is the operational backbone that every other service reports into.
 
 | CloudWatch component | Signal | Covered in |
 |----------------------|--------|-----------|
@@ -123,10 +123,10 @@ In the AWS architecture map CloudWatch belongs to the ==Management and Governanc
 
 On a traditional server an administrator could run `top`, `vmstat` or `df` and look. In a cloud-native system this model breaks down for four reasons:
 
-1. ==Ephemerality.== ECS tasks, Kubernetes pods and Lambda execution environments live for minutes or seconds. When an engineer arrives to investigate, the component that failed no longer exists. Its telemetry must have been exported ==before== it disappeared.
-2. ==Scale.== A service with 200 tasks cannot be inspected one task at a time. Measurements must be aggregated across the fleet and sliced by dimension.
-3. ==Managed services have no shell.== There is no host to log in to for DynamoDB, SQS, API Gateway or Fargate. The provider must expose the internal state as metrics.
-4. ==Distribution.== The user's experience is the composition of many services. No single host holds the answer to "is the checkout working?".
+1. **Ephemerality.** ECS tasks, Kubernetes pods and Lambda execution environments live for minutes or seconds. When an engineer arrives to investigate, the component that failed no longer exists. Its telemetry must have been exported **before** it disappeared.
+2. **Scale.** A service with 200 tasks cannot be inspected one task at a time. Measurements must be aggregated across the fleet and sliced by dimension.
+3. **Managed services have no shell.** There is no host to log in to for DynamoDB, SQS, API Gateway or Fargate. The provider must expose the internal state as metrics.
+4. **Distribution.** The user's experience is the composition of many services. No single host holds the answer to "is the checkout working?".
 
 #### Why AWS built CloudWatch
 
@@ -153,7 +153,7 @@ CloudWatch removes that burden. AWS services publish metrics automatically, stor
 | Cost model | Fixed infrastructure cost | Pay per metric, API call, log GB, canary run and so on |
 
 !!! tip "When another tool is still the right answer"
-    CloudWatch is the default for AWS-native telemetry, but it is not the only choice. Organisations standardised on Prometheus and Grafana often use ==Amazon Managed Service for Prometheus== and ==Amazon Managed Grafana== for Kubernetes metrics, and many enterprises use third-party platforms (Datadog, Dynatrace, New Relic, Grafana Cloud) for multi-cloud estates. Because OpenTelemetry has become the common instrumentation standard, the application code can stay the same while the backend changes. Even then, CloudWatch remains the source of AWS vended metrics, which third-party tools read through metric streams or APIs.
+    CloudWatch is the default for AWS-native telemetry, but it is not the only choice. Organisations standardised on Prometheus and Grafana often use **Amazon Managed Service for Prometheus** and **Amazon Managed Grafana** for Kubernetes metrics, and many enterprises use third-party platforms (Datadog, Dynatrace, New Relic, Grafana Cloud) for multi-cloud estates. Because OpenTelemetry has become the common instrumentation standard, the application code can stay the same while the backend changes. Even then, CloudWatch remains the source of AWS vended metrics, which third-party tools read through metric streams or APIs.
 
 ### Core Concepts
 
@@ -177,13 +177,13 @@ flowchart LR
 |-----------|---------|---------|
 | Namespace | A container that isolates metrics from one another. AWS namespaces start with `AWS/`; custom namespaces must not. | `AWS/Lambda`, `AWS/ApplicationELB`, `ECS/ContainerInsights`, `DSO303/Orders` |
 | Metric name | The quantity being measured | `Invocations`, `CPUUtilization`, `OrdersPlaced` |
-| Dimensions | Name/value pairs that identify ==which thing== the measurement describes. Up to 30 per metric. | `FunctionName=checkout`, `ServiceName=orders`, `ClusterName=prod` |
+| Dimensions | Name/value pairs that identify **which thing** the measurement describes. Up to 30 per metric. | `FunctionName=checkout`, `ServiceName=orders`, `ClusterName=prod` |
 | Timestamp | When the observation occurred, in UTC | `2026-09-26T10:00:03Z` |
 | Value | The numeric observation | `182` |
 | Unit | Optional unit of measure | `Milliseconds`, `Count`, `Bytes`, `Percent` |
 | Storage resolution | Standard (60 s) or high resolution (1 s) | `StorageResolution = 1` |
 
-==A metric is uniquely identified by its namespace, name and complete set of dimensions.== This has a consequence that surprises beginners: `OrderLatency` with dimensions `{Service=checkout}` and `OrderLatency` with dimensions `{Service=checkout, Environment=prod}` are ==two different metrics==. CloudWatch does not aggregate across dimensions for you unless you publish the aggregate dimension combination as well or use a query that groups (Metrics Insights, [Section 7.3.1](../unit7/topic3.md#creating-cloudwatch-dashboards-and-alarms)).
+==A metric is uniquely identified by its namespace, name and complete set of dimensions.== This has a consequence that surprises beginners: `OrderLatency` with dimensions `{Service=checkout}` and `OrderLatency` with dimensions `{Service=checkout, Environment=prod}` are **two different metrics**. CloudWatch does not aggregate across dimensions for you unless you publish the aggregate dimension combination as well or use a query that groups (Metrics Insights, [Section 7.3.1](../unit7/topic3.md#creating-cloudwatch-dashboards-and-alarms)).
 
 !!! warning "Dimensions are part of the identity"
     If you publish only the combination `{Service, Environment, InstanceId}`, you cannot later ask CloudWatch's standard API for "OrderLatency for Service=checkout across all instances". You either publish additional dimension combinations (each is a separately billed metric), or query with Metrics Insights `GROUP BY`, or emit the metric through the Embedded Metric Format with several dimension sets.
@@ -208,7 +208,7 @@ flowchart LR
 
 #### Data points, periods and statistics
 
-CloudWatch stores individual data points (or pre-aggregated statistic sets) and, when you query, ==aggregates them over a period== using a statistic. The period is the width of the time bucket, for example 60 seconds or 5 minutes.
+CloudWatch stores individual data points (or pre-aggregated statistic sets) and, when you query, **aggregates them over a period** using a statistic. The period is the width of the time bucket, for example 60 seconds or 5 minutes.
 
 | Statistic | Meaning | Use it for |
 |-----------|---------|------------|
@@ -221,7 +221,7 @@ CloudWatch stores individual data points (or pre-aggregated statistic sets) and,
 
 ##### Why averages lie about latency
 
-Consider 100 requests in one minute: 95 take 50 ms and 5 take 4,000 ms because a database lock is held. The average is about 247 ms, which looks acceptable. The p99 is 4,000 ms, which reveals that one user in twenty had a terrible experience. Averages ==hide the tail==, and in a microservice system the tail compounds: if a page calls 10 services in parallel and waits for all of them, the probability that at least one call hits its individual p99 is roughly 10 per cent.
+Consider 100 requests in one minute: 95 take 50 ms and 5 take 4,000 ms because a database lock is held. The average is about 247 ms, which looks acceptable. The p99 is 4,000 ms, which reveals that one user in twenty had a terrible experience. Averages **hide the tail**, and in a microservice system the tail compounds: if a page calls 10 services in parallel and waits for all of them, the probability that at least one call hits its individual p99 is roughly 10 per cent.
 
 ```mermaid
 flowchart LR
@@ -240,10 +240,10 @@ flowchart LR
 
 CloudWatch can compute percentiles only when it has the underlying distribution. This holds when:
 
-- the metric was published as ==raw values== (individual data points, or the `Values` and `Counts` arrays of `PutMetricData`), and
+- the metric was published as **raw values** (individual data points, or the `Values` and `Counts` arrays of `PutMetricData`), and
 - the values are non-negative.
 
-If a producer publishes only a pre-aggregated ==statistic set== (`SampleCount`, `Sum`, `Minimum`, `Maximum`), percentiles are not available, because the distribution has been discarded. Services that publish latency with percentile support include ALB, API Gateway, Lambda, EC2, Kinesis and RDS.
+If a producer publishes only a pre-aggregated **statistic set** (`SampleCount`, `Sum`, `Minimum`, `Maximum`), percentiles are not available, because the distribution has been discarded. Services that publish latency with percentile support include ALB, API Gateway, Lambda, EC2, Kinesis and RDS.
 
 !!! danger "Never average percentiles"
     The average of five one-minute p99 values is not the five-minute p99. Percentiles are not additive. Always request the percentile directly at the period you care about, and never compute a fleet p99 by averaging per-instance p99 values.
@@ -276,11 +276,11 @@ stateDiagram-v2
 ```
 
 !!! note "Implications of the retention schedule"
-    You cannot look at one-minute detail from three weeks ago; by then CloudWatch retains only five-minute rollups. If an audit or capacity-planning process needs raw data for longer, export it continuously with ==metric streams== to Amazon S3 (through Amazon Data Firehose) or to a third-party platform. Metrics that stop receiving data expire 15 months after their last data point, and metrics without data in the past two weeks no longer appear in the console search even though they can still be queried.
+    You cannot look at one-minute detail from three weeks ago; by then CloudWatch retains only five-minute rollups. If an audit or capacity-planning process needs raw data for longer, export it continuously with **metric streams** to Amazon S3 (through Amazon Data Firehose) or to a third-party platform. Metrics that stop receiving data expire 15 months after their last data point, and metrics without data in the past two weeks no longer appear in the console search even though they can still be queried.
 
 #### Vended metrics, basic monitoring and detailed monitoring
 
-==Vended metrics== are published by AWS services at no charge for the basic set. For EC2 the distinction between basic and detailed monitoring matters:
+**Vended metrics** are published by AWS services at no charge for the basic set. For EC2 the distinction between basic and detailed monitoring matters:
 
 | Mode | Period | Cost | When to use |
 |------|--------|------|-------------|
@@ -288,11 +288,11 @@ stateDiagram-v2
 | Detailed monitoring | 1 minute | Charged as custom metrics | Auto Scaling groups that must react quickly, production workloads |
 
 !!! warning "What EC2 cannot see"
-    The hypervisor measures what it can see from outside the guest: CPU, network, disk operations on instance store, and status checks. It ==cannot see memory usage or file-system usage inside the guest operating system==. A common interview question asks why there is no memory metric for EC2 by default. The answer is the CloudWatch agent, described below.
+    The hypervisor measures what it can see from outside the guest: CPU, network, disk operations on instance store, and status checks. It **cannot see memory usage or file-system usage inside the guest operating system**. A common interview question asks why there is no memory metric for EC2 by default. The answer is the CloudWatch agent, described below.
 
 #### Custom metrics and the four ways to publish them
 
-A ==custom metric== is any metric you publish yourself. Business metrics ("orders placed", "payment declined", "basket value") are the most valuable custom metrics because they measure outcomes rather than resource consumption.
+A **custom metric** is any metric you publish yourself. Business metrics ("orders placed", "payment declined", "basket value") are the most valuable custom metrics because they measure outcomes rather than resource consumption.
 
 | Method | How it works | Latency added to request path | Best for |
 |--------|--------------|-------------------------------|----------|
@@ -344,14 +344,14 @@ flowchart TB
 }
 ```
 
-Here two dimension sets produce ==four time series== (two metrics times two dimension sets). The high-cardinality fields `orderId`, `tenantId` and `traceId` are ==not dimensions==; they remain in the log event, where they cost nothing extra as metrics but can still be queried when investigating a specific order.
+Here two dimension sets produce **four time series** (two metrics times two dimension sets). The high-cardinality fields `orderId`, `tenantId` and `traceId` are **not dimensions**; they remain in the log event, where they cost nothing extra as metrics but can still be queried when investigating a specific order.
 
 !!! tip "EMF is the cardinality escape valve"
     With EMF you can keep a low-cardinality set of dimensions for metrics and alarms, while high-cardinality context (customer ID, request ID, trace ID) stays in the log line for investigation. This is the recommended way to get both cheap metrics and rich context.
 
 #### Cardinality
 
-==Cardinality== is the number of distinct time series produced by a metric: the product of the number of distinct values of each dimension. Every distinct time series is a separately billed custom metric.
+**Cardinality** is the number of distinct time series produced by a metric: the product of the number of distinct values of each dimension. Every distinct time series is a separately billed custom metric.
 
 | Dimensions chosen | Distinct values | Time series |
 |-------------------|-----------------|-------------|
@@ -361,11 +361,11 @@ Here two dimension sets produce ==four time series== (two metrics times two dime
 | `Service`, `Operation`, `CustomerId` | 20 x 15 x 50,000 | 15,000,000 |
 
 !!! danger "Unbounded dimensions"
-    Using a user ID, request ID, order ID, IP address, full URL path with identifiers, or a timestamp as a dimension creates unbounded cardinality. The bill grows with the number of customers, and dashboards become unusable. Dimensions must have a ==small, bounded set of values== (service, operation, environment, Availability Zone, status class such as `2xx`/`4xx`/`5xx`). Put identifiers in logs or trace annotations instead.
+    Using a user ID, request ID, order ID, IP address, full URL path with identifiers, or a timestamp as a dimension creates unbounded cardinality. The bill grows with the number of customers, and dashboards become unusable. Dimensions must have a **small, bounded set of values** (service, operation, environment, Availability Zone, status class such as `2xx`/`4xx`/`5xx`). Put identifiers in logs or trace annotations instead.
 
 #### Units, timestamps and late data
 
-- Always set a ==unit==. Without one, a latency of 250 could be seconds or milliseconds, and CloudWatch cannot convert units when comparing metrics.
+- Always set a **unit**. Without one, a latency of 250 could be seconds or milliseconds, and CloudWatch cannot convert units when comparing metrics.
 - Timestamps may be up to two weeks in the past and two hours in the future. Data points with delayed timestamps can arrive after an alarm has already evaluated the period, leaving the alarm in `INSUFFICIENT_DATA` or firing late (alarm evaluation is covered in [Section 7.3.1](../unit7/topic3.md#creating-cloudwatch-dashboards-and-alarms)).
 - Clocks must be synchronised. EC2 instances use the Amazon Time Sync Service by default; containers inherit the host clock.
 
@@ -384,7 +384,7 @@ Three capabilities operate on stored metrics. They are introduced here because t
 
 #### The CloudWatch agent
 
-The ==unified CloudWatch agent== is an open-source process (Go, derived from Telegraf) that runs on EC2 instances, on-premises servers, ECS container instances and EKS nodes. It fills the gap left by hypervisor metrics and acts as a local telemetry gateway.
+The **unified CloudWatch agent** is an open-source process (Go, derived from Telegraf) that runs on EC2 instances, on-premises servers, ECS container instances and EKS nodes. It fills the gap left by hypervisor metrics and acts as a local telemetry gateway.
 
 | Capability | Detail |
 |------------|--------|
@@ -438,7 +438,7 @@ A minimal agent configuration that adds memory and disk metrics, aggregated per 
 
 #### Container Insights
 
-==CloudWatch Container Insights== collects, aggregates and summarises metrics and performance logs from containerised applications on Amazon ECS (EC2 and Fargate), Amazon EKS and self-managed Kubernetes on EC2. It answers platform questions that raw service metrics cannot: which task is using the memory, which pod restarted, which node is saturated.
+**CloudWatch Container Insights** collects, aggregates and summarises metrics and performance logs from containerised applications on Amazon ECS (EC2 and Fargate), Amazon EKS and self-managed Kubernetes on EC2. It answers platform questions that raw service metrics cannot: which task is using the memory, which pod restarted, which node is saturated.
 
 | Aspect | Amazon ECS | Amazon EKS |
 |--------|-----------|-----------|
@@ -450,7 +450,7 @@ A minimal agent configuration that adds memory and disk metrics, aggregated per 
 
 ##### Enhanced observability
 
-AWS introduced ==Container Insights with enhanced observability== for EKS in 2023 and for ECS at the end of 2024. Standard Container Insights aggregates mainly at cluster and service level. Enhanced observability adds ==granular metrics down to the container level==, curated drill-down dashboards (cluster to service to task to container), correlation with application telemetry, and, for EKS, control plane metrics, GPU and AWS accelerator metrics. It is priced by ==observations== (metric data points ingested) rather than per custom metric, which makes high-cardinality container metrics affordable.
+AWS introduced **Container Insights with enhanced observability** for EKS in 2023 and for ECS at the end of 2024. Standard Container Insights aggregates mainly at cluster and service level. Enhanced observability adds **granular metrics down to the container level**, curated drill-down dashboards (cluster to service to task to container), correlation with application telemetry, and, for EKS, control plane metrics, GPU and AWS accelerator metrics. It is priced by **observations** (metric data points ingested) rather than per custom metric, which makes high-cardinality container metrics affordable.
 
 ```mermaid
 flowchart TB
@@ -470,18 +470,18 @@ flowchart TB
 | `EphemeralStorageUtilized` (ECS on Fargate) | Tasks that fill their ephemeral storage fail in confusing ways |
 
 !!! info "OpenTelemetry-based Container Insights for EKS"
-    In April 2026 AWS launched, in public preview, ==OTel Container Insights for Amazon EKS==, which sends Container Insights metrics over OTLP with up to 150 descriptive labels and supports PromQL querying in CloudWatch. In June 2026 it was launched in all commercial Regions except Middle East (UAE), Middle East (Bahrain) and Israel (Tel Aviv), priced per GB ingested. It requires a recent version of the CloudWatch Observability EKS add-on, which can publish the classic and OTel metrics side by side during migration. Treat it as the likely future direction and check the Container Insights documentation for its current status before using it in a design.
+    In April 2026 AWS launched, in public preview, **OTel Container Insights for Amazon EKS**, which sends Container Insights metrics over OTLP with up to 150 descriptive labels and supports PromQL querying in CloudWatch. In June 2026 it was launched in all commercial Regions except Middle East (UAE), Middle East (Bahrain) and Israel (Tel Aviv), priced per GB ingested. It requires a recent version of the CloudWatch Observability EKS add-on, which can publish the classic and OTel metrics side by side during migration. Treat it as the likely future direction and check the Container Insights documentation for its current status before using it in a design.
 
 #### Lambda Insights (recap)
 
-[Chapter 1.3](../unit1/topic3.md) introduced ==Lambda Insights==, a Lambda extension delivered as a layer that reports system-level metrics (memory used versus allocated, CPU time, network, initialisation duration) in EMF to the `LambdaInsights` namespace. Two points complete the picture for this part:
+[Chapter 1.3](../unit1/topic3.md) introduced **Lambda Insights**, a Lambda extension delivered as a layer that reports system-level metrics (memory used versus allocated, CPU time, network, initialisation duration) in EMF to the `LambdaInsights` namespace. Two points complete the picture for this part:
 
 - It requires the function's execution role to allow writing to CloudWatch Logs (the managed policy `CloudWatchLambdaInsightsExecutionRolePolicy` grants exactly that).
 - It is billed as custom metrics and log ingestion per function, so enable it on functions where right-sizing and cold-start analysis matter, not indiscriminately on hundreds of small functions. Its use for right-sizing is covered in [Section 7.3.3](../unit7/topic3.md#performance-optimization-using-aws-tools).
 
 #### CloudWatch Application Signals
 
-==Application Signals== is the application performance monitoring (APM) capability of CloudWatch, generally available since mid-2024. It automatically instruments applications using the ==AWS Distro for OpenTelemetry (ADOT)== and the CloudWatch agent, and produces, for every service and every operation:
+**Application Signals** is the application performance monitoring (APM) capability of CloudWatch, generally available since mid-2024. It automatically instruments applications using the **AWS Distro for OpenTelemetry (ADOT)** and the CloudWatch agent, and produces, for every service and every operation:
 
 | Standard signal | Meaning |
 |-----------------|---------|
@@ -491,7 +491,7 @@ flowchart TB
 | Errors | Client-side failures (HTTP 4xx) |
 | Availability | Percentage of requests without faults |
 
-It adds an automatically discovered ==application map== of services and dependencies, ==service level objectives (SLOs)== on those signals, correlation with X-Ray traces, Synthetics canaries, RUM sessions and CloudTrail change events.
+It adds an automatically discovered **application map** of services and dependencies, **service level objectives (SLOs)** on those signals, correlation with X-Ray traces, Synthetics canaries, RUM sessions and CloudTrail change events.
 
 | Platform | Support |
 |----------|---------|
@@ -517,11 +517,11 @@ flowchart LR
 ```
 
 !!! tip "Why Application Signals matters in DSO303"
-    Application Signals turns the RED method from a dashboard you build by hand into a default. For a microservices estate on ECS and EKS (Units II to IV) it removes the need to add latency and error metrics to every endpoint manually, and it produces them with ==consistent names and dimensions== across languages and platforms. Custom business metrics (orders placed, payments declined) still require EMF or OpenTelemetry metrics.
+    Application Signals turns the RED method from a dashboard you build by hand into a default. For a microservices estate on ECS and EKS (Units II to IV) it removes the need to add latency and error metrics to every endpoint manually, and it produces them with **consistent names and dimensions** across languages and platforms. Custom business metrics (orders placed, payments declined) still require EMF or OpenTelemetry metrics.
 
 #### CloudWatch Synthetics
 
-==CloudWatch Synthetics== runs ==canaries==: scripts (Node.js with Puppeteer or Playwright, or Python with Selenium) executed on a schedule by a managed Lambda-based runtime. A canary behaves like a user or an API client and records success, duration, screenshots, HAR files and logs.
+**CloudWatch Synthetics** runs **canaries**: scripts (Node.js with Puppeteer or Playwright, or Python with Selenium) executed on a schedule by a managed Lambda-based runtime. A canary behaves like a user or an API client and records success, duration, screenshots, HAR files and logs.
 
 | Blueprint | What it checks |
 |-----------|----------------|
@@ -532,16 +532,16 @@ flowchart LR
 | GUI workflow | A multi-step user journey (log in, search, add to basket) |
 | Canary recorder | Script generated from actions recorded in a browser extension |
 
-Why canaries exist: internal metrics report what the system sees. When DNS is misconfigured, a certificate expires, a CDN rule blocks a path or a login dependency fails, ==no request reaches your services at all==, so internal error metrics stay at zero. A canary measures the journey from outside, continuously, even at 3 a.m. when there are no real users to notice.
+Why canaries exist: internal metrics report what the system sees. When DNS is misconfigured, a certificate expires, a CDN rule blocks a path or a login dependency fails, **no request reaches your services at all**, so internal error metrics stay at zero. A canary measures the journey from outside, continuously, even at 3 a.m. when there are no real users to notice.
 
 !!! info "Multilocation canaries"
-    In June 2026 Synthetics added ==multilocation canaries==: one primary canary definition replicated to several Regions, with run data consolidated in the primary Region and alarms that can require failures from more than one location before firing. This reduces false alarms caused by a single probe location and removes configuration drift between per-Region copies.
+    In June 2026 Synthetics added **multilocation canaries**: one primary canary definition replicated to several Regions, with run data consolidated in the primary Region and alarms that can require failures from more than one location before firing. This reduces false alarms caused by a single probe location and removes configuration drift between per-Region copies.
 
 Canaries can run inside a VPC to test private endpoints (an internal ALB, a private API Gateway endpoint), and their results appear on the Application Signals map.
 
 #### CloudWatch RUM
 
-==CloudWatch Real User Monitoring (RUM)== collects telemetry from ==real users' browsers and mobile apps==: page load timings and Core Web Vitals (Largest Contentful Paint, Interaction to Next Paint, Cumulative Layout Shift), JavaScript errors, HTTP errors, and user sessions, segmented by browser, device, country and page. A small JavaScript snippet (or, since late 2025, an OpenTelemetry-based SDK for iOS and Android) sends events to a RUM app monitor. Browser clients authenticate through an Amazon Cognito identity pool with a narrowly scoped unauthenticated role, or through resource-based policies.
+**CloudWatch Real User Monitoring (RUM)** collects telemetry from **real users' browsers and mobile apps**: page load timings and Core Web Vitals (Largest Contentful Paint, Interaction to Next Paint, Cumulative Layout Shift), JavaScript errors, HTTP errors, and user sessions, segmented by browser, device, country and page. A small JavaScript snippet (or, since late 2025, an OpenTelemetry-based SDK for iOS and Android) sends events to a RUM app monitor. Browser clients authenticate through an Amazon Cognito identity pool with a narrowly scoped unauthenticated role, or through resource-based policies.
 
 | Synthetics | RUM |
 |-----------|-----|
@@ -555,11 +555,11 @@ Canaries can run inside a VPC to test private endpoints (an internal ALB, a priv
 
 #### Internet Monitor
 
-==Amazon CloudWatch Internet Monitor== uses AWS's global view of internet connectivity to show how internet issues (an ISP outage, congestion in a city network) affect availability and performance between your users and your application hosted on AWS (VPCs, CloudFront distributions, WorkSpaces directories, Network Load Balancers). It reports health events by ==city-network== (a city location combined with an autonomous system, typically an ISP) and suggests alternative Regions or CloudFront to improve latency. It answers the question "is it us or the internet?" during an incident. Its use in performance optimisation is discussed in [Section 7.3.3](../unit7/topic3.md#performance-optimization-using-aws-tools).
+**Amazon CloudWatch Internet Monitor** uses AWS's global view of internet connectivity to show how internet issues (an ISP outage, congestion in a city network) affect availability and performance between your users and your application hosted on AWS (VPCs, CloudFront distributions, WorkSpaces directories, Network Load Balancers). It reports health events by **city-network** (a city location combined with an autonomous system, typically an ISP) and suggests alternative Regions or CloudFront to improve latency. It answers the question "is it us or the internet?" during an incident. Its use in performance optimisation is discussed in [Section 7.3.3](../unit7/topic3.md#performance-optimization-using-aws-tools).
 
 #### Cross-account observability with Observability Access Manager
 
-Production AWS estates use many accounts (Chapter 5.x recommended separate accounts for development, staging and production, and teams often have their own). Engineers investigating an incident should not need to switch between twenty accounts. ==CloudWatch cross-account observability==, configured through the ==Observability Access Manager (OAM)== API, links ==source accounts== to a ==monitoring account== within a Region.
+Production AWS estates use many accounts (Chapter 5.x recommended separate accounts for development, staging and production, and teams often have their own). Engineers investigating an incident should not need to switch between twenty accounts. **CloudWatch cross-account observability**, configured through the **Observability Access Manager (OAM)** API, links **source accounts** to a **monitoring account** within a Region.
 
 ```mermaid
 flowchart LR
@@ -590,11 +590,11 @@ flowchart LR
 | Cost | No extra charge for sharing metrics and logs; the first copy of shared traces is free |
 
 !!! tip "OAM does not copy data"
-    Cross-account observability ==does not move or duplicate telemetry==; the monitoring account queries data where it lives. For compliance-driven central retention (copying logs and metrics into one account and Region), CloudWatch also offers cross-account, cross-Region ==centralisation rules== that require AWS Organizations; log centralisation is discussed in [Section 7.2.1](../unit7/topic2.md#log-aggregation-with-amazon-cloudwatch-logs).
+    Cross-account observability **does not move or duplicate telemetry**; the monitoring account queries data where it lives. For compliance-driven central retention (copying logs and metrics into one account and Region), CloudWatch also offers cross-account, cross-Region **centralisation rules** that require AWS Organizations; log centralisation is discussed in [Section 7.2.1](../unit7/topic2.md#log-aggregation-with-amazon-cloudwatch-logs).
 
 #### OpenTelemetry metrics in CloudWatch
 
-OpenTelemetry (introduced fully in the X-Ray part) has become the industry standard for instrumentation. In June 2026 CloudWatch made ==native OpenTelemetry metrics== generally available: applications send metrics over OTLP, they are stored with their labels for 15 months, priced per GB ingested rather than per metric, and queried with ==PromQL== through a Prometheus-compatible API alongside AWS vended metrics. For new services instrumented with OpenTelemetry this removes the historic tension between rich labels and per-metric pricing. Classic CloudWatch custom metrics (`PutMetricData`, EMF) remain fully supported and are still the simplest option for Lambda functions and for existing code.
+OpenTelemetry (introduced fully in the X-Ray part) has become the industry standard for instrumentation. In June 2026 CloudWatch made **native OpenTelemetry metrics** generally available: applications send metrics over OTLP, they are stored with their labels for 15 months, priced per GB ingested rather than per metric, and queried with **PromQL** through a Prometheus-compatible API alongside AWS vended metrics. For new services instrumented with OpenTelemetry this removes the historic tension between rich labels and per-metric pricing. Classic CloudWatch custom metrics (`PutMetricData`, EMF) remain fully supported and are still the simplest option for Lambda functions and for existing code.
 
 !!! warning "Choose one metrics path per service"
     Publishing the same measurement through EMF, `PutMetricData` and OpenTelemetry "to be safe" doubles or triples cost and produces conflicting numbers on dashboards. Decide per service, record the decision, and enforce it in code review and templates.
@@ -650,11 +650,11 @@ flowchart TB
     QUERY --> MON
 ```
 
-- ==Regional service.== Metrics are stored in the Region where they are published. A metric published in `us-east-1` is not visible in `ap-south-1` except through cross-Region dashboards or centralisation.
-- ==Control plane and data plane.== Control plane operations (`PutMetricAlarm`, `PutDashboard`, `PutMetricStream`) are low-volume configuration calls made through IaC. Data plane operations (`PutMetricData`, `GetMetricData`) are high-volume and subject to request-rate quotas.
-- ==Push model.== Producers push data points to CloudWatch. Unlike Prometheus, CloudWatch does not scrape targets directly; the CloudWatch agent performs scraping where needed and then pushes.
-- ==Eventually consistent reads.== A newly published data point typically becomes queryable within about a minute for standard metrics. Alarms are designed around this delay.
-- ==No servers.== There are no instances to size. Capacity appears as request quotas and, for costs, as per-metric and per-request charges.
+- **Regional service.** Metrics are stored in the Region where they are published. A metric published in `us-east-1` is not visible in `ap-south-1` except through cross-Region dashboards or centralisation.
+- **Control plane and data plane.** Control plane operations (`PutMetricAlarm`, `PutDashboard`, `PutMetricStream`) are low-volume configuration calls made through IaC. Data plane operations (`PutMetricData`, `GetMetricData`) are high-volume and subject to request-rate quotas.
+- **Push model.** Producers push data points to CloudWatch. Unlike Prometheus, CloudWatch does not scrape targets directly; the CloudWatch agent performs scraping where needed and then pushes.
+- **Eventually consistent reads.** A newly published data point typically becomes queryable within about a minute for standard metrics. Alarms are designed around this delay.
+- **No servers.** There are no instances to size. Capacity appears as request quotas and, for costs, as per-metric and per-request charges.
 
 #### Important Features
 
@@ -679,13 +679,13 @@ flowchart TB
 
 #### Limitations
 
-- ==Regional scope.== Global views require cross-Region dashboards, centralisation or a third-party tool.
-- ==Downsampling.== One-minute detail is kept for 15 days only; raw history requires metric streams.
-- ==Dimension identity.== Classic metrics do not aggregate across dimension combinations unless you publish them or use Metrics Insights.
-- ==Cost of cardinality.== Classic custom metrics are billed per unique time series, which penalises high-cardinality designs.
-- ==Push only.== Scraping requires the agent or a collector.
-- ==Latency of data availability.== Standard metrics are not suitable for sub-second control loops.
-- ==Percentiles need raw values.== Pre-aggregated statistic sets lose the distribution.
+- **Regional scope.** Global views require cross-Region dashboards, centralisation or a third-party tool.
+- **Downsampling.** One-minute detail is kept for 15 days only; raw history requires metric streams.
+- **Dimension identity.** Classic metrics do not aggregate across dimension combinations unless you publish them or use Metrics Insights.
+- **Cost of cardinality.** Classic custom metrics are billed per unique time series, which penalises high-cardinality designs.
+- **Push only.** Scraping requires the agent or a collector.
+- **Latency of data availability.** Standard metrics are not suitable for sub-second control loops.
+- **Percentiles need raw values.** Pre-aggregated statistic sets lose the distribution.
 - ==No deletion API for metric data.== Data points cannot be deleted; a mistaken metric simply expires 15 months after publication stops.
 
 #### Pricing Model and recommendations
@@ -708,14 +708,14 @@ flowchart TB
 
 Recommendations:
 
-1. ==Budget for cardinality.== Estimate the number of time series before shipping a new metric. Multiply the distinct values of every dimension.
-2. Prefer ==EMF== over `PutMetricData` in request paths; you pay for log ingestion instead of synchronous API calls, and you keep rich context.
-3. Use ==agent aggregation== (`aggregation_dimensions`, `metrics_collection_interval`) to avoid per-instance metrics you will never query.
-4. Enable ==detailed monitoring== only where one-minute reaction time matters, such as Auto Scaling groups.
-5. Enable ==Lambda Insights and enhanced Container Insights selectively==, for services where the detail informs right-sizing or troubleshooting.
-6. Tune ==canary frequency== to the business need: a one-minute canary costs five times as much as a five-minute canary.
-7. ==Sample RUM sessions== on high-traffic sites.
-8. Review the ==CloudWatch line of Cost Explorer by usage type== monthly; observability often becomes one of the top five cost lines in a mature estate. [Section 7.3.3](../unit7/topic3.md#performance-optimization-using-aws-tools) discusses observability cost governance in detail.
+1. **Budget for cardinality.** Estimate the number of time series before shipping a new metric. Multiply the distinct values of every dimension.
+2. Prefer **EMF** over `PutMetricData` in request paths; you pay for log ingestion instead of synchronous API calls, and you keep rich context.
+3. Use **agent aggregation** (`aggregation_dimensions`, `metrics_collection_interval`) to avoid per-instance metrics you will never query.
+4. Enable **detailed monitoring** only where one-minute reaction time matters, such as Auto Scaling groups.
+5. Enable **Lambda Insights and enhanced Container Insights selectively**, for services where the detail informs right-sizing or troubleshooting.
+6. Tune **canary frequency** to the business need: a one-minute canary costs five times as much as a five-minute canary.
+7. **Sample RUM sessions** on high-traffic sites.
+8. Review the **CloudWatch line of Cost Explorer by usage type** monthly; observability often becomes one of the top five cost lines in a mature estate. [Section 7.3.3](../unit7/topic3.md#performance-optimization-using-aws-tools) discusses observability cost governance in detail.
 
 #### Performance Characteristics
 
@@ -730,7 +730,7 @@ Recommendations:
 
 #### Scaling Behaviour
 
-CloudWatch scales transparently with the number of metrics and data points. The architect scales ==producers== sensibly: batching data points into fewer `PutMetricData` calls (each call can carry many metrics and many values), using agent aggregation, and preferring EMF, which rides on log ingestion throughput. Request quotas are per account per Region, so a large fleet of containers each calling `PutMetricData` every second can throttle; the fix is batching and asynchronous publication, not retry loops.
+CloudWatch scales transparently with the number of metrics and data points. The architect scales **producers** sensibly: batching data points into fewer `PutMetricData` calls (each call can carry many metrics and many values), using agent aggregation, and preferring EMF, which rides on log ingestion throughput. Request quotas are per account per Region, so a large fleet of containers each calling `PutMetricData` every second can throttle; the fix is batching and asynchronous publication, not retry loops.
 
 #### Availability
 
@@ -860,7 +860,7 @@ Terms such as alarm, dashboard, log group and log stream are defined in Sections
 
 #### Scalability
 
-Monitoring must scale with the system without scaling cost linearly with traffic. Two design choices achieve this. First, ==aggregate before publishing==: counts and distributions per interval, not one data point per request through the API. Second, ==bound cardinality==: dimensions grow with the number of services and operations, never with the number of users or requests. A design whose metric count grows with customers will fail financially before it fails technically.
+Monitoring must scale with the system without scaling cost linearly with traffic. Two design choices achieve this. First, **aggregate before publishing**: counts and distributions per interval, not one data point per request through the API. Second, **bound cardinality**: dimensions grow with the number of services and operations, never with the number of users or requests. A design whose metric count grows with customers will fail financially before it fails technically.
 
 #### Availability
 
@@ -868,7 +868,7 @@ Monitoring must be ==more available than the system it monitors==. CloudWatch ru
 
 #### Reliability
 
-Telemetry code must ==never break the application==. `PutMetricData` failures must be caught and must not fail the user's request; EMF avoids the problem entirely by writing to standard output. Heartbeat metrics ("I processed N messages this minute", published even when N is zero) make silent failures detectable: absence of data is a signal only if the producer normally publishes zeros.
+Telemetry code must **never break the application**. `PutMetricData` failures must be caught and must not fail the user's request; EMF avoids the problem entirely by writing to standard output. Heartbeat metrics ("I processed N messages this minute", published even when N is zero) make silent failures detectable: absence of data is a signal only if the producer normally publishes zeros.
 
 #### Durability
 
@@ -888,11 +888,11 @@ Instrumentation itself consumes CPU and memory. Auto-instrumentation agents add 
 
 #### Maintainability
 
-Standardise ==metric names, namespaces and dimensions== across services in a shared library or platform template, so that dashboards and alarms can be generated rather than hand-built. Keep monitoring resources (agent configuration, canaries, RUM app monitors, OAM links) in the same infrastructure as code repository as the service ([Chapter 5.3](../unit5/topic3.md)), so that monitoring is deployed, reviewed and versioned with the code.
+Standardise **metric names, namespaces and dimensions** across services in a shared library or platform template, so that dashboards and alarms can be generated rather than hand-built. Keep monitoring resources (agent configuration, canaries, RUM app monitors, OAM links) in the same infrastructure as code repository as the service ([Chapter 5.3](../unit5/topic3.md)), so that monitoring is deployed, reviewed and versioned with the code.
 
 #### Operational Complexity
 
-CloudWatch's managed nature keeps the operational burden low, but complexity moves into ==design governance==: which capabilities are enabled where, who owns each canary, how cardinality is reviewed, and how many accounts link into the monitoring account. A platform team typically owns these decisions and publishes paved-road templates.
+CloudWatch's managed nature keeps the operational burden low, but complexity moves into **design governance**: which capabilities are enabled where, who owns each canary, how cardinality is reviewed, and how many accounts link into the monitoring account. A platform team typically owns these decisions and publishes paved-road templates.
 
 ```mermaid
 flowchart TD
@@ -969,11 +969,11 @@ Metrics look harmless, but dimensions and EMF log lines can leak personal or con
 
 #### Encryption
 
-Metric data is encrypted at rest by the service. Log groups that carry EMF, Container Insights performance logs, Lambda Insights data and canary logs should use ==customer managed KMS keys== when the data is sensitive or when key control is a compliance requirement. Synthetics artefacts in S3 should use SSE-KMS or at least SSE-S3 with a bucket policy that denies non-TLS access.
+Metric data is encrypted at rest by the service. Log groups that carry EMF, Container Insights performance logs, Lambda Insights data and canary logs should use **customer managed KMS keys** when the data is sensitive or when key control is a compliance requirement. Synthetics artefacts in S3 should use SSE-KMS or at least SSE-S3 with a bucket policy that denies non-TLS access.
 
 #### Network controls
 
-Workloads in private subnets should publish through ==interface VPC endpoints== for `monitoring`, `logs` and `xray`, with endpoint policies restricting use to the organisation's accounts. This removes the NAT gateway from the telemetry path (reducing both cost and a failure mode) and keeps telemetry off the internet.
+Workloads in private subnets should publish through **interface VPC endpoints** for `monitoring`, `logs` and `xray`, with endpoint policies restricting use to the organisation's accounts. This removes the NAT gateway from the telemetry path (reducing both cost and a failure mode) and keeps telemetry off the internet.
 
 #### Logging and compliance
 
@@ -1051,7 +1051,7 @@ flowchart LR
 
 #### Amazon EKS
 
-The ==Amazon CloudWatch Observability EKS add-on== installs the CloudWatch agent (with Container Insights and Application Signals) and Fluent Bit. Pods annotated for auto-instrumentation receive the ADOT agent automatically through a mutating webhook, without image changes. Organisations committed to Prometheus often combine it with Amazon Managed Service for Prometheus and Amazon Managed Grafana.
+The **Amazon CloudWatch Observability EKS add-on** installs the CloudWatch agent (with Container Insights and Application Signals) and Fluent Bit. Pods annotated for auto-instrumentation receive the ADOT agent automatically through a mutating webhook, without image changes. Organisations committed to Prometheus often combine it with Amazon Managed Service for Prometheus and Amazon Managed Grafana.
 
 #### Amazon API Gateway
 
@@ -1063,7 +1063,7 @@ ALB and NLB metrics are the most reliable request-level RED signals for containe
 
 #### Amazon SQS, SNS, Kinesis and EventBridge
 
-Asynchronous services publish backlog and delivery metrics ([Chapter 6.3](../unit6/topic3.md)). The architectural rule from that chapter applies: alarm on ==age==, not only depth.
+Asynchronous services publish backlog and delivery metrics ([Chapter 6.3](../unit6/topic3.md)). The architectural rule from that chapter applies: alarm on **age**, not only depth.
 
 #### Application Auto Scaling and EC2 Auto Scaling
 
@@ -1209,13 +1209,13 @@ Amazon CloudWatch is the regional, managed telemetry platform of AWS. Its metric
 
 Architectural lessons:
 
-- ==Monitor from the outside in.== User-facing canaries, RUM and edge metrics detect the failures that internal metrics cannot see.
-- ==Percentiles, not averages.== Latency objectives are stated and measured as percentiles or percentile ranks, and percentiles require raw distributions.
-- ==Cardinality is a design decision.== Dimensions are bounded; identifiers belong in logs and trace annotations.
+- **Monitor from the outside in.** User-facing canaries, RUM and edge metrics detect the failures that internal metrics cannot see.
+- **Percentiles, not averages.** Latency objectives are stated and measured as percentiles or percentile ranks, and percentiles require raw distributions.
+- **Cardinality is a design decision.** Dimensions are bounded; identifiers belong in logs and trace annotations.
 - ==Telemetry must never harm the workload.== Prefer EMF and local collectors to synchronous API calls in the request path.
-- ==Publish counts, derive rates== with metric math.
-- ==Use managed producers== (Container Insights, Lambda Insights, Application Signals) where the detail drives decisions, and enable them selectively for cost.
-- ==Monitoring is code.== Agent configuration, canaries, RUM monitors and OAM links are version-controlled and deployed with the service.
+- **Publish counts, derive rates** with metric math.
+- **Use managed producers** (Container Insights, Lambda Insights, Application Signals) where the detail drives decisions, and enable them selectively for cost.
+- **Monitoring is code.** Agent configuration, canaries, RUM monitors and OAM links are version-controlled and deployed with the service.
 
 ## Distributed Tracing with AWS X-Ray
 
@@ -1223,9 +1223,9 @@ Architectural lessons:
 
 ==Distributed tracing is the technique of recording the causal chain of operations performed on behalf of one request as it flows through a distributed system, with timing, outcome and context for each operation, so that the request can be reconstructed end to end.==
 
-==AWS X-Ray is the managed distributed tracing service of AWS.== It receives trace data from instrumented applications and AWS services, assembles segments into traces, builds a ==trace map== (historically called the service map) of services and dependencies, and provides trace search, analytics and anomaly insights. Since 2024 X-Ray is presented inside the CloudWatch console alongside Application Signals, and with ==CloudWatch Transaction Search== all spans can be stored as structured logs in CloudWatch while a configurable fraction is indexed as X-Ray trace summaries.
+**AWS X-Ray is the managed distributed tracing service of AWS.** It receives trace data from instrumented applications and AWS services, assembles segments into traces, builds a **trace map** (historically called the service map) of services and dependencies, and provides trace search, analytics and anomaly insights. Since 2024 X-Ray is presented inside the CloudWatch console alongside Application Signals, and with **CloudWatch Transaction Search** all spans can be stored as structured logs in CloudWatch while a configurable fraction is indexed as X-Ray trace summaries.
 
-In the AWS architecture map, X-Ray belongs to the ==Management and Governance== and ==Developer Tools== categories and is part of the CloudWatch observability family. It sits beside every compute service: Lambda, ECS, EKS, EC2, Elastic Beanstalk and App Runner can all emit traces, and API Gateway, SNS, SQS, EventBridge and Step Functions participate in trace propagation.
+In the AWS architecture map, X-Ray belongs to the **Management and Governance** and **Developer Tools** categories and is part of the CloudWatch observability family. It sits beside every compute service: Lambda, ECS, EKS, EC2, Elastic Beanstalk and App Runner can all emit traces, and API Gateway, SNS, SQS, EventBridge and Step Functions participate in trace propagation.
 
 ```mermaid
 flowchart LR
@@ -1248,7 +1248,7 @@ Consider a checkout request that takes 3.2 seconds in a system of API Gateway, t
 - The ECS inventory service's ALB reports p99 `TargetResponseTime` of 900 ms for all requests, not this one.
 - DynamoDB reports normal `SuccessfulRequestLatency` on average.
 
-None of these answers the question that matters: ==where did this request spend its 3.2 seconds, and why?== Metrics are aggregated across many requests and lose the individual path. Logs contain individual events but live in separate log groups with separate clocks and no shared identifier unless one was deliberately propagated. The answer lives in the ==composition== of calls, which is exactly what a trace records.
+None of these answers the question that matters: ==where did this request spend its 3.2 seconds, and why?== Metrics are aggregated across many requests and lose the individual path. Logs contain individual events but live in separate log groups with separate clocks and no shared identifier unless one was deliberately propagated. The answer lives in the **composition** of calls, which is exactly what a trace records.
 
 ```mermaid
 sequenceDiagram
@@ -1284,9 +1284,9 @@ Tracing originated in Google's Dapper paper (2010), followed by open-source syst
 
 #### Why the industry converged on OpenTelemetry
 
-Early tracing systems each had their own SDKs, header formats and wire protocols. Switching backends meant re-instrumenting every service. ==OpenTelemetry (OTel)==, a Cloud Native Computing Foundation project formed in 2019 by merging OpenTracing and OpenCensus, defines a vendor-neutral API, SDKs, semantic conventions and the OTLP wire protocol for traces, metrics and logs. It has become the default instrumentation standard across cloud providers and observability vendors.
+Early tracing systems each had their own SDKs, header formats and wire protocols. Switching backends meant re-instrumenting every service. **OpenTelemetry (OTel)**, a Cloud Native Computing Foundation project formed in 2019 by merging OpenTracing and OpenCensus, defines a vendor-neutral API, SDKs, semantic conventions and the OTLP wire protocol for traces, metrics and logs. It has become the default instrumentation standard across cloud providers and observability vendors.
 
-AWS responded by publishing the ==AWS Distro for OpenTelemetry (ADOT)== and, in late 2025, by announcing that the ==X-Ray SDKs and X-Ray daemon entered maintenance mode on 25 February 2026== (security fixes only) and reach ==end of support on 25 February 2027==. The X-Ray ==service== is not deprecated; AWS recommends that new and existing applications send traces to X-Ray using OpenTelemetry instrumentation.
+AWS responded by publishing the **AWS Distro for OpenTelemetry (ADOT)** and, in late 2025, by announcing that the **X-Ray SDKs and X-Ray daemon entered maintenance mode on 25 February 2026** (security fixes only) and reach **end of support on 25 February 2027**. The X-Ray **service** is not deprecated; AWS recommends that new and existing applications send traces to X-Ray using OpenTelemetry instrumentation.
 
 | Period | X-Ray SDKs and daemon status |
 |--------|------------------------------|
@@ -1295,7 +1295,7 @@ AWS responded by publishing the ==AWS Distro for OpenTelemetry (ADOT)== and, in 
 | From 25 February 2027 | End of support: no updates; existing releases remain downloadable |
 
 !!! warning "What this means for DSO303 projects"
-    New services in this module should be instrumented with ==OpenTelemetry (ADOT or upstream OpenTelemetry SDKs)== and export to X-Ray through the CloudWatch agent, an ADOT collector or the X-Ray OTLP endpoint. You will still meet the X-Ray SDK and daemon in existing code, older tutorials and AWS Academy materials, so you must understand their concepts, which map directly onto OpenTelemetry concepts. Plan migrations of existing X-Ray SDK code before February 2027.
+    New services in this module should be instrumented with **OpenTelemetry (ADOT or upstream OpenTelemetry SDKs)** and export to X-Ray through the CloudWatch agent, an ADOT collector or the X-Ray OTLP endpoint. You will still meet the X-Ray SDK and daemon in existing code, older tutorials and AWS Academy materials, so you must understand their concepts, which map directly onto OpenTelemetry concepts. Plan migrations of existing X-Ray SDK code before February 2027.
 
 #### Benefits over older methods
 
@@ -1339,7 +1339,7 @@ flowchart TB
     SS4 -.-> INF2["Inferred segment: payments.example.com"]
 ```
 
-A trace viewed as a ==timeline== (waterfall) shows each segment and subsegment as a horizontal bar positioned by start time and sized by duration. Gaps between a parent's start and its children's start reveal time spent in the service's own code; overlapping bars reveal parallel calls; a single long bar reveals the bottleneck.
+A trace viewed as a **timeline** (waterfall) shows each segment and subsegment as a horizontal bar positioned by start time and sized by duration. Gaps between a parent's start and its children's start reveal time spent in the service's own code; overlapping bars reveal parallel calls; a single long bar reveals the bottleneck.
 
 ##### The segment document
 
@@ -1389,7 +1389,7 @@ Every segment is a JSON document of up to 64 KB sent to X-Ray. Understanding its
 
 #### Trace IDs and context propagation
 
-A trace exists only if every service passes the ==trace context== to the next one. This is called ==context propagation== and it is the single most important operational concept in tracing: one uninstrumented hop that drops the header breaks the trace into disconnected pieces.
+A trace exists only if every service passes the **trace context** to the next one. This is called **context propagation** and it is the single most important operational concept in tracing: one uninstrumented hop that drops the header breaks the trace into disconnected pieces.
 
 ##### The X-Ray trace header
 
@@ -1420,7 +1420,7 @@ tracestate: vendor1=value1
 | 16 hex digits | Parent span ID |
 | `01` | Trace flags; the lowest bit is "sampled" |
 
-An X-Ray trace ID converts to a W3C trace ID by removing the `1-` prefix and the hyphen, which is why ADOT can interoperate with AWS services that still use `X-Amzn-Trace-Id`. With Transaction Search and the OTLP endpoint, X-Ray also accepts native W3C trace IDs. ADOT configures a ==composite propagator== that reads and writes both headers, so traces remain connected across services that use either format.
+An X-Ray trace ID converts to a W3C trace ID by removing the `1-` prefix and the hyphen, which is why ADOT can interoperate with AWS services that still use `X-Amzn-Trace-Id`. With Transaction Search and the OTLP endpoint, X-Ray also accepts native W3C trace IDs. ADOT configures a **composite propagator** that reads and writes both headers, so traces remain connected across services that use either format.
 
 ```mermaid
 sequenceDiagram
@@ -1439,11 +1439,11 @@ sequenceDiagram
 ```
 
 !!! note "Load balancers propagate but do not trace"
-    An Application Load Balancer adds or updates the `X-Amzn-Trace-Id` header on requests it forwards, which helps correlate ALB access logs with application traces. It does ==not== send segments to X-Ray, so it does not appear as a node on the trace map. API Gateway REST APIs, by contrast, can record their own segments when tracing is enabled on the stage.
+    An Application Load Balancer adds or updates the `X-Amzn-Trace-Id` header on requests it forwards, which helps correlate ALB access logs with application traces. It does **not** send segments to X-Ray, so it does not appear as a node on the trace map. API Gateway REST APIs, by contrast, can record their own segments when tracing is enabled on the stage.
 
 ##### Propagation across asynchronous boundaries
 
-Synchronous HTTP propagation is handled by instrumentation libraries. Asynchronous hops need special attention, because the context must travel ==inside the message==.
+Synchronous HTTP propagation is handled by instrumentation libraries. Asynchronous hops need special attention, because the context must travel **inside the message**.
 
 | Boundary | How context travels | Notes |
 |----------|---------------------|-------|
@@ -1453,30 +1453,30 @@ Synchronous HTTP propagation is handled by instrumentation libraries. Asynchrono
 | Step Functions | X-Ray tracing enabled on the state machine; context passed to Lambda and service integrations | Shows each state as a subsegment |
 | Kinesis Data Streams | No automatic propagation | Put trace context in the record payload and extract it manually; consider span links |
 | Lambda asynchronous invoke | Context carried in the invocation | Trace continues through the async queue |
-| Batch consumers | One consumer span processes many messages from different traces | Use ==span links== to relate the batch span to each producer trace |
+| Batch consumers | One consumer span processes many messages from different traces | Use **span links** to relate the batch span to each producer trace |
 
 !!! tip "Span links for fan-in"
-    A single consumer span that processes a batch of ten SQS messages cannot have ten parents. OpenTelemetry solves this with ==span links==: the batch span links to each message's producer span. The trace viewer can navigate from the consumer to each producer without pretending that the batch belongs to one trace. [Chapter 6.3](../unit6/topic3.md) described fan-in patterns; span links are how tracing represents them.
+    A single consumer span that processes a batch of ten SQS messages cannot have ten parents. OpenTelemetry solves this with **span links**: the batch span links to each message's producer span. The trace viewer can navigate from the consumer to each producer without pretending that the batch belongs to one trace. [Chapter 6.3](../unit6/topic3.md) described fan-in patterns; span links are how tracing represents them.
 
 #### Sampling
 
-Recording every request of a high-traffic service would be expensive and mostly redundant: the ten-thousandth successful `GET /products` trace in a minute teaches nothing new. ==Sampling== decides which requests are traced.
+Recording every request of a high-traffic service would be expensive and mostly redundant: the ten-thousandth successful `GET /products` trace in a minute teaches nothing new. **Sampling** decides which requests are traced.
 
 ##### Head-based sampling
 
-In ==head-based sampling== the decision is made at the start of the trace (the "head", usually the first instrumented service) and propagated downstream in the `Sampled` flag, so every service records the same traces. It is cheap and consistent, but the decision is made ==before anyone knows whether the request will be slow or fail==.
+In **head-based sampling** the decision is made at the start of the trace (the "head", usually the first instrumented service) and propagated downstream in the `Sampled` flag, so every service records the same traces. It is cheap and consistent, but the decision is made ==before anyone knows whether the request will be slow or fail==.
 
-X-Ray implements head-based sampling with centrally managed ==sampling rules==. Each rule has:
+X-Ray implements head-based sampling with centrally managed **sampling rules**. Each rule has:
 
 | Field | Meaning |
 |-------|---------|
 | `RuleName`, `Priority` | Rules are evaluated in ascending priority; the first match applies |
 | Matching criteria | `ServiceName`, `ServiceType`, `Host`, `HTTPMethod`, `URLPath`, `ResourceARN`, custom `Attributes` (wildcards allowed) |
-| `ReservoirSize` | A fixed number of requests per second to record, ==per rule, shared across the fleet== |
+| `ReservoirSize` | A fixed number of requests per second to record, **per rule, shared across the fleet** |
 | `FixedRate` | The percentage of additional requests beyond the reservoir to record |
 | `SamplingRateBoost` | Optional adaptive-sampling settings (below) |
 
-The ==default rule== records the ==first request each second and 5 per cent of additional requests==. Instrumented services poll the X-Ray API for rules and reservoir quotas, so a change to a rule takes effect across the fleet within seconds, without redeployment.
+The **default rule** records the **first request each second and 5 per cent of additional requests**. Instrumented services poll the X-Ray API for rules and reservoir quotas, so a change to a rule takes effect across the fleet within seconds, without redeployment.
 
 ```mermaid
 flowchart TD
@@ -1497,11 +1497,11 @@ flowchart TD
 ```
 
 !!! note "Lambda sampling"
-    For Lambda functions with active tracing, the sampling rate is fixed at ==one request per second plus 5 per cent of additional requests== and cannot be changed with sampling rules. If an upstream service (for example API Gateway, or a caller using OpenTelemetry) has already made a decision, Lambda honours the incoming `Sampled` flag. To trace a larger fraction of a Lambda workload, make the decision upstream or use OpenTelemetry instrumentation with its own sampler.
+    For Lambda functions with active tracing, the sampling rate is fixed at **one request per second plus 5 per cent of additional requests** and cannot be changed with sampling rules. If an upstream service (for example API Gateway, or a caller using OpenTelemetry) has already made a decision, Lambda honours the incoming `Sampled` flag. To trace a larger fraction of a Lambda workload, make the decision upstream or use OpenTelemetry instrumentation with its own sampler.
 
 ##### Adaptive sampling
 
-In September 2025 X-Ray introduced ==adaptive sampling==, available with ADOT SDKs (initially Java and Python) running alongside the CloudWatch agent or an OpenTelemetry Collector. It addresses the weakness of fixed-rate head sampling, which records too few traces precisely when something goes wrong:
+In September 2025 X-Ray introduced **adaptive sampling**, available with ADOT SDKs (initially Java and Python) running alongside the CloudWatch agent or an OpenTelemetry Collector. It addresses the weakness of fixed-rate head sampling, which records too few traces precisely when something goes wrong:
 
 | Mechanism | Behaviour |
 |-----------|-----------|
@@ -1512,7 +1512,7 @@ Adaptive sampling keeps the baseline cheap (for example 5 per cent) while captur
 
 ##### Tail-based sampling
 
-In ==tail-based sampling== the decision is made after all spans of a trace have been collected, so rules such as "keep every trace with an error or with duration above 2 seconds, plus 1 per cent of the rest" become possible. It is implemented in the ==OpenTelemetry Collector== with the `tail_sampling` processor. Its costs are real: the collector must buffer all spans of every trace for a decision window, and all spans of one trace must reach the same collector instance (achieved with a load-balancing exporter tier keyed by trace ID). Services must also sample 100 per cent at the head so the collector sees everything.
+In **tail-based sampling** the decision is made after all spans of a trace have been collected, so rules such as "keep every trace with an error or with duration above 2 seconds, plus 1 per cent of the rest" become possible. It is implemented in the **OpenTelemetry Collector** with the `tail_sampling` processor. Its costs are real: the collector must buffer all spans of every trace for a decision window, and all spans of one trace must reach the same collector instance (achieved with a load-balancing exporter tier keyed by trace ID). Services must also sample 100 per cent at the head so the collector sees everything.
 
 | Strategy | Decision point | Keeps errors and slow traces reliably | Cost and complexity |
 |----------|----------------|---------------------------------------|---------------------|
@@ -1531,7 +1531,7 @@ In ==tail-based sampling== the decision is made after all spans of a trace have 
 | Limit | Up to 50 per trace | Bounded only by segment size (64 KB) |
 | Typical content | `order_id`, `tenant_id`, `customer_tier`, `app_version`, `payment_provider` | Request bodies (sanitised), feature flag state, debug details |
 
-Annotations are what make traces ==findable==. When a customer reports "my order o-88121 failed at 10:04", the filter expression `annotation.order_id = "o-88121"` retrieves the exact trace. Unlike metric dimensions, high-cardinality annotations are acceptable, because traces are sampled records rather than aggregated time series.
+Annotations are what make traces **findable**. When a customer reports "my order o-88121 failed at 10:04", the filter expression `annotation.order_id = "o-88121"` retrieves the exact trace. Unlike metric dimensions, high-cardinality annotations are acceptable, because traces are sampled records rather than aggregated time series.
 
 !!! warning "Annotations are indexed data: do not put secrets or personal data in them"
     Card numbers, passwords, tokens, national identity numbers and full personal details must never appear in annotations, metadata or span attributes. Use opaque identifiers (an order ID rather than the customer's email). Trace data is visible to everyone with X-Ray read permissions and, with Transaction Search, lives in a CloudWatch log group.
@@ -1552,7 +1552,7 @@ Exceptions are recorded in the `cause` object of a segment or subsegment, includ
 
 | Capability | What it does | Why it matters |
 |------------|--------------|----------------|
-| Trace map | Graph of services (nodes) and calls (edges) built from traces, with latency, request rate and outcome per node and edge | The ==authoritative, up-to-date architecture diagram== of the running system |
+| Trace map | Graph of services (nodes) and calls (edges) built from traces, with latency, request rate and outcome per node and edge | The **authoritative, up-to-date architecture diagram** of the running system |
 | Filter expressions | Query language over traces, for example `service("orders") { fault = true } AND responsetime > 2` | Find specific traces |
 | Groups | Named filter expressions with their own trace map and CloudWatch metrics | Monitor a subset such as "premium tenants" or "checkout path" |
 | Trace analytics | Distributions of response time and outcomes, compared between time ranges | Understand whether an incident affects all requests or a subset |
@@ -1590,7 +1590,7 @@ OpenTelemetry separates instrumentation from the backend. Its components are:
 | OTLP | The OpenTelemetry Protocol over gRPC (port 4317) or HTTP (port 4318) |
 | Collector | A separate process that receives, processes (batching, filtering, tail sampling, attribute redaction) and exports telemetry |
 
-==ADOT== is AWS's supported, tested distribution of OpenTelemetry components. It adds AWS resource detectors (EC2, ECS, EKS, Lambda metadata), the X-Ray propagator and ID generator, the X-Ray remote sampler, AWS SDK instrumentation, Application Signals support and exporters for X-Ray, CloudWatch and Amazon Managed Service for Prometheus. ADOT is delivered as SDK distributions per language, a Lambda layer, a collector image and an EKS add-on.
+**ADOT** is AWS's supported, tested distribution of OpenTelemetry components. It adds AWS resource detectors (EC2, ECS, EKS, Lambda metadata), the X-Ray propagator and ID generator, the X-Ray remote sampler, AWS SDK instrumentation, Application Signals support and exporters for X-Ray, CloudWatch and Amazon Managed Service for Prometheus. ADOT is delivered as SDK distributions per language, a Lambda layer, a collector image and an EKS add-on.
 
 ```mermaid
 flowchart LR
@@ -1614,7 +1614,7 @@ flowchart LR
 
 ##### The legacy X-Ray SDK and daemon
 
-Before OpenTelemetry, applications used the ==X-Ray SDK== (Java, Node.js, Python, Go, .NET, Ruby) to create segments, and sent them over UDP port 2000 to the ==X-Ray daemon==, which batched them and called `PutTraceSegments`. On ECS the daemon ran as a sidecar; on EKS as a DaemonSet; on Lambda the service runs it for you. The concepts are identical to OpenTelemetry's, and the migration path is to replace the SDK with ADOT or upstream OpenTelemetry instrumentation and the daemon with the CloudWatch agent or an ADOT collector.
+Before OpenTelemetry, applications used the **X-Ray SDK** (Java, Node.js, Python, Go, .NET, Ruby) to create segments, and sent them over UDP port 2000 to the **X-Ray daemon**, which batched them and called `PutTraceSegments`. On ECS the daemon ran as a sidecar; on EKS as a DaemonSet; on Lambda the service runs it for you. The concepts are identical to OpenTelemetry's, and the migration path is to replace the SDK with ADOT or upstream OpenTelemetry instrumentation and the daemon with the CloudWatch agent or an ADOT collector.
 
 | Legacy component | OpenTelemetry replacement |
 |------------------|---------------------------|
@@ -1626,10 +1626,10 @@ Before OpenTelemetry, applications used the ==X-Ray SDK== (Java, Node.js, Python
 
 #### CloudWatch Transaction Search
 
-Classic X-Ray stores sampled traces for 30 days and charges per trace recorded and retrieved. ==CloudWatch Transaction Search==, generally available since late 2024, changes the storage model:
+Classic X-Ray stores sampled traces for 30 days and charges per trace recorded and retrieved. **CloudWatch Transaction Search**, generally available since late 2024, changes the storage model:
 
 - All spans sent to X-Ray (from X-Ray SDKs, ADOT, or the OTLP endpoint) are ingested as structured log events into the ==`aws/spans`== log group in CloudWatch Logs, in OpenTelemetry semantic convention format with W3C trace IDs.
-- A configurable percentage of spans, ==1 per cent by default and at no additional cost==, is indexed as X-Ray ==trace summaries== to power the classic trace search and analytics.
+- A configurable percentage of spans, **1 per cent by default and at no additional cost**, is indexed as X-Ray **trace summaries** to power the classic trace search and analytics.
 - The span data becomes searchable with a visual editor and with CloudWatch Logs Insights, and can use log features such as retention settings, metric filters, subscription filters and data protection masking ([Section 7.2](../unit7/topic2.md)).
 - Pricing for span ingestion follows CloudWatch pricing per GB rather than X-Ray per-trace pricing.
 - Traces of up to 10,000 spans can be visualised.
@@ -1699,11 +1699,11 @@ flowchart TB
     SPN --> UI
 ```
 
-- ==Regional service.== Traces are stored in the Region where they are sent. A request crossing Regions produces segments in each Region; cross-Region trace viewing requires each Region's console or central analysis of span logs.
-- ==Data plane APIs.== `PutTraceSegments` (segment documents), `PutTelemetryRecords` (daemon health), the OTLP traces endpoint, and `GetSamplingRules` and `GetSamplingTargets` (used by instrumented services to fetch rules and reservoir quotas).
-- ==Read APIs.== `GetTraceSummaries` (with filter expressions), `BatchGetTraces`, `GetServiceGraph`, `GetTraceGraph`, `GetInsightSummaries`.
-- ==Assembly.== Segments arrive independently and out of order from many hosts. X-Ray assembles them by trace ID and parent ID; a trace may appear incomplete for a short time until late segments arrive.
-- ==Collectors.== Applications rarely call the X-Ray API directly. A local collector (CloudWatch agent, ADOT collector, legacy daemon, or the Lambda service) batches and signs requests.
+- **Regional service.** Traces are stored in the Region where they are sent. A request crossing Regions produces segments in each Region; cross-Region trace viewing requires each Region's console or central analysis of span logs.
+- **Data plane APIs.** `PutTraceSegments` (segment documents), `PutTelemetryRecords` (daemon health), the OTLP traces endpoint, and `GetSamplingRules` and `GetSamplingTargets` (used by instrumented services to fetch rules and reservoir quotas).
+- **Read APIs.** `GetTraceSummaries` (with filter expressions), `BatchGetTraces`, `GetServiceGraph`, `GetTraceGraph`, `GetInsightSummaries`.
+- **Assembly.** Segments arrive independently and out of order from many hosts. X-Ray assembles them by trace ID and parent ID; a trace may appear incomplete for a short time until late segments arrive.
+- **Collectors.** Applications rarely call the X-Ray API directly. A local collector (CloudWatch agent, ADOT collector, legacy daemon, or the Lambda service) batches and signs requests.
 
 #### Important Features
 
@@ -1725,15 +1725,15 @@ flowchart TB
 
 #### Limitations
 
-- ==Sampling means incompleteness.== Without Transaction Search at high head sampling, the trace for a specific request may not exist.
-- ==Instrumentation required.== Services that do not propagate context break traces; third-party SaaS dependencies appear only as client-side subsegments.
-- ==Asynchronous gaps.== Kinesis and custom transports need manual propagation.
-- ==Regional.== No built-in global trace view across Regions.
-- ==Retention.== Classic trace data is kept for 30 days; longer analysis requires Transaction Search with an appropriate log retention, or export.
-- ==Clock skew.== Segment timings come from different hosts' clocks; small skews can make a child appear to start before its parent.
-- ==Lambda sampling is fixed== for active tracing.
-- ==Segment size== is limited to 64 KB; very large subsegment trees must be split.
-- ==SDK lifecycle.== X-Ray SDKs and daemon are in maintenance mode until February 2027, then unsupported.
+- **Sampling means incompleteness.** Without Transaction Search at high head sampling, the trace for a specific request may not exist.
+- **Instrumentation required.** Services that do not propagate context break traces; third-party SaaS dependencies appear only as client-side subsegments.
+- **Asynchronous gaps.** Kinesis and custom transports need manual propagation.
+- **Regional.** No built-in global trace view across Regions.
+- **Retention.** Classic trace data is kept for 30 days; longer analysis requires Transaction Search with an appropriate log retention, or export.
+- **Clock skew.** Segment timings come from different hosts' clocks; small skews can make a child appear to start before its parent.
+- **Lambda sampling is fixed** for active tracing.
+- **Segment size** is limited to 64 KB; very large subsegment trees must be split.
+- **SDK lifecycle.** X-Ray SDKs and daemon are in maintenance mode until February 2027, then unsupported.
 
 #### Pricing Model and recommendations
 
@@ -1752,10 +1752,10 @@ flowchart TB
 
 Recommendations:
 
-1. Start with the ==default sampling rule== and add specific rules: lower rates for high-volume, low-value paths (health checks, static assets, polling endpoints) and higher rates or reservoirs for critical, low-volume paths (checkout, payment).
+1. Start with the **default sampling rule** and add specific rules: lower rates for high-volume, low-value paths (health checks, static assets, polling endpoints) and higher rates or reservoirs for critical, low-volume paths (checkout, payment).
 2. Set `FixedRate` to 0 for health check paths; they otherwise dominate trace volume and cost (health checks are discussed in the next part).
-3. Evaluate ==Transaction Search== for services where complete searchability is valuable; estimate span GB per month and set a log retention on `aws/spans` that matches investigation needs.
-4. Use ==adaptive sampling== to keep baselines low without losing incident evidence.
+3. Evaluate **Transaction Search** for services where complete searchability is valuable; estimate span GB per month and set a log retention on `aws/spans` that matches investigation needs.
+4. Use **adaptive sampling** to keep baselines low without losing incident evidence.
 5. Avoid enormous metadata payloads; span size drives Transaction Search ingestion cost.
 6. Use groups and Insights only for subsets that someone monitors, since scanning is billed.
 
@@ -1770,11 +1770,11 @@ Recommendations:
 
 #### Scaling Behaviour
 
-X-Ray scales transparently. The architect scales ==collection==: sidecar collectors scale with tasks automatically; DaemonSet collectors scale with nodes and must be sized for the busiest node; tail-sampling collector tiers must be scaled horizontally with trace-ID-aware load balancing. Sampling reservoirs are enforced fleet-wide by X-Ray, so adding instances does not increase the reservoir, only the fixed-rate portion.
+X-Ray scales transparently. The architect scales **collection**: sidecar collectors scale with tasks automatically; DaemonSet collectors scale with nodes and must be sized for the busiest node; tail-sampling collector tiers must be scaled horizontally with trace-ID-aware load balancing. Sampling reservoirs are enforced fleet-wide by X-Ray, so adding instances does not increase the reservoir, only the fixed-rate portion.
 
 #### Availability
 
-X-Ray is a regional, managed service. Telemetry export is designed to be ==best-effort==: if X-Ray is unreachable, SDKs and collectors drop spans rather than blocking requests. Applications must never depend on tracing for correctness. For multi-Region applications, each Region records its own traces; engineers correlate them by trace ID.
+X-Ray is a regional, managed service. Telemetry export is designed to be **best-effort**: if X-Ray is unreachable, SDKs and collectors drop spans rather than blocking requests. Applications must never depend on tracing for correctness. For multi-Region applications, each Region records its own traces; engineers correlate them by trace ID.
 
 #### Security Features
 
@@ -1914,7 +1914,7 @@ Classic trace data is retained for 30 days. Transaction Search stores spans in a
 
 #### Latency
 
-Span creation adds microseconds; export is asynchronous. The measurable latency cost is in ==auto-instrumentation start-up==, particularly for Java agents and Lambda cold starts, and in synchronous exporters misconfigured to block. Measure p99 latency with and without instrumentation before rolling out broadly.
+Span creation adds microseconds; export is asynchronous. The measurable latency cost is in **auto-instrumentation start-up**, particularly for Java agents and Lambda cold starts, and in synchronous exporters misconfigured to block. Measure p99 latency with and without instrumentation before rolling out broadly.
 
 #### Cost
 
@@ -1930,7 +1930,7 @@ Prefer auto-instrumentation plus a small number of manual spans around important
 
 #### Operational Complexity
 
-OpenTelemetry has many configuration options, collector pipelines and language-specific details. Reduce complexity by adopting a ==paved road==: the platform team publishes a collector configuration, base images, Lambda layers and IaC modules, and application teams set only `OTEL_SERVICE_NAME` and business attributes.
+OpenTelemetry has many configuration options, collector pipelines and language-specific details. Reduce complexity by adopting a **paved road**: the platform team publishes a collector configuration, base images, Lambda layers and IaC modules, and application teams set only `OTEL_SERVICE_NAME` and business attributes.
 
 ```mermaid
 flowchart TD
@@ -1977,7 +1977,7 @@ flowchart TD
 | Platform team | `xray:CreateSamplingRule`, `xray:UpdateSamplingRule`, `xray:CreateGroup`, `xray:PutEncryptionConfig`, `xray:UpdateTraceSegmentDestination` |
 
 !!! note "Which role sends the spans"
-    In ECS, the collector sidecar uses the ==task role==, not the task execution role; the execution role is only for pulling images and writing container logs. In EKS, the collector DaemonSet or sidecar needs its own Pod Identity or IRSA role; do not grant X-Ray permissions to the node role for all pods.
+    In ECS, the collector sidecar uses the **task role**, not the task execution role; the execution role is only for pulling images and writing container logs. In EKS, the collector DaemonSet or sidecar needs its own Pod Identity or IRSA role; do not grant X-Ray permissions to the node role for all pods.
 
 #### Sensitive data in traces
 
@@ -2107,7 +2107,7 @@ Application Signals derives service metrics from the same spans and links metric
 
 #### Trace-first debugging of a latency alarm
 
-An alarm on p99 latency ([Section 7.3.1](../unit7/topic3.md#creating-cloudwatch-dashboards-and-alarms)) links to Application Signals, which shows the operation that degraded; exemplar traces from that period show the slow span; the trace ID leads to the relevant log lines in Logs Insights ([Section 7.2.2](../unit7/topic2.md#log-analysis-with-amazon-cloudwatch-logs-insights)). This ==metrics to traces to logs== workflow is the standard investigation path and works only if all three signals share service names and trace IDs.
+An alarm on p99 latency ([Section 7.3.1](../unit7/topic3.md#creating-cloudwatch-dashboards-and-alarms)) links to Application Signals, which shows the operation that degraded; exemplar traces from that period show the slow span; the trace ID leads to the relevant log lines in Logs Insights ([Section 7.2.2](../unit7/topic2.md#log-analysis-with-amazon-cloudwatch-logs-insights)). This **metrics to traces to logs** workflow is the standard investigation path and works only if all three signals share service names and trace IDs.
 
 ```mermaid
 sequenceDiagram
@@ -2128,7 +2128,7 @@ sequenceDiagram
 
 #### Correlation ID and trace ID together
 
-A business correlation ID (for example `orderId`) is recorded as an annotation and a log field; the trace ID is recorded in every log line. The correlation ID links events across ==multiple traces== (an order's creation, payment and fulfilment may be separate requests over hours), while the trace ID links spans ==within one request==. Structured logging with both is covered in [Section 7.2](../unit7/topic2.md#correlation-ids-and-trace-context).
+A business correlation ID (for example `orderId`) is recorded as an annotation and a log field; the trace ID is recorded in every log line. The correlation ID links events across **multiple traces** (an order's creation, payment and fulfilment may be separate requests over hours), while the trace ID links spans **within one request**. Structured logging with both is covered in [Section 7.2](../unit7/topic2.md#correlation-ids-and-trace-context).
 
 #### Sidecar or node collector
 
@@ -2219,11 +2219,11 @@ Distributed tracing reconstructs the causal path of individual requests across s
 Architectural lessons:
 
 - ==A trace is only as complete as its weakest hop.== Propagation is a platform standard, including across queues, topics, buses and batches.
-- ==Instrument with OpenTelemetry.== Portable, supported, and the direction AWS has taken for X-Ray.
-- ==Sample deliberately.== Exclude health checks, protect critical paths with reservoirs, and use adaptive or tail sampling to keep errors.
-- ==Annotations make traces findable;== choose business identifiers, never secrets or personal data.
-- ==Metrics tell you that, traces tell you where, logs tell you why.== Join them with shared service names and trace IDs.
-- ==Tracing must fail open== and must never threaten the workload it observes.
+- **Instrument with OpenTelemetry.** Portable, supported, and the direction AWS has taken for X-Ray.
+- **Sample deliberately.** Exclude health checks, protect critical paths with reservoirs, and use adaptive or tail sampling to keep errors.
+- **Annotations make traces findable;** choose business identifiers, never secrets or personal data.
+- **Metrics tell you that, traces tell you where, logs tell you why.** Join them with shared service names and trace IDs.
+- **Tracing must fail open** and must never threaten the workload it observes.
 
 ## Health Checks and Readiness Probes on AWS
 
@@ -2231,7 +2231,7 @@ Architectural lessons:
 
 ==A health check is an automated, repeated probe of a component whose result is used by a controller (a load balancer, a DNS service, an orchestrator or a scaling group) to decide whether that component should receive traffic, be restarted or be replaced.==
 
-A ==readiness probe== is a health check whose only consequence is ==traffic routing==: a component that is not ready stops receiving new requests but keeps running. A ==liveness probe== is a health check whose consequence is ==restart==. A ==replacement check== (for example an Auto Scaling health check) leads to termination and replacement of the whole instance or task. The distinction between these consequences is the central idea of this part.
+A **readiness probe** is a health check whose only consequence is **traffic routing**: a component that is not ready stops receiving new requests but keeps running. A **liveness probe** is a health check whose consequence is **restart**. A **replacement check** (for example an Auto Scaling health check) leads to termination and replacement of the whole instance or task. The distinction between these consequences is the central idea of this part.
 
 In the AWS architecture map, health checks are not a single service. They are features of Elastic Load Balancing, Amazon Route 53, Amazon EC2 and EC2 Auto Scaling, Amazon ECS, Amazon EKS (through Kubernetes and the AWS Load Balancer Controller) and AWS Cloud Map. CloudWatch observes their results as metrics (`UnHealthyHostCount`, `HealthCheckStatus`, `StatusCheckFailed`), which connects this part to the CloudWatch part and to alarms in [Section 7.3.1](../unit7/topic3.md#creating-cloudwatch-dashboards-and-alarms).
 
@@ -2268,7 +2268,7 @@ flowchart TB
 
 In a cloud-native system, individual components fail constantly: an instance's underlying host degrades, a container leaks memory and stops responding, a deployment ships a version that cannot connect to its database, an Availability Zone experiences network problems. At the scale of hundreds of tasks, some component is always unhealthy. If a human had to notice and remove each one, users would see errors for minutes or hours.
 
-Health checks turn detection and recovery into ==closed control loops== that act in seconds:
+Health checks turn detection and recovery into **closed control loops** that act in seconds:
 
 ```mermaid
 flowchart LR
@@ -2281,7 +2281,7 @@ flowchart LR
     O --> P
 ```
 
-This is the self-healing property that Chapter 1 described as a defining characteristic of cloud-native design, and it is the mechanism behind the ==reliability== pillar's principle of automatic recovery from failure.
+This is the self-healing property that Chapter 1 described as a defining characteristic of cloud-native design, and it is the mechanism behind the **reliability** pillar's principle of automatic recovery from failure.
 
 #### Why each layer needs its own check
 
@@ -2314,9 +2314,9 @@ The most common health check mistake is to use one endpoint to answer several di
 
 | Question | Consequence of "no" | Cost of a false "no" | Typical mechanisms |
 |----------|--------------------|----------------------|--------------------|
-| Is it ==ready== to serve traffic? | Stop routing new requests to it | Reduced capacity, reversible within seconds | ALB and NLB target health, Kubernetes readiness, Route 53 |
-| Is it ==alive==? | Restart the process or container | Lost in-flight work, cold start, possible restart storm | ECS container health check, Kubernetes liveness |
-| Is the host or instance ==viable==? | Terminate and replace | Longest recovery, capacity churn | EC2 status checks, Auto Scaling health checks, ECS task replacement |
+| Is it **ready** to serve traffic? | Stop routing new requests to it | Reduced capacity, reversible within seconds | ALB and NLB target health, Kubernetes readiness, Route 53 |
+| Is it **alive**? | Restart the process or container | Lost in-flight work, cold start, possible restart storm | ECS container health check, Kubernetes liveness |
+| Is the host or instance **viable**? | Terminate and replace | Longest recovery, capacity churn | EC2 status checks, Auto Scaling health checks, ECS task replacement |
 
 !!! danger "The cost of a false negative grows with the severity of the consequence"
     A readiness check that fails wrongly removes a target briefly. A liveness check that fails wrongly restarts a healthy process. A replacement check that fails wrongly destroys capacity. Therefore ==the more severe the consequence, the narrower and more conservative the check must be==. This is the general principle behind the Kubernetes rule from [Chapter 3.2](../unit3/topic2.md) that liveness must not check dependencies.
@@ -2347,9 +2347,9 @@ flowchart TD
 Suppose every ECS task's ALB health check verifies the shared Aurora database. The database has a 20-second failover. Every task fails its health check at the same time, the ALB marks all targets unhealthy, and, as the next section explains, ALB then fails open and sends traffic to all of them anyway, so the check achieved nothing. Worse, if ECS is replacing tasks that fail the ELB health check, it begins stopping every task in the service. When the database returns, there is no warm capacity; new tasks start, all open database connections at once, and the recovery itself overloads the database. The original 20-second fault becomes a 10-minute outage.
 
 !!! warning "Rule of thumb for target health checks"
-    A target-level health check should fail only when ==this target== cannot serve requests but ==other targets could==. A dependency shared by all targets cannot be fixed by removing some of them. Shared dependency failures are handled by timeouts, circuit breakers and fallbacks in the application ([Chapter 4.3](../unit4/topic3.md)), by alarms ([Section 7.3.1](../unit7/topic3.md#creating-cloudwatch-dashboards-and-alarms)), and, at the Regional level, by Route 53 failover.
+    A target-level health check should fail only when **this target** cannot serve requests but **other targets could**. A dependency shared by all targets cannot be fixed by removing some of them. Shared dependency failures are handled by timeouts, circuit breakers and fallbacks in the application ([Chapter 4.3](../unit4/topic3.md)), by alarms ([Section 7.3.1](../unit7/topic3.md#creating-cloudwatch-dashboards-and-alarms)), and, at the Regional level, by Route 53 failover.
 
-There is one important exception: a dependency that is ==specific to the target== (a local sidecar, a per-task cache, a disk, a per-AZ endpoint) is legitimately part of that target's readiness.
+There is one important exception: a dependency that is **specific to the target** (a local sidecar, a per-task cache, a disk, a per-AZ endpoint) is legitimately part of that target's readiness.
 
 #### Health check anatomy
 
@@ -2423,18 +2423,18 @@ aws elbv2 describe-target-health --target-group-arn "$TG_ARN" \
 
 ##### Fail open
 
-If ==every== target in a target group is unhealthy, the ALB does not return errors for lack of targets; it ==fails open== and routes requests to all targets regardless of health. The reasoning is that a health check that fails everywhere is more likely to be wrong (a bad path, a shared dependency) than every target being broken at once. Fail-open is also why a deep health check that fails on a shared dependency provides no protection: when all targets fail together, they all receive traffic anyway.
+If **every** target in a target group is unhealthy, the ALB does not return errors for lack of targets; it **fails open** and routes requests to all targets regardless of health. The reasoning is that a health check that fails everywhere is more likely to be wrong (a bad path, a shared dependency) than every target being broken at once. Fail-open is also why a deep health check that fails on a shared dependency provides no protection: when all targets fail together, they all receive traffic anyway.
 
 ##### Target group health settings
 
-Two further settings control what happens when ==too few== targets are healthy, which matters for multi-AZ resilience:
+Two further settings control what happens when **too few** targets are healthy, which matters for multi-AZ resilience:
 
 | Setting | Purpose |
 |---------|---------|
 | Unhealthy state routing threshold (minimum healthy target count or percentage) | When the healthy count in a zone falls below the threshold, the load balancer routes to all targets in that zone (fail open at zone level) |
 | DNS failover threshold | When healthy targets fall below the threshold, the load balancer node's IP address is marked unhealthy in DNS, so Route 53 stops returning that zone's node and clients shift to other zones |
 
-These let an architect express "if fewer than 50 per cent of targets in a zone are healthy, move traffic away from that zone", which is more precise than per-target checks alone. ALB also offers ==automatic target weights== (anomaly mitigation) with the weighted random routing algorithm, which reduces traffic to targets that return anomalous error rates even while they pass health checks.
+These let an architect express "if fewer than 50 per cent of targets in a zone are healthy, move traffic away from that zone", which is more precise than per-target checks alone. ALB also offers **automatic target weights** (anomaly mitigation) with the weighted random routing algorithm, which reduces traffic to targets that return anomalous error rates even while they pass health checks.
 
 ##### What the load balancer health check must and must not do
 
@@ -2448,7 +2448,7 @@ These let an architect express "if fewer than 50 per cent of targets in a zone a
 
 #### Route 53 health checks
 
-Route 53 health checks operate at the ==DNS and global== layer. They decide which records Route 53 returns, and therefore which Region, endpoint or load balancer users reach.
+Route 53 health checks operate at the **DNS and global** layer. They decide which records Route 53 returns, and therefore which Region, endpoint or load balancer users reach.
 
 | Health check type | What it monitors | Typical use |
 |-------------------|------------------|-------------|
@@ -2469,19 +2469,19 @@ flowchart TB
 
 How Route 53 decides:
 
-- Health checkers in several AWS Regions probe the endpoint independently at an interval of ==30 seconds (standard) or 10 seconds (fast, extra charge)==.
-- Each checker applies the ==failure threshold== (1 to 10 consecutive results, default 3).
-- The endpoint is considered healthy if ==more than 18 per cent== of health checkers report it healthy. The low threshold prevents a network problem near a few checker locations from triggering a global failover.
-- For HTTP and HTTPS checks, the TCP connection must be established within 4 seconds and a 2xx or 3xx response returned within 2 seconds; optional string matching searches the ==first 5,120 bytes== of the body. HTTPS checks do not validate the certificate.
+- Health checkers in several AWS Regions probe the endpoint independently at an interval of **30 seconds (standard) or 10 seconds (fast, extra charge)**.
+- Each checker applies the **failure threshold** (1 to 10 consecutive results, default 3).
+- The endpoint is considered healthy if **more than 18 per cent** of health checkers report it healthy. The low threshold prevents a network problem near a few checker locations from triggering a global failover.
+- For HTTP and HTTPS checks, the TCP connection must be established within 4 seconds and a 2xx or 3xx response returned within 2 seconds; optional string matching searches the **first 5,120 bytes** of the body. HTTPS checks do not validate the certificate.
 - Health checks can publish `HealthCheckStatus` and `HealthCheckPercentageHealthy` metrics and trigger CloudWatch alarms.
 
 !!! note "Alias records and evaluate target health"
-    For alias records that point to an ELB load balancer, API Gateway or other AWS resources, setting ==Evaluate target health== makes Route 53 use the target's own health (for an ALB, whether it has healthy targets in any zone) without a separately billed health check. Add an explicit health check when the definition of healthy is richer than "the load balancer has a healthy target".
+    For alias records that point to an ELB load balancer, API Gateway or other AWS resources, setting **Evaluate target health** makes Route 53 use the target's own health (for an ALB, whether it has healthy targets in any zone) without a separately billed health check. Add an explicit health check when the definition of healthy is richer than "the load balancer has a healthy target".
 
 !!! warning "Health checkers are on the internet"
-    Endpoint health checks come from public Route 53 health checker IP addresses (published in the `ip-ranges.json` file under the `ROUTE53_HEALTHCHECKS` service). They ==cannot reach private IP addresses==. Security groups and network ACLs must allow the checker ranges for public endpoints; for private resources, use CloudWatch alarm-based health checks instead.
+    Endpoint health checks come from public Route 53 health checker IP addresses (published in the `ip-ranges.json` file under the `ROUTE53_HEALTHCHECKS` service). They **cannot reach private IP addresses**. Security groups and network ACLs must allow the checker ranges for public endpoints; for private resources, use CloudWatch alarm-based health checks instead.
 
-Route 53 health checks support the routing policies used for multi-Region resilience: failover (active-passive), weighted, latency, geolocation and multivalue answer routing. For organisations that require deterministic, human-controlled failover, ==Route 53 Application Recovery Controller== provides routing controls and readiness checks on top of these primitives; it is beyond the scope of this section.
+Route 53 health checks support the routing policies used for multi-Region resilience: failover (active-passive), weighted, latency, geolocation and multivalue answer routing. For organisations that require deterministic, human-controlled failover, **Route 53 Application Recovery Controller** provides routing controls and readiness checks on top of these primitives; it is beyond the scope of this section.
 
 #### EC2 status checks and Auto Scaling health checks
 
@@ -2493,9 +2493,9 @@ EC2 runs automated checks on every running instance every minute:
 | Instance status check | Problems in the guest: failed boot, exhausted memory, corrupted file system, misconfigured network | Customer | Reboot, fix configuration, replace |
 | Attached EBS status check | Attached EBS volumes are unreachable or cannot complete I/O | AWS or customer depending on cause | Replace instance or volume |
 
-Their results appear as `StatusCheckFailed_System`, `StatusCheckFailed_Instance`, `StatusCheckFailed_AttachedEBS` and `StatusCheckFailed` in CloudWatch. A CloudWatch alarm on `StatusCheckFailed_System` can trigger the EC2 ==recover== action, which moves the instance to healthy hardware while keeping its instance ID, private IP addresses and EBS volumes; many current instance types also have ==simplified automatic recovery== enabled by default. Recovery suits single, stateful instances. For stateless fleets, replacement through Auto Scaling is preferable.
+Their results appear as `StatusCheckFailed_System`, `StatusCheckFailed_Instance`, `StatusCheckFailed_AttachedEBS` and `StatusCheckFailed` in CloudWatch. A CloudWatch alarm on `StatusCheckFailed_System` can trigger the EC2 **recover** action, which moves the instance to healthy hardware while keeping its instance ID, private IP addresses and EBS volumes; many current instance types also have **simplified automatic recovery** enabled by default. Recovery suits single, stateful instances. For stateless fleets, replacement through Auto Scaling is preferable.
 
-EC2 Auto Scaling decides which instances to ==replace== using its own health status:
+EC2 Auto Scaling decides which instances to **replace** using its own health status:
 
 | Health check type | Instance is unhealthy when | Recommendation |
 |-------------------|----------------------------|----------------|
@@ -2505,7 +2505,7 @@ EC2 Auto Scaling decides which instances to ==replace== using its own health sta
 | EBS | Attached EBS status check fails | Enable for EBS-dependent workloads |
 | Custom | Your code calls `SetInstanceHealth` with `Unhealthy` | Application-specific health, for example from an external monitor |
 
-The ==health check grace period== delays Auto Scaling health checks after an instance enters `InService` so that it can boot and pass load balancer checks; the console suggests 300 seconds. Too short a grace period produces a replacement loop similar to the ECS loop described in [Chapter 2.2](../unit2/topic2.md); too long delays replacement of genuinely broken instances.
+The **health check grace period** delays Auto Scaling health checks after an instance enters `InService` so that it can boot and pass load balancer checks; the console suggests 300 seconds. Too short a grace period produces a replacement loop similar to the ECS loop described in [Chapter 2.2](../unit2/topic2.md); too long delays replacement of genuinely broken instances.
 
 ```mermaid
 sequenceDiagram
@@ -2529,7 +2529,7 @@ sequenceDiagram
 
 | Signal | Checked by | Effect in an ECS service |
 |--------|------------|--------------------------|
-| Container `healthCheck` (command inside the container) | ECS agent or Fargate | If an ==essential== container becomes `UNHEALTHY`, the task is marked unhealthy and the service scheduler stops and replaces it |
+| Container `healthCheck` (command inside the container) | ECS agent or Fargate | If an **essential** container becomes `UNHEALTHY`, the task is marked unhealthy and the service scheduler stops and replaces it |
 | Load balancer target health | ALB or NLB | If the task fails target health checks after `healthCheckGracePeriodSeconds`, the service stops and replaces it |
 | Service Connect or Cloud Map health | ECS | Unhealthy tasks are removed from service discovery |
 | Deployment circuit breaker | ECS | If new tasks repeatedly fail to become healthy, the deployment is marked failed and optionally rolled back ([Chapter 5.2](../unit5/topic2.md)) |
@@ -2537,13 +2537,13 @@ sequenceDiagram
 One cross-cutting trap applies to every command-based check: the container image must contain the probe tool (`curl`, `wget`, or a small health binary). Minimal and distroless images often do not, which silently fails every check.
 
 !!! note "Which health check should ECS use for replacement"
-    Use the container health check for ==liveness== (a narrow, local check), and the load balancer health check for ==readiness== of request-serving tasks. Because ECS replaces tasks that fail either, both must follow the "no shared dependencies" rule. For worker services without a load balancer (queue consumers, [Chapter 6.3](../unit6/topic3.md)), the container health check is the only automated signal; make it verify that the worker loop is making progress (for example "last successful poll within 60 seconds"), not merely that the process exists.
+    Use the container health check for **liveness** (a narrow, local check), and the load balancer health check for **readiness** of request-serving tasks. Because ECS replaces tasks that fail either, both must follow the "no shared dependencies" rule. For worker services without a load balancer (queue consumers, [Chapter 6.3](../unit6/topic3.md)), the container health check is the only automated signal; make it verify that the worker loop is making progress (for example "last successful poll within 60 seconds"), not merely that the process exists.
 
 #### Amazon EKS: probes, readiness gates and ALB target health
 
-[Chapter 3.2](../unit3/topic2.md#using-kubernetes-manifests-and-helm-charts) covered the configuration of startup, readiness and liveness probes. On EKS with the AWS Load Balancer Controller in IP target mode, there are ==two independent health systems== for a pod: the kubelet's probes and the ALB's target health checks. A gap between them causes dropped requests during rollouts: Kubernetes may consider a new pod ready (readiness probe passed) and terminate an old pod before the ALB has registered the new pod's IP and marked it healthy.
+[Chapter 3.2](../unit3/topic2.md#using-kubernetes-manifests-and-helm-charts) covered the configuration of startup, readiness and liveness probes. On EKS with the AWS Load Balancer Controller in IP target mode, there are **two independent health systems** for a pod: the kubelet's probes and the ALB's target health checks. A gap between them causes dropped requests during rollouts: Kubernetes may consider a new pod ready (readiness probe passed) and terminate an old pod before the ALB has registered the new pod's IP and marked it healthy.
 
-==Pod readiness gates== close that gap. When enabled for a namespace (label `elbv2.k8s.aws/pod-readiness-gate-inject: enabled`), the controller adds a readiness condition to each pod that becomes true only when the pod's IP is ==healthy in the ALB target group==. The Deployment rollout therefore waits for real load balancer health before proceeding.
+**Pod readiness gates** close that gap. When enabled for a namespace (label `elbv2.k8s.aws/pod-readiness-gate-inject: enabled`), the controller adds a readiness condition to each pod that becomes true only when the pod's IP is **healthy in the ALB target group**. The Deployment rollout therefore waits for real load balancer health before proceeding.
 
 ```mermaid
 sequenceDiagram
@@ -2582,17 +2582,17 @@ When Lambda is an ALB target, health checks are optional and, if enabled, invoke
 
 API Gateway is a managed, multi-AZ service with no customer-visible health checks, and it does not health check its integrations. Three practices apply:
 
-- For ==private integrations== through VPC links to an NLB or ALB, backend health is enforced by the load balancer's target health checks.
+- For **private integrations** through VPC links to an NLB or ALB, backend health is enforced by the load balancer's target health checks.
 - Provide an explicit ==`GET /health` route==. A mock integration returns 200 without touching the backend (a shallow check that proves API Gateway, the custom domain and TLS work); a Lambda or HTTP integration performs a deep check of the Regional stack.
-- For ==multi-Region APIs==, deploy Regional endpoints with the same custom domain in each Region and use Route 53 failover or latency routing with health checks on each Region's `/health` route, or CloudWatch alarm-based health checks on each Region's `5XXError` rate.
+- For **multi-Region APIs**, deploy Regional endpoints with the same custom domain in each Region and use Route 53 failover or latency routing with health checks on each Region's `/health` route, or CloudWatch alarm-based health checks on each Region's `5XXError` rate.
 
 #### AWS Cloud Map and Service Connect
 
-Services registered in AWS Cloud Map can use Route 53 health checks (public namespaces) or ==custom health checks== reported by the application or orchestrator. ECS updates Cloud Map and Service Connect registrations based on task health, so unhealthy tasks are removed from service discovery as well as from load balancers ([Chapter 2.3](../unit2/topic3.md)).
+Services registered in AWS Cloud Map can use Route 53 health checks (public namespaces) or **custom health checks** reported by the application or orchestrator. ECS updates Cloud Map and Service Connect registrations based on task health, so unhealthy tasks are removed from service discovery as well as from load balancers ([Chapter 2.3](../unit2/topic3.md)).
 
 #### Graceful shutdown
 
-Health checks decide when a component ==stops receiving traffic==; graceful shutdown decides whether requests ==already in flight== complete. Every deployment, scale-in event, Spot interruption and node drain terminates healthy components, so graceful shutdown affects far more requests than failures do.
+Health checks decide when a component **stops receiving traffic**; graceful shutdown decides whether requests **already in flight** complete. Every deployment, scale-in event, Spot interruption and node drain terminates healthy components, so graceful shutdown affects far more requests than failures do.
 
 The canonical sequence is the same on every platform. This section gives the cross-platform view.
 
@@ -2620,11 +2620,11 @@ sequenceDiagram
 | ECS capacity providers on EC2 | Managed instance draining | Tasks moved off instances before scale-in or updates |
 
 !!! tip "Ordering the timeouts"
-    For request-serving services the durations must be ordered: ==p99 request duration < deregistration delay < application shutdown time < stopTimeout or terminationGracePeriodSeconds==. [Chapter 2.2](../unit2/topic2.md) noted that the deregistration delay default of 300 seconds is usually too long for APIs and slows every deployment; set it just above the p99 request duration. For queue workers, the grace period must cover finishing or releasing the current message ([Chapter 6.3](../unit6/topic3.md)).
+    For request-serving services the durations must be ordered: **p99 request duration < deregistration delay < application shutdown time < stopTimeout or terminationGracePeriodSeconds**. [Chapter 2.2](../unit2/topic2.md) noted that the deregistration delay default of 300 seconds is usually too long for APIs and slows every deployment; set it just above the p99 request duration. For queue workers, the grace period must cover finishing or releasing the current message ([Chapter 6.3](../unit6/topic3.md)).
 
 ### AWS Service Deep Dive
 
-Health checking is a capability spread across several services rather than one product. This deep dive therefore treats the ==health checking system== of a typical cloud-native application as the subject, and compares the services that provide it.
+Health checking is a capability spread across several services rather than one product. This deep dive therefore treats the **health checking system** of a typical cloud-native application as the subject, and compares the services that provide it.
 
 #### Purpose
 
@@ -2693,12 +2693,12 @@ flowchart TB
 #### Limitations
 
 - ==Health checks only test what they probe.== A 200 from `/health` does not prove that checkout works; canaries complement health checks.
-- ==Fail-open== means a universally failing check provides no protection.
-- ==Route 53 checkers cannot reach private endpoints== and DNS changes are subject to client caching of TTLs.
-- ==EC2 status checks cannot see application failures.==
-- ==Lambda and API Gateway have no customer health checks==; their health comes from metrics and canaries.
-- ==Two health systems on EKS== (probes and ALB checks) can disagree without readiness gates.
-- ==Probe traffic has side effects==: log noise, trace volume, load on shared dependencies if checks are deep.
+- **Fail-open** means a universally failing check provides no protection.
+- **Route 53 checkers cannot reach private endpoints** and DNS changes are subject to client caching of TTLs.
+- **EC2 status checks cannot see application failures.**
+- **Lambda and API Gateway have no customer health checks**; their health comes from metrics and canaries.
+- **Two health systems on EKS** (probes and ALB checks) can disagree without readiness gates.
+- **Probe traffic has side effects**: log noise, trace volume, load on shared dependencies if checks are deep.
 
 #### Pricing Model and recommendations
 
@@ -2723,11 +2723,11 @@ Health check traffic is small per probe but multiplies: an ALB with nodes in thr
 
 #### Scaling Behaviour
 
-Health checks scale with the number of targets automatically. The architectural concern is ==capacity headroom==: when a zone or a portion of targets is removed as unhealthy, the remaining targets must absorb the load. Without headroom (for example at least N+1 or zone-level static stability), removing unhealthy targets overloads the healthy ones, which then fail their checks too, a ==cascading removal==.
+Health checks scale with the number of targets automatically. The architectural concern is **capacity headroom**: when a zone or a portion of targets is removed as unhealthy, the remaining targets must absorb the load. Without headroom (for example at least N+1 or zone-level static stability), removing unhealthy targets overloads the healthy ones, which then fail their checks too, a **cascading removal**.
 
 #### Availability
 
-Health checks raise availability only if the remaining capacity can serve the traffic. Design for ==static stability==: provision enough capacity in each zone that losing one zone does not require scaling before the service can cope. Route 53 health checks and failover routing are the basis of multi-Region active-passive and active-active designs.
+Health checks raise availability only if the remaining capacity can serve the traffic. Design for **static stability**: provision enough capacity in each zone that losing one zone does not require scaling before the service can cope. Route 53 health checks and failover routing are the basis of multi-Region active-passive and active-active designs.
 
 #### Security Features
 
@@ -2837,11 +2837,11 @@ Health check traffic grows with targets and probe sources. Keep checks in memory
 
 #### Availability
 
-Health checks improve availability only with ==spare capacity==. Size fleets so that losing a zone or a fraction of targets keeps utilisation acceptable, and use target group health thresholds so that a mostly failed zone is drained rather than left serving errors. For Regional failover, the secondary Region must have the capacity (or warm standby that scales quickly) to accept all traffic.
+Health checks improve availability only with **spare capacity**. Size fleets so that losing a zone or a fraction of targets keeps utilisation acceptable, and use target group health thresholds so that a mostly failed zone is drained rather than left serving errors. For Regional failover, the secondary Region must have the capacity (or warm standby that scales quickly) to accept all traffic.
 
 #### Reliability
 
-Beware ==correlated failure modes== created by health checks: deep target checks that fail together, liveness checks that restart all replicas together, and tight thresholds that flap under load. Prefer conservative liveness, local readiness, and circuit breakers for dependencies.
+Beware **correlated failure modes** created by health checks: deep target checks that fail together, liveness checks that restart all replicas together, and tight thresholds that flap under load. Prefer conservative liveness, local readiness, and circuit breakers for dependencies.
 
 #### Durability
 
@@ -2865,7 +2865,7 @@ Standardise endpoint paths and semantics across services in the platform's servi
 
 #### Operational Complexity
 
-The complexity lies in the ==interaction== of mechanisms: ALB health, ECS container health, the ECS grace period, deregistration delay, stop timeout, Auto Scaling grace period and DNS TTL all interact. Document the timeline for start-up and shutdown of each service, including every relevant duration.
+The complexity lies in the **interaction** of mechanisms: ALB health, ECS container health, the ECS grace period, deregistration delay, stop timeout, Auto Scaling grace period and DNS TTL all interact. Document the timeline for start-up and shutdown of each service, including every relevant duration.
 
 ```mermaid
 flowchart TD
@@ -2975,7 +2975,7 @@ Blue/green deployments shift traffic only when the replacement target group is h
 
 #### Amazon Application Recovery Controller and zonal shift
 
-For zonal failures that per-target health checks do not detect (gray failures where targets pass checks but perform badly), ALB and NLB support ==zonal shift==, which moves traffic away from an Availability Zone, and ==zonal autoshift==, which AWS triggers when it detects a zonal impairment. These complement health checks rather than replace them.
+For zonal failures that per-target health checks do not detect (gray failures where targets pass checks but perform badly), ALB and NLB support **zonal shift**, which moves traffic away from an Availability Zone, and **zonal autoshift**, which AWS triggers when it detects a zonal impairment. These complement health checks rather than replace them.
 
 #### Summary of integrations
 
@@ -3103,11 +3103,11 @@ Health checks are the control loops that make cloud-native systems self-healing.
 Architectural lessons:
 
 - ==Match the check to the consequence.== The more severe the action, the narrower and more conservative the check.
-- ==Target-level checks must not test shared dependencies;== dependencies are handled by timeouts, circuit breakers and Regional failover.
-- ==Separate live, ready and deep== endpoints, and use each only for its intended consumer.
-- ==Health checks need capacity headroom;== removing targets without spare capacity causes cascading removal.
-- ==Order the timeouts:== p99 request duration, deregistration delay, application drain time, stop timeout.
-- ==Health checks are not monitoring of user experience;== pair them with canaries and alarms.
+- **Target-level checks must not test shared dependencies;** dependencies are handled by timeouts, circuit breakers and Regional failover.
+- **Separate live, ready and deep** endpoints, and use each only for its intended consumer.
+- **Health checks need capacity headroom;** removing targets without spare capacity causes cascading removal.
+- **Order the timeouts:** p99 request duration, deregistration delay, application drain time, stop timeout.
+- **Health checks are not monitoring of user experience;** pair them with canaries and alarms.
 
 ## Section Summary
 
@@ -3116,11 +3116,11 @@ Section 7.1 established the monitoring foundation of Unit VII. Amazon CloudWatch
 The architectural lessons of the section:
 
 - ==Metrics tell you that something is wrong, traces tell you where, logs tell you why, and health checks act automatically.== A production system needs all four, joined by shared service names and trace IDs.
-- ==Measure from the outside in.== Canaries, RUM and edge metrics detect the failures users feel; internal metrics and traces diagnose them.
-- ==Design telemetry for cost and safety:== bounded metric cardinality, deliberate trace sampling, and instrumentation that never threatens the workload.
-- ==Standardise on OpenTelemetry== for instrumentation, recognising that the X-Ray SDKs and daemon reach end of support in February 2027.
-- ==Match every health check to its consequence,== keep shared dependencies out of restart and replacement decisions, and provide the spare capacity that makes removal of unhealthy components safe.
-- ==Monitoring is part of the service definition,== deployed and reviewed as code with the service it observes. [Section 7.2](../unit7/topic2.md) continues with centralised logging, and [Section 7.3](../unit7/topic3.md) turns these signals into dashboards, alarms, automated incident response and performance optimisation.
+- **Measure from the outside in.** Canaries, RUM and edge metrics detect the failures users feel; internal metrics and traces diagnose them.
+- **Design telemetry for cost and safety:** bounded metric cardinality, deliberate trace sampling, and instrumentation that never threatens the workload.
+- **Standardise on OpenTelemetry** for instrumentation, recognising that the X-Ray SDKs and daemon reach end of support in February 2027.
+- **Match every health check to its consequence,** keep shared dependencies out of restart and replacement decisions, and provide the spare capacity that makes removal of unhealthy components safe.
+- **Monitoring is part of the service definition,** deployed and reviewed as code with the service it observes. [Section 7.2](../unit7/topic2.md) continues with centralised logging, and [Section 7.3](../unit7/topic3.md) turns these signals into dashboards, alarms, automated incident response and performance optimisation.
 
 !!! question "Practice and interview questions"
     Questions for this topic are kept separately: [Practice questions](../Questions/unit7.md#71-monitoring-cloud-native-applications) · [Interview questions](../interviewquestions/unit7.md#71-monitoring-cloud-native-applications).

@@ -48,7 +48,7 @@ flowchart TD
 
 ### Definition
 
-In the context of Unit VI, a ==relational database integration== is the set of architectural decisions and platform mechanisms through which application workloads (containers, functions, pipelines and analytics consumers) connect to, authenticate against, evolve, observe and extract change from a managed relational database, without compromising the database's transactional guarantees or availability.
+In the context of Unit VI, a **relational database integration** is the set of architectural decisions and platform mechanisms through which application workloads (containers, functions, pipelines and analytics consumers) connect to, authenticate against, evolve, observe and extract change from a managed relational database, without compromising the database's transactional guarantees or availability.
 
 Amazon RDS and Amazon Aurora supply the engine. The integration layer around them is made up of several distinct AWS capabilities:
 
@@ -120,15 +120,15 @@ Relational databases were designed for a world of a few long-lived application s
 
 AWS responded by building integration capabilities around the engines rather than changing the engines' fundamental single-writer model:
 
-- ==RDS Proxy== exists because connection-oriented protocols do not scale with function-per-request compute.
+- **RDS Proxy** exists because connection-oriented protocols do not scale with function-per-request compute.
 - ==IAM database authentication and RDS-managed Secrets Manager credentials== exist because static passwords are incompatible with least privilege and rotation.
-- ==Blue/Green Deployments and fast clones== exist because database change is the riskiest part of continuous delivery.
-- ==The Data API== exists because some consumers, such as Lambda functions and Amazon Bedrock Knowledge Bases, benefit from an HTTPS request model with no connection or VPC plumbing.
-- ==Zero-ETL integrations== exist because hand-built extract-transform-load pipelines are expensive to maintain and are a common cause of stale analytics.
-- ==Aurora Limitless Database and Aurora DSQL== exist because some workloads outgrow a single writer but still require SQL and transactions.
+- **Blue/Green Deployments and fast clones** exist because database change is the riskiest part of continuous delivery.
+- **The Data API** exists because some consumers, such as Lambda functions and Amazon Bedrock Knowledge Bases, benefit from an HTTPS request model with no connection or VPC plumbing.
+- **Zero-ETL integrations** exist because hand-built extract-transform-load pipelines are expensive to maintain and are a common cause of stale analytics.
+- **Aurora Limitless Database and Aurora DSQL** exist because some workloads outgrow a single writer but still require SQL and transactions.
 
 !!! tip "The architect's framing"
-    The relational engine gives you correctness. The integration layer determines whether that correctness survives contact with elastic compute, continuous delivery and distributed teams. Most relational database incidents in cloud-native systems are not engine failures; they are ==integration failures==: exhausted connections, stale credentials, locking migrations, or clients that do not reconnect after failover.
+    The relational engine gives you correctness. The integration layer determines whether that correctness survives contact with elastic compute, continuous delivery and distributed teams. Most relational database incidents in cloud-native systems are not engine failures; they are **integration failures**: exhausted connections, stale credentials, locking migrations, or clients that do not reconnect after failover.
 
 ---
 
@@ -166,15 +166,15 @@ graph TD
 
 The decision is usually driven by four questions:
 
-1. ==Do the services scale differently?== A write-heavy order service and a read-mostly catalogue service on one writer compete for the same CPU, buffer pool and connection limit.
+1. **Do the services scale differently?** A write-heavy order service and a read-mostly catalogue service on one writer compete for the same CPU, buffer pool and connection limit.
 2. ==Do they have different availability or compliance requirements?== A payment ledger that needs Global Database and customer-managed KMS keys should not force those costs onto a recommendation service.
-3. ==How many teams are involved?== Separate teams benefit from separate maintenance windows, engine versions and parameter groups.
-4. ==What is the cost floor?== Each Aurora cluster carries at least one instance or a Serverless v2 minimum. Twenty services with a Multi-AZ cluster each is a substantial fixed cost.
+3. **How many teams are involved?** Separate teams benefit from separate maintenance windows, engine versions and parameter groups.
+4. **What is the cost floor?** Each Aurora cluster carries at least one instance or a Serverless v2 minimum. Twenty services with a Multi-AZ cluster each is a substantial fixed cost.
 
 !!! example "A pragmatic progression"
-    Many organisations start with a shared Aurora cluster and schema-per-service with strict grants, then ==promote a service to its own cluster when its metrics justify it==: sustained CPU contention, a noisy-neighbour incident, a compliance boundary, or a distinct scaling curve. Because each service already owns a schema and communicates with others only through APIs and events, the promotion is a data migration, not an architectural rewrite.
+    Many organisations start with a shared Aurora cluster and schema-per-service with strict grants, then **promote a service to its own cluster when its metrics justify it**: sustained CPU contention, a noisy-neighbour incident, a compliance boundary, or a distinct scaling curve. Because each service already owns a schema and communicates with others only through APIs and events, the promotion is a data migration, not an architectural rewrite.
 
-When data belonging to one service is needed by another, the options are an API call, an event carrying the required state (event-carried state transfer, [Chapter 1.7](../unit1/topic7.md#event-driven-core-concepts)), or a read-optimised projection maintained through change data capture. ==Direct cross-schema SQL joins between services are the coupling that database-per-service exists to prevent.==
+When data belonging to one service is needed by another, the options are an API call, an event carrying the required state (event-carried state transfer, [Chapter 1.7](../unit1/topic7.md#event-driven-core-concepts)), or a read-optimised projection maintained through change data capture. **Direct cross-schema SQL joins between services are the coupling that database-per-service exists to prevent.**
 
 #### The connection problem, quantified
 
@@ -187,7 +187,7 @@ A relational connection is a stateful, authenticated TCP session. On PostgreSQL 
 | Aurora PostgreSQL and Aurora MySQL | A per-instance-class default published in the Aurora documentation; Serverless v2 derives it from the maximum ACU setting |
 
 !!! info "Serverless v2 and connection limits"
-    For Aurora Serverless v2 the default connection limit is derived from the ==maximum== ACU configured, not the current capacity, so that scaling does not change the limit mid-flight. A cluster configured with a very low maximum ACU therefore also has a low connection limit. Verify the current formula in the Aurora documentation.
+    For Aurora Serverless v2 the default connection limit is derived from the **maximum** ACU configured, not the current capacity, so that scaling does not change the limit mid-flight. A cluster configured with a very low maximum ACU therefore also has a low connection limit. Verify the current formula in the Aurora documentation.
 
 The demand side depends on the compute platform:
 
@@ -205,7 +205,7 @@ The demand side depends on the compute platform:
     - ECS demand at maximum scale: `40 × 20 = 800`
     - EKS demand at maximum scale: `25 × 10 = 250`
     - Reporting: `5`
-    - Total worst case: ==1,055 connections==
+    - Total worst case: **1,055 connections**
 
     The Aurora writer is a `db.r7g.large`. Its default connection limit is roughly one thousand (verify for your instance class). At peak scale-out, which is exactly when the business is busiest, new connections begin to fail. Nothing in either service's configuration is individually wrong; the failure is emergent from the combination.
 
@@ -219,9 +219,9 @@ Little's Law states that the average number of items in a system equals the arri
     - Busy connections per task: `150 × 0.008 = 1.2`
     - Allowing for variance and bursts, a pool of 4 to 5 per task is ample.
 
-    The team had configured 20 per task. At 40 tasks that is 800 connections, of which only about 50 are busy on average. ==Over-sized pools are the most common cause of connection exhaustion==, and they also hurt the database, because hundreds of mostly idle backends consume memory that could have served the buffer cache.
+    The team had configured 20 per task. At 40 tasks that is 800 connections, of which only about 50 are busy on average. **Over-sized pools are the most common cause of connection exhaustion**, and they also hurt the database, because hundreds of mostly idle backends consume memory that could have served the buffer cache.
 
-The database side has its own sizing limit. A widely cited guideline from the HikariCP project is that a database performs best with active connections in the order of `(CPU cores × 2) + effective spindle count`. Beyond that point, additional concurrent queries contend for CPU and locks and throughput falls. The purpose of pooling is therefore twofold: to cap total connections below the engine limit, and to ==queue excess work in the application rather than inside the database==.
+The database side has its own sizing limit. A widely cited guideline from the HikariCP project is that a database performs best with active connections in the order of `(CPU cores × 2) + effective spindle count`. Beyond that point, additional concurrent queries contend for CPU and locks and throughput falls. The purpose of pooling is therefore twofold: to cap total connections below the engine limit, and to **queue excess work in the application rather than inside the database**.
 
 | Pool parameter (HikariCP naming) | Guidance for cloud-native workloads |
 |---|---|
@@ -271,18 +271,18 @@ graph LR
 
 #### Schema evolution as a deployment concern
 
-In a rolling or blue/green application deployment, the old and new versions of a service run simultaneously against one database. Any schema change must therefore be compatible with both versions for the duration of the rollout. This leads to the ==expand-contract== pattern (also called parallel change), examined in the Design Considerations section.
+In a rolling or blue/green application deployment, the old and new versions of a service run simultaneously against one database. Any schema change must therefore be compatible with both versions for the duration of the rollout. This leads to the **expand-contract** pattern (also called parallel change), examined in the Design Considerations section.
 
 #### Change data capture
 
-==Change data capture (CDC)== is the continuous extraction of committed row changes from a database's transaction log, in commit order, for delivery to downstream consumers. Reading the log rather than polling tables means CDC imposes little load, captures deletes, and preserves ordering. On PostgreSQL the log is the write-ahead log, exposed through ==logical replication slots==; on MySQL it is the ==binary log== in row format.
+**Change data capture (CDC)** is the continuous extraction of committed row changes from a database's transaction log, in commit order, for delivery to downstream consumers. Reading the log rather than polling tables means CDC imposes little load, captures deletes, and preserves ordering. On PostgreSQL the log is the write-ahead log, exposed through **logical replication slots**; on MySQL it is the **binary log** in row format.
 
 !!! warning "CDC is not the same as auditing"
-    Database Activity Streams on Aurora deliver a near-real-time, encrypted stream of database activity (who ran which statement) to Kinesis Data Streams for security monitoring and compliance. It is an ==audit feed==, not a change feed; it does not give you reliable before-and-after row images to drive business events. Use DMS, logical replication or zero-ETL for data changes.
+    Database Activity Streams on Aurora deliver a near-real-time, encrypted stream of database activity (who ran which statement) to Kinesis Data Streams for security monitoring and compliance. It is an **audit feed**, not a change feed; it does not give you reliable before-and-after row images to drive business events. Use DMS, logical replication or zero-ETL for data changes.
 
 #### Failover-aware clients
 
-RDS and Aurora failover is announced through DNS. A client that relies on DNS must wait for the record to change and for its own resolver cache to expire. ==Topology-aware clients== avoid this: they query the cluster's instance topology directly, detect the new writer, and reconnect to its instance endpoint within seconds. The AWS Advanced JDBC Wrapper and its sibling wrappers for other languages implement this, and RDS Proxy achieves a similar effect on the server side.
+RDS and Aurora failover is announced through DNS. A client that relies on DNS must wait for the record to change and for its own resolver cache to expire. **Topology-aware clients** avoid this: they query the cluster's instance topology directly, detect the new writer, and reconnect to its instance endpoint within seconds. The AWS Advanced JDBC Wrapper and its sibling wrappers for other languages implement this, and RDS Proxy achieves a similar effect on the server side.
 
 ---
 
@@ -470,11 +470,11 @@ sequenceDiagram
 
 ##### Multiplexing and transaction-level reuse
 
-RDS Proxy reuses a database connection for a different client ==at transaction boundaries==. While a client is inside a transaction, the underlying database connection is dedicated to it. Between transactions, the same database connection may serve another client. This is what allows thousands of client connections to share tens of database connections.
+RDS Proxy reuses a database connection for a different client **at transaction boundaries**. While a client is inside a transaction, the underlying database connection is dedicated to it. Between transactions, the same database connection may serve another client. This is what allows thousands of client connections to share tens of database connections.
 
 ##### Session pinning
 
-Multiplexing is only safe if nothing about the database session is specific to one client. When a client does something that creates ==session state==, the proxy cannot hand the connection to anyone else, and it ==pins== that client to that database connection until the client disconnects. A pinned connection behaves like an unpooled one.
+Multiplexing is only safe if nothing about the database session is specific to one client. When a client does something that creates **session state**, the proxy cannot hand the connection to anyone else, and it **pins** that client to that database connection until the client disconnects. A pinned connection behaves like an unpooled one.
 
 | Common pinning triggers | Engine |
 |---|---|
@@ -488,8 +488,8 @@ Multiplexing is only safe if nothing about the database session is specific to o
 
 Pinning is observable: the CloudWatch metric `DatabaseConnectionsCurrentlySessionPinned` counts pinned connections, and proxy logs (when enhanced logging is briefly enabled) record the reason. Remedies are:
 
-- Move session initialisation into the proxy's ==initialization query== (`InitQuery`), so that every database connection is created with the same settings and clients do not issue `SET` statements.
-- Use the ==session pinning filter== `EXCLUDE_VARIABLE_SETS`, which tells the proxy not to pin on variable assignments. This is safe only if every client sets the same values or does not depend on them.
+- Move session initialisation into the proxy's **initialization query** (`InitQuery`), so that every database connection is created with the same settings and clients do not issue `SET` statements.
+- Use the **session pinning filter** `EXCLUDE_VARIABLE_SETS`, which tells the proxy not to pin on variable assignments. This is safe only if every client sets the same values or does not depend on them.
 - Configure ORMs and drivers to avoid server-side prepared statements where they cause pinning, or confirm that your engine version handles them without pinning.
 - Keep transactions short so that non-pinned connections return to the pool quickly.
 
@@ -510,9 +510,9 @@ Pinning is observable: the CloudWatch metric `DatabaseConnectionsCurrentlySessio
 
 ##### Authentication at the proxy
 
-RDS Proxy separates ==client-to-proxy== authentication from ==proxy-to-database== authentication.
+RDS Proxy separates **client-to-proxy** authentication from **proxy-to-database** authentication.
 
-- Client to proxy: native database password, or IAM authentication. With IAM, the client generates an authentication token signed with its IAM role and presents it as the password; the IAM policy grants `rds-db:connect` on the ==proxy's== resource ID.
+- Client to proxy: native database password, or IAM authentication. With IAM, the client generates an authentication token signed with its IAM role and presents it as the password; the IAM policy grants `rds-db:connect` on the **proxy's** resource ID.
 - Proxy to database: the proxy retrieves the database user's credential from Secrets Manager using its own IAM role. Because the proxy reads the secret on demand, ==Secrets Manager rotation does not require client changes==. AWS has also introduced an option for the proxy to authenticate to the database using IAM itself (sometimes described as end-to-end IAM authentication), which removes the need to store a database secret for that user. Verify availability for your engine and Region before designing around it.
 
 This separation has a significant consequence. IAM database authentication directly against an instance has a limit on the rate of new IAM-authenticated connections that AWS advises should stay modest (verify current guidance). Placing a proxy in front allows high connection-rate clients such as Lambda to use IAM identity while the proxy holds a small number of long-lived database connections.
@@ -568,7 +568,7 @@ sequenceDiagram
 | Authorisation | Remains in the database: IAM only authenticates; `GRANT` statements still control what the user can do |
 
 !!! note "Why IAM authentication suits Kubernetes and Lambda"
-    With EKS Pod Identity or IRSA ([Chapter 3.1](../unit3/topic1.md#eks-security-and-iam-integration)), each Kubernetes service account maps to an IAM role. With IAM database authentication, that role maps to a database user. The result is a chain of identity from pod to SQL grant ==with no secret stored anywhere==, which is exactly the property security teams want in multi-tenant clusters.
+    With EKS Pod Identity or IRSA ([Chapter 3.1](../unit3/topic1.md#eks-security-and-iam-integration)), each Kubernetes service account maps to an IAM role. With IAM database authentication, that role maps to a database user. The result is a chain of identity from pod to SQL grant **with no secret stored anywhere**, which is exactly the property security teams want in multi-tenant clusters.
 
 #### RDS Data API
 
@@ -612,7 +612,7 @@ graph LR
 
 ##### Purpose
 
-A Blue/Green Deployment creates a synchronised copy (green) of a production database (blue), lets you apply changes to green, and then switches production traffic to green, typically in under a minute, with guardrails. It is designed for major version upgrades, parameter changes, instance class changes and ==replication-compatible schema changes==.
+A Blue/Green Deployment creates a synchronised copy (green) of a production database (blue), lets you apply changes to green, and then switches production traffic to green, typically in under a minute, with guardrails. It is designed for major version upgrades, parameter changes, instance class changes and **replication-compatible schema changes**.
 
 ##### Architecture
 
@@ -641,7 +641,7 @@ stateDiagram-v2
 Because green is kept current by replication from blue, a schema change on green must not break replication of blue's writes. Additive changes such as adding a nullable column at the end of a table or adding an index are generally compatible; renaming or dropping columns that blue still writes are not. PostgreSQL logical replication does not replicate DDL, so schema changes made on blue during the deployment are not propagated. Check the engine-specific limitations list before relying on Blue/Green for schema work.
 
 !!! tip "Blue/Green complements expand-contract, it does not replace it"
-    Blue/Green gives a fast, low-risk switchover for ==infrastructure-level== change: an engine upgrade from PostgreSQL 15 to 17, a parameter group change, a move to Graviton. For ==application-level== schema evolution during normal feature delivery, expand-contract migrations executed by the pipeline remain the primary tool. Use both.
+    Blue/Green gives a fast, low-risk switchover for **infrastructure-level** change: an engine upgrade from PostgreSQL 15 to 17, a parameter group change, a move to Graviton. For **application-level** schema evolution during normal feature delivery, expand-contract migrations executed by the pipeline remain the primary tool. Use both.
 
 #### Aurora fast clones for test environments
 
@@ -659,7 +659,7 @@ In a delivery pipeline, clones become an environment factory:
 | Data masking | Clone, run a masking job, then share the masked clone with lower environments |
 
 !!! warning "Clones carry production data"
-    A clone is a full copy of production data, including personal and payment data. Treat clones as production from a security perspective: restrict who can create them, place them in production-grade subnets, and run a ==masking or tokenisation step== before any developer or test tool is given access. Cross-account cloning (via AWS RAM) is useful for isolating test accounts, but the data classification travels with the clone.
+    A clone is a full copy of production data, including personal and payment data. Treat clones as production from a security perspective: restrict who can create them, place them in production-grade subnets, and run a **masking or tokenisation step** before any developer or test tool is given access. Cross-account cloning (via AWS RAM) is useful for isolating test accounts, but the data classification travels with the clone.
 
 Clones are billed for their own compute and for storage pages that diverge from the source. A clone left running for weeks under heavy write load gradually accumulates its own storage. Automate deletion in the pipeline.
 
@@ -669,7 +669,7 @@ Aurora Serverless v2 scales compute in Aurora capacity units (ACUs). Two integra
 
 ##### Scale to zero with automatic pause
 
-Aurora Serverless v2 supports a minimum capacity of ==0 ACUs== on supported engine versions. When an instance has had no user connections for a configured period (`SecondsUntilAutoPause`), it pauses and compute charges stop; storage charges continue. The next connection attempt resumes the instance, which AWS describes as taking in the order of seconds (commonly cited as around 15 seconds; verify for your engine version).
+Aurora Serverless v2 supports a minimum capacity of **0 ACUs** on supported engine versions. When an instance has had no user connections for a configured period (`SecondsUntilAutoPause`), it pauses and compute charges stop; storage charges continue. The next connection attempt resumes the instance, which AWS describes as taking in the order of seconds (commonly cited as around 15 seconds; verify for your engine version).
 
 | Consideration | Implication |
 |---|---|
@@ -690,7 +690,7 @@ The maximum ACU setting bounds both cost and the default connection limit. A ran
 
 ##### Purpose
 
-Aurora Limitless Database is a capability of Aurora PostgreSQL that scales ==writes and storage horizontally== across multiple shards while presenting a single database endpoint and PostgreSQL interface. It targets workloads that have exceeded what the largest single writer instance can deliver.
+Aurora Limitless Database is a capability of Aurora PostgreSQL that scales **writes and storage horizontally** across multiple shards while presenting a single database endpoint and PostgreSQL interface. It targets workloads that have exceeded what the largest single writer instance can deliver.
 
 ##### Architecture
 
@@ -719,13 +719,13 @@ graph TD
 
 ##### Positioning
 
-Limitless keeps the relational model and PostgreSQL compatibility, but ==data modelling becomes shard-aware==: choosing the shard key, collocating related tables and keeping transactions single-shard where possible decide performance, much as partition key choice does in DynamoDB. Some PostgreSQL features have restrictions under Limitless; review the compatibility list. Treat it as an option when a relational workload has outgrown a single writer and cannot reasonably be decomposed, not as a default.
+Limitless keeps the relational model and PostgreSQL compatibility, but **data modelling becomes shard-aware**: choosing the shard key, collocating related tables and keeping transactions single-shard where possible decide performance, much as partition key choice does in DynamoDB. Some PostgreSQL features have restrictions under Limitless; review the compatibility list. Treat it as an option when a relational workload has outgrown a single writer and cannot reasonably be decomposed, not as a default.
 
 #### Amazon Aurora DSQL
 
 ##### Purpose
 
-Aurora DSQL is a serverless, distributed SQL database with PostgreSQL compatibility, designed for ==active-active operation== with strong consistency, both within a Region and across Regions. There are no instances to size and no failover to manage; compute, transaction processing and storage scale independently.
+Aurora DSQL is a serverless, distributed SQL database with PostgreSQL compatibility, designed for **active-active operation** with strong consistency, both within a Region and across Regions. There are no instances to size and no failover to manage; compute, transaction processing and storage scale independently.
 
 ##### Characteristics relevant to architects
 
@@ -733,13 +733,13 @@ Aurora DSQL is a serverless, distributed SQL database with PostgreSQL compatibil
 |---|---|
 | Serverless, no instances | No capacity planning; billing is usage-based (verify current pricing dimensions) |
 | Active-active, multi-Region | Applications can read and write in more than one Region against one logical database; multi-Region clusters use peered Regions with a witness Region (verify current topology) |
-| Optimistic concurrency control | Transactions do not take locks; conflicting transactions fail at commit and must be ==retried by the application== |
+| Optimistic concurrency control | Transactions do not take locks; conflicting transactions fail at commit and must be **retried by the application** |
 | PostgreSQL compatible, not identical | A subset of PostgreSQL features is supported; features such as foreign key constraints and some extensions have been unsupported at launch; check the current compatibility list |
 | Transaction limits | Limits on rows modified, transaction size and duration apply; long-running batch updates must be chunked |
 | IAM-based authentication | Connections authenticate with IAM-generated tokens |
 
 !!! warning "DSQL is not a drop-in replacement for Aurora PostgreSQL"
-    An application written for PostgreSQL with pessimistic locking, long transactions, heavy use of extensions and database-enforced foreign keys may need material changes to run well on DSQL. Conversely, a new service designed for DSQL from the start, with short idempotent transactions and application-level retry, gains multi-Region active-active SQL without the operational burden of Global Database failover. ==Evaluate DSQL as a design target, not as a migration target, and verify feature support at design time, as the service has been evolving rapidly.==
+    An application written for PostgreSQL with pessimistic locking, long transactions, heavy use of extensions and database-enforced foreign keys may need material changes to run well on DSQL. Conversely, a new service designed for DSQL from the start, with short idempotent transactions and application-level retry, gains multi-Region active-active SQL without the operational burden of Global Database failover. **Evaluate DSQL as a design target, not as a migration target, and verify feature support at design time, as the service has been evolving rapidly.**
 
 ##### Choosing among the relational options
 
@@ -792,7 +792,7 @@ graph LR
 ```
 
 !!! danger "Replication slots can fill a disk"
-    A PostgreSQL logical replication slot retains write-ahead log until its consumer confirms it. If a DMS task or Debezium connector stops, WAL accumulates. On RDS for PostgreSQL this consumes allocated storage and can exhaust it; on Aurora it grows the volume and cost. Alarm on the `OldestReplicationSlotLag` and `TransactionLogsDiskUsage` style metrics for your engine, and ==drop slots belonging to decommissioned consumers==.
+    A PostgreSQL logical replication slot retains write-ahead log until its consumer confirms it. If a DMS task or Debezium connector stops, WAL accumulates. On RDS for PostgreSQL this consumes allocated storage and can exhaust it; on Aurora it grows the volume and cost. Alarm on the `OldestReplicationSlotLag` and `TransactionLogsDiskUsage` style metrics for your engine, and **drop slots belonging to decommissioned consumers**.
 
 #### AWS Advanced JDBC Wrapper and sibling wrappers
 
@@ -808,7 +808,7 @@ The AWS Advanced JDBC Wrapper is an open-source wrapper around standard JDBC dri
 | Blue/Green awareness | Newer versions can coordinate with Blue/Green switchovers (verify availability) |
 
 !!! warning "Failover plugins expect correct error handling"
-    After a successful failover the wrapper raises a specific exception to indicate that the connection was replaced and the ==current transaction was lost==. The application must catch it and retry the whole transaction. A wrapper does not make in-flight transactions survive a failover; it only makes reconnection fast.
+    After a successful failover the wrapper raises a specific exception to indicate that the connection was replaced and the **current transaction was lost**. The application must catch it and retry the whole transaction. A wrapper does not make in-flight transactions survive a failover; it only makes reconnection fast.
 
 #### Read/write splitting options
 
@@ -1026,7 +1026,7 @@ Terms such as Multi-AZ, read replica, ACU, PITR, cluster endpoint and RDS Proxy 
 
 #### Scalability
 
-The access layer scales; the writer does not. RDS Proxy, the Data API and client pools manage ==how many clients== can reach the database, but the number of transactions the writer can commit per second is still bounded by one instance. Scaling strategies in order of increasing disruption are: query and index optimisation; caching ([Chapter 6.1 on ElastiCache](../unit6/topic1.md#caching-strategies-with-amazon-elasticache)); read offload to readers; vertical scaling or Serverless v2 range increase; functional decomposition into database-per-service; and finally horizontal write scaling with Aurora Limitless, Aurora DSQL or a move of the hottest access pattern to DynamoDB.
+The access layer scales; the writer does not. RDS Proxy, the Data API and client pools manage **how many clients** can reach the database, but the number of transactions the writer can commit per second is still bounded by one instance. Scaling strategies in order of increasing disruption are: query and index optimisation; caching ([Chapter 6.1 on ElastiCache](../unit6/topic1.md#caching-strategies-with-amazon-elasticache)); read offload to readers; vertical scaling or Serverless v2 range increase; functional decomposition into database-per-service; and finally horizontal write scaling with Aurora Limitless, Aurora DSQL or a move of the hottest access pattern to DynamoDB.
 
 #### Availability and failover handling end to end
 
@@ -1197,7 +1197,7 @@ Each workload has its own IAM role, and that role is granted only what it needs.
 
 #### Secrets Manager rotation integrated with compute
 
-Rotation changes the password in the database and in the secret. The integration question is ==when each workload notices==.
+Rotation changes the password in the database and in the secret. The integration question is **when each workload notices**.
 
 ```mermaid
 sequenceDiagram
@@ -1218,7 +1218,7 @@ sequenceDiagram
 
 | Delivery mechanism | Behaviour on rotation | Mitigation |
 |---|---|---|
-| ECS task definition `secrets` (injected as environment variables) | Value is resolved ==only at task start==; running tasks keep the old value | Use alternating users rotation so the previous credential remains valid; or force a new deployment after rotation (for example via an EventBridge rule on the rotation event); or fetch the secret in code with a caching client |
+| ECS task definition `secrets` (injected as environment variables) | Value is resolved **only at task start**; running tasks keep the old value | Use alternating users rotation so the previous credential remains valid; or force a new deployment after rotation (for example via an EventBridge rule on the rotation event); or fetch the secret in code with a caching client |
 | External Secrets Operator (`ExternalSecret` syncing into a Kubernetes `Secret`) | Kubernetes `Secret` updated after `refreshInterval`; environment variables in running pods do not change; mounted files update after kubelet sync | Mount as files and reload, or use a reloader controller to roll pods on change |
 | Secrets Store CSI Driver with the AWS provider (ASCP) | Mounted file updated if rotation reconciliation is enabled; optional sync to Kubernetes `Secret` | Application re-reads the file on authentication failure |
 | SDK with caching client (for example `aws-secretsmanager-caching`) | Cache refreshes on TTL; application can force refresh on authentication failure | Implement refresh-on-auth-failure |
@@ -1227,7 +1227,7 @@ sequenceDiagram
 | IAM database authentication | No secret to rotate | None needed |
 
 !!! tip "Alternating users is the safe default for cached credentials"
-    With single-user rotation, the old password stops working the moment rotation completes, so any workload still holding it fails on its next new connection. With ==alternating users==, rotation switches `AWSCURRENT` to a second database user while the first user's password remains valid until the next rotation. Workloads holding the previous value continue to work, giving time for tasks to be replaced naturally.
+    With single-user rotation, the old password stops working the moment rotation completes, so any workload still holding it fails on its next new connection. With **alternating users**, rotation switches `AWSCURRENT` to a second database user while the first user's password remains valid until the next rotation. Workloads holding the previous value continue to work, giving time for tasks to be replaced naturally.
 
 #### Encryption and KMS
 
@@ -1272,7 +1272,7 @@ Use customer-managed KMS keys for clusters holding regulated data, for Secrets M
 | Analytics offload | Zero-ETL to Redshift | Reporting queries harming OLTP |
 
 !!! warning "Lambda SnapStart and database connections"
-    With Lambda SnapStart, the initialisation phase runs once and a snapshot of memory is reused for many execution environments. A database connection opened during initialisation is captured in the snapshot and is ==invalid after restore==. Open connections lazily in the handler, or re-establish them in a runtime after-restore hook.
+    With Lambda SnapStart, the initialisation phase runs once and a snapshot of memory is reused for many execution environments. A database connection opened during initialisation is captured in the snapshot and is **invalid after restore**. Open connections lazily in the handler, or re-establish them in a runtime after-restore hook.
 
 ---
 
@@ -1382,7 +1382,7 @@ This design suits internal tools and low-volume APIs: no VPC configuration, no d
 | Fan-out of change events | CDC stream consumed by multiple services via EventBridge rules or Kinesis consumers | Decoupled downstream processing |
 
 !!! example "Bulkhead with two proxies"
-    An Aurora cluster serves an interactive checkout API and a nightly settlement batch. Both previously shared one pool, and the batch exhausted connections at 02:00, failing checkout requests from another time zone. The fix is two ==bulkheads==: a proxy (or pool) for interactive traffic with `MaxConnectionsPercent` of 60, and a separate path for the batch limited to 20 percent, with the batch reading from a reader where possible. Saturation of one no longer starves the other.
+    An Aurora cluster serves an interactive checkout API and a nightly settlement batch. Both previously shared one pool, and the batch exhausted connections at 02:00, failing checkout requests from another time zone. The fix is two **bulkheads**: a proxy (or pool) for interactive traffic with `MaxConnectionsPercent` of 60, and a separate path for the batch limited to 20 percent, with the batch reading from a reader where possible. Saturation of one no longer starves the other.
 
 ---
 
@@ -1403,28 +1403,28 @@ This design suits internal tools and low-volume APIs: no VPC configuration, no d
 
 ### Advantages
 
-- ==Relational guarantees survive elastic compute.== With pooling, proxies and the Data API, thousands of ephemeral workers can use ACID transactions safely.
-- ==Credential-free identity chains.== IAM authentication from task roles and Pod Identity removes long-lived secrets, and Secrets Manager rotation manages the remainder centrally.
-- ==Low-risk change.== Expand-contract migrations, fast clones and Blue/Green Deployments make schema and engine change a routine pipeline activity.
-- ==Faster failover.== RDS Proxy and topology-aware drivers reduce application-observed failover from DNS-bound delays to seconds.
-- ==Analytics without pipelines.== Zero-ETL removes an entire class of hand-built ETL.
-- ==Event-driven integration.== CDC and the outbox pattern turn committed transactions into reliable domain events.
-- ==A growth path.== Limitless Database and DSQL offer horizontal write scale while keeping SQL, reducing the pressure to abandon the relational model.
-- ==Economical non-production.== Scale to zero and clones make realistic per-branch databases affordable.
+- **Relational guarantees survive elastic compute.** With pooling, proxies and the Data API, thousands of ephemeral workers can use ACID transactions safely.
+- **Credential-free identity chains.** IAM authentication from task roles and Pod Identity removes long-lived secrets, and Secrets Manager rotation manages the remainder centrally.
+- **Low-risk change.** Expand-contract migrations, fast clones and Blue/Green Deployments make schema and engine change a routine pipeline activity.
+- **Faster failover.** RDS Proxy and topology-aware drivers reduce application-observed failover from DNS-bound delays to seconds.
+- **Analytics without pipelines.** Zero-ETL removes an entire class of hand-built ETL.
+- **Event-driven integration.** CDC and the outbox pattern turn committed transactions into reliable domain events.
+- **A growth path.** Limitless Database and DSQL offer horizontal write scale while keeping SQL, reducing the pressure to abandon the relational model.
+- **Economical non-production.** Scale to zero and clones make realistic per-branch databases affordable.
 
 ---
 
 ### Limitations
 
-- ==The single writer remains.== None of the access-layer services increases write capacity of standard Aurora or RDS.
+- **The single writer remains.** None of the access-layer services increases write capacity of standard Aurora or RDS.
 - ==Proxies add latency and cost, and can be negated by pinning.==
-- ==IAM authentication has connection-rate considerations== and requires TLS and token generation logic.
-- ==Rotation and injection interact badly== if credentials are injected once at start and single-user rotation is used.
-- ==Blue/Green has replication constraints== on the schema changes it permits.
-- ==Scale to zero introduces resume latency== and is defeated by idle connections.
-- ==Newer services have narrower compatibility.== Limitless and DSQL restrict some PostgreSQL features, and DSQL requires application-level retry for optimistic concurrency conflicts.
-- ==CDC adds operational surface== including replication slots, lag monitoring and schema evolution handling.
-- ==Zero-ETL mirrors OLTP schemas== and does not remove the need for analytical modelling.
+- **IAM authentication has connection-rate considerations** and requires TLS and token generation logic.
+- **Rotation and injection interact badly** if credentials are injected once at start and single-user rotation is used.
+- **Blue/Green has replication constraints** on the schema changes it permits.
+- **Scale to zero introduces resume latency** and is defeated by idle connections.
+- **Newer services have narrower compatibility.** Limitless and DSQL restrict some PostgreSQL features, and DSQL requires application-level retry for optimistic concurrency conflicts.
+- **CDC adds operational surface** including replication slots, lag monitoring and schema evolution handling.
+- **Zero-ETL mirrors OLTP schemas** and does not remove the need for analytical modelling.
 
 ---
 
@@ -1462,18 +1462,18 @@ This design suits internal tools and low-volume APIs: no VPC configuration, no d
 
 ### Summary
 
-Relational databases remain the correct system of record for data that needs transactions, constraints and flexible queries, but in a cloud-native system the engine is only half of the design. The other half is the ==integration layer== that makes the engine safe to use from elastic, ephemeral, continuously deployed workloads.
+Relational databases remain the correct system of record for data that needs transactions, constraints and flexible queries, but in a cloud-native system the engine is only half of the design. The other half is the **integration layer** that makes the engine safe to use from elastic, ephemeral, continuously deployed workloads.
 
 Architectural lessons from this part:
 
-- ==Ownership first.== Choose between schema-per-service and cluster-per-service on measured coupling, scale and compliance needs, and enforce ownership with grants, not conventions.
-- ==Connections are a budget.== Total demand equals replicas multiplied by pool size. Size pools with Little's Law, protect the database with RDS Proxy where clients are elastic, and watch for session pinning.
-- ==Identity replaces secrets where possible.== IAM authentication from task roles and Pod Identity removes stored credentials; where secrets remain, understand how rotation reaches each workload and prefer alternating users when credentials are cached.
+- **Ownership first.** Choose between schema-per-service and cluster-per-service on measured coupling, scale and compliance needs, and enforce ownership with grants, not conventions.
+- **Connections are a budget.** Total demand equals replicas multiplied by pool size. Size pools with Little's Law, protect the database with RDS Proxy where clients are elastic, and watch for session pinning.
+- **Identity replaces secrets where possible.** IAM authentication from task roles and Pod Identity removes stored credentials; where secrets remain, understand how rotation reaches each workload and prefer alternating users when credentials are cached.
 - ==Schema change is a pipeline stage.== Expand-contract keeps two application versions compatible; `lock_timeout` prevents lock-queue outages; fast clones allow rehearsal on real volumes; Blue/Green Deployments handle engine and parameter change.
-- ==Failover is an application concern.== Proxies and topology-aware drivers make reconnection fast; only the application can retry a lost transaction correctly and idempotently.
-- ==Change flows out through logs, not queries.== CDC, the outbox pattern and zero-ETL keep analytics and downstream services current without loading the OLTP engine.
-- ==Know the next step.== Aurora Limitless Database and Aurora DSQL provide horizontal write scale and, for DSQL, active-active multi-Region operation, at the cost of shard-aware or retry-aware design and narrower compatibility.
-- ==Observe the whole path.== Database Insights explains what the database is doing; traces explain why the application asked it to.
+- **Failover is an application concern.** Proxies and topology-aware drivers make reconnection fast; only the application can retry a lost transaction correctly and idempotently.
+- **Change flows out through logs, not queries.** CDC, the outbox pattern and zero-ETL keep analytics and downstream services current without loading the OLTP engine.
+- **Know the next step.** Aurora Limitless Database and Aurora DSQL provide horizontal write scale and, for DSQL, active-active multi-Region operation, at the cost of shard-aware or retry-aware design and narrower compatibility.
+- **Observe the whole path.** Database Insights explains what the database is doing; traces explain why the application asked it to.
 
 ---
 
@@ -1483,7 +1483,7 @@ Architectural lessons from this part:
 
 ### Definition
 
-In this part, ==DynamoDB integration== means using Amazon DynamoDB as the primary operational store of a service in such a way that its key design serves the service's access patterns, its change stream drives event-driven processing, its API is invoked directly by other managed services where no business logic is required, and its security, capacity and cost are governed declaratively.
+In this part, **DynamoDB integration** means using Amazon DynamoDB as the primary operational store of a service in such a way that its key design serves the service's access patterns, its change stream drives event-driven processing, its API is invoked directly by other managed services where no business logic is required, and its security, capacity and cost are governed declaratively.
 
 DynamoDB is well suited to this role because it has ==no connections, no servers and no VPC placement==. Every request is an independently authenticated HTTPS call signed with SigV4. This removes the connection-management problems examined in the Amazon RDS and Aurora part of this section and makes DynamoDB the natural partner of Lambda, Fargate and other elastic compute.
 
@@ -1525,7 +1525,7 @@ graph TD
 
 ### Why This Service or Concept Exists
 
-[Chapter 1.5](../unit1/topic5.md#why-this-service-or-concept-exists) explained why DynamoDB exists as a database. This section explains why ==integration patterns around it== exist.
+[Chapter 1.5](../unit1/topic5.md#why-this-service-or-concept-exists) explained why DynamoDB exists as a database. This section explains why **integration patterns around it** exist.
 
 | Problem in serverless and microservice systems | DynamoDB integration response |
 |---|---|
@@ -1540,7 +1540,7 @@ graph TD
 | Unbounded on-demand cost during runaway traffic | On-demand maximum throughput limits |
 
 !!! tip "The architect's framing"
-    With a relational database, integration effort goes into ==protecting the engine== from its clients: pools, proxies, lock-aware migrations. With DynamoDB, integration effort goes into ==designing keys and events==: the table will absorb almost any request rate, provided the keys spread load and the access patterns were designed in advance.
+    With a relational database, integration effort goes into **protecting the engine** from its clients: pools, proxies, lock-aware migrations. With DynamoDB, integration effort goes into **designing keys and events**: the table will absorb almost any request rate, provided the keys spread load and the access patterns were designed in advance.
 
 ---
 
@@ -1852,7 +1852,7 @@ graph TD
 
 #### Case study: a multi-tenant ride-booking platform
 
-The worked case study for this part is RideLink, a ride-booking platform offered as a white-label service to several ==fleet operators== (the tenants). Each operator has its own riders and drivers in one or more cities. The service is built as microservices on Lambda and ECS, with DynamoDB as the operational store of the Trip service.
+The worked case study for this part is RideLink, a ride-booking platform offered as a white-label service to several **fleet operators** (the tenants). Each operator has its own riders and drivers in one or more cities. The service is built as microservices on Lambda and ECS, with DynamoDB as the operational store of the Trip service.
 
 ##### Entities and relationships
 
@@ -1869,7 +1869,7 @@ erDiagram
     TRIP ||--o{ TRIP_VERSION : "audited by"
 ```
 
-Note the many-to-many relationship between drivers and operators: a driver may work for more than one fleet operator. This is the classic case for the ==adjacency list== pattern.
+Note the many-to-many relationship between drivers and operators: a driver may work for more than one fleet operator. This is the classic case for the **adjacency list** pattern.
 
 ##### Access pattern table
 
@@ -1934,18 +1934,18 @@ The table uses three indexes:
 | AP12 | `Query PK=T#op1#TRIP#t9001 AND begins_with(SK, VER#)` |
 
 !!! note "Where each technique appears"
-    The same table demonstrates five techniques at once. ==GSI overloading==: `GSI1` holds rider trips, driver trips and driver status lists. ==Inverted index==: `INV` swaps `PK` and `SK` to traverse the driver-operator edges in both directions. ==Adjacency list==: membership and driver-trip edges are stored as items connecting two nodes. ==Hierarchical keys==: `LOC#thimphu#z3#TRIP#...` supports prefix queries at city or zone level. ==Sparse index==: `GSI3` contains only trips currently in `REQUESTED` status.
+    The same table demonstrates five techniques at once. **GSI overloading**: `GSI1` holds rider trips, driver trips and driver status lists. **Inverted index**: `INV` swaps `PK` and `SK` to traverse the driver-operator edges in both directions. **Adjacency list**: membership and driver-trip edges are stored as items connecting two nodes. **Hierarchical keys**: `LOC#thimphu#z3#TRIP#...` supports prefix queries at city or zone level. **Sparse index**: `GSI3` contains only trips currently in `REQUESTED` status.
 
 #### GSI overloading
 
-A ==GSI is overloaded== when different entity types write different meanings into the same generic index attributes. Because an item appears in a GSI only if it has the index key attributes, each entity type contributes only the items it needs. Overloading keeps the number of GSIs small, which matters because each GSI adds write cost for every projected write and counts against a per-table quota.
+A **GSI is overloaded** when different entity types write different meanings into the same generic index attributes. Because an item appears in a GSI only if it has the index key attributes, each entity type contributes only the items it needs. Overloading keeps the number of GSIs small, which matters because each GSI adds write cost for every projected write and counts against a per-table quota.
 
 !!! warning "Overloading and hot index partitions"
-    `GSI1PK = T#op1#DRIVERS` places all drivers of an operator in one GSI partition. For an operator with a few thousand drivers updating status every few minutes this is fine. For a very large operator with tens of thousands of status changes per second it would be a hot key. The remedy is ==write sharding on the index key==, for example `T#op1#DRIVERS#<0-9>`, with a scatter-gather read. [Write sharding for unavoidably hot keys](#write-sharding-for-unavoidably-hot-keys) above describes the sharding arithmetic.
+    `GSI1PK = T#op1#DRIVERS` places all drivers of an operator in one GSI partition. For an operator with a few thousand drivers updating status every few minutes this is fine. For a very large operator with tens of thousands of status changes per second it would be a hot key. The remedy is **write sharding on the index key**, for example `T#op1#DRIVERS#<0-9>`, with a scatter-gather read. [Write sharding for unavoidably hot keys](#write-sharding-for-unavoidably-hot-keys) above describes the sharding arithmetic.
 
 #### The adjacency list pattern and inverted indexes
 
-An adjacency list stores a graph as items: node items and edge items. An edge item has the source node as `PK` and the target node as `SK`, and may carry attributes about the relationship (for example the driver's contract start date with that operator). An ==inverted index== (a GSI whose partition key is the table's `SK` and whose sort key is the table's `PK`) lets the same edges be traversed from the other end.
+An adjacency list stores a graph as items: node items and edge items. An edge item has the source node as `PK` and the target node as `SK`, and may carry attributes about the relationship (for example the driver's contract start date with that operator). An **inverted index** (a GSI whose partition key is the table's `SK` and whose sort key is the table's `PK`) lets the same edges be traversed from the other end.
 
 ```mermaid
 graph LR
@@ -1972,7 +1972,7 @@ A hierarchical sort key encodes a path from general to specific, separated by a 
 
 #### Item versioning
 
-Where an audit trail is required, the ==versioning pattern== keeps a "current" item and immutable history items in the same item collection:
+Where an audit trail is required, the **versioning pattern** keeps a "current" item and immutable history items in the same item collection:
 
 - `SK = META` holds the current state and a numeric `version` attribute.
 - Each change writes a new immutable history item `SK = VER#000005` (zero-padded so that lexicographic order equals numeric order) and updates `META`, in one `TransactWriteItems` call, conditioned on the current version.
@@ -1982,7 +1982,7 @@ The current item is always one `GetItem` away; the history is one `Query`. The c
 
 #### Optimistic locking
 
-Two dispatchers try to assign trip `t9001` to different drivers at the same moment. Without concurrency control, the second `UpdateItem` silently overwrites the first. DynamoDB has no row locks to take; instead it offers ==conditional writes==, which are evaluated atomically on the item at write time.
+Two dispatchers try to assign trip `t9001` to different drivers at the same moment. Without concurrency control, the second `UpdateItem` silently overwrites the first. DynamoDB has no row locks to take; instead it offers **conditional writes**, which are evaluated atomically on the item at write time.
 
 ```mermaid
 sequenceDiagram
@@ -2011,9 +2011,9 @@ sequenceDiagram
 
 #### Idempotency
 
-An operation is ==idempotent== if performing it more than once has the same effect as performing it once. Distributed systems retry: clients retry on timeouts, SDKs retry on throttling, Lambda retries asynchronous invocations and stream batches, EventBridge and SQS deliver at least once. Without idempotency, a retried "request ride" creates two trips and charges twice.
+An operation is **idempotent** if performing it more than once has the same effect as performing it once. Distributed systems retry: clients retry on timeouts, SDKs retry on throttling, Lambda retries asynchronous invocations and stream batches, EventBridge and SQS deliver at least once. Without idempotency, a retried "request ride" creates two trips and charges twice.
 
-An ==idempotency table== records each processed request by an idempotency key, the processing status and the stored response:
+An **idempotency table** records each processed request by an idempotency key, the processing status and the stored response:
 
 ```mermaid
 stateDiagram-v2
@@ -2052,7 +2052,7 @@ DynamoDB offers two change streams: DynamoDB Streams and Kinesis Data Streams fo
 | Choose when | One or two consumers, strict per-item ordering, simplicity | Many consumers, long retention, replay, analytics pipelines through Firehose or Flink |
 
 !!! danger "Streams are not a message queue with infinite retention"
-    With DynamoDB Streams, a record not processed within 24 hours is lost. A consumer that fails for a day, for example because of a poison record without bisection or a failure destination, ==permanently loses changes==. Alarm on `IteratorAge` for every stream consumer and configure `MaximumRecordAgeInSeconds` and an on-failure destination deliberately.
+    With DynamoDB Streams, a record not processed within 24 hours is lost. A consumer that fails for a day, for example because of a poison record without bisection or a failure destination, **permanently loses changes**. Alarm on `IteratorAge` for every stream consumer and configure `MaximumRecordAgeInSeconds` and an on-failure destination deliberately.
 
 ---
 
@@ -2098,7 +2098,7 @@ This section opens with DynamoDB's capacity modes and core features, then examin
 
 ##### Purpose and architecture
 
-An ==event source mapping (ESM)== is a Lambda-managed poller that reads a stream on your behalf, batches records and invokes your function synchronously. For DynamoDB Streams, Lambda assigns pollers per stream shard, tracks a checkpoint per shard, and advances it only when a batch succeeds (or is discarded according to your failure settings).
+An **event source mapping (ESM)** is a Lambda-managed poller that reads a stream on your behalf, batches records and invokes your function synchronously. For DynamoDB Streams, Lambda assigns pollers per stream shard, tracks a checkpoint per shard, and advances it only when a batch succeeds (or is discarded according to your failure settings).
 
 ```mermaid
 sequenceDiagram
@@ -2155,11 +2155,11 @@ Filter criteria use EventBridge-style patterns ([Chapter 6.3](../unit6/topic3.md
 }
 ```
 
-Records that do not match are discarded for that mapping and never invoke the function, which reduces invocation cost. Because DynamoDB Streams allow few concurrent readers per shard, ==do not create many filtered mappings on one stream== as a substitute for fan-out; use EventBridge Pipes to an event bus, or Kinesis Data Streams for DynamoDB, when many consumers need different subsets.
+Records that do not match are discarded for that mapping and never invoke the function, which reduces invocation cost. Because DynamoDB Streams allow few concurrent readers per shard, **do not create many filtered mappings on one stream** as a substitute for fan-out; use EventBridge Pipes to an event bus, or Kinesis Data Streams for DynamoDB, when many consumers need different subsets.
 
 #### EventBridge Pipes
 
-EventBridge Pipes ([Chapter 6.3](../unit6/topic3.md#event-routing-with-amazon-eventbridge) covers Pipes) connect a source to a target with optional filtering, enrichment and input transformation, without custom polling code. With a DynamoDB stream as the source, a pipe is the idiomatic way to turn table changes into ==domain events on an event bus==.
+EventBridge Pipes ([Chapter 6.3](../unit6/topic3.md#event-routing-with-amazon-eventbridge) covers Pipes) connect a source to a target with optional filtering, enrichment and input transformation, without custom polling code. With a DynamoDB stream as the source, a pipe is the idiomatic way to turn table changes into **domain events on an event bus**.
 
 ```mermaid
 graph LR
@@ -2183,7 +2183,7 @@ graph LR
 
 #### Amazon API Gateway direct integration
 
-A REST API in API Gateway can call DynamoDB actions directly using an ==AWS service integration==, with Velocity Template Language (VTL) mapping templates that translate the HTTP request into a DynamoDB API request and the response back into JSON.
+A REST API in API Gateway can call DynamoDB actions directly using an **AWS service integration**, with Velocity Template Language (VTL) mapping templates that translate the HTTP request into a DynamoDB API request and the response back into JSON.
 
 | Aspect | Detail |
 |---|---|
@@ -2194,11 +2194,11 @@ A REST API in API Gateway can call DynamoDB actions directly using an ==AWS serv
 | Weaknesses | VTL is harder to test and review than code; complex validation and business logic do not belong there |
 
 !!! tip "When to remove the Lambda"
-    A function whose only job is to validate a request schema and call `PutItem` or `GetItem` can often be replaced by API Gateway request validation plus a direct integration. Keep Lambda where there is real business logic, multiple calls, or complex error handling. Direct integration is an ==optimisation for simple paths==, not a universal pattern.
+    A function whose only job is to validate a request schema and call `PutItem` or `GetItem` can often be replaced by API Gateway request validation plus a direct integration. Keep Lambda where there is real business logic, multiple calls, or complex error handling. Direct integration is an **optimisation for simple paths**, not a universal pattern.
 
 #### AWS AppSync
 
-AWS AppSync is a managed GraphQL (and real-time Pub/Sub) service. A ==DynamoDB data source== lets resolvers read and write tables directly. Resolvers are written in the `APPSYNC_JS` runtime (a restricted JavaScript) or in legacy VTL. The `@aws-appsync/utils/dynamodb` module provides helpers for `get`, `put`, `update`, `query` and conditions.
+AWS AppSync is a managed GraphQL (and real-time Pub/Sub) service. A **DynamoDB data source** lets resolvers read and write tables directly. Resolvers are written in the `APPSYNC_JS` runtime (a restricted JavaScript) or in legacy VTL. The `@aws-appsync/utils/dynamodb` module provides helpers for `get`, `put`, `update`, `query` and conditions.
 
 | Strength | Consideration |
 |---|---|
@@ -2215,11 +2215,11 @@ Step Functions calls DynamoDB in two ways:
 | Optimised integration | `arn:aws:states:::dynamodb:getItem`, `putItem`, `updateItem`, `deleteItem` | Common item operations with simplified error handling |
 | AWS SDK integration | `arn:aws:states:::aws-sdk:dynamodb:query`, `transactWriteItems` and others | Almost any DynamoDB API action |
 
-This enables the ==saga orchestration== pattern ([Chapter 4.3](../unit4/topic3.md)) without Lambda glue: a state machine updates a trip's status with a condition expression, catches `DynamoDB.ConditionalCheckFailedException` to take a compensating path, and uses a `Map` state over query results for batch work. Step Functions Distributed Map can also process large S3 exports of a table in parallel.
+This enables the **saga orchestration** pattern ([Chapter 4.3](../unit4/topic3.md)) without Lambda glue: a state machine updates a trip's status with a condition expression, catches `DynamoDB.ConditionalCheckFailedException` to take a compensating path, and uses a `Map` state over query results for batch work. Step Functions Distributed Map can also process large S3 exports of a table in parallel.
 
 #### Zero-ETL integration with Amazon OpenSearch Service
 
-DynamoDB is not a search engine. Full-text search, fuzzy matching, geospatial queries over many items and ad hoc aggregations belong in OpenSearch. The ==DynamoDB zero-ETL integration with OpenSearch Service== is implemented with an Amazon OpenSearch Ingestion pipeline whose source is the table: it performs an initial load from a point-in-time export and then applies changes continuously from DynamoDB Streams.
+DynamoDB is not a search engine. Full-text search, fuzzy matching, geospatial queries over many items and ad hoc aggregations belong in OpenSearch. The **DynamoDB zero-ETL integration with OpenSearch Service** is implemented with an Amazon OpenSearch Ingestion pipeline whose source is the table: it performs an initial load from a point-in-time export and then applies changes continuously from DynamoDB Streams.
 
 | Requirement | Reason |
 |---|---|
@@ -2241,7 +2241,7 @@ The DynamoDB zero-ETL integration with Amazon Redshift replicates table data int
 |---|---|---|
 | Full export | Exports the table as of any point within the PITR window to S3, in DynamoDB JSON or Amazon Ion; does not consume table read capacity | Data lake snapshots, Athena queries, ML training, audit |
 | Incremental export | Exports only items changed between two points in time (window between 15 minutes and 24 hours per export, verify), with old and/or new images | Keeping a data lake current with hourly or daily increments |
-| Import from S3 | Creates a ==new== table from CSV, DynamoDB JSON or Ion files in S3 (optionally compressed); does not consume write capacity and is billed on uncompressed source size | Bulk loading, migrations, seeding test environments, restoring into a different account |
+| Import from S3 | Creates a **new** table from CSV, DynamoDB JSON or Ion files in S3 (optionally compressed); does not consume write capacity and is billed on uncompressed source size | Bulk loading, migrations, seeding test environments, restoring into a different account |
 
 ```mermaid
 graph LR
@@ -2259,7 +2259,7 @@ graph LR
 
 #### Global Tables: eventual and strong multi-Region consistency
 
-Global Tables were introduced under [Core features at a glance](#core-features-at-a-glance) with their default ==last-writer-wins== conflict resolution. Global Tables now offer two consistency modes:
+Global Tables were introduced under [Core features at a glance](#core-features-at-a-glance) with their default **last-writer-wins** conflict resolution. Global Tables now offer two consistency modes:
 
 | Property | Multi-Region eventual consistency (MREC, default) | Multi-Region strong consistency (MRSC) |
 |---|---|---|
@@ -2272,11 +2272,11 @@ Global Tables were introduced under [Core features at a glance](#core-features-a
 | Recovery point on Regional failure | Near zero but not zero: unreplicated writes may be lost | Zero for acknowledged writes |
 
 !!! danger "Choose the mode per table, from business requirements"
-    For rider profiles and trip history, MREC is appropriate: each rider writes in their home Region and last-writer-wins is acceptable. For a ==wallet balance or a seat inventory== shared across Regions, MREC can silently discard a concurrent update, which is a correctness failure. Either route those writes to a single Region, or use MRSC and design for higher write latency and conflict retries. As with Aurora DSQL in the Amazon RDS and Aurora part of this section, MRSC is recent; verify the current constraints at design time.
+    For rider profiles and trip history, MREC is appropriate: each rider writes in their home Region and last-writer-wins is acceptable. For a **wallet balance or a seat inventory** shared across Regions, MREC can silently discard a concurrent update, which is a correctness failure. Either route those writes to a single Region, or use MRSC and design for higher write latency and conflict retries. As with Aurora DSQL in the Amazon RDS and Aurora part of this section, MRSC is recent; verify the current constraints at design time.
 
 #### Resource-based policies
 
-DynamoDB supports ==resource-based policies== attached to tables, indexes and streams. They are evaluated together with identity-based policies.
+DynamoDB supports **resource-based policies** attached to tables, indexes and streams. They are evaluated together with identity-based policies.
 
 | Use | Example |
 |---|---|
@@ -2285,15 +2285,15 @@ DynamoDB supports ==resource-based policies== attached to tables, indexes and st
 | Guardrails | Explicit `Deny` for `DeleteTable` except from a break-glass role, or deny access not arriving through a specific VPC endpoint (`aws:SourceVpce`) |
 | Stream sharing | A consumer account's Lambda reading the table's stream |
 
-DynamoDB evaluates resource-based policies with IAM Access Analyzer-based checks and ==blocks policies that would grant public access==. Resource-based policies can be declared in CloudFormation (`ResourcePolicy` on `AWS::DynamoDB::Table`) and Terraform.
+DynamoDB evaluates resource-based policies with IAM Access Analyzer-based checks and **blocks policies that would grant public access**. Resource-based policies can be declared in CloudFormation (`ResourcePolicy` on `AWS::DynamoDB::Table`) and Terraform.
 
 #### Warm throughput and pre-warming
 
-Every table and GSI has a ==warm throughput== value: the number of reads and writes per second it can serve instantly, based on its current partitions. `DescribeTable` reports it. For a new on-demand table, the default warm throughput is modest (in the order of thousands of write units and roughly three times that in read units per second; verify), and it grows as the table experiences higher traffic.
+Every table and GSI has a **warm throughput** value: the number of reads and writes per second it can serve instantly, based on its current partitions. `DescribeTable` reports it. For a new on-demand table, the default warm throughput is modest (in the order of thousands of write units and roughly three times that in read units per second; verify), and it grows as the table experiences higher traffic.
 
 | Scenario | Action |
 |---|---|
-| A new table will receive a large, sudden launch spike (ticket sale, marketing push, migration cut-over) | ==Pre-warm== by setting higher warm throughput values on the table and GSIs in advance; a one-time charge applies |
+| A new table will receive a large, sudden launch spike (ticket sale, marketing push, migration cut-over) | **Pre-warm** by setting higher warm throughput values on the table and GSIs in advance; a one-time charge applies |
 | A table's previous peak was far below the expected event | Pre-warm rather than relying on on-demand's ability to accommodate up to double the previous peak instantly |
 | A migration writes into a new table at high rate | Pre-warm the table and every GSI, because a throttled GSI can back-pressure the base table (see [Secondary indexes](#secondary-indexes-lsi-versus-gsi)) |
 
@@ -2301,7 +2301,7 @@ Pre-warming does not change the billing mode and is available for both on-demand
 
 #### On-demand maximum throughput
 
-On-demand tables and GSIs can be configured with a ==maximum read and write request unit rate== (`OnDemandThroughput` with `MaxReadRequestUnits` and `MaxWriteRequestUnits`). Requests above the limit are throttled.
+On-demand tables and GSIs can be configured with a **maximum read and write request unit rate** (`OnDemandThroughput` with `MaxReadRequestUnits` and `MaxWriteRequestUnits`). Requests above the limit are throttled.
 
 | Why set a maximum | Example |
 |---|---|
@@ -2318,7 +2318,7 @@ Set the maximum well above normal peaks and alarm on throttling; a limit that is
 | Gateway VPC endpoint | Route-table entry, no hourly charge, only from within the VPC | Default for ECS, EKS and VPC-attached Lambda |
 | Interface VPC endpoint (AWS PrivateLink) | ENIs with private IPs, hourly and data processing charges, reachable from on-premises through Direct Connect or VPN and from peered networks | Hybrid access; centralised endpoint VPCs |
 
-Both support ==endpoint policies== that restrict which tables and actions may be used through the endpoint, and table resource policies can require `aws:SourceVpce` so that data is reachable only from approved networks.
+Both support **endpoint policies** that restrict which tables and actions may be used through the endpoint, and table resource policies can require `aws:SourceVpce` so that data is reachable only from approved networks.
 
 #### Testing with DynamoDB Local
 
@@ -2560,7 +2560,7 @@ DynamoDB's scaling ceiling is set by key distribution, not by the service. In Ri
 | Cross-Region | MREC eventual; MRSC strong at higher write latency |
 
 !!! tip "Correctness in the write, not in the read"
-    The dispatch queue may show a driver a request that another driver accepted a few milliseconds ago. That is acceptable because acceptance is a ==conditional write== on the base table, which fails for the second driver. Eventually consistent reads for discovery combined with conditional writes for commitment is a recurring DynamoDB design idiom.
+    The dispatch queue may show a driver a request that another driver accepted a few milliseconds ago. That is acceptable because acceptance is a **conditional write** on the base table, which fails for the second driver. Eventually consistent reads for discovery combined with conditional writes for commitment is a recurring DynamoDB design idiom.
 
 #### Latency
 
@@ -2728,7 +2728,7 @@ DynamoDB has no passwords: every workload authenticates with temporary IAM crede
 | Compute | Mechanism | Common mistake |
 |---|---|---|
 | Lambda | Execution role credentials injected by the runtime | One shared role for all functions |
-| ECS | ==Task role== credentials from the ECS credentials endpoint | Granting DynamoDB permissions to the task execution role, which is for pulling images and fetching secrets |
+| ECS | **Task role** credentials from the ECS credentials endpoint | Granting DynamoDB permissions to the task execution role, which is for pulling images and fetching secrets |
 | EKS | EKS Pod Identity association or IRSA for the pod's service account | Using the node instance role, which grants every pod on the node the same access |
 | API Gateway, AppSync, Step Functions, Pipes | Service role assumed by the service | Wildcard table permissions |
 
@@ -2929,32 +2929,32 @@ graph LR
 
 ### Advantages
 
-- ==Connectionless, serverless integration.== No pools, proxies or VPC placement; ideal for Lambda and elastic containers.
-- ==Direct integrations reduce code.== API Gateway, AppSync, Step Functions and Pipes can read and write without glue functions.
-- ==Built-in change capture.== Streams provide ordered per-item change events without dual writes.
-- ==Concurrency without locks.== Conditional writes give atomic, lock-free optimistic concurrency and idempotent creation.
-- ==Managed analytics and search paths.== Zero-ETL and exports remove custom pipelines.
-- ==Global reach.== Global Tables with a choice of eventual or strong multi-Region consistency.
-- ==Fine-grained, identity-based security.== Row-level tenant isolation in IAM and cross-account sharing through resource policies.
-- ==Predictable operations.== Warm throughput, pre-warming and maximum throughput make capacity behaviour explicit.
+- **Connectionless, serverless integration.** No pools, proxies or VPC placement; ideal for Lambda and elastic containers.
+- **Direct integrations reduce code.** API Gateway, AppSync, Step Functions and Pipes can read and write without glue functions.
+- **Built-in change capture.** Streams provide ordered per-item change events without dual writes.
+- **Concurrency without locks.** Conditional writes give atomic, lock-free optimistic concurrency and idempotent creation.
+- **Managed analytics and search paths.** Zero-ETL and exports remove custom pipelines.
+- **Global reach.** Global Tables with a choice of eventual or strong multi-Region consistency.
+- **Fine-grained, identity-based security.** Row-level tenant isolation in IAM and cross-account sharing through resource policies.
+- **Predictable operations.** Warm throughput, pre-warming and maximum throughput make capacity behaviour explicit.
 
 ---
 
 ### Limitations
 
-- ==Query flexibility is deliberately constrained.== There are no joins, no native aggregations, no ordering except by the sort key, and every query needs the full partition key or an index; anything else is a `Scan`.
-- ==The 400 KB item limit== forces large payloads into S3 with a pointer in the item.
+- **Query flexibility is deliberately constrained.** There are no joins, no native aggregations, no ordering except by the sort key, and every query needs the full partition key or an index; anything else is a `Scan`.
+- **The 400 KB item limit** forces large payloads into S3 with a pointer in the item.
 - ==LSIs can only be created with the table==, so a late-discovered access pattern cannot use one.
-- ==A poorly chosen partition key== produces hot partitions and throttling that no amount of capacity fixes.
-- ==Transactions are Region- and account-scoped==, and the API is proprietary, which limits portability.
-- ==Up-front modelling.== New access patterns may require new GSIs, backfills or key migrations.
-- ==GSIs are eventually consistent== and add write cost for each projected change.
-- ==Stream constraints.== DynamoDB Streams retain 24 hours and support few concurrent readers per shard; Kinesis Data Streams for DynamoDB removes these limits but introduces duplicates and reordering.
-- ==Direct integrations trade code for configuration.== VTL and resolver code can be harder to test and review.
-- ==Transactions and versioning double write cost== and have size limits.
-- ==MRSC constraints.== Higher write latency, fixed Region topology and feature restrictions.
-- ==Local testing gaps.== DynamoDB Local does not reproduce throttling, IAM, Global Tables or exports.
-- ==Search and analytics require other services==, adding cost and eventual consistency.
+- **A poorly chosen partition key** produces hot partitions and throttling that no amount of capacity fixes.
+- **Transactions are Region- and account-scoped**, and the API is proprietary, which limits portability.
+- **Up-front modelling.** New access patterns may require new GSIs, backfills or key migrations.
+- **GSIs are eventually consistent** and add write cost for each projected change.
+- **Stream constraints.** DynamoDB Streams retain 24 hours and support few concurrent readers per shard; Kinesis Data Streams for DynamoDB removes these limits but introduces duplicates and reordering.
+- **Direct integrations trade code for configuration.** VTL and resolver code can be harder to test and review.
+- **Transactions and versioning double write cost** and have size limits.
+- **MRSC constraints.** Higher write latency, fixed Region topology and feature restrictions.
+- **Local testing gaps.** DynamoDB Local does not reproduce throttling, IAM, Global Tables or exports.
+- **Search and analytics require other services**, adding cost and eventual consistency.
 
 ---
 
@@ -2995,14 +2995,14 @@ DynamoDB becomes the data backbone of serverless and microservice systems not me
 
 Architectural lessons from this part:
 
-- ==Model from access patterns with a repeatable workflow.== Entity diagram, access pattern table, key design, index design, validation, cost check. The RideLink design shows that a single table with three indexes can serve twelve patterns through overloading, inverted indexes, adjacency lists, hierarchical keys and sparse indexes.
-- ==Put correctness in conditional writes.== Optimistic locking, state-machine guards and create-once conditions give lock-free concurrency; eventually consistent discovery plus conditional commitment is a recurring idiom.
-- ==Assume every operation will be retried.== Idempotency tables, such as those implemented by Powertools for AWS Lambda, and idempotent stream consumers are mandatory in at-least-once systems.
-- ==Treat streams as critical infrastructure.== Choose DynamoDB Streams or Kinesis Data Streams for DynamoDB deliberately, bound retries, bisect, report partial failures, filter, send failures to a destination and alarm on iterator age.
-- ==Remove glue where it adds nothing.== API Gateway, AppSync, Step Functions and EventBridge Pipes can call DynamoDB directly for simple paths.
-- ==Use managed paths for search and analytics.== Zero-ETL to OpenSearch and Redshift and incremental exports to S3 replace hand-built pipelines.
-- ==Choose multi-Region consistency per data category.== Last-writer-wins suits user-partitioned data; shared balances need single-Region writes or strong multi-Region consistency.
-- ==Govern capacity and access explicitly.== Warm throughput and pre-warming for launches, on-demand maxima for cost safety, tenant-prefixed keys with `LeadingKeys`, resource-based policies and VPC endpoints for security.
+- **Model from access patterns with a repeatable workflow.** Entity diagram, access pattern table, key design, index design, validation, cost check. The RideLink design shows that a single table with three indexes can serve twelve patterns through overloading, inverted indexes, adjacency lists, hierarchical keys and sparse indexes.
+- **Put correctness in conditional writes.** Optimistic locking, state-machine guards and create-once conditions give lock-free concurrency; eventually consistent discovery plus conditional commitment is a recurring idiom.
+- **Assume every operation will be retried.** Idempotency tables, such as those implemented by Powertools for AWS Lambda, and idempotent stream consumers are mandatory in at-least-once systems.
+- **Treat streams as critical infrastructure.** Choose DynamoDB Streams or Kinesis Data Streams for DynamoDB deliberately, bound retries, bisect, report partial failures, filter, send failures to a destination and alarm on iterator age.
+- **Remove glue where it adds nothing.** API Gateway, AppSync, Step Functions and EventBridge Pipes can call DynamoDB directly for simple paths.
+- **Use managed paths for search and analytics.** Zero-ETL to OpenSearch and Redshift and incremental exports to S3 replace hand-built pipelines.
+- **Choose multi-Region consistency per data category.** Last-writer-wins suits user-partitioned data; shared balances need single-Region writes or strong multi-Region consistency.
+- **Govern capacity and access explicitly.** Warm throughput and pre-warming for launches, on-demand maxima for cost safety, tenant-prefixed keys with `LeadingKeys`, resource-based policies and VPC endpoints for security.
 
 ---
 
@@ -3010,16 +3010,16 @@ Architectural lessons from this part:
 
 ### Definition
 
-A ==graph database== is a database whose primary storage and query model is a graph: a set of vertices (also called nodes) connected by edges (also called relationships), where both vertices and edges may carry properties. Queries are expressed as ==traversals== that start at one or more vertices and walk along edges, rather than as joins between tables.
+A **graph database** is a database whose primary storage and query model is a graph: a set of vertices (also called nodes) connected by edges (also called relationships), where both vertices and edges may carry properties. Queries are expressed as **traversals** that start at one or more vertices and walk along edges, rather than as joins between tables.
 
-==Amazon Neptune== is AWS's fully managed graph database service. As of 2026 the Neptune family has two principal engines:
+**Amazon Neptune** is AWS's fully managed graph database service. As of 2026 the Neptune family has two principal engines:
 
 | Engine | Nature | Typical use |
 |--------|--------|-------------|
 | Neptune Database | Durable, transactional (OLTP) graph database cluster with a writer and up to 15 read replicas over a shared, multi-AZ storage volume. Available as provisioned instances or as Neptune Serverless. | System of record for connected data, low-latency online traversals from applications |
 | Neptune Analytics | Memory-optimised graph analytics engine that loads a graph into memory for fast whole-graph algorithms and vector similarity search | Graph algorithms, investigations, GraphRAG, ad-hoc analysis over large graphs |
 
-Around these engines sit supporting capabilities: ==Neptune ML== (graph neural networks trained with Amazon SageMaker), the ==bulk loader== (parallel ingestion from Amazon S3), ==Neptune Streams== (a change log of graph mutations), ==Neptune Global Database== (cross-Region replication), and Jupyter-based ==graph notebooks== for exploration.
+Around these engines sit supporting capabilities: **Neptune ML** (graph neural networks trained with Amazon SageMaker), the **bulk loader** (parallel ingestion from Amazon S3), **Neptune Streams** (a change log of graph mutations), **Neptune Global Database** (cross-Region replication), and Jupyter-based **graph notebooks** for exploration.
 
 Within an AWS architecture, Neptune sits in the data tier of a VPC, beside Aurora and DynamoDB. It is consumed by compute services (Lambda, ECS tasks, EKS pods) through HTTPS or WebSocket endpoints on port 8182, secured with security groups and, in production, with IAM database authentication.
 
@@ -3053,7 +3053,7 @@ flowchart LR
 
 #### The problem: connected data is everywhere
 
-Many real business questions are questions about ==relationships== rather than about individual records:
+Many real business questions are questions about **relationships** rather than about individual records:
 
 - Which accounts share a device, phone number or postal address with an account already confirmed as fraudulent, up to four hops away?
 - Which products were bought by customers who bought the same products as this customer?
@@ -3080,7 +3080,7 @@ WITH RECURSIVE reach(person_id, depth) AS (
 SELECT DISTINCT person_id FROM reach;
 ```
 
-The difficulty is not that SQL cannot express the question; it can. The difficulty is ==cost growth==:
+The difficulty is not that SQL cannot express the question; it can. The difficulty is **cost growth**:
 
 | Factor | Effect in a relational engine |
 |--------|-------------------------------|
@@ -3094,10 +3094,10 @@ A graph engine is designed so that the cost of a traversal is proportional to ==
 
 #### Index-free adjacency, conceptually
 
-The textbook term ==index-free adjacency== describes a storage design in which each vertex holds direct references to its adjacent edges, so moving from a vertex to its neighbours does not require a global index lookup. Native graph databases such as Neo4j popularised this description.
+The textbook term **index-free adjacency** describes a storage design in which each vertex holds direct references to its adjacent edges, so moving from a vertex to its neighbours does not require a global index lookup. Native graph databases such as Neo4j popularised this description.
 
 !!! note "How Neptune fits the concept"
-    AWS does not describe Neptune as using pointer-based index-free adjacency. Neptune stores graph data as quads or edge records in a distributed, log-structured storage volume and maintains several ==indexes over those records== (for example, subject-predicate-object orderings) so that neighbour lookups are efficient in any direction. The architectural outcome the student should remember is the same: a neighbour expansion in Neptune is a cheap, localised index range scan over the adjacency of one vertex, not a join between two large tables. Whether that is achieved with physical pointers or with carefully ordered indexes is an implementation detail; what matters to the architect is that ==traversal cost follows the neighbourhood, not the table size==.
+    AWS does not describe Neptune as using pointer-based index-free adjacency. Neptune stores graph data as quads or edge records in a distributed, log-structured storage volume and maintains several **indexes over those records** (for example, subject-predicate-object orderings) so that neighbour lookups are efficient in any direction. The architectural outcome the student should remember is the same: a neighbour expansion in Neptune is a cheap, localised index range scan over the adjacency of one vertex, not a join between two large tables. Whether that is achieved with physical pointers or with carefully ordered indexes is an implementation detail; what matters to the architect is that **traversal cost follows the neighbourhood, not the table size**.
 
 #### Why AWS introduced Neptune
 
@@ -3152,11 +3152,11 @@ flowchart TB
 | Typical users | Fraud, recommendations, identity, IT topology | Life sciences, publishing, government, master data and knowledge graphs |
 
 !!! tip "Architect's rule of thumb"
-    Choose a ==property graph== when a development team is building an application that traverses its own data. Choose ==RDF== when the dominant problem is integrating data from many sources using shared vocabularies and globally unique identifiers, or when standards compliance (W3C) is a stated requirement. In Neptune the two models are stored and queried separately: data loaded as RDF is queried with SPARQL, and property graph data is queried with Gremlin or openCypher.
+    Choose a **property graph** when a development team is building an application that traverses its own data. Choose **RDF** when the dominant problem is integrating data from many sources using shared vocabularies and globally unique identifiers, or when standards compliance (W3C) is a stated requirement. In Neptune the two models are stored and queried separately: data loaded as RDF is queried with SPARQL, and property graph data is queried with Gremlin or openCypher.
 
 #### Directed edges and direction semantics
 
-Every edge in a property graph has a direction (`out` from the source, `in` to the target), but traversals may follow edges in either direction. Direction should carry ==meaning== (`(Person)-[:FOLLOWS]->(Person)` is not symmetric) and should not be duplicated merely to make reverse traversal possible, because Neptune can traverse incoming edges efficiently.
+Every edge in a property graph has a direction (`out` from the source, `in` to the target), but traversals may follow edges in either direction. Direction should carry **meaning** (`(Person)-[:FOLLOWS]->(Person)` is not symmetric) and should not be duplicated merely to make reverse traversal possible, because Neptune can traverse incoming edges efficiently.
 
 #### Query languages at a glance
 
@@ -3246,13 +3246,13 @@ A variable-length traversal, "accounts reachable from account A1 through shared 
     `ex:usedDevice/^ex:usedDevice` means "follow `usedDevice` forward to a device, then backward to another account". The `+` operator repeats this one or more times. SPARQL property paths do not bound the depth; in production, bounded Gremlin or openCypher traversals, or explicit unrolled patterns, give more predictable latency.
 
 !!! tip "Which language should a team use?"
-    For new property graph applications, ==openCypher== is usually the easiest to learn for developers who know SQL, and it is also supported by Neptune Analytics. ==Gremlin== offers fine-grained control over traversal order and is well supported by TinkerPop drivers in Java, Python, JavaScript, .NET and Go. Both can be used against the same property graph data in Neptune Database. Choose ==SPARQL== when the data is RDF.
+    For new property graph applications, **openCypher** is usually the easiest to learn for developers who know SQL, and it is also supported by Neptune Analytics. **Gremlin** offers fine-grained control over traversal order and is well supported by TinkerPop drivers in Java, Python, JavaScript, .NET and Go. Both can be used against the same property graph data in Neptune Database. Choose **SPARQL** when the data is RDF.
 
 #### Transactions and consistency
 
 Neptune Database provides ACID transactions. Each Gremlin or openCypher request is executed as a transaction; Gremlin also supports sessions and, with recent TinkerPop versions, explicit transactions spanning several requests. The writer instance commits changes to the shared storage volume; read replicas read from the same volume and typically observe writes after a short replica lag (commonly tens of milliseconds, indicative). Read replicas therefore offer ==eventual consistency relative to the writer== for reads, which the application must tolerate or route read-after-write queries to the writer.
 
-Neptune uses a form of multi-version concurrency control so that readers do not block writers. Concurrent writers modifying the same vertices can encounter ==ConcurrentModificationException== conflicts, which the application must retry with backoff. This is a key production concern discussed in Common Mistakes.
+Neptune uses a form of multi-version concurrency control so that readers do not block writers. Concurrent writers modifying the same vertices can encounter **ConcurrentModificationException** conflicts, which the application must retry with backoff. This is a key production concern discussed in Common Mistakes.
 
 ### AWS Service Deep Dive
 
@@ -3264,11 +3264,11 @@ Neptune exists to store and query highly connected data with managed durability,
 
 ##### Neptune Database cluster
 
-A ==Neptune DB cluster== consists of:
+A **Neptune DB cluster** consists of:
 
-- One ==primary (writer) instance== that handles reads and all writes.
-- Zero to ==15 read replicas== that serve read queries and act as failover targets.
-- A single ==cluster volume==, a distributed, SSD-backed storage layer that spans three Availability Zones and keeps six copies of the data, in a design closely related to Aurora's quorum storage.
+- One **primary (writer) instance** that handles reads and all writes.
+- Zero to **15 read replicas** that serve read queries and act as failover targets.
+- A single **cluster volume**, a distributed, SSD-backed storage layer that spans three Availability Zones and keeps six copies of the data, in a design closely related to Aurora's quorum storage.
 
 ```mermaid
 flowchart TB
@@ -3324,7 +3324,7 @@ Consequences of the shared volume:
 
 ##### Neptune Serverless
 
-==Neptune Serverless== is a capacity option for Neptune Database in which instances scale automatically in units called ==Neptune Capacity Units (NCUs)==. Each NCU represents roughly 2 GiB of memory with associated CPU and networking (indicative). The cluster administrator sets a minimum and maximum NCU range (indicatively from 1 to 128 NCUs; verify current values). Serverless and provisioned instances can be mixed in the same cluster, for example a provisioned writer with serverless readers that absorb spikes.
+**Neptune Serverless** is a capacity option for Neptune Database in which instances scale automatically in units called **Neptune Capacity Units (NCUs)**. Each NCU represents roughly 2 GiB of memory with associated CPU and networking (indicative). The cluster administrator sets a minimum and maximum NCU range (indicatively from 1 to 128 NCUs; verify current values). Serverless and provisioned instances can be mixed in the same cluster, for example a provisioned writer with serverless readers that absorb spikes.
 
 | Choose Serverless when | Choose provisioned when |
 |------------------------|--------------------------|
@@ -3337,7 +3337,7 @@ Consequences of the shared volume:
 
 ##### Neptune Analytics
 
-==Neptune Analytics== is a separate, memory-optimised engine. A user creates a ==graph== (not a cluster); the entire graph is held in memory across the engine, sized in ==memory-optimised Neptune Capacity Units (m-NCUs)==. Data can be loaded from S3 (CSV or Parquet in supported formats, or RDF N-Triples) or imported from a Neptune Database cluster or snapshot.
+**Neptune Analytics** is a separate, memory-optimised engine. A user creates a **graph** (not a cluster); the entire graph is held in memory across the engine, sized in **memory-optimised Neptune Capacity Units (m-NCUs)**. Data can be loaded from S3 (CSV or Parquet in supported formats, or RDF N-Triples) or imported from a Neptune Database cluster or snapshot.
 
 | Capability | Description |
 |------------|-------------|
@@ -3376,9 +3376,9 @@ This is the same OLTP versus OLAP separation discussed in [Chapter 1.5](../unit1
 
 ##### Neptune ML
 
-==Neptune ML== applies ==graph neural networks (GNNs)== to data stored in Neptune Database. GNNs learn from both the attributes of a vertex and the structure of its neighbourhood, which often improves predictions for connected data compared with models that treat each row independently. Neptune ML uses the Deep Graph Library (DGL) and Amazon SageMaker for data processing, training and hosting.
+**Neptune ML** applies **graph neural networks (GNNs)** to data stored in Neptune Database. GNNs learn from both the attributes of a vertex and the structure of its neighbourhood, which often improves predictions for connected data compared with models that treat each row independently. Neptune ML uses the Deep Graph Library (DGL) and Amazon SageMaker for data processing, training and hosting.
 
-Supported task types include node classification, node regression, edge classification, edge regression and ==link prediction== (predicting edges likely to exist, for example "this account is likely to be linked to that fraud ring" or "this user is likely to buy this product").
+Supported task types include node classification, node regression, edge classification, edge regression and **link prediction** (predicting edges likely to exist, for example "this account is likely to be linked to that fraud ring" or "this user is likely to buy this product").
 
 ```mermaid
 sequenceDiagram
@@ -3405,9 +3405,9 @@ Inference is invoked through the query language (Neptune ML supports Gremlin and
 
 ##### GraphRAG with Amazon Bedrock
 
-==Retrieval-augmented generation (RAG)== supplies a large language model with retrieved context. Pure vector RAG retrieves text chunks by semantic similarity; ==GraphRAG== additionally uses relationships between entities extracted from documents, so that retrieval can follow connections ("which policies reference the regulation that this clause amends") rather than only similarity.
+**Retrieval-augmented generation (RAG)** supplies a large language model with retrieved context. Pure vector RAG retrieves text chunks by semantic similarity; **GraphRAG** additionally uses relationships between entities extracted from documents, so that retrieval can follow connections ("which policies reference the regulation that this clause amends") rather than only similarity.
 
-As of 2026, Amazon Bedrock Knowledge Bases can be configured with Neptune Analytics as a graph and vector store for a GraphRAG option, in which Bedrock builds a graph of entities and document chunks and combines graph traversal with vector search during retrieval. AWS has also published an open-source GraphRAG toolkit that works with Neptune. Feature scope, supported Regions and supported data sources for these capabilities change frequently, so students should ==verify current availability in the Bedrock documentation== before designing around them.
+As of 2026, Amazon Bedrock Knowledge Bases can be configured with Neptune Analytics as a graph and vector store for a GraphRAG option, in which Bedrock builds a graph of entities and document chunks and combines graph traversal with vector search during retrieval. AWS has also published an open-source GraphRAG toolkit that works with Neptune. Feature scope, supported Regions and supported data sources for these capabilities change frequently, so students should **verify current availability in the Bedrock documentation** before designing around them.
 
 ```mermaid
 flowchart LR
@@ -3422,7 +3422,7 @@ flowchart LR
 ```
 
 !!! note "Architectural lesson"
-    GraphRAG does not replace a vector store; it adds ==relationship-aware retrieval==. It pays off when answers depend on multi-hop connections between entities across documents, and it adds ingestion cost and complexity when questions are answerable from a single passage.
+    GraphRAG does not replace a vector store; it adds **relationship-aware retrieval**. It pays off when answers depend on multi-hop connections between entities across documents, and it adds ingestion cost and complexity when questions are answerable from a single passage.
 
 #### Important Features
 
@@ -3447,11 +3447,11 @@ flowchart LR
 
 #### Limitations
 
-- ==Single writer per cluster==: write throughput scales vertically only. Very high write rates require sharding by domain or tenant across clusters.
-- ==Property graph and RDF data are separate==: SPARQL cannot query data loaded as a property graph, and vice versa.
-- ==No arbitrary cross-cluster traversal==: a traversal runs within one cluster.
-- ==Supernodes== (vertices with millions of edges) degrade traversal latency and increase write conflicts.
-- ==Query timeouts==: a default query timeout (indicatively 120 seconds, adjustable in the parameter group) protects the cluster but means long analytical queries belong in Neptune Analytics.
+- **Single writer per cluster**: write throughput scales vertically only. Very high write rates require sharding by domain or tenant across clusters.
+- **Property graph and RDF data are separate**: SPARQL cannot query data loaded as a property graph, and vice versa.
+- **No arbitrary cross-cluster traversal**: a traversal runs within one cluster.
+- **Supernodes** (vertices with millions of edges) degrade traversal latency and increase write conflicts.
+- **Query timeouts**: a default query timeout (indicatively 120 seconds, adjustable in the parameter group) protects the cluster but means long analytical queries belong in Neptune Analytics.
 - Language feature coverage differs from other implementations: not every Neo4j Cypher function or APOC procedure exists in Neptune openCypher, and some TinkerPop features (for example, certain lambda steps and custom ID types) are restricted.
 - Neptune Database is designed for access from within a VPC; exposing it to external clients requires deliberate architecture (see Security Features).
 
@@ -3470,8 +3470,8 @@ Pricing dimensions (indicative, as of 2026; verify in the AWS Pricing Calculator
 
 Recommendations:
 
-- Start new or uncertain workloads on ==Serverless== with a low minimum, observe NCU utilisation, then move steady workloads to provisioned instances with Reserved Instances.
-- Use ==I/O-Optimized== when I/O charges exceed roughly a quarter of the cluster bill (the same heuristic AWS gives for Aurora; verify for Neptune).
+- Start new or uncertain workloads on **Serverless** with a low minimum, observe NCU utilisation, then move steady workloads to provisioned instances with Reserved Instances.
+- Use **I/O-Optimized** when I/O charges exceed roughly a quarter of the cluster bill (the same heuristic AWS gives for Aurora; verify for Neptune).
 - Do not over-provision replicas for HA alone: one replica in another AZ gives failover; add more only for read load.
 - Stop or delete notebook instances and Analytics graphs when not in use; they are frequent sources of surprise bills in student accounts.
 
@@ -3485,7 +3485,7 @@ Recommendations:
 | Bulk load | Parallel; throughput depends on instance size and data format |
 | Whole-graph algorithm | Not suited to Neptune Database; use Neptune Analytics |
 
-The dominant performance factor is whether the working set fits in the ==buffer cache== (instance memory). Memory-optimised instance families (for example r6g, r6i, r7g and x2g where available) are preferred for this reason.
+The dominant performance factor is whether the working set fits in the **buffer cache** (instance memory). Memory-optimised instance families (for example r6g, r6i, r7g and x2g where available) are preferred for this reason.
 
 #### Scaling Behaviour
 
@@ -3501,9 +3501,9 @@ The dominant performance factor is whether the working set fits in the ==buffer 
 #### Availability
 
 - A cluster with at least one replica in a different AZ fails over automatically if the writer or its AZ fails. Without a replica, Neptune must create a new instance, which takes considerably longer.
-- Replicas are assigned ==promotion tiers== (0 to 15) that control failover order.
+- Replicas are assigned **promotion tiers** (0 to 15) that control failover order.
 - The storage volume tolerates the loss of an AZ.
-- ==Global Database== provides cross-Region disaster recovery; a secondary Region can be promoted to primary in a managed or detach-and-promote process, with an RPO typically measured in seconds.
+- **Global Database** provides cross-Region disaster recovery; a secondary Region can be promoted to primary in a managed or detach-and-promote process, with an RPO typically measured in seconds.
 - Neptune offers an SLA for Multi-AZ clusters (check the current Neptune SLA page for the percentage).
 
 #### Security Features
@@ -3605,7 +3605,7 @@ The following terms are new in this part. Terms such as VPC, security group, KMS
 
 #### Bulk loader configuration
 
-The ==Neptune bulk loader== ingests files in parallel from S3. The cluster must have an IAM role attached that can read the bucket, and the VPC must provide a route to S3, normally an ==S3 gateway VPC endpoint== (see [Chapter 1.6](../unit1/topic6.md#vpc-endpoints)).
+The **Neptune bulk loader** ingests files in parallel from S3. The cluster must have an IAM role attached that can read the bucket, and the VPC must provide a route to S3, normally an **S3 gateway VPC endpoint** (see [Chapter 1.6](../unit1/topic6.md#vpc-endpoints)).
 
 | Setting | Values | Notes |
 |---------|--------|-------|
@@ -3655,7 +3655,7 @@ sequenceDiagram
     end
 ```
 
-AWS provides a CloudFormation-based ==Neptune Streams poller== framework (Lambda functions, a DynamoDB lease and checkpoint table, and step orchestration) with ready-made handlers such as full-text replication to Amazon OpenSearch Service. Teams may also write their own consumer.
+AWS provides a CloudFormation-based **Neptune Streams poller** framework (Lambda functions, a DynamoDB lease and checkpoint table, and step orchestration) with ready-made handlers such as full-text replication to Amazon OpenSearch Service. Teams may also write their own consumer.
 
 #### Global Database configuration
 
@@ -3671,7 +3671,7 @@ AWS provides a CloudFormation-based ==Neptune Streams poller== framework (Lambda
 
 #### Graph modelling principles
 
-Graph modelling begins, as with [DynamoDB single-table design](#single-table-design), with ==access patterns==: the questions the application must answer. A graph model is not a free-form diagram of the business; it is a structure that makes the required traversals short, selective and bounded.
+Graph modelling begins, as with [DynamoDB single-table design](#single-table-design), with **access patterns**: the questions the application must answer. A graph model is not a free-form diagram of the business; it is a structure that makes the required traversals short, selective and bounded.
 
 ```mermaid
 flowchart LR
@@ -3696,7 +3696,7 @@ flowchart LR
 
 #### Supernodes
 
-A ==supernode== is a vertex with an extremely large number of edges, for example a `Country` vertex connected to every customer, or a celebrity followed by tens of millions of users. Supernodes cause three problems: traversals through them explode in fan-out, writes to their adjacency conflict under concurrency, and they skew memory use.
+A **supernode** is a vertex with an extremely large number of edges, for example a `Country` vertex connected to every customer, or a celebrity followed by tens of millions of users. Supernodes cause three problems: traversals through them explode in fan-out, writes to their adjacency conflict under concurrency, and they skew memory use.
 
 | Mitigation | How it works |
 |------------|-------------|
@@ -3726,7 +3726,7 @@ A graph database is powerful but is not a default. Choose it only when relations
 
 #### Comparison: relational, DynamoDB adjacency list and Neptune
 
-The ==adjacency list pattern== in DynamoDB ([described in the DynamoDB part](#the-adjacency-list-pattern-and-inverted-indexes)) stores edges as items whose partition key is the source vertex and whose sort key identifies the target, with a GSI for the reverse direction. It supports one-hop lookups very efficiently.
+The **adjacency list pattern** in DynamoDB ([described in the DynamoDB part](#the-adjacency-list-pattern-and-inverted-indexes)) stores edges as items whose partition key is the source vertex and whose sort key identifies the target, with a GSI for the reverse direction. It supports one-hop lookups very efficiently.
 
 | Criterion | Relational (Aurora) | DynamoDB adjacency list | Neptune Database |
 |-----------|---------------------|-------------------------|------------------|
@@ -3740,7 +3740,7 @@ The ==adjacency list pattern== in DynamoDB ([described in the DynamoDB part](#th
 | Best when | Relationships are shallow and data is tabular | Access patterns are fixed and one or two hops deep | Relationships are deep, variable or exploratory |
 
 !!! tip "Polyglot persistence"
-    In a microservice platform, it is common for the ==order service== to keep its data in Aurora or DynamoDB while a ==relationship service== maintains a Neptune graph fed by events from other services. Each service owns its store ([Chapter 4.1](../unit4/topic1.md)); the graph is a purpose-built read model, not a shared database.
+    In a microservice platform, it is common for the **order service** to keep its data in Aurora or DynamoDB while a **relationship service** maintains a Neptune graph fed by events from other services. Each service owns its store ([Chapter 4.1](../unit4/topic1.md)); the graph is a purpose-built read model, not a shared database.
 
 #### Scalability, availability and reliability
 
@@ -3767,14 +3767,14 @@ The ==adjacency list pattern== in DynamoDB ([described in the DynamoDB part](#th
 
 #### Operational Excellence
 
-- Define clusters, parameter groups, subnet groups and IAM roles in ==infrastructure as code== ([Chapter 5.3](../unit5/topic3.md)).
+- Define clusters, parameter groups, subnet groups and IAM roles in **infrastructure as code** ([Chapter 5.3](../unit5/topic3.md)).
 - Store graph model conventions (labels, edge directions, ID formats) in the repository and review changes like schema migrations.
 - Include representative queries with `explain` checks in CI to catch regressions in traversal plans.
 - Use graph notebooks for exploration but never as the production write path.
 
 #### Security
 
-- Enable ==IAM database authentication== and grant data-plane actions per workload role.
+- Enable **IAM database authentication** and grant data-plane actions per workload role.
 - Keep clusters in private subnets; restrict security groups to application security groups.
 - Encrypt at rest with KMS and in transit with TLS; enable audit logs.
 
@@ -3833,11 +3833,11 @@ A read-only recommendation service should receive only `neptune-db:ReadDataViaQu
 ```
 
 !!! note "Resource ARN uses the cluster resource ID"
-    The data-plane ARN uses the cluster ==resource ID== (a value beginning with `cluster-`), not the cluster name. Obtain it from `aws neptune describe-db-clusters --query "DBClusters[].DbClusterResourceId"`.
+    The data-plane ARN uses the cluster **resource ID** (a value beginning with `cluster-`), not the cluster name. Obtain it from `aws neptune describe-db-clusters --query "DBClusters[].DbClusterResourceId"`.
 
 #### SigV4 request signing
 
-With IAM authentication enabled, every HTTP request and every WebSocket upgrade request must be signed with ==Signature Version 4== using service name `neptune-db`. Credentials come from the workload's role: the Lambda execution role, the ECS task role, or the EKS pod's role through EKS Pod Identity or IRSA (Chapter 3.3). AWS publishes signing helpers for Gremlin drivers in Java, Python, JavaScript and .NET, and the `awscurl` tool is convenient for manual testing.
+With IAM authentication enabled, every HTTP request and every WebSocket upgrade request must be signed with **Signature Version 4** using service name `neptune-db`. Credentials come from the workload's role: the Lambda execution role, the ECS task role, or the EKS pod's role through EKS Pod Identity or IRSA (Chapter 3.3). AWS publishes signing helpers for Gremlin drivers in Java, Python, JavaScript and .NET, and the `awscurl` tool is convenient for manual testing.
 
 ```mermaid
 sequenceDiagram
@@ -3868,15 +3868,15 @@ sequenceDiagram
 
 #### Encryption, secrets and logging
 
-- ==Encryption at rest== with KMS covers the cluster volume, backups, snapshots and replicas. It must be chosen at creation.
-- With IAM authentication there are ==no database passwords== to store in Secrets Manager. Secrets Manager remains relevant for third-party credentials used by loaders or ETL jobs.
-- ==Audit logs== record queries and connection events; export them to CloudWatch Logs and set retention. Avoid logging sensitive property values in application logs.
-- ==CloudTrail== records control-plane API calls.
+- **Encryption at rest** with KMS covers the cluster volume, backups, snapshots and replicas. It must be chosen at creation.
+- With IAM authentication there are **no database passwords** to store in Secrets Manager. Secrets Manager remains relevant for third-party credentials used by loaders or ETL jobs.
+- **Audit logs** record queries and connection events; export them to CloudWatch Logs and set retention. Avoid logging sensitive property values in application logs.
+- **CloudTrail** records control-plane API calls.
 - See [8.3 Data Protection](../unit8/topic3.md#encryption-at-rest-with-aws-kms) for KMS key types, key policies and envelope encryption.
 
 #### Compliance
 
-Neptune is within scope of major compliance programmes (for example SOC, PCI DSS and HIPAA eligibility; verify in AWS Artifact for the Region). Graphs frequently contain personal data such as identity links, so ==data minimisation==, retention policies and the ability to delete a person's vertices and edges on request must be designed from the start.
+Neptune is within scope of major compliance programmes (for example SOC, PCI DSS and HIPAA eligibility; verify in AWS Artifact for the Region). Graphs frequently contain personal data such as identity links, so **data minimisation**, retention policies and the ability to delete a person's vertices and edges on request must be designed from the start.
 
 ### Performance Optimization
 
@@ -3970,7 +3970,7 @@ flowchart LR
     NEP -- "Neptune Streams" --> POLL["Stream poller"] --> EB["EventBridge bus"]
 ```
 
-The payment service remains the owner of transactions in DynamoDB. The graph is built asynchronously from events, which protects the payment path from graph outages; the risk service queries Neptune with a strict timeout and a ==fallback rule-based score== if the graph is unavailable (Chapter 4.3 circuit breaker).
+The payment service remains the owner of transactions in DynamoDB. The graph is built asynchronously from events, which protects the payment path from graph outages; the risk service queries Neptune with a strict timeout and a **fallback rule-based score** if the graph is unavailable (Chapter 4.3 circuit breaker).
 
 #### Architecture example: Lambda behind API Gateway
 
@@ -4007,7 +4007,7 @@ sequenceDiagram
 
 | Pattern | Application to Neptune |
 |---------|------------------------|
-| CQRS | Neptune is the ==query-side read model== for relationship queries, built from events emitted by owning services |
+| CQRS | Neptune is the **query-side read model** for relationship queries, built from events emitted by owning services |
 | Event-driven ingestion | EventBridge or SQS delivers domain events; an idempotent consumer upserts vertices and edges |
 | Change data capture | Neptune Streams publishes graph changes to OpenSearch, caches or EventBridge |
 | Transactional outbox | Services publish events reliably so the graph is eventually consistent with source systems ([Chapter 1.7](../unit1/topic7.md#event-driven-core-concepts)) |
@@ -4045,24 +4045,24 @@ flowchart LR
 
 ### Advantages
 
-- ==Traversal performance for connected queries==: cost follows the visited neighbourhood rather than table size, making multi-hop queries practical at interactive latency.
-- ==Expressive query languages==: pattern-matching queries in openCypher or Gremlin are far shorter and clearer than equivalent recursive SQL.
-- ==Schema flexibility==: new relationship types can be introduced without migrations of existing data.
-- ==Managed operations==: patching, backups, PITR, Multi-AZ failover and storage growth are handled by AWS.
-- ==Open standards==: Gremlin, openCypher and SPARQL reduce lock-in and enable use of open-source tooling.
-- ==Integrated analytics and ML==: Neptune Analytics algorithms, vector search and Neptune ML extend the same graph to analytics and prediction.
-- ==Security integration==: IAM authentication, KMS and VPC isolation align with the rest of an AWS architecture.
+- **Traversal performance for connected queries**: cost follows the visited neighbourhood rather than table size, making multi-hop queries practical at interactive latency.
+- **Expressive query languages**: pattern-matching queries in openCypher or Gremlin are far shorter and clearer than equivalent recursive SQL.
+- **Schema flexibility**: new relationship types can be introduced without migrations of existing data.
+- **Managed operations**: patching, backups, PITR, Multi-AZ failover and storage growth are handled by AWS.
+- **Open standards**: Gremlin, openCypher and SPARQL reduce lock-in and enable use of open-source tooling.
+- **Integrated analytics and ML**: Neptune Analytics algorithms, vector search and Neptune ML extend the same graph to analytics and prediction.
+- **Security integration**: IAM authentication, KMS and VPC isolation align with the rest of an AWS architecture.
 
 ### Limitations
 
-- ==Single writer== limits write scalability; very high ingest rates need partitioning or buffering.
-- ==Specialised skill set==: graph modelling and traversal tuning are unfamiliar to many teams.
-- ==Supernodes and unbounded queries== can cause unpredictable latency.
-- ==Not an analytics warehouse==: aggregations over entire datasets are better served by Redshift or Athena.
-- ==Cost floor==: even Serverless has a minimum capacity; small workloads may cost more than DynamoDB.
-- ==Language dialect differences==: Neptune openCypher and Gremlin implementations differ in some functions and features from Neo4j or other TinkerPop providers.
-- ==Model separation==: property graph and RDF data cannot be queried together.
-- ==VPC-centric access== adds networking work for Lambda and developer access.
+- **Single writer** limits write scalability; very high ingest rates need partitioning or buffering.
+- **Specialised skill set**: graph modelling and traversal tuning are unfamiliar to many teams.
+- **Supernodes and unbounded queries** can cause unpredictable latency.
+- **Not an analytics warehouse**: aggregations over entire datasets are better served by Redshift or Athena.
+- **Cost floor**: even Serverless has a minimum capacity; small workloads may cost more than DynamoDB.
+- **Language dialect differences**: Neptune openCypher and Gremlin implementations differ in some functions and features from Neo4j or other TinkerPop providers.
+- **Model separation**: property graph and RDF data cannot be queried together.
+- **VPC-centric access** adds networking work for Lambda and developer access.
 
 ### Common Mistakes
 
@@ -4093,31 +4093,31 @@ flowchart LR
 
 ### Summary
 
-Graph databases exist because relationship-centric questions, those involving multiple and variable numbers of hops, become expensive and unpredictable when every hop is a relational join or an application round trip. Amazon Neptune provides a managed graph platform with two engines. ==Neptune Database== is the transactional system of record: one writer and up to 15 readers over a six-way replicated, three-AZ storage volume, available as provisioned instances or as Serverless NCUs, queried with Gremlin, openCypher or SPARQL. ==Neptune Analytics== is an in-memory engine for graph algorithms and vector search, and it underpins GraphRAG with Amazon Bedrock. Around them, the bulk loader, Neptune Streams, Global Database and Neptune ML provide ingestion, change data capture, disaster recovery and graph machine learning.
+Graph databases exist because relationship-centric questions, those involving multiple and variable numbers of hops, become expensive and unpredictable when every hop is a relational join or an application round trip. Amazon Neptune provides a managed graph platform with two engines. **Neptune Database** is the transactional system of record: one writer and up to 15 readers over a six-way replicated, three-AZ storage volume, available as provisioned instances or as Serverless NCUs, queried with Gremlin, openCypher or SPARQL. **Neptune Analytics** is an in-memory engine for graph algorithms and vector search, and it underpins GraphRAG with Amazon Bedrock. Around them, the bulk loader, Neptune Streams, Global Database and Neptune ML provide ingestion, change data capture, disaster recovery and graph machine learning.
 
 Architectural lessons:
 
 - ==Use a graph when relationships are the product==, not merely because relationships exist.
-- ==Model from access patterns==: vertices for things you traverse through, properties for things you only read, and deliberate handling of supernodes.
-- ==Separate OLTP and analytics==: online traversals on Neptune Database, whole-graph algorithms on Neptune Analytics.
-- ==Build the graph from events== in a microservice platform; the graph is a read model owned by one service, fed through idempotent upserts.
-- ==Secure by default==: private subnets, security groups on 8182, IAM SigV4 authentication with least-privilege data-plane actions, KMS encryption and audit logs.
-- ==Engineer for failure==: bounded queries with timeouts, retries for concurrent modification conflicts, reconnect logic for failover and credential rotation, and fallback behaviour when the graph is unavailable.
+- **Model from access patterns**: vertices for things you traverse through, properties for things you only read, and deliberate handling of supernodes.
+- **Separate OLTP and analytics**: online traversals on Neptune Database, whole-graph algorithms on Neptune Analytics.
+- **Build the graph from events** in a microservice platform; the graph is a read model owned by one service, fed through idempotent upserts.
+- **Secure by default**: private subnets, security groups on 8182, IAM SigV4 authentication with least-privilege data-plane actions, KMS encryption and audit logs.
+- **Engineer for failure**: bounded queries with timeouts, retries for concurrent modification conflicts, reconnect logic for failover and credential rotation, and fallback behaviour when the graph is unavailable.
 
 ## Data Warehousing with Amazon Redshift
 
 ### Definition
 
-A ==data warehouse== is a subject-oriented, integrated, time-variant, non-volatile store of data optimised for analytical queries across large volumes of historical data. Its users are analysts, dashboards, data scientists and reporting jobs rather than online transactions.
+A **data warehouse** is a subject-oriented, integrated, time-variant, non-volatile store of data optimised for analytical queries across large volumes of historical data. Its users are analysts, dashboards, data scientists and reporting jobs rather than online transactions.
 
-==Amazon Redshift== is a fully managed, petabyte-scale, SQL-based cloud data warehouse. It combines ==columnar storage==, ==massively parallel processing (MPP)==, compression and a cost-based optimiser to execute complex analytical SQL over billions of rows. It is offered in two deployment options:
+**Amazon Redshift** is a fully managed, petabyte-scale, SQL-based cloud data warehouse. It combines **columnar storage**, **massively parallel processing (MPP)**, compression and a cost-based optimiser to execute complex analytical SQL over billions of rows. It is offered in two deployment options:
 
 | Option | Model | Billing basis |
 |--------|-------|---------------|
 | Redshift provisioned | A cluster of nodes you choose (RA3 node types with Redshift Managed Storage for current designs) | Node-hours plus managed storage |
 | Redshift Serverless | A namespace (data) and a workgroup (compute) that scales automatically in Redshift Processing Units (RPUs) | RPU-hours consumed, plus managed storage |
 
-Redshift sits in the ==analytics tier== of an AWS architecture. Data flows into it from operational databases, event streams and the S3 data lake; out of it flow dashboards (Amazon QuickSight and third-party BI tools), machine learning features, exports to S3, and APIs built with the Redshift Data API.
+Redshift sits in the **analytics tier** of an AWS architecture. Data flows into it from operational databases, event streams and the S3 data lake; out of it flow dashboards (Amazon QuickSight and third-party BI tools), machine learning features, exports to S3, and APIs built with the Redshift Data API.
 
 ```mermaid
 flowchart LR
@@ -4170,9 +4170,9 @@ flowchart LR
 #### The problems a cloud warehouse solves
 
 1. ==Operational databases are the wrong engine for analytics.== A row store must read entire rows to aggregate one column, and a large analytical query competes for buffer cache, CPU and I/O with customer-facing transactions.
-2. ==Data is fragmented across services.== In a microservice architecture, each service owns its database ([Chapter 4.1](../unit4/topic1.md)). Business questions such as "revenue by marketing channel by product category" span several services, so the data must be ==integrated== somewhere.
-3. ==On-premises warehouses were expensive and rigid.== Traditional appliances required large up-front capital expenditure, capacity planning years ahead, and specialist administration.
-4. ==History must be preserved.== Operational stores often keep only current state; analytics needs time-variant history.
+2. **Data is fragmented across services.** In a microservice architecture, each service owns its database ([Chapter 4.1](../unit4/topic1.md)). Business questions such as "revenue by marketing channel by product category" span several services, so the data must be **integrated** somewhere.
+3. **On-premises warehouses were expensive and rigid.** Traditional appliances required large up-front capital expenditure, capacity planning years ahead, and specialist administration.
+4. **History must be preserved.** Operational stores often keep only current state; analytics needs time-variant history.
 
 #### Why AWS introduced Redshift
 
@@ -4187,7 +4187,7 @@ AWS launched Redshift in 2013 to bring MPP columnar warehousing to a pay-as-you-
 #### Microservices and analytics: the golden rule
 
 !!! danger "Analytics must not query service databases directly"
-    Pointing BI tools or analytical SQL at each microservice's production database creates exactly the coupling that microservice architecture tries to eliminate. It degrades customer-facing latency, makes the service's internal schema a public contract that cannot be changed, and requires cross-service joins that the operational databases were never designed for. Instead, services ==publish their data to the analytics platform== through change data capture, zero-ETL integrations or domain events, and analysts query the warehouse.
+    Pointing BI tools or analytical SQL at each microservice's production database creates exactly the coupling that microservice architecture tries to eliminate. It degrades customer-facing latency, makes the service's internal schema a public contract that cannot be changed, and requires cross-service joins that the operational databases were never designed for. Instead, services **publish their data to the analytics platform** through change data capture, zero-ETL integrations or domain events, and analysts query the warehouse.
 
 ```mermaid
 flowchart TB
@@ -4206,7 +4206,7 @@ flowchart TB
 
 | Mechanism | How the service publishes | Coupling |
 |-----------|---------------------------|----------|
-| Zero-ETL integration | AWS replicates the service's Aurora, RDS or DynamoDB changes into Redshift | Low operational impact; schema still reflects the service's tables, so treat the replicated tables as a ==raw layer== and build stable models on top |
+| Zero-ETL integration | AWS replicates the service's Aurora, RDS or DynamoDB changes into Redshift | Low operational impact; schema still reflects the service's tables, so treat the replicated tables as a **raw layer** and build stable models on top |
 | CDC with AWS DMS or Debezium | Log-based capture to S3 or Kinesis, then load | Similar; more control and more components |
 | Domain events | Service emits business events to EventBridge, Kinesis or MSK; warehouse ingests them | Lowest coupling: events are a deliberate public contract |
 | Batch exports | Service exports daily snapshots to S3 | Simple; high latency |
@@ -4215,7 +4215,7 @@ flowchart TB
 
 #### Columnar storage
 
-In a ==row-oriented== store, all columns of a row are stored together on the same page. In a ==column-oriented== store, the values of each column are stored together in their own blocks.
+In a **row-oriented** store, all columns of a row are stored together on the same page. In a **column-oriented** store, the values of each column are stored together in their own blocks.
 
 ```mermaid
 flowchart LR
@@ -4241,19 +4241,19 @@ For `SELECT city, SUM(amount) FROM sales GROUP BY city`, a columnar engine reads
 | Vectorised execution | CPU processes batches of values of one type efficiently |
 | Block skipping | Per-block metadata (zone maps) allows whole blocks to be skipped |
 
-The trade-off is that single-row inserts, updates and point lookups are expensive: one logical row touches a block per column. Redshift is therefore loaded in ==bulk or micro-batches==, not row by row.
+The trade-off is that single-row inserts, updates and point lookups are expensive: one logical row touches a block per column. Redshift is therefore loaded in **bulk or micro-batches**, not row by row.
 
 #### Massively parallel processing
 
-==MPP== divides both data and work across many independent processors that each hold a portion of every table. A query is compiled into steps that each processor executes on its local data in parallel; results are combined at the end.
+**MPP** divides both data and work across many independent processors that each hold a portion of every table. A query is compiled into steps that each processor executes on its local data in parallel; results are combined at the end.
 
-In Redshift, the unit of parallelism is the ==slice==: each compute node is divided into slices, each with a share of memory and disk and its own portion of every table. More slices means more parallelism, provided data is evenly distributed.
+In Redshift, the unit of parallelism is the **slice**: each compute node is divided into slices, each with a share of memory and disk and its own portion of every table. More slices means more parallelism, provided data is evenly distributed.
 
 #### Blocks and zone maps
 
-Redshift stores each column in immutable ==1 MB blocks==. For every block it records metadata including the ==minimum and maximum value== in the block. This metadata is the ==zone map==.
+Redshift stores each column in immutable **1 MB blocks**. For every block it records metadata including the **minimum and maximum value** in the block. This metadata is the **zone map**.
 
-When a query filters `WHERE sale_date BETWEEN '2026-09-01' AND '2026-09-07'`, the engine compares the predicate with each block's min and max and skips blocks that cannot contain matching rows. Zone maps are only effective when values are clustered, which is what the ==sort key== achieves.
+When a query filters `WHERE sale_date BETWEEN '2026-09-01' AND '2026-09-07'`, the engine compares the predicate with each block's min and max and skips blocks that cannot contain matching rows. Zone maps are only effective when values are clustered, which is what the **sort key** achieves.
 
 ```mermaid
 flowchart LR
@@ -4266,7 +4266,7 @@ flowchart LR
 
 #### Compression encodings
 
-Each column can use a different ==compression encoding==. With `ENCODE AUTO` (the default for new tables), Redshift chooses and adjusts encodings automatically.
+Each column can use a different **compression encoding**. With `ENCODE AUTO` (the default for new tables), Redshift chooses and adjusts encodings automatically.
 
 | Encoding | Best for | Idea |
 |----------|----------|------|
@@ -4290,7 +4290,7 @@ Because each slice holds part of every table, the way rows are assigned to slice
 |-------|-----------|---------|------|
 | AUTO | Redshift chooses and changes the style as the table grows (typically ALL for small tables, then EVEN or KEY) | Default for most tables | None significant; review recommendations |
 | EVEN | Round-robin across slices | Large tables with no dominant join key; staging tables | Joins need redistribution |
-| KEY | Rows with the same value of the distribution column go to the same slice | Large fact table and large dimension joined on the same column | ==Skew== if the key has few distinct values or hot values |
+| KEY | Rows with the same value of the distribution column go to the same slice | Large fact table and large dimension joined on the same column | **Skew** if the key has few distinct values or hot values |
 | ALL | Full copy on every node | Small, slowly changing dimension tables | Storage multiplied by node count; slower loads |
 
 ```mermaid
@@ -4311,7 +4311,7 @@ When a join is not collocated, the query plan shows steps such as `DS_DIST_INNER
 
 #### Sort keys
 
-A ==sort key== defines the order in which rows are stored on disk within each slice, which makes zone maps effective.
+A **sort key** defines the order in which rows are stored on disk within each slice, which makes zone maps effective.
 
 | Type | Behaviour | Use |
 |------|-----------|-----|
@@ -4332,11 +4332,11 @@ Good sort key candidates are columns frequently used in range filters (dates and
 | Automatic analyze | Keeps optimiser statistics fresh |
 | Advisor | Recommends distribution, sort, compression and other improvements |
 
-Deletes and updates in Redshift mark rows as deleted and write new versions; ==VACUUM== reclaims space and restores sort order, and ==ANALYZE== refreshes statistics. These run automatically, but after very large loads or deletes a manual `VACUUM` and `ANALYZE` may still be appropriate.
+Deletes and updates in Redshift mark rows as deleted and write new versions; **VACUUM** reclaims space and restores sort order, and **ANALYZE** refreshes statistics. These run automatically, but after very large loads or deletes a manual `VACUUM` and `ANALYZE` may still be appropriate.
 
 #### Dimensional modelling: star and snowflake schemas
 
-A ==star schema== places numeric measurements of a business process in a central ==fact table== surrounded by denormalised ==dimension tables== that describe context (who, what, where, when).
+A **star schema** places numeric measurements of a business process in a central **fact table** surrounded by denormalised **dimension tables** that describe context (who, what, where, when).
 
 ```mermaid
 erDiagram
@@ -4379,7 +4379,7 @@ erDiagram
     DIM_STORE ||--o{ FACT_SALES : "store_key"
 ```
 
-A ==snowflake schema== normalises dimensions into sub-dimensions (for example `DIM_PRODUCT` referencing `DIM_CATEGORY`). It reduces redundancy at the cost of more joins.
+A **snowflake schema** normalises dimensions into sub-dimensions (for example `DIM_PRODUCT` referencing `DIM_CATEGORY`). It reduces redundancy at the cost of more joins.
 
 | Concept | Meaning |
 |---------|---------|
@@ -4402,7 +4402,7 @@ A ==snowflake schema== normalises dimensions into sub-dimensions (for example `D
 
 #### Semi-structured data
 
-The ==SUPER== data type stores JSON-like semi-structured values, queried with ==PartiQL== syntax for navigation and unnesting. It is used for streaming payloads and for data whose schema evolves rapidly; frequently queried attributes are later extracted into typed columns for performance.
+The **SUPER** data type stores JSON-like semi-structured values, queried with **PartiQL** syntax for navigation and unnesting. It is used for streaming payloads and for data whose schema evolves rapidly; frequently queried attributes are later extracted into typed columns for performance.
 
 ```sql
 SELECT payload.userId::varchar AS user_id,
@@ -4454,7 +4454,7 @@ flowchart TB
 | Redshift Managed Storage (RMS) | For RA3 nodes and Serverless: durable storage in S3 with high-performance local SSD caching of hot blocks; storage scales independently of compute |
 | Result cache | Caches results of repeated identical queries on the leader node when underlying data has not changed |
 
-==RA3 node types== (for example `ra3.large`, `ra3.xlplus`, `ra3.4xlarge` and `ra3.16xlarge`, indicative as of 2026) are the current generation for provisioned clusters. Older ==DC2== dense-compute nodes with local storage are deprecated (announced April 2025); AWS directs customers to migrate to RA3 or Serverless.
+**RA3 node types** (for example `ra3.large`, `ra3.xlplus`, `ra3.4xlarge` and `ra3.16xlarge`, indicative as of 2026) are the current generation for provisioned clusters. Older **DC2** dense-compute nodes with local storage are deprecated (announced April 2025); AWS directs customers to migrate to RA3 or Serverless.
 
 ##### Redshift Serverless
 
@@ -4549,13 +4549,13 @@ sequenceDiagram
 
 #### Limitations
 
-- ==Not an OLTP database==: single-row inserts, updates and point lookups are slow relative to Aurora or DynamoDB; high rates of small DML cause fragmentation.
-- ==Primary and foreign keys are informational only==: Redshift does not enforce uniqueness or referential integrity; loads must deduplicate.
-- ==Concurrency is finite==: many simultaneous heavy queries queue; concurrency scaling and Serverless mitigate, at a cost.
-- ==Latency floor==: even simple queries typically take tens to hundreds of milliseconds; Redshift is not a backend for per-request user-facing lookups at high rates.
-- ==Design matters==: poor distribution and sort choices cause skew and redistribution, although automation reduces this.
-- ==Some PostgreSQL features are absent==: Redshift is derived from an old PostgreSQL version and does not support many modern PostgreSQL features (for example, general-purpose triggers and many extension types).
-- ==Zero-ETL and streaming features have source-specific constraints== (supported engine versions, table requirements such as primary keys, and data type mappings), which must be verified per integration.
+- **Not an OLTP database**: single-row inserts, updates and point lookups are slow relative to Aurora or DynamoDB; high rates of small DML cause fragmentation.
+- **Primary and foreign keys are informational only**: Redshift does not enforce uniqueness or referential integrity; loads must deduplicate.
+- **Concurrency is finite**: many simultaneous heavy queries queue; concurrency scaling and Serverless mitigate, at a cost.
+- **Latency floor**: even simple queries typically take tens to hundreds of milliseconds; Redshift is not a backend for per-request user-facing lookups at high rates.
+- **Design matters**: poor distribution and sort choices cause skew and redistribution, although automation reduces this.
+- **Some PostgreSQL features are absent**: Redshift is derived from an old PostgreSQL version and does not support many modern PostgreSQL features (for example, general-purpose triggers and many extension types).
+- **Zero-ETL and streaming features have source-specific constraints** (supported engine versions, table requirements such as primary keys, and data type mappings), which must be verified per integration.
 
 #### Pricing Model and recommendations
 
@@ -4574,9 +4574,9 @@ Pricing dimensions (indicative, as of 2026; verify in the AWS Pricing Calculator
 
 Recommendations:
 
-- Begin with ==Serverless== for new or variable workloads and set ==usage limits== and a ==maximum RPU== as guardrails.
-- For steady, predictable, round-the-clock workloads on provisioned clusters, purchase ==Reserved Nodes== after observing utilisation. AWS has also introduced reservation options for Serverless capacity; verify their current terms.
-- ==Pause== development provisioned clusters when unused and ==resume== on schedule.
+- Begin with **Serverless** for new or variable workloads and set **usage limits** and a **maximum RPU** as guardrails.
+- For steady, predictable, round-the-clock workloads on provisioned clusters, purchase **Reserved Nodes** after observing utilisation. AWS has also introduced reservation options for Serverless capacity; verify their current terms.
+- **Pause** development provisioned clusters when unused and **resume** on schedule.
 - Keep cold history in S3 in Parquet and query it through Spectrum rather than keeping it in RMS if it is rarely accessed.
 
 #### Performance Characteristics
@@ -4601,17 +4601,17 @@ Recommendations:
 
 #### Availability
 
-- ==Single-AZ provisioned clusters== recover from node failures automatically by replacing nodes; data in RMS is durable in S3.
-- ==Multi-AZ deployments== for RA3 provisioned clusters run compute in two AZs behind one endpoint so that an AZ failure does not cause an extended outage; verify supported node types and Serverless options.
-- ==Cluster relocation== allows a provisioned RA3 cluster to move to another AZ.
-- ==Snapshots== are taken automatically; cross-Region snapshot copy supports disaster recovery.
-- Serverless creates ==recovery points== automatically (indicatively every 30 minutes, retained for a limited period) and supports snapshots.
+- **Single-AZ provisioned clusters** recover from node failures automatically by replacing nodes; data in RMS is durable in S3.
+- **Multi-AZ deployments** for RA3 provisioned clusters run compute in two AZs behind one endpoint so that an AZ failure does not cause an extended outage; verify supported node types and Serverless options.
+- **Cluster relocation** allows a provisioned RA3 cluster to move to another AZ.
+- **Snapshots** are taken automatically; cross-Region snapshot copy supports disaster recovery.
+- Serverless creates **recovery points** automatically (indicatively every 30 minutes, retained for a limited period) and supports snapshots.
 
 #### Security Features
 
 | Control | Capability |
 |---------|-----------|
-| Network | Deploy in private subnets; security groups on port 5439; optional public accessibility (avoid); Redshift-managed VPC endpoints for cross-VPC access; ==enhanced VPC routing== forces COPY and UNLOAD traffic through the VPC |
+| Network | Deploy in private subnets; security groups on port 5439; optional public accessibility (avoid); Redshift-managed VPC endpoints for cross-VPC access; **enhanced VPC routing** forces COPY and UNLOAD traffic through the VPC |
 | Authentication | Database users with passwords (store in Secrets Manager), IAM-based temporary credentials (`GetClusterCredentials`, `GetCredentials` for Serverless), IAM Identity Center and identity-provider federation |
 | Authorisation | SQL GRANT on databases, schemas, tables and columns; role-based access control (RBAC) with database roles |
 | Row-level security | RLS policies attached to tables and roles |
@@ -4713,11 +4713,11 @@ Terms such as OLTP, OLAP, VPC, KMS, IAM role and Multi-AZ are defined in [Chapte
 
 #### Workload management
 
-Redshift provides ==workload management (WLM)== to control how queries share memory and concurrency.
+Redshift provides **workload management (WLM)** to control how queries share memory and concurrency.
 
 | Mode | Behaviour | When to use |
 |------|-----------|-------------|
-| Automatic WLM | Redshift decides concurrency and memory per query dynamically; queues can have ==priorities== (highest to lowest) | Recommended default for provisioned clusters |
+| Automatic WLM | Redshift decides concurrency and memory per query dynamically; queues can have **priorities** (highest to lowest) | Recommended default for provisioned clusters |
 | Manual WLM | Administrator defines up to 8 queues with fixed slots and memory percentages | Legacy or highly specialised control |
 | Serverless | Managed automatically; configure query limits (for example maximum query execution time) and usage limits per workgroup | Serverless workgroups |
 
@@ -4746,7 +4746,7 @@ flowchart LR
 
 #### Materialized views
 
-A ==materialized view (MV)== stores the precomputed result of a query. Redshift supports:
+A **materialized view (MV)** stores the precomputed result of a query. Redshift supports:
 
 | Capability | Description |
 |------------|-------------|
@@ -4759,7 +4759,7 @@ A ==materialized view (MV)== stores the precomputed result of a query. Redshift 
 
 #### Redshift Spectrum and data lake queries
 
-==Redshift Spectrum== lets Redshift query files in S3 through ==external tables== defined in the AWS Glue Data Catalog (or a Hive metastore). A fleet of Spectrum workers, separate from the cluster, performs scanning, filtering and partial aggregation, and returns results to the cluster for joins with local tables.
+**Redshift Spectrum** lets Redshift query files in S3 through **external tables** defined in the AWS Glue Data Catalog (or a Hive metastore). A fleet of Spectrum workers, separate from the cluster, performs scanning, filtering and partial aggregation, and returns results to the cluster for joins with local tables.
 
 ```mermaid
 flowchart LR
@@ -4782,11 +4782,11 @@ Design guidance for Spectrum:
 | Compress (Snappy or ZSTD for Parquet) | Less data scanned |
 | Push predicates to external tables | Filtering happens in the Spectrum layer |
 
-Redshift can also query ==open table formats== in the lake such as Apache Iceberg (with growing read and, in some cases, write support) and Apache Hudi and Delta Lake (read support with constraints). Verify current support levels before designing around them.
+Redshift can also query **open table formats** in the lake such as Apache Iceberg (with growing read and, in some cases, write support) and Apache Hudi and Delta Lake (read support with constraints). Verify current support levels before designing around them.
 
 #### Data sharing
 
-==Data sharing== provides live, transactionally consistent access to data in one Redshift warehouse (the ==producer==) from other warehouses (the ==consumers==) without copying data. Consumers use their own compute.
+**Data sharing** provides live, transactionally consistent access to data in one Redshift warehouse (the **producer**) from other warehouses (the **consumers**) without copying data. Consumers use their own compute.
 
 | Scope | Description |
 |-------|-------------|
@@ -4812,11 +4812,11 @@ flowchart TB
     P -- "cross-account datashare" --> C3
 ```
 
-This is the warehouse equivalent of the ==bulkhead pattern== ([Chapter 4.3](../unit4/topic3.md)): heavy ETL cannot starve dashboards because each runs on separate compute over the same data.
+This is the warehouse equivalent of the **bulkhead pattern** ([Chapter 4.3](../unit4/topic3.md)): heavy ETL cannot starve dashboards because each runs on separate compute over the same data.
 
 #### Zero-ETL integrations
 
-A ==zero-ETL integration== is a managed replication channel from a source database into a Redshift database. After an initial full load, ongoing changes are applied continuously, typically within seconds.
+A **zero-ETL integration** is a managed replication channel from a source database into a Redshift database. After an initial full load, ongoing changes are applied continuously, typically within seconds.
 
 | Source | Status as of 2026 (verify) |
 |--------|---------------------------|
@@ -4854,11 +4854,11 @@ Configuration considerations:
 | Monitoring | Integration metrics and system views show lag and table state |
 
 !!! tip "Raw, staging and presentation layers"
-    Treat zero-ETL tables as the ==raw layer== that mirrors each service's private schema. Build ==staging== views that rename and type-cast columns, and ==presentation== models (star schema, materialized views) that analysts use. When the orders team renames a column, only the staging view changes, protecting dashboards.
+    Treat zero-ETL tables as the **raw layer** that mirrors each service's private schema. Build **staging** views that rename and type-cast columns, and **presentation** models (star schema, materialized views) that analysts use. When the orders team renames a column, only the staging view changes, protecting dashboards.
 
 #### Streaming ingestion
 
-Streaming ingestion reads directly from ==Kinesis Data Streams== or ==Amazon MSK== into a ==materialized view==, without staging data in S3 or running Firehose.
+Streaming ingestion reads directly from **Kinesis Data Streams** or **Amazon MSK** into a **materialized view**, without staging data in S3 or running Firehose.
 
 | Step | Statement |
 |------|-----------|
@@ -4872,7 +4872,7 @@ Streaming ingestion reads directly from ==Kinesis Data Streams== or ==Amazon MSK
 
 #### COPY and UNLOAD
 
-==COPY== loads data in parallel from S3 (and from other sources such as DynamoDB, EMR or remote hosts over SSH), with each slice loading files concurrently.
+**COPY** loads data in parallel from S3 (and from other sources such as DynamoDB, EMR or remote hosts over SSH), with each slice loading files concurrently.
 
 | Practice | Reason |
 |----------|--------|
@@ -4883,11 +4883,11 @@ Streaming ingestion reads directly from ==Kinesis Data Streams== or ==Amazon MSK
 | Use `COPY ... JOB CREATE ... AUTO ON` for auto-copy from S3 | Continuous file ingestion as new objects arrive (verify availability) |
 | Grant an IAM role with S3 read, not access keys | Security |
 
-==UNLOAD== exports query results to S3 in parallel, typically in Parquet with partitioning, to publish curated data to the lake for Athena, EMR, SageMaker or other consumers.
+**UNLOAD** exports query results to S3 in parallel, typically in Parquet with partitioning, to publish curated data to the lake for Athena, EMR, SageMaker or other consumers.
 
 #### Federated queries
 
-==Federated queries== let Redshift query live data in Aurora PostgreSQL, RDS PostgreSQL, Aurora MySQL and RDS MySQL through an external schema, pushing down filters to the remote database.
+**Federated queries** let Redshift query live data in Aurora PostgreSQL, RDS PostgreSQL, Aurora MySQL and RDS MySQL through an external schema, pushing down filters to the remote database.
 
 | Suitable for | Unsuitable for |
 |--------------|----------------|
@@ -4900,7 +4900,7 @@ Streaming ingestion reads directly from ==Kinesis Data Streams== or ==Amazon MSK
 
 #### Redshift ML
 
-==Redshift ML== enables analysts to create, train and invoke models with SQL.
+**Redshift ML** enables analysts to create, train and invoke models with SQL.
 
 | Capability | Mechanism |
 |------------|-----------|
@@ -4910,7 +4910,7 @@ Streaming ingestion reads directly from ==Kinesis Data Streams== or ==Amazon MSK
 
 #### Data API
 
-The ==Redshift Data API== runs SQL over HTTPS with IAM authentication and no persistent database connection or driver.
+The **Redshift Data API** runs SQL over HTTPS with IAM authentication and no persistent database connection or driver.
 
 | Characteristic | Detail |
 |----------------|--------|
@@ -4922,7 +4922,7 @@ The ==Redshift Data API== runs SQL over HTTPS with IAM authentication and no per
 | Results | Retained for about 24 hours; size limits apply; use UNLOAD for large results |
 | Integrations | Lambda, Step Functions (direct SDK integration), EventBridge, AppSync, SageMaker notebooks |
 
-The Data API is the recommended way for ==Lambda functions== to use Redshift, because it avoids connection management in short-lived execution environments and avoids placing the function in the VPC solely for database access.
+The Data API is the recommended way for **Lambda functions** to use Redshift, because it avoids connection management in short-lived execution environments and avoids placing the function in the VPC solely for database access.
 
 ### Design Considerations
 
@@ -5008,7 +5008,7 @@ flowchart LR
 
 #### Operational Excellence
 
-- Define namespaces, workgroups, clusters, parameter groups, IAM roles and integrations in ==infrastructure as code== ([Chapter 5.3](../unit5/topic3.md)).
+- Define namespaces, workgroups, clusters, parameter groups, IAM roles and integrations in **infrastructure as code** ([Chapter 5.3](../unit5/topic3.md)).
 - Manage SQL transformations as code (for example dbt or version-controlled stored procedures) with CI tests and pull request review ([Chapter 5.2](../unit5/topic2.md)).
 - Monitor with CloudWatch metrics, system tables (`SYS_QUERY_HISTORY`, `SYS_LOAD_HISTORY`), and query profiling in the console; alarm on queue wait, disk spill, integration lag and usage limits.
 
@@ -5144,10 +5144,10 @@ flowchart LR
 
 #### Encryption, secrets, logging and compliance
 
-- ==KMS encryption at rest== for managed storage, snapshots and backups; customer managed keys for control over rotation and access.
-- ==TLS in transit==, enforced with `require_ssl`.
-- ==Secrets Manager== for database user passwords (including the admin password, which Redshift can manage in Secrets Manager on your behalf) and for federated query credentials.
-- ==Audit logging== of connections, users and user activity to CloudWatch Logs or S3; CloudTrail for API calls, including Data API.
+- **KMS encryption at rest** for managed storage, snapshots and backups; customer managed keys for control over rotation and access.
+- **TLS in transit**, enforced with `require_ssl`.
+- **Secrets Manager** for database user passwords (including the admin password, which Redshift can manage in Secrets Manager on your behalf) and for federated query credentials.
+- **Audit logging** of connections, users and user activity to CloudWatch Logs or S3; CloudTrail for API calls, including Data API.
 - Redshift is in scope of many compliance programmes (for example SOC, PCI DSS, HIPAA eligibility; verify in AWS Artifact). Personal data in the warehouse requires masking, retention and deletion processes.
 - See [8.3 Data Protection](../unit8/topic3.md#encryption-at-rest-with-aws-kms) for KMS key types, key policies and envelope encryption.
 
@@ -5256,7 +5256,7 @@ flowchart LR
 
 #### Architecture example: serving analytics to a microservice
 
-A microservice that must show "your spending this year by category" should not run Redshift queries on every page view. Instead, a scheduled job computes aggregates in Redshift and ==UNLOADs== them to S3 or writes them to DynamoDB, from which the service reads with single-digit millisecond latency. For internal tools with low request rates, a Lambda function behind API Gateway can use the Data API directly.
+A microservice that must show "your spending this year by category" should not run Redshift queries on every page view. Instead, a scheduled job computes aggregates in Redshift and **UNLOADs** them to S3 or writes them to DynamoDB, from which the service reads with single-digit millisecond latency. For internal tools with low request rates, a Lambda function behind API Gateway can use the Data API directly.
 
 ```mermaid
 flowchart LR
@@ -5318,24 +5318,24 @@ flowchart TB
 
 ### Advantages
 
-- ==Performance at scale==: columnar storage, compression, zone maps and MPP make complex aggregations over billions of rows fast.
-- ==Standard SQL==: analysts and BI tools use familiar SQL and JDBC or ODBC connectivity.
-- ==Elastic, decoupled architecture==: RA3 and Serverless separate compute from storage; Serverless removes idle compute cost.
-- ==Deep AWS integration==: zero-ETL, streaming ingestion, Spectrum, data sharing, Glue, Lake Formation, QuickSight, SageMaker and Bedrock reduce pipeline code.
-- ==Workload isolation without copies==: data sharing gives each team its own compute over the same data.
-- ==Automation==: automatic table optimisation, vacuum, analyze and WLM reduce administration.
-- ==Security and governance==: KMS, VPC, IAM, RBAC, RLS, column security, masking and auditing.
-- ==Serverless-friendly access==: the Data API allows Lambda and Step Functions to use the warehouse without connection management.
+- **Performance at scale**: columnar storage, compression, zone maps and MPP make complex aggregations over billions of rows fast.
+- **Standard SQL**: analysts and BI tools use familiar SQL and JDBC or ODBC connectivity.
+- **Elastic, decoupled architecture**: RA3 and Serverless separate compute from storage; Serverless removes idle compute cost.
+- **Deep AWS integration**: zero-ETL, streaming ingestion, Spectrum, data sharing, Glue, Lake Formation, QuickSight, SageMaker and Bedrock reduce pipeline code.
+- **Workload isolation without copies**: data sharing gives each team its own compute over the same data.
+- **Automation**: automatic table optimisation, vacuum, analyze and WLM reduce administration.
+- **Security and governance**: KMS, VPC, IAM, RBAC, RLS, column security, masking and auditing.
+- **Serverless-friendly access**: the Data API allows Lambda and Step Functions to use the warehouse without connection management.
 
 ### Limitations
 
-- ==Unsuitable for OLTP== and high-rate point lookups.
-- ==Unenforced constraints== require deduplication logic in pipelines.
-- ==Cost can escalate== with unbounded Serverless scaling, concurrency scaling or unoptimised Spectrum scans.
-- ==Design knowledge required== for large-scale tuning despite automation.
-- ==PostgreSQL compatibility is partial==; some tools and SQL features behave differently.
-- ==Feature constraints on integrations==: zero-ETL, streaming and data sharing each have source, version and object-type limitations.
-- ==Latency floor== makes it inappropriate as a direct backend for high-traffic customer-facing APIs.
+- **Unsuitable for OLTP** and high-rate point lookups.
+- **Unenforced constraints** require deduplication logic in pipelines.
+- **Cost can escalate** with unbounded Serverless scaling, concurrency scaling or unoptimised Spectrum scans.
+- **Design knowledge required** for large-scale tuning despite automation.
+- **PostgreSQL compatibility is partial**; some tools and SQL features behave differently.
+- **Feature constraints on integrations**: zero-ETL, streaming and data sharing each have source, version and object-type limitations.
+- **Latency floor** makes it inappropriate as a direct backend for high-traffic customer-facing APIs.
 
 ### Common Mistakes
 
@@ -5366,16 +5366,16 @@ flowchart TB
 
 ### Summary
 
-Amazon Redshift is AWS's managed cloud data warehouse. Its performance derives from ==columnar storage==, ==compression==, ==zone maps== and ==massively parallel processing== across slices, coordinated by a leader node. Modern deployments use ==RA3 nodes with Redshift Managed Storage== or ==Redshift Serverless==, which separates namespaces (data) from workgroups (compute measured in RPUs) and charges only for compute used. Physical design, distribution styles, sort keys and encodings, determines whether joins are collocated and whether blocks can be skipped, although automatic table optimisation now handles much of this. Workload management, concurrency scaling, short query acceleration and materialized views keep mixed workloads responsive, and data sharing isolates workloads without copying data.
+Amazon Redshift is AWS's managed cloud data warehouse. Its performance derives from **columnar storage**, **compression**, **zone maps** and **massively parallel processing** across slices, coordinated by a leader node. Modern deployments use ==RA3 nodes with Redshift Managed Storage== or **Redshift Serverless**, which separates namespaces (data) from workgroups (compute measured in RPUs) and charges only for compute used. Physical design, distribution styles, sort keys and encodings, determines whether joins are collocated and whether blocks can be skipped, although automatic table optimisation now handles much of this. Workload management, concurrency scaling, short query acceleration and materialized views keep mixed workloads responsive, and data sharing isolates workloads without copying data.
 
 Architectural lessons:
 
-- ==Separate analytics from operations==: analytical queries never run against microservice databases; data reaches the warehouse through zero-ETL, CDC, streaming ingestion or events.
-- ==Layer the warehouse==: raw replicated data, staging models and presentation star schemas protect consumers from source schema changes.
-- ==Design for the engine==: bulk loads, columnar-friendly queries, collocated joins, date-sorted facts and precomputed aggregates.
-- ==Choose the right engine per workload==: Redshift for curated high-concurrency SQL analytics, Athena for ad hoc lake queries, EMR for custom big data processing, OpenSearch for search and logs.
-- ==Integrate serverlessly==: the Data API with Lambda and Step Functions removes connection management; UNLOAD and DynamoDB serve analytical results to customer-facing APIs.
-- ==Govern and control cost==: private networking, IAM roles, KMS, RLS, column security and masking; Serverless limits, Reserved Nodes, pause and resume, and S3 tiering with Spectrum.
+- **Separate analytics from operations**: analytical queries never run against microservice databases; data reaches the warehouse through zero-ETL, CDC, streaming ingestion or events.
+- **Layer the warehouse**: raw replicated data, staging models and presentation star schemas protect consumers from source schema changes.
+- **Design for the engine**: bulk loads, columnar-friendly queries, collocated joins, date-sorted facts and precomputed aggregates.
+- **Choose the right engine per workload**: Redshift for curated high-concurrency SQL analytics, Athena for ad hoc lake queries, EMR for custom big data processing, OpenSearch for search and logs.
+- **Integrate serverlessly**: the Data API with Lambda and Step Functions removes connection management; UNLOAD and DynamoDB serve analytical results to customer-facing APIs.
+- **Govern and control cost**: private networking, IAM roles, KMS, RLS, column security and masking; Serverless limits, Reserved Nodes, pause and resume, and S3 tiering with Spectrum.
 
 ## Section Summary
 
@@ -5383,10 +5383,10 @@ Section 6.2 showed that choosing a database is choosing a data model, a connecti
 
 The architectural lessons:
 
-- ==Each service owns its data==; sharing a database between services recreates the monolith at the data layer.
+- **Each service owns its data**; sharing a database between services recreates the monolith at the data layer.
 - ==The connection model matters as much as the data model==, especially for Lambda and autoscaled containers.
-- ==Data moves between stores by change data capture and events==, which is why [Section 6.3](../unit6/topic3.md) on messaging follows directly.
-- ==Operational and analytical workloads are separated by design==, with the warehouse fed asynchronously.
+- **Data moves between stores by change data capture and events**, which is why [Section 6.3](../unit6/topic3.md) on messaging follows directly.
+- **Operational and analytical workloads are separated by design**, with the warehouse fed asynchronously.
 
 !!! question "Practice and interview questions"
     Questions for this topic are kept separately: [Practice questions](../Questions/unit6.md#62-aws-database-services) · [Interview questions](../interviewquestions/unit6.md#62-aws-database-services).
