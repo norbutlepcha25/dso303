@@ -58,7 +58,7 @@ The layers are not redundant copies of one another. Each has a different **vanta
 | Identity and data (IAM, TLS, KMS) | Principal, action, resource, context | Use of stolen network access to reach data without credentials | Nothing at the packet level; it depends on correct policy |
 
 !!! note "Network controls and identity controls answer different questions"
-    A security group answers ==can this packet reach this port?== An IAM policy answers **may this principal perform this action on this resource?** A mature design needs both. Network controls reduce the attack surface and slow an attacker down; identity controls decide whether a request that does arrive is legitimate. [Section 8.1](../unit8/topic1.md) describes the identity side of the data perimeter; this section describes the network side, and the two meet in VPC endpoint policies and in conditions such as `aws:SourceVpce` and `aws:SourceVpc`.
+    A security group answers **can this packet reach this port?** An IAM policy answers **may this principal perform this action on this resource?** A mature design needs both. Network controls reduce the attack surface and slow an attacker down; identity controls decide whether a request that does arrive is legitimate. [Section 8.1](../unit8/topic1.md) describes the identity side of the data perimeter; this section describes the network side, and the two meet in VPC endpoint policies and in conditions such as `aws:SourceVpce` and `aws:SourceVpc`.
 
 ### Threat modelling the network
 
@@ -102,7 +102,7 @@ AWS is responsible for the security **of** the network: the physical network, th
 
 ### Definition
 
-==Secure VPC design is the practice of arranging accounts, VPCs, subnets, routes, gateways and endpoints so that every network path that exists is intended, minimal and observable, and every path that is not intended is impossible by construction.==
+**Secure VPC design is the practice of arranging accounts, VPCs, subnets, routes, gateways and endpoints so that every network path that exists is intended, minimal and observable, and every path that is not intended is impossible by construction.**
 
 **A security group is a stateful, allow-only virtual firewall enforced by the AWS Nitro system on each elastic network interface (ENI), whose rules can refer to CIDR blocks, managed prefix lists or other security groups.** All of a group's rules are evaluated and any matching allow rule permits the traffic; there are no deny rules, and the return traffic of an allowed flow is permitted automatically. From a security perspective, a security group is best understood as a **workload-level identity for network policy**: membership of `sg-orders-api` says "this ENI belongs to the orders API", and rules referencing that group express who may talk to the orders API regardless of IP addresses.
 
@@ -139,7 +139,7 @@ Security groups alone solve east-west and ingress control for individual workloa
 
 #### Least privilege applied to the network
 
-Least privilege is usually discussed for IAM ([Section 8.1](../unit8/topic1.md)). Applied to networks it means that ==every path must be justified by a specific communication requirement==. A useful exercise is to draw the application's communication matrix before writing any security group.
+Least privilege is usually discussed for IAM ([Section 8.1](../unit8/topic1.md)). Applied to networks it means that **every path must be justified by a specific communication requirement**. A useful exercise is to draw the application's communication matrix before writing any security group.
 
 | From / To | ALB | Orders API | Payments API | Orders DB | S3 (via endpoint) | Internet |
 |-----------|-----|-----------|--------------|-----------|-------------------|----------|
@@ -520,7 +520,7 @@ Terms already defined in [Chapter 1.6](../unit1/topic6.md#important-aws-terminol
 
 ### AWS Best Practices
 
-The AWS Well-Architected Framework Security pillar describes infrastructure protection as ==creating network layers, controlling traffic at all layers, automating network protection and implementing inspection and protection==.
+The AWS Well-Architected Framework Security pillar describes infrastructure protection as **creating network layers, controlling traffic at all layers, automating network protection and implementing inspection and protection**.
 
 | Pillar | Network security practice |
 |--------|---------------------------|
@@ -646,7 +646,7 @@ Architectural lessons:
 
 ### Definition
 
-==A network ACL used as a security guardrail is a stateless, subnet-level set of numbered allow and deny rules that enforces coarse invariants and emergency containment independent of the security groups of individual workloads.==
+**A network ACL used as a security guardrail is a stateless, subnet-level set of numbered allow and deny rules that enforces coarse invariants and emergency containment independent of the security groups of individual workloads.**
 
 **VPC Flow Logs is a VPC feature that captures metadata about IP traffic flowing to and from network interfaces in a VPC, a subnet or a specific ENI, and delivers aggregated flow records to Amazon CloudWatch Logs, Amazon S3 or Amazon Data Firehose.** Flow Logs record **metadata, not payloads**: who talked to whom, on which ports and protocols, how much, when, and whether the traffic was accepted or rejected.
 
@@ -808,7 +808,7 @@ flowchart LR
     SL --> SIEM["Subscribers: SIEM, OpenSearch, partner tools"]
 ```
 
-**Amazon GuardDuty** is a managed threat detection service that analyses foundational data sources: CloudTrail management events, VPC Flow Logs and Route 53 Resolver DNS query logs, plus optional protection plans (S3, EKS audit logs, Runtime Monitoring for EC2, ECS and EKS, RDS login activity, Lambda network activity, Malware Protection). Crucially, GuardDuty ==obtains flow log and DNS data through an independent, duplicated stream== directly from AWS; you do not need to enable Flow Logs for GuardDuty to work, and disabling your flow logs does not blind GuardDuty. It uses threat intelligence, machine learning and anomaly detection to produce findings, and its extended threat detection correlates multiple signals into attack sequence findings.
+**Amazon GuardDuty** is a managed threat detection service that analyses foundational data sources: CloudTrail management events, VPC Flow Logs and Route 53 Resolver DNS query logs, plus optional protection plans (S3, EKS audit logs, Runtime Monitoring for EC2, ECS and EKS, RDS login activity, Lambda network activity, Malware Protection). Crucially, GuardDuty **obtains flow log and DNS data through an independent, duplicated stream** directly from AWS; you do not need to enable Flow Logs for GuardDuty to work, and disabling your flow logs does not blind GuardDuty. It uses threat intelligence, machine learning and anomaly detection to produce findings, and its extended threat detection correlates multiple signals into attack sequence findings.
 
 Examples of network-derived GuardDuty findings:
 
@@ -1052,7 +1052,7 @@ Architectural lessons:
 
 ### Definition
 
-==AWS WAF is a managed web application firewall that inspects HTTP and HTTPS requests forwarded by integrated AWS services and allows, blocks, counts or challenges each request according to the rules in a web access control list (web ACL).== WAF operates at layer 7 and sees the request line, headers, cookies, query string, body, client IP address and TLS fingerprint.
+**AWS WAF is a managed web application firewall that inspects HTTP and HTTPS requests forwarded by integrated AWS services and allows, blocks, counts or challenges each request according to the rules in a web access control list (web ACL).** WAF operates at layer 7 and sees the request line, headers, cookies, query string, body, client IP address and TLS fingerprint.
 
 **AWS Shield is a managed distributed denial of service (DDoS) protection service.** **Shield Standard** is automatically applied at no extra charge to all AWS customers and protects against the most common network and transport layer attacks. **Shield Advanced** is a paid subscription adding enhanced detection and mitigation for specific protected resources, application-layer DDoS mitigation integrated with WAF, access to the Shield Response Team, cost protection and visibility. A separate capability, AWS Shield network security director (in preview since June 2025), analyses VPC network configurations and reports missing or misconfigured network security controls; it is a posture assessment tool, not a DDoS mitigation.
 
@@ -1089,7 +1089,7 @@ Fixing vulnerabilities in code remains the primary defence, but organisations ru
 
 #### The problem: attacks larger than the application
 
-A DDoS attack aims to exhaust a resource: network bandwidth, connection tables, CPU or application threads. Volumetric attacks now regularly reach terabits per second and hundreds of millions of packets per second, far beyond any single organisation's capacity. Defending against them requires ==capacity and scrubbing at the scale of a global network==, which is why DDoS protection is a service rather than a product. AWS operates that capacity across its edge locations and Regions and provides it to customers through Shield.
+A DDoS attack aims to exhaust a resource: network bandwidth, connection tables, CPU or application threads. Volumetric attacks now regularly reach terabits per second and hundreds of millions of packets per second, far beyond any single organisation's capacity. Defending against them requires **capacity and scrubbing at the scale of a global network**, which is why DDoS protection is a service rather than a product. AWS operates that capacity across its edge locations and Regions and provides it to customers through Shield.
 
 ### Core Concepts
 
@@ -1111,7 +1111,7 @@ The OWASP Top 10 is a widely used awareness document listing the most critical w
 | A10 Server-Side Request Forgery | Partly | Rules blocking internal addresses and metadata endpoints in parameters | IMDSv2, egress controls ([Part 8.2.1](#vpc-design-and-security-groups)), input validation |
 
 !!! warning "A WAF is not a substitute for secure code"
-    WAF rules are pattern-based and can be bypassed by sufficiently creative encoding, and business-logic flaws (for example changing an order identifier in a URL to view another customer's order) look like perfectly normal requests. Treat WAF as ==defence in depth and virtual patching==, never as permission to leave vulnerabilities in the application.
+    WAF rules are pattern-based and can be bypassed by sufficiently creative encoding, and business-logic flaws (for example changing an order identifier in a URL to view another customer's order) look like perfectly normal requests. Treat WAF as **defence in depth and virtual patching**, never as permission to leave vulnerabilities in the application.
 
 #### Anatomy of a web ACL
 
@@ -1569,7 +1569,7 @@ flowchart TB
 ### Closing architectural lessons for Section 8.2
 
 - **Assume every layer can fail.** Edge, VPC boundary, subnet, workload and identity controls must each hold even when the layer outside it has been bypassed.
-- ==Least privilege applies to packets too.== Every path should correspond to a documented requirement; default deny is the only safe starting point.
+- **Least privilege applies to packets too.** Every path should correspond to a documented requirement; default deny is the only safe starting point.
 - **Identity beats addresses.** Security group references, pod labels, IAM auth policies and endpoint policies express intent that survives elasticity; IP lists do not.
 - **Egress is where breaches end.** Filter outbound traffic, including DNS, and use endpoint policies so that stolen data has nowhere to go.
 - **Prevent, detect and contain.** Guardrails (BPA, SCPs, Firewall Manager) prevent; Flow Logs, GuardDuty and Config detect; NACLs, isolation groups and WAF IP sets contain, ideally automatically and always audited.

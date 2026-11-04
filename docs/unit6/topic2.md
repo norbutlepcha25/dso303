@@ -35,7 +35,7 @@ flowchart TD
 | Change data capture | DMS, zero-ETL, activity streams | DynamoDB Streams, Kinesis | Neptune Streams | Consumer, not source |
 
 !!! danger "The rule that connects all four parts"
-    ==Analytics must never query service databases directly.== Operational stores in the first three parts are owned by individual services; the warehouse in the fourth part receives their data through zero-ETL integrations, change data capture or events. Breaking this rule couples services at the data layer and lets a reporting query take down a checkout path.
+    **Analytics must never query service databases directly.** Operational stores in the first three parts are owned by individual services; the warehouse in the fourth part receives their data through zero-ETL integrations, change data capture or events. Breaking this rule couples services at the data layer and lets a reporting query take down a checkout path.
 
 ---
 
@@ -121,7 +121,7 @@ Relational databases were designed for a world of a few long-lived application s
 AWS responded by building integration capabilities around the engines rather than changing the engines' fundamental single-writer model:
 
 - **RDS Proxy** exists because connection-oriented protocols do not scale with function-per-request compute.
-- ==IAM database authentication and RDS-managed Secrets Manager credentials== exist because static passwords are incompatible with least privilege and rotation.
+- **IAM database authentication and RDS-managed Secrets Manager credentials** exist because static passwords are incompatible with least privilege and rotation.
 - **Blue/Green Deployments and fast clones** exist because database change is the riskiest part of continuous delivery.
 - **The Data API** exists because some consumers, such as Lambda functions and Amazon Bedrock Knowledge Bases, benefit from an HTTPS request model with no connection or VPC plumbing.
 - **Zero-ETL integrations** exist because hand-built extract-transform-load pipelines are expensive to maintain and are a common cause of stale analytics.
@@ -167,7 +167,7 @@ graph TD
 The decision is usually driven by four questions:
 
 1. **Do the services scale differently?** A write-heavy order service and a read-mostly catalogue service on one writer compete for the same CPU, buffer pool and connection limit.
-2. ==Do they have different availability or compliance requirements?== A payment ledger that needs Global Database and customer-managed KMS keys should not force those costs onto a recommendation service.
+2. **Do they have different availability or compliance requirements?** A payment ledger that needs Global Database and customer-managed KMS keys should not force those costs onto a recommendation service.
 3. **How many teams are involved?** Separate teams benefit from separate maintenance windows, engine versions and parameter groups.
 4. **What is the cost floor?** Each Aurora cluster carries at least one instance or a Serverless v2 minimum. Twenty services with a Multi-AZ cluster each is a substantial fixed cost.
 
@@ -513,7 +513,7 @@ Pinning is observable: the CloudWatch metric `DatabaseConnectionsCurrentlySessio
 RDS Proxy separates **client-to-proxy** authentication from **proxy-to-database** authentication.
 
 - Client to proxy: native database password, or IAM authentication. With IAM, the client generates an authentication token signed with its IAM role and presents it as the password; the IAM policy grants `rds-db:connect` on the **proxy's** resource ID.
-- Proxy to database: the proxy retrieves the database user's credential from Secrets Manager using its own IAM role. Because the proxy reads the secret on demand, ==Secrets Manager rotation does not require client changes==. AWS has also introduced an option for the proxy to authenticate to the database using IAM itself (sometimes described as end-to-end IAM authentication), which removes the need to store a database secret for that user. Verify availability for your engine and Region before designing around it.
+- Proxy to database: the proxy retrieves the database user's credential from Secrets Manager using its own IAM role. Because the proxy reads the secret on demand, **Secrets Manager rotation does not require client changes**. AWS has also introduced an option for the proxy to authenticate to the database using IAM itself (sometimes described as end-to-end IAM authentication), which removes the need to store a database secret for that user. Verify availability for your engine and Region before designing around it.
 
 This separation has a significant consequence. IAM database authentication directly against an instance has a limit on the rate of new IAM-authenticated connections that AWS advises should stay modest (verify current guidance). Placing a proxy in front allows high connection-rate clients such as Lambda to use IAM identity while the proxy holds a small number of long-lived database connections.
 
@@ -1115,7 +1115,7 @@ graph TD
 
 Design rules for the migration stage:
 
-- ==Migrations run once per environment, as a dedicated step==, not at every container start. Running migrations on application start races between replicas, slows scale-out and couples deployment of compute with change of data.
+- **Migrations run once per environment, as a dedicated step**, not at every container start. Running migrations on application start races between replicas, slows scale-out and couples deployment of compute with change of data.
 - The migration identity is separate from the runtime identity: it holds DDL privileges; the runtime user holds only DML on its schema.
 - Migrations are forward-only in production. Rollback is achieved by deploying a compatible application version, which expand-contract guarantees. Down-migrations are useful in development only.
 - The pipeline must stop if a migration fails, and the migration tool's lock table must be checked for stale locks after an interrupted run.
@@ -1417,7 +1417,7 @@ This design suits internal tools and low-volume APIs: no VPC configuration, no d
 ### Limitations
 
 - **The single writer remains.** None of the access-layer services increases write capacity of standard Aurora or RDS.
-- ==Proxies add latency and cost, and can be negated by pinning.==
+- **Proxies add latency and cost, and can be negated by pinning.**
 - **IAM authentication has connection-rate considerations** and requires TLS and token generation logic.
 - **Rotation and injection interact badly** if credentials are injected once at start and single-user rotation is used.
 - **Blue/Green has replication constraints** on the schema changes it permits.
@@ -1485,7 +1485,7 @@ Architectural lessons from this part:
 
 In this part, **DynamoDB integration** means using Amazon DynamoDB as the primary operational store of a service in such a way that its key design serves the service's access patterns, its change stream drives event-driven processing, its API is invoked directly by other managed services where no business logic is required, and its security, capacity and cost are governed declaratively.
 
-DynamoDB is well suited to this role because it has ==no connections, no servers and no VPC placement==. Every request is an independently authenticated HTTPS call signed with SigV4. This removes the connection-management problems examined in the Amazon RDS and Aurora part of this section and makes DynamoDB the natural partner of Lambda, Fargate and other elastic compute.
+DynamoDB is well suited to this role because it has **no connections, no servers and no VPC placement**. Every request is an independently authenticated HTTPS call signed with SigV4. This removes the connection-management problems examined in the Amazon RDS and Aurora part of this section and makes DynamoDB the natural partner of Lambda, Fargate and other elastic compute.
 
 ```mermaid
 graph TD
@@ -1889,7 +1889,7 @@ Note the many-to-many relationship between drivers and operators: a driver may w
 | AP12 | Retrieve the full change history of a trip for dispute resolution | tripId | Low | Eventual |
 
 !!! warning "Driver location is not in this table"
-    Driver GPS updates arrive every few seconds for every active driver and need geospatial proximity search. That is an in-memory geospatial workload (ElastiCache or MemoryDB geospatial commands, or Amazon Location Service), not a DynamoDB workload. Modelling is also about ==deciding what not to put in the table==.
+    Driver GPS updates arrive every few seconds for every active driver and need geospatial proximity search. That is an in-memory geospatial workload (ElastiCache or MemoryDB geospatial commands, or Amazon Location Service), not a DynamoDB workload. Modelling is also about **deciding what not to put in the table**.
 
 ##### Key design
 
@@ -2139,7 +2139,7 @@ sequenceDiagram
 | `TumblingWindowInSeconds` | 0 to 900 | Aggregates state across invocations within a window, for streaming aggregations |
 
 !!! note "Partial batch response semantics for streams"
-    For stream sources, the function returns the ==sequence number of the first failed record==. Lambda checkpoints up to the record before it and retries the batch starting from the failed record. Records after the failed one are therefore retried as well, so the handler must be idempotent. Returning several item identifiers is allowed, but Lambda uses the lowest sequence number.
+    For stream sources, the function returns the **sequence number of the first failed record**. Lambda checkpoints up to the record before it and retries the batch starting from the failed record. Records after the failed one are therefore retried as well, so the handler must be idempotent. Returning several item identifiers is allowed, but Lambda uses the lowest sequence number.
 
 ##### Event filtering
 
@@ -2685,7 +2685,7 @@ Because every partition key in RideLink begins with `T#<operator>#`, IAM can enf
 | `aws:PrincipalTag/...` | Attribute-based access control using session tags from Cognito, IAM Identity Center or STS |
 
 !!! warning "Indexes need tenant-prefixed keys too"
-    `LeadingKeys` applies to the partition key of whatever is being queried. The inverted index `INV` has `SK` values such as `DRIVER#d7` without a tenant prefix, so a tenant-scoped role must not be granted access to `INV`. In RideLink, only the platform's internal operator-management service, with its own role, queries `INV`. ==Tenant isolation is a property of every key in every index the role can reach.==
+    `LeadingKeys` applies to the partition key of whatever is being queried. The inverted index `INV` has `SK` values such as `DRIVER#d7` without a tenant prefix, so a tenant-scoped role must not be granted access to `INV`. In RideLink, only the platform's internal operator-management service, with its own role, queries `INV`. **Tenant isolation is a property of every key in every index the role can reach.**
 
 #### Resource-based policy example
 
@@ -2806,7 +2806,7 @@ The model counts request units per month. Multiply by current Regional prices fr
 
     Observations:
 
-    - ==Versioning accounts for 40 of 64 write units.== If the audit requirement allows, storing history as timeline events (1 KB, non-transactional) instead of full versions would cut writes by more than half.
+    - **Versioning accounts for 40 of 64 write units.** If the audit requirement allows, storing history as timeline events (1 KB, non-transactional) instead of full versions would cut writes by more than half.
     - Writes cost several times more per unit than reads, so this workload is write-dominated in cost even though reads outnumber writes in operations.
     - Add storage (items plus GSIs), PITR (proportional to table size), stream consumers (Lambda cost), and any Global Table replicated writes, which multiply write cost by the number of replica Regions.
 
@@ -2944,7 +2944,7 @@ graph LR
 
 - **Query flexibility is deliberately constrained.** There are no joins, no native aggregations, no ordering except by the sort key, and every query needs the full partition key or an index; anything else is a `Scan`.
 - **The 400 KB item limit** forces large payloads into S3 with a pointer in the item.
-- ==LSIs can only be created with the table==, so a late-discovered access pattern cannot use one.
+- **LSIs can only be created with the table**, so a late-discovered access pattern cannot use one.
 - **A poorly chosen partition key** produces hot partitions and throttling that no amount of capacity fixes.
 - **Transactions are Region- and account-scoped**, and the API is proprietary, which limits portability.
 - **Up-front modelling.** New access patterns may require new GSIs, backfills or key migrations.
@@ -3090,7 +3090,7 @@ The difficulty is not that SQL cannot express the question; it can. The difficul
 | Variable depth | Recursive queries are hard for the optimiser to estimate; plans become unstable |
 | Schema rigidity | Adding a new relationship type (for example "shares device with") often means a new join table and code change |
 
-A graph engine is designed so that the cost of a traversal is proportional to ==the part of the graph actually visited==, not to the total size of the dataset.
+A graph engine is designed so that the cost of a traversal is proportional to **the part of the graph actually visited**, not to the total size of the dataset.
 
 #### Index-free adjacency, conceptually
 
@@ -3250,7 +3250,7 @@ A variable-length traversal, "accounts reachable from account A1 through shared 
 
 #### Transactions and consistency
 
-Neptune Database provides ACID transactions. Each Gremlin or openCypher request is executed as a transaction; Gremlin also supports sessions and, with recent TinkerPop versions, explicit transactions spanning several requests. The writer instance commits changes to the shared storage volume; read replicas read from the same volume and typically observe writes after a short replica lag (commonly tens of milliseconds, indicative). Read replicas therefore offer ==eventual consistency relative to the writer== for reads, which the application must tolerate or route read-after-write queries to the writer.
+Neptune Database provides ACID transactions. Each Gremlin or openCypher request is executed as a transaction; Gremlin also supports sessions and, with recent TinkerPop versions, explicit transactions spanning several requests. The writer instance commits changes to the shared storage volume; read replicas read from the same volume and typically observe writes after a short replica lag (commonly tens of milliseconds, indicative). Read replicas therefore offer **eventual consistency relative to the writer** for reads, which the application must tolerate or route read-after-write queries to the writer.
 
 Neptune uses a form of multi-version concurrency control so that readers do not block writers. Concurrent writers modifying the same vertices can encounter **ConcurrentModificationException** conflicts, which the application must retry with backoff. This is a key production concern discussed in Common Mistakes.
 
@@ -3372,7 +3372,7 @@ LIMIT 10
 | Typical latency goal | Milliseconds per request | Seconds for algorithms over millions or billions of edges |
 | Role in architecture | System of record | Analytical copy, refreshed from S3 or Neptune Database |
 
-This is the same OLTP versus OLAP separation discussed in [Chapter 1.5](../unit1/topic5.md#oltp-versus-olap) and in the Amazon Redshift part of this section for Redshift: ==do not run whole-graph analytics on the cluster that serves your online application==.
+This is the same OLTP versus OLAP separation discussed in [Chapter 1.5](../unit1/topic5.md#oltp-versus-olap) and in the Amazon Redshift part of this section for Redshift: **do not run whole-graph analytics on the cluster that serves your online application**.
 
 ##### Neptune ML
 
@@ -3990,7 +3990,7 @@ sequenceDiagram
 ```
 
 !!! tip "Protocol choice for Lambda"
-    Lambda execution environments are frozen between invocations, which can leave WebSocket connections half-open. For Lambda, ==HTTPS requests with openCypher or Gremlin over HTTP== are often simpler and more robust than long-lived WebSockets. If WebSockets are used, create the connection during initialisation, detect closed connections, and reconnect with retries. For ECS and EKS services, pooled WebSocket or Bolt connections provide the best throughput.
+    Lambda execution environments are frozen between invocations, which can leave WebSocket connections half-open. For Lambda, **HTTPS requests with openCypher or Gremlin over HTTP** are often simpler and more robust than long-lived WebSockets. If WebSockets are used, create the connection during initialisation, detect closed connections, and reconnect with retries. For ECS and EKS services, pooled WebSocket or Bolt connections provide the best throughput.
 
 #### Consuming Neptune from EKS
 
@@ -4169,7 +4169,7 @@ flowchart LR
 
 #### The problems a cloud warehouse solves
 
-1. ==Operational databases are the wrong engine for analytics.== A row store must read entire rows to aggregate one column, and a large analytical query competes for buffer cache, CPU and I/O with customer-facing transactions.
+1. **Operational databases are the wrong engine for analytics.** A row store must read entire rows to aggregate one column, and a large analytical query competes for buffer cache, CPU and I/O with customer-facing transactions.
 2. **Data is fragmented across services.** In a microservice architecture, each service owns its database ([Chapter 4.1](../unit4/topic1.md)). Business questions such as "revenue by marketing channel by product category" span several services, so the data must be **integrated** somewhere.
 3. **On-premises warehouses were expensive and rigid.** Traditional appliances required large up-front capital expenditure, capacity planning years ahead, and specialist administration.
 4. **History must be preserved.** Operational stores often keep only current state; analytics needs time-variant history.
@@ -4484,7 +4484,7 @@ flowchart LR
 | AI-driven scaling and optimisation | Optional mode in which you set a price-performance target and Redshift adjusts capacity and optimisations; verify current availability |
 | Usage limits | Daily, weekly or monthly RPU-hour limits with alert, log or disable actions |
 
-Serverless compute is charged per RPU-second while queries run (with a minimum charge per activation, indicatively 60 seconds), and ==no compute charge accrues while the workgroup is idle==. Storage is billed separately as RMS.
+Serverless compute is charged per RPU-second while queries run (with a minimum charge per activation, indicatively 60 seconds), and **no compute charge accrues while the workgroup is idle**. Storage is billed separately as RMS.
 
 ##### Provisioned versus Serverless
 
@@ -5384,7 +5384,7 @@ Section 6.2 showed that choosing a database is choosing a data model, a connecti
 The architectural lessons:
 
 - **Each service owns its data**; sharing a database between services recreates the monolith at the data layer.
-- ==The connection model matters as much as the data model==, especially for Lambda and autoscaled containers.
+- **The connection model matters as much as the data model**, especially for Lambda and autoscaled containers.
 - **Data moves between stores by change data capture and events**, which is why [Section 6.3](../unit6/topic3.md) on messaging follows directly.
 - **Operational and analytical workloads are separated by design**, with the warehouse fed asynchronously.
 

@@ -65,7 +65,7 @@ flowchart TD
 
 ### Definition
 
-==Amazon CloudWatch Logs is a fully managed, regional service that ingests, stores, secures and makes searchable the log data produced by applications, AWS services and operating systems, and that routes that data to metrics, alarms, queries and downstream destinations.==
+**Amazon CloudWatch Logs is a fully managed, regional service that ingests, stores, secures and makes searchable the log data produced by applications, AWS services and operating systems, and that routes that data to metrics, alarms, queries and downstream destinations.**
 
 A log, in the sense used throughout this section, is an **append-only, time-ordered record of discrete events**, each describing something that happened: a request served, an exception thrown, a user signed in, a packet rejected. Logs complement the other observability signals from [Section 7.1](../unit7/topic1.md):
 
@@ -111,7 +111,7 @@ On a traditional server, logs were files in `/var/log`. An administrator logged 
 1. **Compute is ephemeral.** A Fargate task, a Kubernetes pod or a Lambda execution environment can disappear at any moment, taking any local files with it. [Chapter 2.1](../unit2/topic1.md) made the point that anything written to a file inside a container is lost when the task stops.
 2. **Compute is numerous.** A service may run 40 tasks today and 400 tomorrow. Nobody can SSH into 400 containers to find one failed request.
 3. **Requests cross services.** One user request in a microservices system touches an API Gateway stage, three services and a queue. The story of that request is scattered across many log sources, and it can only be reconstructed if all of them land in one queryable place with a shared identifier.
-4. ==There may be no host at all.== Lambda and Fargate give you no operating system to log in to.
+4. **There may be no host at all.** Lambda and Fargate give you no operating system to log in to.
 5. **Logs are evidence.** Security investigations, audits and regulations (financial services, health data, national data protection laws) require logs to be retained, tamper-resistant and access-controlled, which is impossible when they live on the servers an attacker may have compromised.
 
 The solution is **centralised logging**: every workload ships its events, immediately and continuously, to a durable store outside the workload itself.
@@ -172,7 +172,7 @@ flowchart TB
     DP["Data protection policy"] -.->|"applies to all streams"| LG
 ```
 
-The ==log group is the unit of configuration==. Everything an architect decides is set on the log group (or at account level) and applies to every stream within it:
+The **log group is the unit of configuration**. Everything an architect decides is set on the log group (or at account level) and applies to every stream within it:
 
 | Setting | Belongs to |
 |---------|------------|
@@ -532,7 +532,7 @@ flowchart TB
 - **Not a full-text search engine.** Queries scan data rather than consulting an inverted index (field indexes help only for equality filters on indexed fields). Very large, repeated, interactive searches are better served by OpenSearch (7.2.3).
 - **Log class is immutable** and Infrequent Access disables many features.
 - **Metric filters are not retroactive** and support at most three dimensions.
-- ==Limited subscription filters per log group.== Complex fan-out needs Kinesis or Firehose in between, or account-level policies.
+- **Limited subscription filters per log group.** Complex fan-out needs Kinesis or Firehose in between, or account-level policies.
 - **Export is batch and serialised** (one active task per account and Region).
 - **Ingestion constraints:** event size, batch size and timestamp windows can drop events from misconfigured shippers.
 - **Regional by default.** Cross-Region analysis requires centralisation or cross-account observability.
@@ -733,7 +733,7 @@ CloudWatch Logs itself scales without intervention. Design for scalability at th
 
 #### Availability
 
-The logging path must be ==less critical than the request path==. Non-blocking drivers, bounded buffers and asynchronous shippers ensure that an impaired logging service degrades observability rather than availability. For regional resilience of the logs themselves, replicate to a backup Region.
+The logging path must be **less critical than the request path**. Non-blocking drivers, bounded buffers and asynchronous shippers ensure that an impaired logging service degrades observability rather than availability. For regional resilience of the logs themselves, replicate to a backup Region.
 
 #### Reliability
 
@@ -839,7 +839,7 @@ Secrets Manager and Parameter Store ([Chapter 2.2](../unit2/topic2.md)) keep cre
 
 #### Network controls
 
-Workloads in private subnets without a NAT gateway need an ==interface VPC endpoint for CloudWatch Logs== (`com.amazonaws.<region>.logs`). The endpoint's security group must allow HTTPS (TCP 443) from the workload security groups. An endpoint policy can restrict which log groups may be written through it. For Fargate tasks in private subnets, a missing Logs endpoint (and no NAT) is a classic cause of tasks failing to start with log driver errors.
+Workloads in private subnets without a NAT gateway need an **interface VPC endpoint for CloudWatch Logs** (`com.amazonaws.<region>.logs`). The endpoint's security group must allow HTTPS (TCP 443) from the workload security groups. An endpoint policy can restrict which log groups may be written through it. For Fargate tasks in private subnets, a missing Logs endpoint (and no NAT) is a classic cause of tasks failing to start with log driver errors.
 
 #### Security Groups, Network ACLs and public versus private resources
 
@@ -1157,7 +1157,7 @@ Architectural lessons:
 
 ### Definition
 
-==CloudWatch Logs Insights is a fully managed, interactive, pay-per-query log analytics capability of CloudWatch Logs that scans log events in selected log groups over a chosen time range and filters, parses, aggregates and visualises them using a pipe-based query language, OpenSearch Piped Processing Language (PPL) or OpenSearch SQL.==
+**CloudWatch Logs Insights is a fully managed, interactive, pay-per-query log analytics capability of CloudWatch Logs that scans log events in selected log groups over a chosen time range and filters, parses, aggregates and visualises them using a pipe-based query language, OpenSearch Piped Processing Language (PPL) or OpenSearch SQL.**
 
 Logs Insights needs no setup: any log group in CloudWatch Logs can be queried immediately, including historical data ingested before anyone thought of the question. It is the **investigation tool** of the logging stack: engineers use it during incidents, while debugging, and for ad hoc operational and security analysis. Since June 2026 the default console experience is **CloudWatch Log Analytics**, a unified interface that brings Logs Insights queries, Live Tail and Contributor Insights together with tabs, facets, saved queries and visualisations; the query engine and pricing are those of Logs Insights.
 
@@ -1316,7 +1316,7 @@ filter level in ["ERROR", "FATAL"]
 Case-insensitive regular expressions use the `(?i)` flag: `filter @message like /(?i)timeout/`.
 
 !!! warning "Filtering does not reduce bytes scanned by itself"
-    Without field indexes, Logs Insights must read every event in the selected log groups and time range to evaluate a `filter`. A selective filter makes the query return fewer rows and aggregate faster, but ==the bill is based on bytes scanned==, which only shrinks when you narrow the log groups, narrow the time range, or use indexed fields.
+    Without field indexes, Logs Insights must read every event in the selected log groups and time range to evaluate a `filter`. A selective filter makes the query return fewer rows and aggregate faster, but **the bill is based on bytes scanned**, which only shrinks when you narrow the log groups, narrow the time range, or use indexed fields.
 
 #### Aggregation with stats and time bins
 
@@ -1593,7 +1593,7 @@ Key architectural properties:
 - **No persistent materialisation.** Each query recomputes from raw data; repeated heavy dashboards are better served by metrics or OpenSearch.
 - **Regional.** No single query spans Regions without centralisation.
 - **Language feature gaps.** Some commands are exclusive to one language (for example `filterIndex` and comparison queries are Logs Insights QL only); PPL and SQL have supported Infrequent Access log groups since March 2026.
-- ==Field indexes cover recent data only== (30 days from ingestion) and only after the policy exists.
+- **Field indexes cover recent data only** (30 days from ingestion) and only after the policy exists.
 
 #### Pricing Model and recommendations
 
@@ -2099,7 +2099,7 @@ Architectural lessons:
 
 ### Definition
 
-==Amazon OpenSearch Service is a managed service that deploys, operates and scales OpenSearch, an open-source, distributed search and analytics engine, so that data such as logs, metrics, traces and documents can be indexed at write time and then searched, aggregated and visualised interactively with low latency.==
+**Amazon OpenSearch Service is a managed service that deploys, operates and scales OpenSearch, an open-source, distributed search and analytics engine, so that data such as logs, metrics, traces and documents can be indexed at write time and then searched, aggregated and visualised interactively with low latency.**
 
 The service offers three ways to use the engine:
 
@@ -2377,7 +2377,7 @@ The **OpenSearch Optimized** families deserve attention for logging. Because eve
 
 #### The engine optimised for log analytics
 
-In July 2026 AWS introduced an ==engine mode optimised for log analytics== for new domains running OpenSearch 3.5 or later on OpenSearch Optimized instances. It combines **columnar storage in Apache Parquet format** and a vectorised execution engine for analytical queries with the Lucene inverted index for full-text search. AWS reports substantially lower storage and faster ingestion and aggregation for log workloads at no additional charge.
+In July 2026 AWS introduced an **engine mode optimised for log analytics** for new domains running OpenSearch 3.5 or later on OpenSearch Optimized instances. It combines **columnar storage in Apache Parquet format** and a vectorised execution engine for analytical queries with the Lucene inverted index for full-text search. AWS reports substantially lower storage and faster ingestion and aggregation for log workloads at no additional charge.
 
 | Aspect | Standard engine | Optimised engine (log analytics) |
 |--------|-----------------|---------------------------------|
@@ -2703,7 +2703,7 @@ sequenceDiagram
 
 #### Limitations
 
-- ==Clusters must be sized and operated== (for domains): shard strategy, heap pressure, storage headroom and upgrades remain the customer's design responsibility.
+- **Clusters must be sized and operated** (for domains): shard strategy, heap pressure, storage headroom and upgrades remain the customer's design responsibility.
 - **Indexing costs compute and storage.** Every indexed field costs CPU at write time and storage for index structures; indexing everything by default is expensive.
 - **Mapping changes require reindexing.** A field's type cannot be changed in an existing index.
 - **Near-real-time only.** Documents are searchable after a refresh (about 1 to 10 seconds).
@@ -3292,7 +3292,7 @@ Across all three parts the same architectural principles recur:
 
 - **Structure at the source.** A shared JSON schema with trace and correlation IDs is what makes metric filters, Logs Insights queries, field indexes and OpenSearch mappings work across services.
 - **Governance as code.** Log groups, retention, classes, index policies, saved queries, templates, ISM policies and security roles belong in version-controlled infrastructure as code (Unit V).
-- ==Logging must never harm the application.== Asynchronous, buffered delivery with back-pressure handling and dead-letter queues applies from the `awslogs` driver to OpenSearch Ingestion (Chapters [4.3](../unit4/topic3.md) and [6.3](../unit6/topic3.md)).
+- **Logging must never harm the application.** Asynchronous, buffered delivery with back-pressure handling and dead-letter queues applies from the `awslogs` driver to OpenSearch Ingestion (Chapters [4.3](../unit4/topic3.md) and [6.3](../unit6/topic3.md)).
 - **Security by design.** Least-privilege access, encryption with customer managed keys, masking of sensitive data before it spreads, and centralised, tamper-resistant evidence.
 - **Every byte has a lifecycle and a price.** Ingestion, storage, scanning and indexing each cost money; retention, tiering and selective routing keep observability affordable.
 

@@ -38,7 +38,7 @@ The [Section Summary](#section-summary) maps each part to its arc of the loop, i
 
 ### Definition
 
-==A CloudWatch dashboard is a customisable, shareable page in the CloudWatch console that displays metrics, alarms, logs query results and other widgets, possibly from several accounts and Regions, in a single view.== A dashboard is a **read-only visualisation**: it never changes the system and never notifies anyone. Its purpose is shared situational awareness.
+**A CloudWatch dashboard is a customisable, shareable page in the CloudWatch console that displays metrics, alarms, logs query results and other widgets, possibly from several accounts and Regions, in a single view.** A dashboard is a **read-only visualisation**: it never changes the system and never notifies anyone. Its purpose is shared situational awareness.
 
 ==A CloudWatch alarm is a managed rule that continuously evaluates a metric, a metric math expression, a query or a combination of other alarms against a condition, maintains a state (`OK`, `ALARM` or `INSUFFICIENT_DATA`), and performs actions when that state changes.== An alarm is the point at which telemetry becomes a **decision**: someone or something must act.
 
@@ -99,7 +99,7 @@ Before managed monitoring, operations teams ran tools such as Nagios, Zabbix or 
 - write their own integrations to notification and paging systems,
 - keep alert rules synchronised with a fleet whose resources changed constantly.
 
-CloudWatch alarms and dashboards are ==regional, managed and integrated with every AWS service==. Service metrics arrive without agents, alarms evaluate on AWS infrastructure independent of your workloads, and alarm actions integrate natively with SNS, Lambda, Auto Scaling, EC2, Systems Manager and EventBridge. Because alarms are API resources, they can be created by the same CloudFormation or CDK stack that creates the service, so the alarm lifecycle follows the resource lifecycle.
+CloudWatch alarms and dashboards are **regional, managed and integrated with every AWS service**. Service metrics arrive without agents, alarms evaluate on AWS infrastructure independent of your workloads, and alarm actions integrate natively with SNS, Lambda, Auto Scaling, EC2, Systems Manager and EventBridge. Because alarms are API resources, they can be created by the same CloudFormation or CDK stack that creates the service, so the alarm lifecycle follows the resource lifecycle.
 
 #### Benefits over older methods
 
@@ -133,7 +133,7 @@ The single most important design idea in alerting is the distinction between a *
 A page at 03:00 because CPU reached 85 per cent on a healthy, auto-scaling service is **noise**: users were not harmed and nothing needed to be done. A page because checkout errors doubled is **signal** even if every resource metric looks normal, for example because a downstream payment provider is failing. Chapters [1.7](../unit1/topic7.md) and [4.3](../unit4/topic3.md) made this point for microservices; this part turns it into a method.
 
 !!! warning "Cause alarms still have a place"
-    Some cause-based conditions must be alarmed because by the time the symptom appears it is too late to act: free storage on a database approaching zero, certificate expiry within 14 days, a dead-letter queue that is not empty, service quota utilisation approaching its limit. The test is whether the condition ==predicts unavoidable harm that a human must prevent==. Such alarms should normally create a ticket, not page someone at night, unless the lead time is very short.
+    Some cause-based conditions must be alarmed because by the time the symptom appears it is too late to act: free storage on a database approaching zero, certificate expiry within 14 days, a dead-letter queue that is not empty, service quota utilisation approaching its limit. The test is whether the condition **predicts unavoidable harm that a human must prevent**. Such alarms should normally create a ticket, not page someone at night, unless the lead time is very short.
 
 #### Golden signals, RED and USE
 
@@ -684,7 +684,7 @@ flowchart TB
 #### Limitations
 
 - **Actions only on transitions.** There is no built-in re-notification while an alarm remains in `ALARM`.
-- ==Metric resolution and delay bound detection speed.== An alarm can never be faster than the metric it watches; five-minute metrics produce five-minute detection at best.
+- **Metric resolution and delay bound detection speed.** An alarm can never be faster than the metric it watches; five-minute metrics produce five-minute detection at best.
 - **Anomaly detection needs history** and can learn slowly degrading behaviour as normal.
 - **Metrics Insights aggregations are limited** to `AVG`, `SUM`, `MIN`, `MAX` and `COUNT`, and query alarms have a per-Region quota.
 - **Composite alarms cannot evaluate metrics directly**; every condition must first be a child alarm.
@@ -1019,7 +1019,7 @@ Alarm on `5XXError` rate and `Latency` p99 per stage and, where detailed metrics
 
 #### AWS CodeDeploy, CodePipeline and ECS deployments
 
-Alarm-based rollback connects this part to Unit V: a CodeDeploy deployment group lists CloudWatch alarms and rolls back if any enters `ALARM` during the deployment (the mechanics are in [Chapter 5.1](../unit5/topic1.md#aws-codedeploy)). Lambda alias traffic shifting and ECS blue/green deployments depend on these alarms being ==fast and specific to the new version== (for example using the `ExecutedVersion` dimension for Lambda or the green target group for ECS).
+Alarm-based rollback connects this part to Unit V: a CodeDeploy deployment group lists CloudWatch alarms and rolls back if any enters `ALARM` during the deployment (the mechanics are in [Chapter 5.1](../unit5/topic1.md#aws-codedeploy)). Lambda alias traffic shifting and ECS blue/green deployments depend on these alarms being **fast and specific to the new version** (for example using the `ExecutedVersion` dimension for Lambda or the green target group for ECS).
 
 #### Summary of integrations
 
@@ -1152,7 +1152,7 @@ Architectural lessons:
 
 ### Definition
 
-==Automated incident response is the practice of detecting operational or security events and executing predefined, tested actions in code, without waiting for a human, to notify, enrich, diagnose, contain or remediate the problem.== On AWS the typical implementation is: a detection source (a CloudWatch alarm, an AWS service event such as a GuardDuty finding or an AWS Health event) produces an event; the event is delivered by a CloudWatch alarm action, an Amazon EventBridge rule or an Amazon SNS topic; and an **executor** such as an AWS Lambda function, an AWS Systems Manager Automation runbook or an AWS Step Functions workflow performs the response.
+**Automated incident response is the practice of detecting operational or security events and executing predefined, tested actions in code, without waiting for a human, to notify, enrich, diagnose, contain or remediate the problem.** On AWS the typical implementation is: a detection source (a CloudWatch alarm, an AWS service event such as a GuardDuty finding or an AWS Health event) produces an event; the event is delivered by a CloudWatch alarm action, an Amazon EventBridge rule or an Amazon SNS topic; and an **executor** such as an AWS Lambda function, an AWS Systems Manager Automation runbook or an AWS Step Functions workflow performs the response.
 
 **A Lambda responder is a Lambda function whose purpose is to receive an operational event and carry out one well-defined response safely.** Lambda is the natural executor for small, fast, custom responses because it is event-driven, requires no servers, scales to zero between incidents, and can call any AWS API through the SDK with a scoped IAM role.
 
@@ -1228,7 +1228,7 @@ Automation addresses four weaknesses of purely manual response:
 Incident response differs greatly between organisations, and AWS provides composable primitives: alarms and service events as triggers, EventBridge as the router, Lambda for custom code, Systems Manager Automation for executable runbooks, Step Functions for multi-step workflows with approval, SNS and Amazon Q Developer in chat applications for communication, OpsCenter for tracking and CloudWatch investigations for AI-assisted diagnosis. This mirrors the cloud-native philosophy of the whole module: small managed components composed through events and IAM.
 
 !!! info "Incident Manager availability"
-    AWS Systems Manager Incident Manager, which provided response plans, on-call schedules and engagement, has been ==closed to new customers since 7 November 2025== and receives no new features; existing customers can continue to use it. AWS recommends Systems Manager OpsCenter for tracking operational issues and AWS Partner solutions (for example PagerDuty, ServiceNow or Jira Service Management) for paging, on-call and escalation. Designs in this part therefore treat paging as an external integration reached through SNS, EventBridge API destinations or webhooks.
+    AWS Systems Manager Incident Manager, which provided response plans, on-call schedules and engagement, has been **closed to new customers since 7 November 2025** and receives no new features; existing customers can continue to use it. AWS recommends Systems Manager OpsCenter for tracking operational issues and AWS Partner solutions (for example PagerDuty, ServiceNow or Jira Service Management) for paging, on-call and escalation. Designs in this part therefore treat paging as an external integration reached through SNS, EventBridge API destinations or webhooks.
 
 #### Benefits over older methods
 
@@ -1281,7 +1281,7 @@ stateDiagram-v2
 | Review | How do we prevent recurrence? | Days | Timeline reconstruction from audit logs and incident reports |
 
 !!! note "Mitigation before resolution"
-    A central lesson of operational practice is that ==mitigation and resolution are different goals==. Rolling back a deployment mitigates the incident within minutes even though the bug that caused it is fixed days later. Automation is most valuable in mitigation because mitigation actions are generic (roll back, shift traffic, add capacity) whereas resolutions are specific to each defect.
+    A central lesson of operational practice is that **mitigation and resolution are different goals**. Rolling back a deployment mitigates the incident within minutes even though the bug that caused it is fixed days later. Automation is most valuable in mitigation because mitigation actions are generic (roll back, shift traffic, add capacity) whereas resolutions are specific to each defect.
 
 #### Incident metrics
 
@@ -1677,7 +1677,7 @@ Key architectural points:
 - **Separate detection from response.** Alarms live with the workload; responders can live in a central automation account that assumes narrowly scoped roles in workload accounts. This keeps powerful automation code out of every account and gives one place to audit, test and switch off automation.
 - **EventBridge is the spine.** Routing through the bus allows new responders to be added without modifying alarms, and allows archive and replay of incident events for testing ([Chapter 6.3](../unit6/topic3.md#event-routing-with-amazon-eventbridge)).
 - **State is externalised.** Idempotency records, cool-downs and action budgets live in DynamoDB; kill switches in Parameter Store or AppConfig. Lambda functions themselves remain stateless.
-- ==Every path ends with a human-visible record== in chat, OpsCenter or a ticket, even when the automation succeeds.
+- **Every path ends with a human-visible record** in chat, OpsCenter or a ticket, even when the automation succeeds.
 
 #### Important Features
 
@@ -1908,7 +1908,7 @@ Every responder adds a control loop that people must understand during an incide
 | Sustainability | Event-driven responders consume nothing between incidents; automation that stops idle resources reduces energy use; avoid polling loops that keep functions running |
 
 !!! tip "Start with the top three"
-    For a DSO303 project, three automated responses deliver most of the value: **automatic rollback of bad deployments** (CodeDeploy or ECS with alarms), **enriched notifications in chat** with dashboard and runbook links, and ==automatic remediation of one or two security misconfigurations== such as public S3 buckets. Build these well before attempting anything more ambitious.
+    For a DSO303 project, three automated responses deliver most of the value: **automatic rollback of bad deployments** (CodeDeploy or ECS with alarms), **enriched notifications in chat** with dashboard and runbook links, and **automatic remediation of one or two security misconfigurations** such as public S3 buckets. Build these well before attempting anything more ambitious.
 
 ### Security Considerations
 
@@ -1954,7 +1954,7 @@ Responders hold privileges that attackers would value: the ability to modify sec
 Principles:
 
 - **One role per responder.** A shared "automation" role with broad permissions turns any bug in any responder into a platform-wide risk.
-- ==No wildcard actions on IAM, KMS or Organizations.== Security containment responders that must modify IAM should be limited to specific actions (for example attaching a named deny policy) and protected by approvals.
+- **No wildcard actions on IAM, KMS or Organizations.** Security containment responders that must modify IAM should be limited to specific actions (for example attaching a named deny policy) and protected by approvals.
 - **Protect the kill switch and mode parameters.** Whoever can change `/responders/*/mode` from `dry-run` to `enforce` controls the automation; restrict and audit it.
 - **Cross-account roles** in workload accounts should trust only specific responder role ARNs from the automation account, with `aws:PrincipalOrgID` conditions.
 
@@ -2189,7 +2189,7 @@ Architectural lessons:
 
 ### Definition
 
-==Performance optimisation is the continuous, evidence-driven practice of improving how quickly and efficiently a system serves its users (latency and throughput) for a given cost, or reducing its cost for a given level of performance, by measuring where time and resources are spent and changing the design or configuration that causes the waste.==
+**Performance optimisation is the continuous, evidence-driven practice of improving how quickly and efficiently a system serves its users (latency and throughput) for a given cost, or reducing its cost for a given level of performance, by measuring where time and resources are spent and changing the design or configuration that causes the waste.**
 
 On AWS, performance optimisation draws on three families of tools:
 
@@ -2244,7 +2244,7 @@ AWS benefits when customers run efficiently, because efficient customers grow on
 - **Analysis at fleet scale** that no team could perform by hand: Compute Optimizer analyses the utilisation history of every instance, volume, function and Fargate service in an organisation and compares it with the performance characteristics of hundreds of instance types.
 - **Deep, engine-aware database diagnostics**: Database Insights understands wait events, SQL digests and execution plans for each supported engine.
 - **Curated best-practice checks**: Trusted Advisor encodes lessons from many customers into checks across cost, performance, security, fault tolerance, service limits and operational excellence.
-- ==ML-based anomaly detection and AI-assisted analysis==: DevOps Guru and CloudWatch investigations correlate signals that humans would take hours to join.
+- **ML-based anomaly detection and AI-assisted analysis**: DevOps Guru and CloudWatch investigations correlate signals that humans would take hours to join.
 
 #### Benefits over older methods
 
@@ -2284,7 +2284,7 @@ The **USE method** (utilisation, saturation, errors for each resource) and the *
 !!! example "Little's Law applied to Lambda and to connection pools"
     An API receives 400 requests per second and each Lambda invocation lasts 250 ms. The average concurrency is `400 × 0.25 = 100` concurrent executions. If a downstream slowdown raises duration to 2 seconds, concurrency rises to 800 with no change in traffic, which may exceed the account's concurrency limit and cause throttling. The same arithmetic sizes database connection pools: 200 queries per second at 50 ms each need about 10 connections on average; if queries slow to 500 ms, 100 connections are needed, which is why slow databases exhaust connection pools and why RDS Proxy ([Chapter 6.2](../unit6/topic2.md)) helps.
 
-**Amdahl's Law** states that the speed-up from improving one part of a task is limited by the fraction of time spent in that part. If database calls take 70 per cent of a request's latency, making application code twice as fast improves total latency by at most 15 per cent. The practical lesson is ==measure before optimising, and optimise the largest contributor first==, which is exactly what traces and DB load breakdowns reveal.
+**Amdahl's Law** states that the speed-up from improving one part of a task is limited by the fraction of time spent in that part. If database calls take 70 per cent of a request's latency, making application code twice as fast improves total latency by at most 15 per cent. The practical lesson is **measure before optimising, and optimise the largest contributor first**, which is exactly what traces and DB load breakdowns reveal.
 
 #### The optimisation loop
 
@@ -2722,7 +2722,7 @@ flowchart TB
 
 Key points:
 
-- ==Recommendation services are read-only and organisation-aware.== Compute Optimizer and Trusted Advisor analyse member accounts from a management or delegated administrator account without changing anything.
+- **Recommendation services are read-only and organisation-aware.** Compute Optimizer and Trusted Advisor analyse member accounts from a management or delegated administrator account without changing anything.
 - **Database Insights is regional and per database,** with fleet views across accounts and Regions through cross-account observability.
 - **Experimentation tools run in your account,** usually a staging account, and consume resources while tests run.
 
@@ -2939,7 +2939,7 @@ Every tool adds dashboards and recommendations to review. Integrate them into ex
 | Sustainability | Maximise utilisation of provisioned resources; prefer Graviton and managed services; scale to zero where possible; reduce data transferred and stored, including telemetry that nobody uses |
 
 !!! tip "Sustainability and performance align"
-    The Sustainability pillar asks architects to ==maximise utilisation and minimise the resources required per unit of work==. Rightsizing, Graviton adoption, deleting idle resources and removing unnecessary telemetry are simultaneously performance, cost and sustainability improvements, which makes them easy to justify.
+    The Sustainability pillar asks architects to **maximise utilisation and minimise the resources required per unit of work**. Rightsizing, Graviton adoption, deleting idle resources and removing unnecessary telemetry are simultaneously performance, cost and sustainability improvements, which makes them easy to justify.
 
 ### Security Considerations
 
@@ -3197,7 +3197,7 @@ flowchart LR
 
 ### Closing architectural lessons for Unit VII
 
-- ==Observability is designed, not bolted on.== Service names, trace context, structured logs, metric dimensions and SLOs must be decided when services are designed, and deployed with them as code.
+- **Observability is designed, not bolted on.** Service names, trace context, structured logs, metric dimensions and SLOs must be decided when services are designed, and deployed with them as code.
 - **Measure what users experience first.** Symptoms, SLOs and outside-in checks define health; resource metrics explain it.
 - **Every signal needs an owner and a purpose.** A metric nobody looks at, an alarm nobody acts on and a log nobody queries are costs without value.
 - **Close the loop.** Detection without response, and response without learning, leave systems exactly as fragile as before.

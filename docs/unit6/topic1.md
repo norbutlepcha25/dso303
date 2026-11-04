@@ -41,7 +41,7 @@ flowchart TD
 | Typical latency | Tens of milliseconds, single digits with Express One Zone | Sub-millisecond | Low milliseconds | Sub-millisecond |
 
 !!! tip "The architectural thread of this section"
-    Cloud-native compute is disposable only when its state lives somewhere else. Every part of this section is a variation on one idea: ==externalise state into the managed service whose access pattern matches it==, grant each workload its own least-privilege identity to reach it, and observe it as carefully as the compute that uses it.
+    Cloud-native compute is disposable only when its state lives somewhere else. Every part of this section is a variation on one idea: **externalise state into the managed service whose access pattern matches it**, grant each workload its own least-privilege identity to reach it, and observe it as carefully as the compute that uses it.
 
 ### The Three Storage Abstractions
 
@@ -155,7 +155,7 @@ All three services encrypt at rest with AWS KMS and support encryption in transi
 
 ### Definition
 
-Amazon Simple Storage Service (Amazon S3) is a regional, fully managed object storage service accessed through an HTTPS API. In the context of service integration, S3 is best defined as ==a durable, event-emitting, policy-governed shared data plane== that decouples producers of data from its consumers.
+Amazon Simple Storage Service (Amazon S3) is a regional, fully managed object storage service accessed through an HTTPS API. In the context of service integration, S3 is best defined as **a durable, event-emitting, policy-governed shared data plane** that decouples producers of data from its consumers.
 
 Within an AWS architecture, S3 sits beneath almost every other layer:
 
@@ -184,7 +184,7 @@ Traditional options each fail in a cloud-native setting:
 | Database BLOB columns | Expensive storage, large rows harm database performance and backups |
 | FTP or SFTP drop folders | No fine-grained authorisation, polling-based, weak integrity guarantees |
 
-S3 solves these problems because it is ==shared by default, elastic without provisioning, addressable over HTTPS from anywhere with the right permissions, and able to announce changes as events==.
+S3 solves these problems because it is **shared by default, elastic without provisioning, addressable over HTTPS from anywhere with the right permissions, and able to announce changes as events**.
 
 #### Why AWS kept extending S3
 
@@ -241,7 +241,7 @@ The general control plane and data plane distinction is explained in [Control Pl
 | Control plane | CreateBucket, PutBucketPolicy, PutBucketNotificationConfiguration, PutBucketLifecycleConfiguration | IaC tools and pipelines |
 | Management plane | Batch Operations, Inventory, Storage Lens, Access Grants | Platform and data governance teams |
 
-A well-designed workload role should normally hold ==only data plane permissions, scoped to specific prefixes==. Control plane permissions belong to the deployment pipeline.
+A well-designed workload role should normally hold **only data plane permissions, scoped to specific prefixes**. Control plane permissions belong to the deployment pipeline.
 
 #### Credential delivery to workloads
 
@@ -311,7 +311,7 @@ S3 now spans a range of latency and access models:
 
 #### Purpose
 
-In this part, the purpose of S3 is viewed through its integration role: to provide ==a single, secure, scalable, event-driven store that every other component of the platform can rely upon==, so that compute can remain stateless and disposable.
+In this part, the purpose of S3 is viewed through its integration role: to provide **a single, secure, scalable, event-driven store that every other component of the platform can rely upon**, so that compute can remain stateless and disposable.
 
 #### Architecture
 
@@ -1285,7 +1285,7 @@ flowchart LR
 
 #### Troubleshooting AccessDenied with layered evaluation
 
-An S3 request is allowed only if ==every applicable layer permits it and no layer explicitly denies it==. The diagram shows the layers an architect should check, from the outermost organisational controls inwards.
+An S3 request is allowed only if **every applicable layer permits it and no layer explicitly denies it**. The diagram shows the layers an architect should check, from the outermost organisational controls inwards.
 
 ```mermaid
 flowchart TB
@@ -1353,7 +1353,7 @@ Amazon S3 is far more than a place to keep files. In a cloud-native architecture
 
 Amazon EBS provides persistent, zonal block storage volumes for EC2 instances, and therefore for every compute platform built on EC2 capacity, including ECS on EC2, ECS on Fargate, EKS managed node groups, Karpenter-provisioned nodes and EKS Auto Mode.
 
-From an integration perspective, EBS is best defined as ==durable, low-latency, single-writer storage whose lifecycle can be bound to an instance, a task, a pod or an independent resource==.
+From an integration perspective, EBS is best defined as **durable, low-latency, single-writer storage whose lifecycle can be bound to an instance, a task, a pod or an independent resource**.
 
 | Integration context | How EBS participates |
 |---------------------|----------------------|
@@ -1434,7 +1434,7 @@ Scaling is **vertical and explicit**: EBS never scales automatically. Architects
 
 #### Lifecycle binding
 
-The most important design question for any EBS volume is ==what its lifecycle is bound to==.
+The most important design question for any EBS volume is **what its lifecycle is bound to**.
 
 | Binding | Example | Deleted when |
 |---------|---------|--------------|
@@ -1547,7 +1547,7 @@ flowchart LR
 
 #### Purpose
 
-Within Unit VI, the purpose of EBS is to give stateful components of a cloud-native system ==persistent, performant block storage that orchestrators can manage automatically==, with backup, recovery and security integrated into the platform rather than bolted on.
+Within Unit VI, the purpose of EBS is to give stateful components of a cloud-native system **persistent, performant block storage that orchestrators can manage automatically**, with backup, recovery and security integrated into the platform rather than bolted on.
 
 #### Architecture
 
@@ -2286,7 +2286,7 @@ Amazon EBS is the persistence layer that allows stateful systems to run on dispo
 
 ### Definition
 
-==Amazon EFS as an integration service== is a fully managed, serverless, elastic NFS file system that multiple compute clients (EC2 instances, ECS tasks, EKS pods, Fargate tasks and Lambda execution environments) can mount concurrently, with read-after-write consistency for a given client and close-to-open consistency across clients, as expected from NFS.
+**Amazon EFS as an integration service** is a fully managed, serverless, elastic NFS file system that multiple compute clients (EC2 instances, ECS tasks, EKS pods, Fargate tasks and Lambda execution environments) can mount concurrently, with read-after-write consistency for a given client and close-to-open consistency across clients, as expected from NFS.
 
 Within an AWS architecture, EFS sits in the data tier alongside Amazon S3 and Amazon EBS, but it plays a distinctive role: it is the only one of the three that offers **shared, concurrent, POSIX-semantics access across Availability Zones** to many compute clients at once, without the application having to change its file I/O code.
 
@@ -2336,7 +2336,7 @@ Cloud-native design, as taught in Units I to IV, pushes state out of compute. Co
 | Scientific and media pipelines | Many workers read and write intermediate files concurrently |
 | Stateful Kubernetes applications with ReadWriteMany needs | Several pods across nodes and AZs must mount the same volume |
 
-Rewriting all of these to use an object API is often uneconomic. EFS exists so that these workloads can run on elastic, disposable compute ==without reintroducing a self-managed NFS server as a single point of failure==.
+Rewriting all of these to use an object API is often uneconomic. EFS exists so that these workloads can run on elastic, disposable compute **without reintroducing a self-managed NFS server as a single point of failure**.
 
 #### Problems with the older approaches
 
@@ -2362,7 +2362,7 @@ AWS added EFS support to ECS on Fargate (platform version 1.4.0), to Lambda (202
 | Access point | An application-specific entry point that enforces a root directory and can override the POSIX user and group of every request (see [Identity on a shared file system](#identity-on-a-shared-file-system)) |
 | Lifecycle management | Policies that move files between storage classes based on time since last access, and optionally back on first read |
 
-Clients do not talk to a Regional endpoint. When an instance, task or pod mounts `fs-0123456789abcdef0.efs.ap-south-1.amazonaws.com`, DNS resolves the name to the mount target ==in the client's own Availability Zone==. This zone-local resolution keeps NFS traffic inside the zone, minimising latency and avoiding cross-AZ data transfer charges.
+Clients do not talk to a Regional endpoint. When an instance, task or pod mounts `fs-0123456789abcdef0.efs.ap-south-1.amazonaws.com`, DNS resolves the name to the mount target **in the client's own Availability Zone**. This zone-local resolution keeps NFS traffic inside the zone, minimising latency and avoiding cross-AZ data transfer charges.
 
 ```mermaid
 graph TD
@@ -2478,7 +2478,7 @@ flowchart TB
 
 #### Purpose
 
-In the integration context, EFS provides a ==shared persistence layer for compute that is otherwise ephemeral==, so that scaling out, replacing, or rescheduling a workload never loses or duplicates file data.
+In the integration context, EFS provides a **shared persistence layer for compute that is otherwise ephemeral**, so that scaling out, replacing, or rescheduling a workload never loses or duplicates file data.
 
 #### Architecture
 
@@ -2690,7 +2690,7 @@ The driver mounts with TLS by default (`encryptInTransit` volume attribute defau
 
 ##### Dynamic provisioning with `efs-ap`
 
-In dynamic provisioning, the controller does ==not create a new file system==. It creates a new **access point** on an existing file system for each PVC. Each access point receives:
+In dynamic provisioning, the controller does **not create a new file system**. It creates a new **access point** on an existing file system for each PVC. Each access point receives:
 
 - A root directory under a configurable `basePath`, created with `directoryPerms`.
 - A POSIX uid and gid drawn from the range `gidRangeStart` to `gidRangeEnd`, so that each PVC's files are owned by a unique identity and one tenant cannot read another's directory even if both mount the same file system.
@@ -2783,7 +2783,7 @@ EFS removes storage capacity planning, but it does not remove **client-side and 
 
 #### Reliability and durability
 
-EFS Regional storage is designed for very high durability (eleven nines). Durability does not protect against logical errors: a buggy job that deletes a directory is replicated faithfully. ==Backups protect against logical corruption; replication protects against regional unavailability==. Production designs need both, and the two are complementary rather than alternatives.
+EFS Regional storage is designed for very high durability (eleven nines). Durability does not protect against logical errors: a buggy job that deletes a directory is replicated faithfully. **Backups protect against logical corruption; replication protects against regional unavailability**. Production designs need both, and the two are complementary rather than alternatives.
 
 #### Latency
 
@@ -2880,7 +2880,7 @@ KMS key management itself is covered in [8.3 Encryption at Rest with AWS KMS](..
 
 #### Secrets
 
-EFS itself does not use passwords, which is an advantage: authentication is IAM based. However, applications sometimes store secrets such as `wp-config.php` or TLS private keys on shared file systems. ==Secrets belong in AWS Secrets Manager or Systems Manager Parameter Store==, injected at runtime into the task or pod, not in a shared directory that many workloads can read (see [8.3 Secrets Management with AWS Secrets Manager](../unit8/topic3.md#secrets-management-with-aws-secrets-manager)).
+EFS itself does not use passwords, which is an advantage: authentication is IAM based. However, applications sometimes store secrets such as `wp-config.php` or TLS private keys on shared file systems. **Secrets belong in AWS Secrets Manager or Systems Manager Parameter Store**, injected at runtime into the task or pod, not in a shared directory that many workloads can read (see [8.3 Secrets Management with AWS Secrets Manager](../unit8/topic3.md#secrets-management-with-aws-secrets-manager)).
 
 #### Logging and compliance
 
@@ -3264,7 +3264,7 @@ flowchart LR
 
 #### The latency and cost gap
 
-Reading from memory in a nearby cache typically takes well under a millisecond; a well-indexed relational query takes several milliseconds; a complex join, a cross-Region call or a third-party API can take hundreds of milliseconds. Cloud-native systems multiply this gap because a single user request may fan out to many microservices, each of which calls a data store. ==Latency compounds across the call graph==, so the p99 latency of a page is dominated by the slowest dependency.
+Reading from memory in a nearby cache typically takes well under a millisecond; a well-indexed relational query takes several milliseconds; a complex join, a cross-Region call or a third-party API can take hundreds of milliseconds. Cloud-native systems multiply this gap because a single user request may fan out to many microservices, each of which calls a data store. **Latency compounds across the call graph**, so the p99 latency of a page is dominated by the slowest dependency.
 
 A cache exists to exploit two properties of real workloads:
 
@@ -3285,7 +3285,7 @@ Self-managed Redis or Memcached on EC2 requires the team to handle replication, 
 
 #### Where to cache in a cloud-native stack
 
-Each layer has a different scope, freshness control and cost. The architectural principle is: ==serve each request from the outermost layer that can answer it correctly==.
+Each layer has a different scope, freshness control and cost. The architectural principle is: **serve each request from the outermost layer that can answer it correctly**.
 
 | Layer | Service | Scope | What it caches well | Invalidation control | Limitations |
 |-------|---------|-------|---------------------|---------------------|-------------|
@@ -4171,7 +4171,7 @@ Section 6.1 treated storage as an integration problem rather than a catalogue of
 Four lessons carry forward into Sections [6.2](../unit6/topic2.md) and [6.3](../unit6/topic3.md):
 
 - **Access pattern selects the service**, and scope (host, Availability Zone, Region) selects the availability ceiling.
-- ==Every workload receives its own identity== (task role, Pod Identity association, execution role) scoped to the exact buckets, volumes, access points and cache users it needs.
+- **Every workload receives its own identity** (task role, Pod Identity association, execution role) scoped to the exact buckets, volumes, access points and cache users it needs.
 - **Storage emits events and metrics**; S3 notifications, snapshot events and cache metrics are inputs to the event-driven and observability designs of [Section 6.3](../unit6/topic3.md) and Unit V.
 - **Caches and replicas are copies, not truth**; the system of record must always be identifiable, which is the subject of [Section 6.2](../unit6/topic2.md).
 

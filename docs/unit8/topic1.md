@@ -12,7 +12,7 @@ render_macros: false
 
 ## The Identity Control Plane: Who Can Do What to Which Resource
 
-Every interaction with AWS, whether a click in the console, an `aws s3 cp` command, a boto3 call inside a Lambda function or a Terraform apply in a pipeline, is ultimately an ==HTTPS request to an AWS service API==. There is no "back door" into an AWS account: EC2 instances are launched, S3 objects read and DynamoDB items written only through signed API calls. This single fact is what makes IAM so powerful. If every action passes through one control point, then controlling that control point controls the account.
+Every interaction with AWS, whether a click in the console, an `aws s3 cp` command, a boto3 call inside a Lambda function or a Terraform apply in a pipeline, is ultimately an **HTTPS request to an AWS service API**. There is no "back door" into an AWS account: EC2 instances are launched, S3 objects read and DynamoDB items written only through signed API calls. This single fact is what makes IAM so powerful. If every action passes through one control point, then controlling that control point controls the account.
 
 Each request passes through two logically separate stages.
 
@@ -62,7 +62,7 @@ Three design principles run through the whole section and should guide every IAM
 
 ### Definition
 
-==AWS Identity and Access Management (IAM) is the global AWS service that lets you create and manage identities (who can sign in or call APIs) and permissions (what those identities may do) for an AWS account.== IAM works with **AWS Security Token Service (STS)**, which issues short-lived credentials, and with **AWS IAM Identity Center**, which provides workforce single sign-on across many accounts.
+**AWS Identity and Access Management (IAM) is the global AWS service that lets you create and manage identities (who can sign in or call APIs) and permissions (what those identities may do) for an AWS account.** IAM works with **AWS Security Token Service (STS)**, which issues short-lived credentials, and with **AWS IAM Identity Center**, which provides workforce single sign-on across many accounts.
 
 The identities in this part are:
 
@@ -162,7 +162,7 @@ Every IAM entity has an ARN. The formats you will meet most often are:
 
 #### The root user
 
-The root user is created with the account and is identified by the email address used at sign-up. It has ==unrestricted access that IAM policies cannot limit== in a standalone account. A small number of tasks require root, including:
+The root user is created with the account and is identified by the email address used at sign-up. It has **unrestricted access that IAM policies cannot limit** in a standalone account. A small number of tasks require root, including:
 
 - changing the account's root email address, name or root password, and closing the account,
 - changing or cancelling AWS Support plans (in some cases) and certain billing settings,
@@ -413,7 +413,7 @@ IAM, STS and IAM Identity Center together provide **authentication and identity 
 | Credential delivery agents | Per compute platform | IMDS, ECS credential endpoint, EKS Pod Identity Agent, Lambda runtime |
 
 !!! tip "Design for control plane independence"
-    Because the IAM data plane is Regional and highly available while the control plane is centralised, well-architected systems ==do not create or modify IAM resources in the request path or during failover==. Roles for disaster recovery Regions should already exist, created by infrastructure as code, so that recovery never depends on the IAM control plane.
+    Because the IAM data plane is Regional and highly available while the control plane is centralised, well-architected systems **do not create or modify IAM resources in the request path or during failover**. Roles for disaster recovery Regions should already exist, created by infrastructure as code, so that recovery never depends on the IAM control plane.
 
 #### Important Features
 
@@ -533,7 +533,7 @@ Policy size and attachment quotas are listed under Service Limits in [Part 8.1.2
 | Operational complexity | Identity Center plus Organizations centralises complexity once, instead of repeating it per account |
 
 !!! example "Granularity: one role per what?"
-    A frequent design question is how many roles to create. A useful rule is ==one role per workload identity per environment==: the orders API task role in production is separate from the orders API task role in staging and from the payments worker role. Sharing a role between services means the least-privileged service inherits the permissions of the most-privileged one, and CloudTrail can no longer distinguish them. Creating a role per ECS task or per Lambda function costs nothing and is easily automated in CloudFormation, CDK or Terraform.
+    A frequent design question is how many roles to create. A useful rule is **one role per workload identity per environment**: the orders API task role in production is separate from the orders API task role in staging and from the payments worker role. Sharing a role between services means the least-privileged service inherits the permissions of the most-privileged one, and CloudTrail can no longer distinguish them. Creating a role per ECS task or per Lambda function costs nothing and is easily automated in CloudFormation, CDK or Terraform.
 
 ### AWS Best Practices
 
@@ -548,7 +548,7 @@ Policy size and attachment quotas are listed under Service Limits in [Part 8.1.2
 
 ### Security Considerations
 
-- ==Least privilege begins with identity design==: separate roles per workload make least-privilege policies possible.
+- **Least privilege begins with identity design**: separate roles per workload make least-privilege policies possible.
 - **Encryption**: credentials are only transmitted over TLS; SigV4 never sends the secret key. Secrets that are not AWS credentials, such as database passwords, belong in AWS Secrets Manager with rotation ([Section 8.3](topic3.md)).
 - **Private versus public access**: roles used by workloads in private subnets can be restricted to specific VPC endpoints with `aws:SourceVpce` or `aws:SourceVpc` in resource policies ([Section 8.2](topic2.md) explains VPC endpoints).
 - **Logging**: every STS call and every API call made with the resulting credentials is logged in CloudTrail with the role session ARN, session name and source identity. Alarm on root sign-in, console sign-in without MFA, `CreateAccessKey`, and changes to trust policies.
@@ -644,7 +644,7 @@ Architectural lessons:
 
 ### Definition
 
-==An IAM policy is a JSON document that defines permissions by stating which actions are allowed or denied on which resources under which conditions.== Policies are attached to identities (identity-based policies), to resources (resource-based policies), or to boundaries and organisational units, or are passed at session creation. AWS evaluates all policies that apply to a request and produces a single decision: **allow** or **deny**.
+**An IAM policy is a JSON document that defines permissions by stating which actions are allowed or denied on which resources under which conditions.** Policies are attached to identities (identity-based policies), to resources (resource-based policies), or to boundaries and organisational units, or are passed at session creation. AWS evaluates all policies that apply to a request and produces a single decision: **allow** or **deny**.
 
 Permissions in AWS are **default deny**. A request is allowed only if some applicable policy explicitly allows it and no applicable policy explicitly denies it, and every limiting policy layer also permits it.
 
@@ -658,7 +658,7 @@ Traditional access control lists grant coarse rights to named users on individua
 - delegation across teams and accounts without surrendering control,
 - central guardrails that apply regardless of local decisions.
 
-The IAM policy language provides a single, declarative, machine-evaluable grammar for all of these. Because policies are JSON documents, they can be ==versioned, reviewed, tested and deployed as code==, exactly like the infrastructure they protect.
+The IAM policy language provides a single, declarative, machine-evaluable grammar for all of these. Because policies are JSON documents, they can be **versioned, reviewed, tested and deployed as code**, exactly like the infrastructure they protect.
 
 ### Core Concepts
 
@@ -694,7 +694,7 @@ The IAM policy language provides a single, declarative, machine-evaluable gramma
 | `Condition` | No | Context constraints | All condition blocks in a statement must match (logical AND); multiple values for one key are ORed |
 
 !!! warning "NotAction and NotResource are not Deny"
-    `"Effect": "Allow", "NotAction": "iam:*"` means ==allow every action in every service except IAM==, including services launched next year. It does not deny IAM; another policy could still allow it. The idiomatic use of `NotAction` is with `Deny`, for example "deny everything except the global services we need when the Region is not approved". Misusing `NotAction` with `Allow` is a classic cause of over-privilege.
+    `"Effect": "Allow", "NotAction": "iam:*"` means **allow every action in every service except IAM**, including services launched next year. It does not deny IAM; another policy could still allow it. The idiomatic use of `NotAction` is with `Deny`, for example "deny everything except the global services we need when the Region is not approved". Misusing `NotAction` with `Allow` is a classic cause of over-privilege.
 
 #### Actions, resources and the Service Authorization Reference
 
@@ -1123,7 +1123,7 @@ Architectural lessons:
 
 ### Definition
 
-==AWS Organizations is an account management service that lets you consolidate multiple AWS accounts into an organisation that you create and centrally manage, with consolidated billing, hierarchical grouping into organisational units, and centrally applied policies.==
+**AWS Organizations is an account management service that lets you consolidate multiple AWS accounts into an organisation that you create and centrally manage, with consolidated billing, hierarchical grouping into organisational units, and centrally applied policies.**
 
 **A service control policy (SCP) is an organisation policy that defines the maximum permissions available to IAM users and roles, including the root user, in the member accounts to which it applies.** **A resource control policy (RCP) is an organisation policy that defines the maximum permissions available on resources in the member accounts to which it applies, whoever the caller is.**
 
@@ -1484,7 +1484,7 @@ Consolidated billing aggregates usage for tiered pricing and shares Reserved Ins
 ### Advantages
 
 - **Account-level isolation** with central governance.
-- ==Guardrails that local administrators cannot override==, including for the root user of member accounts.
+- **Guardrails that local administrators cannot override**, including for the root user of member accounts.
 - **Consolidated billing and shared discounts.**
 - **Organisation-wide enablement** of security and audit services.
 - **Automated, consistent account vending.**
@@ -1599,7 +1599,7 @@ flowchart TB
 - **No long-lived secrets.** People federate, workloads use platform roles, pipelines use OIDC, servers outside AWS use Roles Anywhere; access keys are an exception to be justified and monitored.
 - **Least privilege is continuous.** Generate, validate, check, simulate and prune permissions as part of the delivery pipeline, informed by CloudTrail and Access Analyzer.
 - **Layer independent controls.** Identity policies, resource policies, boundaries, SCPs, RCPs and network conditions each stop different failure modes; explicit denies encode invariants.
-- ==Use accounts for isolation and organisations for governance.== Small, single-purpose accounts with central guardrails give both autonomy and safety.
+- **Use accounts for isolation and organisations for governance.** Small, single-purpose accounts with central guardrails give both autonomy and safety.
 - **Audit everything, and make the audit tamper-resistant.** An organisation trail in a protected log archive turns every decision into evidence.
 
 !!! tip "Applying this in design and practice"

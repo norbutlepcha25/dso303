@@ -12,13 +12,13 @@ render_macros: false
 
 ## Protecting Data Across Its Lifecycle: At Rest, In Transit, In Use
 
-Identity controls ([Section 8.1](../unit8/topic1.md)) and network controls ([Section 8.2](../unit8/topic2.md)) decide ==whether a request is allowed to reach the data==. They are essential, but they share a weakness: they protect a boundary, and boundaries are breached. A misconfigured bucket policy, a stolen access key, a backup copied to the wrong account, a disk returned for disposal, a packet capture on a compromised host, or a password committed to a public repository all bypass the boundary entirely. Data protection controls are designed on the assumption that **the boundary has already failed**. Their job is to make the bytes useless to anyone who does not also pass a separate, audited check.
+Identity controls ([Section 8.1](../unit8/topic1.md)) and network controls ([Section 8.2](../unit8/topic2.md)) decide **whether a request is allowed to reach the data**. They are essential, but they share a weakness: they protect a boundary, and boundaries are breached. A misconfigured bucket policy, a stolen access key, a backup copied to the wrong account, a disk returned for disposal, a packet capture on a compromised host, or a password committed to a public repository all bypass the boundary entirely. Data protection controls are designed on the assumption that **the boundary has already failed**. Their job is to make the bytes useless to anyone who does not also pass a separate, audited check.
 
 This is **defence in depth** applied to data. An attacker who obtains an encrypted EBS snapshot also needs permission to call `kms:Decrypt` with the right key; that permission is governed by a key policy the attacker does not control, and the attempt is recorded in AWS CloudTrail.
 
 ### Data classification comes first
 
-Encryption and key management decisions are only meaningful when the organisation knows ==what data it holds and how sensitive it is==. Data classification assigns each dataset a level that determines the minimum controls.
+Encryption and key management decisions are only meaningful when the organisation knows **what data it holds and how sensitive it is**. Data classification assigns each dataset a level that determines the minimum controls.
 
 | Classification level | Examples | Typical minimum controls on AWS |
 |----------------------|----------|---------------------------------|
@@ -73,7 +73,7 @@ flowchart LR
 | Monitoring CloudTrail for key and secret usage | Provides the logs | Reviews and alarms on them |
 
 !!! tip "Encryption is now the default; key control is the decision"
-    Most AWS storage services now encrypt data at rest by default: S3 applies SSE-S3 to every new object, DynamoDB tables are always encrypted, and EBS encryption by default can be enabled per Region. The architect's question is therefore rarely "should this be encrypted?" and usually ==who controls the key, who can use it, how usage is audited, and what happens if the key is lost or deleted==. The rest of this section answers those questions.
+    Most AWS storage services now encrypt data at rest by default: S3 applies SSE-S3 to every new object, DynamoDB tables are always encrypted, and EBS encryption by default can be enabled per Region. The architect's question is therefore rarely "should this be encrypted?" and usually **who controls the key, who can use it, how usage is audited, and what happens if the key is lost or deleted**. The rest of this section answers those questions.
 
 ---
 
@@ -81,7 +81,7 @@ flowchart LR
 
 ### Definition
 
-==AWS Key Management Service (AWS KMS) is a managed, regional service that creates and controls cryptographic keys, performs cryptographic operations with them inside FIPS 140-3 validated hardware security modules, and integrates with most AWS services to encrypt data at rest under policies that you control and CloudTrail records.==
+**AWS Key Management Service (AWS KMS) is a managed, regional service that creates and controls cryptographic keys, performs cryptographic operations with them inside FIPS 140-3 validated hardware security modules, and integrates with most AWS services to encrypt data at rest under policies that you control and CloudTrail records.**
 
 Two properties define KMS and distinguish it from simply "a place to store keys":
 
@@ -135,7 +135,7 @@ Before managed key services, organisations either stored keys in software (weak)
 
 #### Why AWS introduced KMS
 
-AWS introduced KMS in 2014 to make ==strong key management the default rather than a specialist project==. KMS provides HSM-backed keys without customers operating HSMs, a policy language consistent with IAM, automatic CloudTrail logging, regional high availability and durability, and native integration so that services such as S3 and EBS can encrypt data with a customer's key by setting one parameter.
+AWS introduced KMS in 2014 to make **strong key management the default rather than a specialist project**. KMS provides HSM-backed keys without customers operating HSMs, a policy language consistent with IAM, automatic CloudTrail logging, regional high availability and durability, and native integration so that services such as S3 and EBS can encrypt data with a customer's key by setting one parameter.
 
 #### Benefits over older methods
 
@@ -192,7 +192,7 @@ The KMS key rarely encrypts data directly. The `Encrypt` API accepts at most **4
 
 #### Envelope encryption
 
-==Envelope encryption is the practice of encrypting data with a data key, and then encrypting the data key with another key (the KMS key), storing the encrypted data key alongside the ciphertext.== The encrypted data key is the "envelope" that travels with the data.
+**Envelope encryption is the practice of encrypting data with a data key, and then encrypting the data key with another key (the KMS key), storing the encrypted data key alongside the ciphertext.** The encrypted data key is the "envelope" that travels with the data.
 
 Why this design?
 
@@ -573,7 +573,7 @@ KMS centralises the creation, protection, authorisation, use and audit of crypto
 
 #### Architecture
 
-KMS is a **regional** service. Each Region runs a fleet of hardened HSMs (validated under FIPS 140-3) behind a front-end API fleet. Front-end hosts authenticate the request with SigV4, evaluate the key policy, IAM policies and grants, and forward authorised requests to the HSMs over authenticated sessions. Key material is stored encrypted by HSM domain keys and is only ever in plaintext inside HSM memory. KMS keys are stored durably across multiple Availability Zones. KMS is designed so that ==no AWS operator can retrieve plaintext key material==, a property documented in the KMS cryptographic details whitepaper and validated by third-party audits.
+KMS is a **regional** service. Each Region runs a fleet of hardened HSMs (validated under FIPS 140-3) behind a front-end API fleet. Front-end hosts authenticate the request with SigV4, evaluate the key policy, IAM policies and grants, and forward authorised requests to the HSMs over authenticated sessions. Key material is stored encrypted by HSM domain keys and is only ever in plaintext inside HSM memory. KMS keys are stored durably across multiple Availability Zones. KMS is designed so that **no AWS operator can retrieve plaintext key material**, a property documented in the KMS cryptographic details whitepaper and validated by third-party audits.
 
 #### Important Features
 
@@ -782,7 +782,7 @@ FIPS 140-3 validated HSMs; no plaintext key export; SigV4-authenticated TLS API;
 - **Uniform access control and audit**: one model for all services, fully logged.
 - **Transparent integration**: most services need a single parameter.
 - **Non-disruptive rotation**: new material without re-encrypting data.
-- ==Separation of duties and cross-account control== through key policies.
+- **Separation of duties and cross-account control** through key policies.
 
 ### Limitations
 
@@ -823,7 +823,7 @@ Architectural lessons:
 
 ### Definition
 
-==AWS Certificate Manager (ACM) is a managed service that provisions, stores, deploys and automatically renews public and private X.509 TLS certificates for use with integrated AWS services, so that applications can serve encrypted traffic without handling private keys.==
+**AWS Certificate Manager (ACM) is a managed service that provisions, stores, deploys and automatically renews public and private X.509 TLS certificates for use with integrated AWS services, so that applications can serve encrypted traffic without handling private keys.**
 
 **AWS Private Certificate Authority (AWS Private CA) is a managed service for operating private certificate authorities whose certificates are trusted only by systems you configure, used for internal services, mutual TLS, devices and workloads.**
 
@@ -833,7 +833,7 @@ ACM sits at the **edge and ingress layer** of the architecture: CloudFront distr
 
 Encryption in transit protects confidentiality and integrity against eavesdropping and man-in-the-middle attacks, and **authenticates the server** (and, with mTLS, the client). Before managed certificates, teams bought certificates from a CA, generated private keys on servers, installed certificates manually and tracked expiry dates in spreadsheets. Expired certificates are one of the most common causes of preventable outages, and private keys copied between servers are a frequent source of compromise.
 
-ACM addresses both: ==private keys for ACM certificates are generated and protected by AWS and never exposed== (except for the deliberately exportable type), and **renewal is automatic** when validation remains in place. Public certificates used with integrated services are provided at no additional charge, removing cost as an excuse for unencrypted endpoints.
+ACM addresses both: **private keys for ACM certificates are generated and protected by AWS and never exposed** (except for the deliberately exportable type), and **renewal is automatic** when validation remains in place. Public certificates used with integrated services are provided at no additional charge, removing cost as an excuse for unencrypted endpoints.
 
 ### Core Concepts
 
@@ -1135,13 +1135,13 @@ Architectural lessons:
 
 ### Definition
 
-==AWS Secrets Manager is a managed service that stores, encrypts with KMS, controls access to, audits, replicates and automatically rotates secrets such as database credentials, API keys and tokens, and delivers them to applications at runtime through an API.==
+**AWS Secrets Manager is a managed service that stores, encrypts with KMS, controls access to, audits, replicates and automatically rotates secrets such as database credentials, API keys and tokens, and delivers them to applications at runtime through an API.**
 
 It sits between **identity** (the IAM role of the workload) and the **protected resource** (a database or external API). The application proves its identity with its role, retrieves the secret over TLS, and uses it; no human needs to know the current value.
 
 ### Why This Service or Concept Exists
 
-The first rule of secrets is: ==if a workload can use an IAM role, it should not have a secret at all==. Calls to S3, DynamoDB, SQS or KMS from ECS, EKS (Pod Identity or IRSA), Lambda and EC2 use temporary role credentials ([Section 8.1](../unit8/topic1.md#iam-users-groups-and-roles)). Secrets remain necessary for systems that do not understand IAM: relational database users (unless IAM database authentication is used), third-party SaaS APIs, legacy systems, signing keys for webhooks, and OAuth client secrets.
+The first rule of secrets is: **if a workload can use an IAM role, it should not have a secret at all**. Calls to S3, DynamoDB, SQS or KMS from ECS, EKS (Pod Identity or IRSA), Lambda and EC2 use temporary role credentials ([Section 8.1](../unit8/topic1.md#iam-users-groups-and-roles)). Secrets remain necessary for systems that do not understand IAM: relational database users (unless IAM database authentication is used), third-party SaaS APIs, legacy systems, signing keys for webhooks, and OAuth client secrets.
 
 | Storage approach | Problems |
 |------------------|----------|
@@ -1246,7 +1246,7 @@ sequenceDiagram
 
 #### RDS-managed master user passwords
 
-RDS and Aurora can ==manage the master user password in Secrets Manager== (`ManageMasterUserPassword`). RDS generates the password, stores it in a service-linked secret (name beginning `rds!`), and rotates it automatically (default every seven days, configurable). Nobody, including the template author, needs to know the password, and no rotation function is needed. Application users should still be separate, least-privilege database users with their own secrets.
+RDS and Aurora can **manage the master user password in Secrets Manager** (`ManageMasterUserPassword`). RDS generates the password, stores it in a service-linked secret (name beginning `rds!`), and rotates it automatically (default every seven days, configurable). Nobody, including the template author, needs to know the password, and no rotation function is needed. Application users should still be separate, least-privilege database users with their own secrets.
 
 #### Encryption, resource policies, cross-account and replication
 
@@ -1475,7 +1475,7 @@ flowchart TB
 ### Closing architectural lessons for Unit VIII
 
 - **Security is layered by design.** Identity, network and data controls each assume the others might fail; a design that relies on only one of them has a single point of security failure.
-- ==Prefer identities to secrets and temporary credentials to permanent ones.== IAM roles, Pod Identity, IAM database authentication and short-lived certificates shrink the value of anything an attacker can steal.
+- **Prefer identities to secrets and temporary credentials to permanent ones.** IAM roles, Pod Identity, IAM database authentication and short-lived certificates shrink the value of anything an attacker can steal.
 - **Keys, certificates and secrets are tier-0 dependencies.** A deleted key, an expired certificate or a failed rotation causes outages as severe as any infrastructure failure; protect and monitor them accordingly.
 - **Enforce with policy, verify with evidence.** SCPs, bucket policies, TLS policies and Config rules make requirements non-optional; CloudTrail, Access Analyzer, Macie and Security Hub prove that they hold.
 - **Everything as code.** IAM policies, security groups, key policies, certificates and secret definitions belong in reviewed infrastructure as code ([Chapter 5.3](../unit5/topic3.md)), so that security posture is repeatable, testable and auditable.

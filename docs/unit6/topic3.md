@@ -9,7 +9,7 @@
 
 ## Choosing a Messaging Primitive
 
-The four parts are complementary rather than competing. A useful memory aid applies throughout: ==the bus routes, the topic fans out, the queue buffers, the stream orders==. The difference lies in what happens to a message after it is read: a queue deletes it, a topic and a bus push a copy to each subscriber or target and keep nothing unless an archive is configured, and a stream keeps it for every reader. The conceptual comparison is in [Streams, queues and buses compared](#streams-queues-and-buses-compared) in the Amazon Kinesis part, and the full selection matrix and decision flow for the whole section are in [Selecting among EventBridge, SNS, SQS, Kinesis and MSK](#selecting-among-eventbridge-sns-sqs-kinesis-and-msk) in the Amazon EventBridge part.
+The four parts are complementary rather than competing. A useful memory aid applies throughout: **the bus routes, the topic fans out, the queue buffers, the stream orders**. The difference lies in what happens to a message after it is read: a queue deletes it, a topic and a bus push a copy to each subscriber or target and keep nothing unless an archive is configured, and a stream keeps it for every reader. The conceptual comparison is in [Streams, queues and buses compared](#streams-queues-and-buses-compared) in the Amazon Kinesis part, and the full selection matrix and decision flow for the whole section are in [Selecting among EventBridge, SNS, SQS, Kinesis and MSK](#selecting-among-eventbridge-sns-sqs-kinesis-and-msk) in the Amazon EventBridge part.
 
 !!! tip "The composition is the design"
     Production systems combine these primitives: SNS or EventBridge fan out to SQS queues so each consumer is buffered; Kinesis carries the firehose of raw records while EventBridge carries the business conclusions drawn from them.
@@ -20,7 +20,7 @@ The four parts are complementary rather than competing. A useful memory aid appl
 
 ### Definition
 
-==Amazon SQS is a fully managed, serverless, distributed message queuing service that stores messages durably between a producer that sends them and a consumer that later receives, processes and deletes them.== Each message is consumed by exactly one consumer in the normal case, which is why SQS is described as a **point-to-point** (or one-to-one) messaging channel, in contrast to the one-to-many publish/subscribe model of Amazon SNS.
+**Amazon SQS is a fully managed, serverless, distributed message queuing service that stores messages durably between a producer that sends them and a consumer that later receives, processes and deletes them.** Each message is consumed by exactly one consumer in the normal case, which is why SQS is described as a **point-to-point** (or one-to-one) messaging channel, in contrast to the one-to-many publish/subscribe model of Amazon SNS.
 
 SQS offers two queue types:
 
@@ -109,7 +109,7 @@ SQS removes all of this. There are no brokers to size, no clusters to operate an
 | Queue | Stores the message durably until it is deleted or the retention period expires. |
 | Consumer | Polls with `ReceiveMessage`, processes the message and calls `DeleteMessage` to acknowledge success. |
 
-The critical design idea is that ==SQS never pushes messages to a consumer==. Consumers pull. Even when Lambda appears to be "triggered" by a queue, the Lambda service is running pollers on your behalf (see the Lambda integration section).
+The critical design idea is that **SQS never pushes messages to a consumer**. Consumers pull. Even when Lambda appears to be "triggered" by a queue, the Lambda service is running pollers on your behalf (see the Lambda integration section).
 
 #### Decoupling along three dimensions
 
@@ -455,7 +455,7 @@ flowchart TB
 - **No broadcast.** A message is consumed by one consumer. For one-to-many delivery, place SNS or EventBridge in front of multiple queues (the Amazon SNS part of this section).
 - **No replay after deletion.** Once a message is deleted it is gone. SQS is not a log; if consumers need to re-read history, use Amazon Kinesis Data Streams (the Amazon Kinesis part of this section), Amazon MSK or EventBridge archives (the [Amazon EventBridge part](#event-routing-with-amazon-eventbridge)).
 - **No content-based routing.** A consumer receives whatever is next; it cannot ask for "only messages of type X". Filtering belongs upstream in SNS subscription filter policies or EventBridge rules.
-- ==No message selectors or priorities within one queue.== Priority requires separate queues.
+- **No message selectors or priorities within one queue.** Priority requires separate queues.
 - **Bounded retention** of 14 days.
 - **Approximate metrics.** Queue depth metrics are eventually consistent approximations.
 - **Limited delay** of 15 minutes.
@@ -738,7 +738,7 @@ A queue policy is a resource-based policy attached to the queue. It is required 
 ```
 
 !!! danger "Confused deputy"
-    A policy that allows `sns.amazonaws.com` without an `aws:SourceArn` (or `aws:SourceAccount`) condition allows ==any SNS topic in any account== to send to your queue. Always scope service principal grants.
+    A policy that allows `sns.amazonaws.com` without an `aws:SourceArn` (or `aws:SourceAccount`) condition allows **any SNS topic in any account** to send to your queue. Always scope service principal grants.
 
 #### Encryption
 
@@ -892,7 +892,7 @@ To protect a downstream database, you might limit how many copies of the functio
 | Reserved concurrency | Function | Pollers may still fetch messages they cannot deliver; invocations are **throttled**, messages return to the queue, receive counts rise, and healthy messages may reach the DLQ |
 | `MaximumConcurrency` | Event source mapping | Pollers **do not fetch more than the function is allowed to process**; no throttling-induced retries |
 
-Prefer ==maximum concurrency on the event source mapping== (minimum value 2). If you also set reserved concurrency, make it at least as large as the maximum concurrency.
+Prefer **maximum concurrency on the event source mapping** (minimum value 2). If you also set reserved concurrency, make it at least as large as the maximum concurrency.
 
 ##### Visibility timeout and the six-times rule
 
@@ -1153,7 +1153,7 @@ Architectural lessons:
 
 ### Definition
 
-==Amazon SNS is a fully managed, serverless publish/subscribe messaging service in which publishers send messages to a topic and SNS pushes a copy of each message to every subscribed endpoint.== The publisher does not know how many subscribers exist or what they do with the message. Subscribers may be other AWS services (SQS queues, Lambda functions, Amazon Data Firehose delivery streams), HTTP or HTTPS endpoints, or people (email, SMS text messages and mobile push notifications).
+**Amazon SNS is a fully managed, serverless publish/subscribe messaging service in which publishers send messages to a topic and SNS pushes a copy of each message to every subscribed endpoint.** The publisher does not know how many subscribers exist or what they do with the message. Subscribers may be other AWS services (SQS queues, Lambda functions, Amazon Data Firehose delivery streams), HTTP or HTTPS endpoints, or people (email, SMS text messages and mobile push notifications).
 
 SNS belongs to the **Application Integration** category. In an architecture diagram it sits at a point of **one-to-many distribution**: after an order is placed, after a file lands in S3, after a CloudWatch alarm changes state.
 
@@ -1181,7 +1181,7 @@ SNS offers two topic types:
 Imagine the order service of an online shop must inform payment, inventory, shipping, analytics and email services whenever an order is placed. Without pub/sub, there are two poor options:
 
 1. **The producer calls every consumer.** The order service must know every consumer's address, handle each consumer's failures and retries, and be changed and redeployed whenever a consumer is added. It is coupled to all of them.
-2. ==The producer writes to one queue per consumer.== The order service must know every queue and write to each, which duplicates code and is error-prone: if the fourth write fails, three consumers have the message and two do not.
+2. **The producer writes to one queue per consumer.** The order service must know every queue and write to each, which duplicates code and is error-prone: if the fourth write fails, three consumers have the message and two do not.
 
 Pub/sub introduces a **topic** as an intermediary. The producer publishes once; the topic delivers to every subscriber. Adding a new consumer is a subscription change, not a producer change. This is the **Open/Closed Principle** of object-oriented design applied to distributed systems: the producer is closed for modification but the system is open for extension.
 
@@ -1278,7 +1278,7 @@ sequenceDiagram
 
 Key properties:
 
-- `Publish` returns after SNS has ==stored the message redundantly across multiple Availability Zones==. From that point SNS takes responsibility for delivery.
+- `Publish` returns after SNS has **stored the message redundantly across multiple Availability Zones**. From that point SNS takes responsibility for delivery.
 - Delivery to each subscription is **independent**. A failing HTTPS endpoint does not slow deliveries to SQS or Lambda.
 - Standard topics deliver **at least once** with best-effort ordering. Subscribers must be idempotent ([4.3](../unit4/topic3.md#idempotency)).
 - If delivery fails permanently, or the retry policy is exhausted, the message is **discarded** unless the subscription has a dead-letter queue.
@@ -1672,7 +1672,7 @@ flowchart TB
 
 - **No storage for standard topics:** no replay, no late subscribers, no backlog.
 - **Push model:** limited back-pressure; endpoints must absorb delivery rate (except where HTTP throttle policy applies).
-- ==Filtering is simpler than EventBridge patterns== and applies per subscription.
+- **Filtering is simpler than EventBridge patterns** and applies per subscription.
 - **Message size** is bounded (see Service Limits); use claim check for large payloads.
 - **FIFO topics** accept only SQS subscribers and have lower subscription and throughput limits.
 - **No multi-Region topic replication.**
@@ -2096,7 +2096,7 @@ Each invocation carries one message. Direct SNS-to-Lambda suits lightweight proc
 
 #### Amazon CloudWatch alarms
 
-CloudWatch alarm actions publish to SNS topics, making SNS the standard paging mechanism for operations. Subscribers include on-call email, SMS, incident management tools via HTTPS, Lambda functions for auto-remediation, and chat channels through ==Amazon Q Developer in chat applications== (formerly AWS Chatbot).
+CloudWatch alarm actions publish to SNS topics, making SNS the standard paging mechanism for operations. Subscribers include on-call email, SMS, incident management tools via HTTPS, Lambda functions for auto-remediation, and chat channels through **Amazon Q Developer in chat applications** (formerly AWS Chatbot).
 
 ```mermaid
 flowchart LR
@@ -2411,7 +2411,7 @@ Firehose followed in 2015 because the most common use of a stream was simply "la
 
 !!! tip "The architect's one-line justification"
 
-    Choose a stream when ==the same ordered data must be read by several independent consumers, possibly more than once, at high volume==. If each item is a job that exactly one worker should process and then forget, a queue is the better tool.
+    Choose a stream when **the same ordered data must be read by several independent consumers, possibly more than once, at high volume**. If each item is a job that exactly one worker should process and then forget, a queue is the better tool.
 
 ---
 
@@ -2483,7 +2483,7 @@ The maximum payload size was 1 MB for most of the service's history. In October 
 
 A **shard** is the unit of capacity and ordering in a stream. Internally, each shard is a replicated, ordered sequence of records, owning a contiguous range of a **128-bit hash key space** from 0 to 2^128 - 1.
 
-When a producer writes a record, Kinesis computes the ==MD5 hash of the partition key==, interprets it as a 128-bit unsigned integer, and routes the record to the shard whose hash key range contains that value.
+When a producer writes a record, Kinesis computes the **MD5 hash of the partition key**, interprets it as a 128-bit unsigned integer, and routes the record to the shard whose hash key range contains that value.
 
 ```mermaid
 flowchart LR
@@ -2730,7 +2730,7 @@ stateDiagram-v2
     end note
 ```
 
-Resharding preserves ordering only if consumers ==finish reading the parent shard before reading its children==. The KCL and Lambda handle this automatically by tracking shard lineage (`ParentShardId`). Custom consumers written directly against `GetRecords` must implement this rule themselves, which is a strong reason to use the KCL or Lambda.
+Resharding preserves ordering only if consumers **finish reading the parent shard before reading its children**. The KCL and Lambda handle this automatically by tracking shard lineage (`ParentShardId`). Custom consumers written directly against `GetRecords` must implement this rule themselves, which is a strong reason to use the KCL or Lambda.
 
 ##### Important features
 
@@ -3738,7 +3738,7 @@ flowchart LR
 
 #### Why EventBridge is the natural routing layer
 
-- AWS services already publish thousands of operational event types to EventBridge in every account, free of charge on the default bus, making it the only place where ==business and operational events share one routing model==.
+- AWS services already publish thousands of operational event types to EventBridge in every account, free of charge on the default bus, making it the only place where **business and operational events share one routing model**.
 - Rules are declarative resources that can be defined in IaC, reviewed in pull requests and deployed by CI/CD, which makes routing auditable.
 - Resource-based bus policies with AWS Organizations conditions allow cross-account flow without network connectivity, VPC peering or credentials exchange.
 - The Schema Registry, archive and replay, `TestEventPattern` and the rich metric set provide the governance and testing hooks that a platform needs.
@@ -3984,7 +3984,7 @@ Schema discovery on a bus is useful for exploration in development, but in produ
 | Rename or remove field, change type or meaning | Breaking | New major version as a new `detail-type`; dual publish; deprecation window |
 | Change `source` or bus | Breaking for routing | Treat as a new event; migrate rules first |
 
-Two consumer-side disciplines make versioning workable: the **tolerant reader** pattern (read only fields you need, ignore others) and ==patterns that match on the fields you rely on==, so that events lacking those fields are simply not delivered rather than causing errors.
+Two consumer-side disciplines make versioning workable: the **tolerant reader** pattern (read only fields you need, ignore others) and **patterns that match on the fields you rely on**, so that events lacking those fields are simply not delivered rather than causing errors.
 
 #### Contract testing
 
@@ -4176,7 +4176,7 @@ Patterns:
 
 #### EventBridge with Step Functions: orchestration plus choreography
 
-[Chapter 1.7](../unit1/topic7.md) contrasted orchestration and choreography. Real systems combine them: ==orchestrate within a bounded context, choreograph between contexts==.
+[Chapter 1.7](../unit1/topic7.md) contrasted orchestration and choreography. Real systems combine them: **orchestrate within a bounded context, choreograph between contexts**.
 
 ```mermaid
 flowchart LR
@@ -4682,7 +4682,7 @@ Event routing costs grow with **events multiplied by hops**. A worked comparison
     - Published instead to SNS with SQS subscriptions: SNS publish charges are lower per million than EventBridge events, and SNS to SQS deliveries have historically not incurred a delivery charge, but SNS offers no cross-account governance or content routing on the envelope.
     - As a Kinesis stream with producer aggregation: cost is driven by shard-hours and GB rather than per event, typically an order of magnitude cheaper for telemetry-like volumes.
 
-    The lesson is not "avoid EventBridge", but ==route business events through EventBridge and keep telemetry and bulk data on streams==, and promote only the events that other domains need.
+    The lesson is not "avoid EventBridge", but **route business events through EventBridge and keep telemetry and bulk data on streams**, and promote only the events that other domains need.
 
 #### Levers
 
@@ -4785,7 +4785,7 @@ GuardDuty and Security Hub can aggregate findings to a delegated administrator a
 
 - **Declarative routing**: who receives what is configuration in IaC, reviewable and auditable, not code in producers.
 - **Organisation-aware cross-account delivery** without networking or credentials.
-- ==A single model for business and AWS operational events==, enabling platform automation alongside application integration.
+- **A single model for business and AWS operational events**, enabling platform automation alongside application integration.
 - **Rich content-based filtering** that reduces consumer work and cost.
 - **Deep integration** with more than twenty AWS target types, plus Pipes, Scheduler and API destinations.
 - **Governance hooks**: Schema Registry, archive and replay, `TestEventPattern`, metrics and CloudTrail.
@@ -4857,7 +4857,7 @@ Section 6.3 completed the asynchronous toolkit. SQS converts availability proble
 
 The architectural lessons of the section, and of Unit VI as a whole:
 
-- ==Select the primitive by consumption pattern==: one consumer, many subscribers, many readers at independent offsets, or content-routed targets.
+- **Select the primitive by consumption pattern**: one consumer, many subscribers, many readers at independent offsets, or content-routed targets.
 - **Every consumer is idempotent and every failure path ends in a dead-letter destination with an alarm**, because all four services deliver at least once.
 - **Messaging connects the storage and database services of Sections 6.1 and 6.2**: S3 events, DynamoDB Streams, database change data capture and cache invalidation all travel over these channels.
 - **Integration is where cloud-native systems succeed or fail**; the managed services are reliable individually, and the architect's responsibility is the identities, contracts, retries and observability that join them.
