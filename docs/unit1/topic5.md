@@ -22,39 +22,12 @@ This chapter covers three services, each with a different job:
 
 ## Why This Service or Concept Exists
 
-### Running a database yourself is hard
-
-Self-managing a production database means owning provisioning, OS and engine patching, backups and restore tests, replication and failover, monitoring, capacity planning and security. None of this differentiates the business. AWS calls it **undifferentiated heavy lifting**, and removing it is the core value of managed databases.
-
-| Dimension | Self-managed | AWS managed |
-|---|---|---|
-| Time to first database | Weeks | Minutes |
-| High availability | Weeks of replication and failover engineering | Enable Multi-AZ |
-| Failover time | Often manual, minutes to hours | Typically 60 to 120 seconds for RDS Multi-AZ; around 30 seconds or less for Aurora |
-| Backups and point-in-time recovery | Custom scripts and log shipping | Automated, to any second within the retention window |
-| Read scaling | Manual replica configuration | Add a read replica with a few API calls |
-| Encryption at rest | Disk- or engine-level setup | Enable at creation, integrated with KMS |
-
-!!! warning "Managed does not mean AWS handles everything"
-    AWS will faithfully replicate a badly designed schema and back up a table with no indexes. It will not tell you that a query does a full table scan, that a partition key causes a hot partition, or that your application role is over-privileged. Under the shared responsibility model, **design is your responsibility**, and poor design is what usually causes outages.
-
-### Purpose-built databases
-
-The second reason is architectural: **the relational model is not optimal for every workload**. A shopping cart, a social graph, IoT telemetry, a search index and a financial ledger have different access patterns, consistency needs and scaling behaviour. AWS therefore offers a family of **purpose-built databases** and expects architects to choose deliberately.
-
-```mermaid
-graph TD
-    A["Workload"] --> B{"Shape of data and access pattern"}
-    B -->|"Rows, joins, transactions"| C["Relational - RDS or Aurora"]
-    B -->|"Key-value at massive scale"| D["Key-value - DynamoDB"]
-    B -->|"Microsecond latency, ephemeral"| E["In-memory - ElastiCache"]
-    B -->|"Highly connected relationships"| F["Graph - Neptune"]
-    B -->|"Analytical scans over history"| G["Data warehouse - Redshift"]
-    B -->|"Full-text search"| H["Search - OpenSearch Service"]
-```
-
-!!! tip "Choose by access pattern, but do not over-fragment"
-    Choose the database that matches the **access pattern**, not the one you already know: changing a data model after production data exists usually means a rewrite. Equally, every extra data store adds backups, monitoring, credentials and a consistency boundary. Add a new store only when the workload demonstrably does not fit the ones you have.
+- **Self-managed databases are undifferentiated heavy lifting:** provisioning, patching, backups, replication, failover and capacity planning do not differentiate the business, and managed services remove them.
+- **High availability becomes a setting:** enabling Multi-AZ replaces weeks of replication and failover engineering, with RDS failover typically taking 60 to 120 seconds and Aurora around 30 seconds or less.
+- **Recovery and scaling by API:** automated backups give point-in-time recovery to any second in the retention window, and read replicas are added with a few API calls.
+- **Managed does not mean designed:** under the shared responsibility model, schema, indexes, partition keys and access control remain your responsibility.
+- **One model does not fit every workload:** shopping carts, social graphs, telemetry, search and ledgers have different access patterns, so AWS offers purpose-built databases (relational, key-value, in-memory, graph, warehouse, search).
+- **Choose by access pattern, without over-fragmenting:** pick the store that matches how data is read and written, but add a new store only when the workload demonstrably does not fit the existing ones.
 
 ## Core Concepts
 
@@ -315,101 +288,7 @@ These decisions are made at creation and are expensive to change. Full option ta
 | DynamoDB | Primary key; capacity mode; secondary indexes and projections; PITR; TTL attribute; Streams; Global Tables |
 | ElastiCache | Engine; node-based or Serverless; cluster mode; Multi-AZ with automatic failover; eviction policy; encryption |
 
-## Design Considerations
-
-### Which database do I choose?
-
-| Requirement in a design or exam question | Choose |
-|---|---|
-| Relational data, joins, ACID transactions, an existing SQL application | RDS, or Aurora for higher throughput, faster failover and auto-growing storage |
-| Key-value access at any scale, serverless, unpredictable traffic | DynamoDB |
-| Access patterns not yet known, ad hoc queries likely | A relational database |
-| Microsecond reads in front of a database, sessions, leaderboards | ElastiCache, or DAX when the database is DynamoDB |
-| Improve read performance | Read replicas or a cache, **not** Multi-AZ |
-| Improve availability or add automatic failover | Multi-AZ, **not** read replicas |
-| Recover from an accidental deletion | PITR or backups, **not** replication (it copies the deletion) |
-| Survive the loss of a Region | Aurora Global Database or DynamoDB Global Tables |
-| Deep relationship traversal, such as fraud rings | Amazon Neptune ([6.2](../unit6/topic2.md#graph-databases-with-amazon-neptune)) |
-| Aggregations over large history | Amazon Redshift ([6.2](../unit6/topic2.md#data-warehousing-with-amazon-redshift)) |
-
-### Service comparison
-
-| Dimension | RDS | Aurora | DynamoDB | ElastiCache |
-|---|---|---|---|---|
-| Query flexibility | Full SQL | Full SQL | Key and index lookups only | Key lookups and data-structure commands |
-| Write scaling | Vertical, one writer | Vertical, one writer | Horizontal by partition | Horizontal by shard |
-| Typical latency | Low milliseconds | Low milliseconds | Single-digit milliseconds | Sub-millisecond |
-| Durability | Synchronous standby, backups | Six copies across three AZs | Synchronous replication across three AZs | Weak by design |
-| Availability | Multi-AZ failover, 1 to 2 minutes | Failover typically under 30 seconds | Built in; no visible failover | Replica promotion; app must survive cache loss |
-| Connection model | Persistent TCP | Persistent TCP | Stateless HTTPS | Persistent TCP |
-| Network placement | Private subnets | Private subnets | Regional endpoint via gateway endpoint | Private subnets |
-
-!!! question "The question to ask before choosing DynamoDB"
-    Can you list every access pattern the application will need? If yes, DynamoDB serves them at any scale. If not, a relational database absorbs that uncertainty far more gracefully. DynamoDB moves design effort forward: more thinking before the first write, less firefighting at scale.
-
-## Common Architecture Patterns
-
-### Cache-Aside with a Read-Through Fallback
-
-The default pattern for read-heavy applications. The application checks ElastiCache or DAX first; on a miss it reads the database and stores the result with a TTL. Only requested data is cached, and if the cache fails the application still works, only slower. Write-through, TTL design and stampede protection are in [6.1](../unit6/topic1.md#caching-strategies-with-amazon-elasticache).
-
-```mermaid
-sequenceDiagram
-    participant App
-    participant Cache as ElastiCache
-    participant DB as Aurora
-    App->>Cache: GET product:42
-    alt Cache hit
-        Cache-->>App: value
-    else Cache miss
-        Cache-->>App: null
-        App->>DB: SELECT ... WHERE id = 42
-        DB-->>App: row
-        App->>Cache: SET product:42 (with TTL)
-    end
-```
-
-### Read replica fan-out
-
-One writer and several readers, with read-only traffic sent to the reader endpoint. Reads that must reflect the caller's own write go to the writer. Aurora replicas share the storage volume, so lag is typically tens of milliseconds.
-
-### Polyglot persistence
-
-Choose the store per access pattern: Aurora for orders and payments, DynamoDB for high-volume key access, ElastiCache for sessions and hot reads, OpenSearch for search (often fed from DynamoDB Streams, because DynamoDB is not a search engine), S3 for large objects, Redshift for analytics.
-
-Service-level data patterns (database per service, saga, CQRS, event sourcing) are covered in [1.7 Cloud-Native Design Patterns](topic7.md) and [4.1](../unit4/topic1.md#database-per-service-with-polyglot-persistence).
-
-## Security Considerations
-
-- **Two layers.** IAM controls the control plane (create, modify, delete a database). Database users control the data plane (who can `SELECT` which table). `rds:*` does not grant a `SELECT`. DynamoDB is the exception: every `GetItem` and `PutItem` is an IAM action, so access can be restricted per table, index or even per partition key ([6.2](../unit6/topic2.md#fine-grained-access-control-for-multi-tenancy)).
-- **Network isolation.** Private subnets only; security group rules that reference the application security group, not CIDR ranges; DynamoDB through a gateway endpoint.
-- **Credentials.** Secrets Manager with automatic rotation, or IAM database authentication (short-lived tokens, no stored password). Never hard-code credentials.
-- **Encryption.** KMS at rest and TLS in transit. DynamoDB is always encrypted at rest; for RDS and ElastiCache it is a **creation-time** choice (encrypting later means snapshot, encrypted copy, restore).
-- **Least privilege inside the database.** Separate accounts for migrations, runtime and reporting.
-
-Deeper treatment: IAM in [8.1](../unit8/topic1.md), KMS and Secrets Manager in [8.3](../unit8/topic3.md).
-
-## Operating It: Performance, Cost and Monitoring
-
-**Performance.**
-
-- Cache the hot working set; set TTLs from tolerable staleness.
-- Send read-only traffic to replicas; use RDS Proxy for elastic compute.
-- Index for known queries (each index slows writes); confirm plans with `EXPLAIN ANALYZE`.
-- In DynamoDB, request paths use `Query` or `GetItem`, never `Scan`.
-
-**Cost.**
-
-| Service | Main cost drivers | Key lever |
-|---|---|---|
-| RDS / Aurora | Instance or ACU hours, storage, I/O, backups, licences | Right-size; Reserved Instances for steady load; stop non-production databases |
-| DynamoDB | Requests or provisioned capacity, storage, optional features | On-demand for spiky traffic; provisioned with auto scaling once steady; TTL to expire old items |
-| ElastiCache | Node hours or serverless usage | Size to the working set; a cache is usually cheaper than the larger database it replaces |
-| All | Cross-AZ transfer, NAT processing, orphaned snapshots | Gateway endpoints; snapshot and log retention policies |
-
-Figures change; check the AWS Pricing Calculator before committing to a budget.
-
-**Monitoring.**
+## Monitoring and Observability
 
 | Service | Metrics to alarm on | Why |
 |---|---|---|
@@ -430,29 +309,6 @@ Performance Insights (RDS/Aurora) and Contributor Insights (DynamoDB hot keys) h
 
 !!! warning "There is no free scalability"
     DynamoDB's horizontal scale costs query flexibility. Aurora's rich queries cost a write ceiling. ElastiCache's speed costs durability. The architect chooses which price the workload can afford.
-
-## Common Mistakes
-
-### Beginner Mistakes
-
-| Mistake | Why it is wrong | Do instead |
-|---|---|---|
-| Making an RDS instance publicly accessible | Exposes the database to the internet | Private subnets and security group references |
-| Hard-coding credentials | They leak through source control and logs | Secrets Manager or IAM database authentication |
-| Using `Scan` in DynamoDB | Reads and bills every item | Design keys so access is `Query` or `GetItem` |
-| Backup retention of zero | Disables PITR | Set retention deliberately |
-| Treating ElastiCache as durable | Data lost on failover or eviction | Cache only what can be rebuilt |
-| Using Multi-AZ to scale reads | The standby is for failover | Read replicas or a cache |
-
-### Production Mistakes
-
-| Mistake | Consequence | Remedy |
-|---|---|---|
-| Lambda connecting directly to RDS at high concurrency | Connection exhaustion and cascading failure | RDS Proxy, reserved concurrency, connection reuse |
-| Never testing failover or restore | Recovery is an assumption | Regular failover and restore drills |
-| Analytics on the OLTP database | Checkout slows or fails | Reporting replica, S3 plus Athena, or Redshift |
-| Ignoring DynamoDB throttling because retries succeed | Latency degrades until it becomes an outage | Alarm on throttling; check key distribution |
-| Cache smaller than the working set | Low hit rate, load pushed back to the database | Monitor evictions and hit rate; resize |
 
 ## Summary
 

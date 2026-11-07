@@ -9,10 +9,9 @@
 
 !!! info "Concepts used in this lab"
     Read these first if a term is new: [Application Auto Scaling on ECS](../unit2/topic3.md#application-auto-scaling-on-ecs) ·
-    [why the signal matters](../unit2/topic3.md#why-auto-scaling-exists-and-why-the-signal-matters-more-than-the-mechanism) ·
+    [why the signal matters](../unit2/topic3.md#choosing-the-scaling-metric) ·
     [choosing the scaling metric](../unit2/topic3.md#choosing-the-scaling-metric) ·
     [the two scaling layers](../unit2/topic3.md#the-two-scaling-layers-revisited) ·
-    [Application Auto Scaling vs EC2 Auto Scaling](../unit7/topic1.md#application-auto-scaling-and-ec2-auto-scaling) ·
     [custom metrics](../unit7/topic1.md#custom-metrics-and-the-four-ways-to-publish-them) ·
     [how an alarm evaluates data](../unit7/topic3.md#how-an-alarm-evaluates-data) ·
     [missing-data treatment](../unit7/topic3.md#missing-data-treatment) ·
@@ -3035,7 +3034,7 @@ Observable here: the role, target, policies, managed alarms, `ResourceLabel`, st
 **Where Floci is nicer than reality (traps on real AWS):** capacity appears instantly or never (real Fargate tasks take 20 to 60 seconds plus the grace period); nothing is ever `Unfulfilled` (real scale-outs hit subnet address exhaustion and quotas); alarms never flap; nothing costs money (CloudWatch charges per alarm and per custom metric); suspension has no effect, so its hazard is invisible; and `set-alarm-state` is a real privilege on a production account.
 
 !!! info "Three things called auto scaling"
-    **ECS service auto scaling** (this lab) changes the task count via Application Auto Scaling. **ECS cluster auto scaling** changes container instances behind a capacity provider and is meaningless on Fargate. **EC2 Auto Scaling** manages Auto Scaling groups from launch templates, which is where Lab 3's golden AMI belongs, and is the only one with predictive scaling. See [Application Auto Scaling and EC2 Auto Scaling](../unit7/topic1.md#application-auto-scaling-and-ec2-auto-scaling) and [the two scaling layers](../unit2/topic3.md#the-two-scaling-layers-revisited).
+    **ECS service auto scaling** (this lab) changes the task count via Application Auto Scaling. **ECS cluster auto scaling** changes container instances behind a capacity provider and is meaningless on Fargate. **EC2 Auto Scaling** manages Auto Scaling groups from launch templates, which is where Lab 3's golden AMI belongs, and is the only one with predictive scaling. See [the two scaling layers](../unit2/topic3.md#the-two-scaling-layers-revisited).
 
 ```text
 aws autoscaling                 EC2 Auto Scaling - groups, launch templates, instance refresh

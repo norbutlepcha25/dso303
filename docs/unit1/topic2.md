@@ -20,15 +20,11 @@ If IAM says no, you get `AccessDenied` and nothing else happens.
 
 ## Why IAM Exists
 
-Before cloud, security was mostly *physical and network based*: the server was in a locked room
-behind a firewall. In the cloud there is no locked room. The only thing standing between your
-company's data and the internet is **an identity and a policy document**.
-
-IAM exists so that you can express, precisely and in machine-readable form, statements such as:
-
-- "The reporting application may **read** student transcripts but may never **delete** them."
-- "Developers may start and stop test servers, but only in the Singapore region."
-- "This virtual machine may write to this one storage bucket, and nothing else."
+- **No locked room in the cloud:** before cloud, security was mostly physical and network based; in AWS the only barrier between your data and the internet is an identity and a policy document.
+- **Every request must be checked:** IAM authenticates the caller and authorises each action on each resource, for every API call to every service.
+- **Precise, machine-readable rules:** statements such as "the reporting application may read student transcripts but never delete them" become enforceable policy.
+- **Scoped by place and resource:** rules such as "developers may start and stop test servers, but only in the Singapore Region" limit actions to approved Regions and resources.
+- **Least privilege for machines too:** a virtual machine can be allowed to write to one storage bucket and nothing else, without storing any keys.
 
 ## Where IAM Is Used in Real Systems
 

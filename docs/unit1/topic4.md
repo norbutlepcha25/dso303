@@ -39,21 +39,12 @@ Three services form the foundation. Each implements a different storage abstract
 
 ## Why This Service or Concept Exists
 
-In a traditional data centre, storage is bought years ahead, durability depends on RAID inside one building, and restores from tape take days. AWS storage replaces this with:
-
-- capacity provisioned by API, on demand;
-- multi-AZ durability as a default;
-- performance set independently of capacity (gp3 volumes);
-- incremental snapshots restorable in minutes;
-- access control by IAM identity rather than network location.
-
-AWS offers **three** services because the three abstractions make **incompatible trade-offs**:
-
-| Abstraction | Gives up | To gain |
-|---|---|---|
-| Object (S3) | In-place updates | Unbounded scale and durability |
-| Block (EBS) | Sharing and cross-AZ reach | Sub-millisecond random access |
-| File (EFS) | Lower cost and latency | Shared POSIX files across many hosts |
+- **Capacity on demand:** data-centre storage was bought years ahead; AWS storage is provisioned by API call when it is needed.
+- **Multi-AZ durability as a default:** durability no longer depends on RAID inside one building.
+- **Performance independent of capacity:** volumes such as gp3 let IOPS and throughput be set separately from size.
+- **Fast recovery:** incremental snapshots restore in minutes rather than the days a tape restore took.
+- **Identity-based access:** access is controlled by IAM identity rather than network location.
+- **Three services for three incompatible trade-offs:** object storage (S3) gives up in-place updates for unbounded scale, block storage (EBS) gives up sharing for sub-millisecond access, and file storage (EFS) gives up cost and latency for shared POSIX files.
 
 <figure markdown="span">
     ![Trade-offs between object, block and file storage](../img/U1/storageTradeoff.png){width="80%"}
@@ -159,7 +150,7 @@ See [6.1 Throughput modes, performance modes and elastic capacity](../unit6/topi
 - **Amazon FSx**: managed file systems beyond EFS: Windows File Server (SMB, Active Directory), Lustre (HPC and ML, linked to S3), NetApp ONTAP and OpenZFS.
 - **AWS Storage Gateway**: presents on-premises NFS, SMB, iSCSI or virtual tape interfaces backed by AWS storage, for hybrid and migration use.
 
-See [6.1 Choosing between EFS, FSx and Mountpoint for Amazon S3](../unit6/topic1.md#choosing-between-efs-fsx-and-mountpoint-for-amazon-s3).
+See [6.1 AWS Storage Solutions](../unit6/topic1.md).
 
 ## Architecture Components
 
@@ -201,71 +192,15 @@ See [6.1 Choosing between EFS, FSx and Mountpoint for Amazon S3](../unit6/topic1
 
 Detailed tables: [S3 bucket configuration](../unit6/topic1.md#bucket-configuration), [EBS configuration](../unit6/topic1.md#configuration-options_1), [EFS configuration](../unit6/topic1.md#configuration-options_2).
 
-## Design Considerations
+## Monitoring and Observability
 
-### The decision framework
-
-```mermaid
-graph TD
-    A["What storage does this workload need"] --> B{"Is the data needed after the compute instance dies"}
-    B -->|"No, purely temporary"| C["Instance store or ephemeral container storage"]
-    B -->|"Yes"| D{"Do multiple hosts need concurrent read and write access"}
-    D -->|"Yes, POSIX required"| E{"Windows SMB or Active Directory"}
-    E -->|"Yes"| F["Amazon FSx for Windows File Server"]
-    E -->|"No"| G{"Extreme HPC throughput needed"}
-    G -->|"Yes"| H["Amazon FSx for Lustre"]
-    G -->|"No"| I["Amazon EFS"]
-    D -->|"No, single host"| J{"Does the application require a block device or a POSIX file path"}
-    J -->|"Yes"| K["Amazon EBS"]
-    J -->|"No, API access is acceptable"| L{"Whole-object read and write"}
-    L -->|"Yes"| M["Amazon S3"]
-    L -->|"No, random in-place updates"| K
-```
-
-### When to choose each
-
-| Choose | When | Avoid when |
+| Service | Metrics to watch | What they reveal |
 |---|---|---|
-| **S3** | Data is written whole and read by name: data lakes, backups, media, static assets, build artefacts, logs | The application needs POSIX semantics or low-latency transactional writes |
-| **EBS** | One instance needs a persistent disk: boot volumes, self-managed databases | Data must be shared, or must stay accessible through an AZ failure |
-| **EFS** | Many instances, containers or functions share files: CMS content, uploads, ML models, home directories | Latency-critical databases, or workloads dominated by small metadata operations |
-| **Instance store** | Scratch space, caches, data replicated elsewhere | Anything that must survive a stop or termination |
+| S3 | `4xxErrors`, `5xxErrors`, `FirstByteLatency`, `BucketSizeBytes` | Client and server errors, read latency, storage growth |
+| EBS | `VolumeQueueLength`, `BurstBalance`, `VolumeReadOps`, `VolumeWriteOps` | Saturation, burst-credit exhaustion, I/O load |
+| EFS | `PercentIOLimit`, `BurstCreditBalance`, `ClientConnections` | Approaching the I/O ceiling, throughput credits, number of connected clients |
 
-!!! tip "Scope determines availability"
-    S3 and EFS survive the loss of an Availability Zone; a single EBS volume does not. Going beyond one Region always needs **asynchronous** replication (S3 replication, EFS replication, snapshot copies), so a multi-Region design always has a non-zero Recovery Point Objective.
-
-## Security Considerations
-
-- **Access control.** S3 access combines IAM identity policies, bucket policies and Block Public Access; an explicit `Deny` anywhere wins. Keep ACLs disabled. Never make a bucket public to host a website; use CloudFront with Origin Access Control. See [1.2](topic2.md) and [8.1](../unit8/topic1.md).
-- **Encryption.** New S3 objects are encrypted by default with SSE-S3; SSE-KMS adds key control and an audit trail. EBS and EFS encrypt at rest with KMS; EFS encrypts in transit with TLS via `efs-utils`. See [8.3 S3 encryption choices](../unit8/topic3.md#server-side-and-client-side-encryption-choices-for-s3).
-- **Network isolation.** Use a Gateway VPC endpoint for S3. Restrict EFS mount targets to TCP 2049 from the application's security group.
-- **Audit.** CloudTrail records management events by default; S3 object-level data events must be enabled explicitly.
-
-## Operating It: Performance, Cost and Monitoring
-
-| Service | Performance | Main cost driver | Cost lever | Metrics to watch |
-|---|---|---|---|---|
-| S3 | Multipart upload and byte-range reads in parallel; CloudFront caching; avoid millions of tiny objects | Storage class, requests, data transfer out | Lifecycle transitions, fewer larger objects, Gateway endpoint instead of NAT | `4xxErrors`, `5xxErrors`, `FirstByteLatency`, `BucketSizeBytes` |
-| EBS | SSD for random I/O, HDD for sequential; the instance's EBS bandwidth is often the real ceiling | Provisioned capacity, used or not | Right-size, delete unattached volumes, gp2 to gp3, snapshot retention | `VolumeQueueLength`, `BurstBalance`, `VolumeReadOps`, `VolumeWriteOps` |
-| EFS | Elastic throughput and parallel clients; avoid very large directories | Data in the Standard class | Lifecycle to Infrequent Access and Archive | `PercentIOLimit`, `BurstCreditBalance`, `ClientConnections` |
-
-!!! tip "The two practices with the highest return"
-    1. **S3 versioning plus a lifecycle rule expiring noncurrent versions.** Accidental deletion becomes an inconvenience, not a disaster, at bounded cost.
-    2. **A Gateway VPC endpoint for S3 in every VPC.** It is free, improves security, and often removes a large NAT Gateway bill.
-
-Other habits: define storage as code, tag everything, automate snapshots and **test restores**, and copy backups to another account and Region. CloudWatch itself is covered in [7.1](../unit7/topic1.md#infrastructure-and-application-monitoring-with-amazon-cloudwatch).
-
-## Common Architecture Patterns
-
-| Pattern | How it works |
-|---|---|
-| **Externalised state** | App servers keep no durable state: uploads in S3, shared files in EFS, sessions in ElastiCache or DynamoDB. This makes the tier horizontally scalable ([1.7](topic7.md)) |
-| **Static website, private origin** | S3 holds the assets; CloudFront serves them |
-| **Event-driven processing** | An S3 upload emits an event to Lambda, SNS, SQS or EventBridge, which writes a derived object |
-| **Direct upload** | Browsers upload to S3 with presigned URLs; the app tier never handles the bytes |
-| **Data lake** | S3 as the landing zone, queried in place by Athena, Glue or EMR |
-| **Container volumes** | EFS gives shared `ReadWriteMany` volumes; EBS gives `ReadWriteOnce` volumes bound to one AZ |
-| **Isolated backups** | Snapshots and backups copied to another account and Region to survive credential compromise |
+S3 request metrics such as `4xxErrors` and `FirstByteLatency` must be enabled per bucket; storage metrics such as `BucketSizeBytes` are published daily. CloudWatch itself is covered in [7.1](../unit7/topic1.md#infrastructure-and-application-monitoring-with-amazon-cloudwatch).
 
 ## Advantages and Limitations
 
@@ -277,19 +212,6 @@ Other habits: define storage as code, tag everything, automate snapshots and **t
 | Performance decoupled from capacity (gp3) | Cross-Region replication is always asynchronous |
 | Security tied to IAM identity and audited by CloudTrail | Lifecycle transitions run roughly daily; cold classes have minimum durations |
 
-## Common Mistakes
-
-| Mistake | Do instead |
-|---|---|
-| Believing S3 has folders, so a "folder rename" is cheap | Treat keys as flat names; a rename copies every object |
-| Making a bucket public to serve a website | CloudFront with Origin Access Control |
-| Attaching an EBS volume to an instance in another AZ | Snapshot it and restore in the target AZ |
-| Mounting EFS without opening TCP 2049 | Allow 2049 from the client security group |
-| Using EFS or S3 as a transactional database's data directory | EBS, or a managed database ([1.5](topic5.md)) |
-| Versioning without a lifecycle rule | Expire noncurrent versions |
-| Routing S3 traffic through a NAT gateway | Gateway VPC endpoint |
-| Leaving unattached volumes and old snapshots | Regular clean-up and snapshot retention rules |
-
 ## Summary
 
 The storage decision comes **before** the compute decision. Three ideas carry beyond AWS:
@@ -300,7 +222,7 @@ The storage decision comes **before** the compute decision. Three ideas carry be
 | **Scope determines availability** | S3 and EFS are Regional and survive an AZ loss. EBS is bound to one AZ; instance store to one host |
 | **Durability is not availability** | Neither protects against deletion; versioning, Object Lock and backups do |
 | **Settings are dials, not defaults** | Storage classes, volume types, throughput modes, lifecycle, replication and encryption are chosen against explicit requirements |
-| **Cheapest high-value habits** | Versioning plus lifecycle; Gateway endpoint for S3; gp3; delete unattached volumes |
+| **Sensible defaults** | Versioning plus a lifecycle rule, Block Public Access, encrypted gp3 volumes and automated snapshots |
 
 Container platforms (Units 2 and 3) need EBS and EFS volumes; serverless designs are triggered by S3 events; pipelines store artefacts in S3. [6.1 AWS Storage Solutions](../unit6/topic1.md) returns to all three services in depth.
 

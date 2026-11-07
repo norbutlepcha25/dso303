@@ -72,11 +72,11 @@
 
     S3 is repartitioning the prefix to scale its request capacity, and the job is exceeding the current rate. Configure the SDK with `adaptive` retry mode so that it rate-limits itself, add a high-cardinality component such as a hash near the start of the key to spread load, ramp concurrency gradually, and ensure the job does not add its own tight retry loop. Once S3 has repartitioned, throughput will increase.
 
-**2. After enabling SSE-KMS on a bucket, a cross-account consumer can list objects but receives AccessDenied on GetObject. Why?**
+**2. A team deletes thousands of obsolete objects from a versioned bucket each week, yet the bucket's storage bill keeps growing. What is happening and how should it be fixed?**
 
 ??? success "Model answer"
 
-    Listing requires only S3 permissions, whereas reading an SSE-KMS object also requires `kms:Decrypt` on the key. The consumer's role must have `kms:Decrypt` in its identity policy, and the key policy in the owning account must allow that role (or its account) to use the key. If the key is an AWS managed key (`aws/s3`), cross-account use is not possible, and a customer managed key is required.
+    In a versioned bucket, a `DELETE` without a version identifier does not remove data; it inserts a delete marker that hides the object, while every prior version remains stored and billed as a noncurrent version. The deletions therefore free no storage. The fix is a lifecycle rule with `NoncurrentVersionExpiration` after an agreed retention window, which permanently deletes old versions automatically, combined with a rule that aborts incomplete multipart uploads. Versioning should stay enabled, because the same mechanism is what makes accidental deletes recoverable.
 
 ### 6.1.2 Block Storage with Amazon EBS
 
@@ -190,11 +190,11 @@
 
     There is no mount target in AZ-b, or the AZ-b mount target's security group or subnet NACL blocks TCP 2049 from the task security group. Verify mount targets per AZ and security group rules.
 
-**2. An inference Lambda function loads a 3 GB model from EFS. During a traffic spike, latency and EFS costs rise sharply. What would you change?**
+**2. A 20 GB EFS file system created years ago in Bursting mode serves a shared build cache. It performed well for months, but builds now stall for long periods during busy afternoons. What is happening and what would you change?**
 
 ??? success "Model answer"
 
-    Cache the model in a module-level global so warm invocations reuse it; use provisioned concurrency so cold starts happen before traffic; cap concurrency with reserved concurrency; consider a container image with the model baked in if models change rarely. Monitor `ClientConnections` and `DataReadIOBytes`.
+    In Bursting mode, baseline throughput is tied to stored size (roughly 50 KiB/s per GiB), so a 20 GB file system has a baseline of only about 1 MiB/s. Burst credits accumulate while usage is below baseline and are spent above it; as build activity grew, the credits were exhausted and throughput fell abruptly to the baseline. The fix is to switch the file system to Elastic throughput, which scales with demand and bills for data read and written, or to Provisioned throughput if the load is steady, heavy and predictable enough to be cheaper. After the change, monitor `MeteredIOBytes` to understand the throughput charges.
 
 **3. Developers report that `npm install` inside a pod using an EFS-backed workspace takes ten times longer than on a laptop. Explain why and suggest a design change.**
 
@@ -954,11 +954,11 @@
 
     The producer likely ignores `FailedRecordCount` in `PutRecords` responses, dropping throttled entries. Confirm with `PutRecords.FailedRecords` and `WriteProvisionedThroughputExceeded` metrics. Fix by retrying only failed entries with backoff, emitting a metric for exhausted retries, and adding capacity or fixing key skew.
 
-**2. After enabling a customer-managed KMS key on a stream, the Lambda consumer stops processing and iterator age rises.**
+**2. A consumer bug was discovered on Monday morning; it had been writing incorrect results since Friday evening. When the team tries to reprocess from Friday, the earliest records are no longer in the stream. Why, and what should change?**
 
 ??? success "Model answer"
 
-    The Lambda execution role lacks `kms:Decrypt` on the key, or the key policy does not allow the role. Grant decrypt permission in both the key policy and the role policy. Producers similarly need `kms:GenerateDataKey`.
+    Retention is time-based, not consumption-based, and the stream uses the default 24-hour retention, so records older than a day have expired regardless of whether they were read. Retention is the recovery window: it must cover the longest plausible consumer outage plus the time to deploy a fix, which is why 7 days is a common production value (extended retention up to 7 days and long-term retention up to 365 days are charged extra). Retention is not archival, however, so Firehose should also land a permanent raw copy in S3, from which older data can be replayed into a reprocessing stream.
 
 **3. After a resharding operation, a custom consumer processes some records for the same key out of order.**
 
@@ -1058,11 +1058,11 @@
 
     Each service's repository declares its SQS queue and EventBridge rule (via Terraform in the pipeline, or ACK controllers as Kubernetes custom resources reconciled by Argo CD or Flux). Pods use EKS Pod Identity for SQS and `PutEvents` permissions. KEDA scales Deployments on queue length. Pattern tests and schema checks run in CI before the GitOps controller applies changes. The platform team owns bus policies and hub rules in a separate repository.
 
-**4. Using the integrated decision matrix, choose services for: payroll job distribution, stock-price ticks for five analytics systems, mobile push notifications to students, and cross-account order events.**
+**4. An orders service writes to a DynamoDB table, and a hand-written Lambda function reads its stream, looks up the customer tier, reshapes each record and publishes `Order Placed` to a bus. Redesign this with EventBridge Pipes and justify each stage.**
 
 ??? success "Model answer"
 
-    Payroll jobs: SQS (FIFO if per-employee ordering or deduplication matters) for competing workers. Stock ticks: Kinesis Data Streams (or MSK if Kafka is required) for high-volume ordered data with multiple independent readers and replay. Mobile push: SNS mobile push, possibly triggered by EventBridge rules. Cross-account order events: EventBridge with organisation-scoped bus policies and SQS queues per consumer.
+    Replace the glue function with a pipe whose source is the DynamoDB stream of the orders table. A filter stage matches only `INSERT` records with status `PLACED`, so unwanted records are discarded before any further cost, because Pipes bill per request after filtering. An enrichment stage calls a small Lambda function (or a synchronous Step Functions Express workflow or API destination) to add the customer tier, which keeps the event useful to consumers without making them call back. An input template turns the record into the public domain event shape, hiding the table's key design from consumers, and the target is the orders event bus, where rules route the event to every interested consumer. Because the source is a stream, ordering is per item key and the pipe needs the same failure controls as a Lambda event source mapping (bounded retries, bisect and an on-failure destination) so that one bad record cannot block a shard; pipe logging to CloudWatch Logs helps diagnose filter and template problems.
 
 #### Troubleshooting Questions
 

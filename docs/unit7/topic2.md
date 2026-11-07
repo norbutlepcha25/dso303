@@ -104,44 +104,12 @@ flowchart LR
 
 ### Why This Service or Concept Exists
 
-#### The problem: logs on disposable infrastructure
-
-On a traditional server, logs were files in `/var/log`. An administrator logged in with SSH and used `tail`, `grep` and `less`. That model fails completely in cloud-native systems:
-
-1. **Compute is ephemeral.** A Fargate task, a Kubernetes pod or a Lambda execution environment can disappear at any moment, taking any local files with it. [Chapter 2.1](../unit2/topic1.md) made the point that anything written to a file inside a container is lost when the task stops.
-2. **Compute is numerous.** A service may run 40 tasks today and 400 tomorrow. Nobody can SSH into 400 containers to find one failed request.
-3. **Requests cross services.** One user request in a microservices system touches an API Gateway stage, three services and a queue. The story of that request is scattered across many log sources, and it can only be reconstructed if all of them land in one queryable place with a shared identifier.
-4. **There may be no host at all.** Lambda and Fargate give you no operating system to log in to.
-5. **Logs are evidence.** Security investigations, audits and regulations (financial services, health data, national data protection laws) require logs to be retained, tamper-resistant and access-controlled, which is impossible when they live on the servers an attacker may have compromised.
-
-The solution is **centralised logging**: every workload ships its events, immediately and continuously, to a durable store outside the workload itself.
-
-#### Why AWS built CloudWatch Logs
-
-Before managed log services, organisations built centralised logging themselves, typically with the "ELK" stack (Elasticsearch, Logstash, Kibana) or with commercial products. The operator had to:
-
-- deploy and scale a fleet of collectors and indexers,
-- size storage for peak log volume plus retention,
-- handle back-pressure when the indexer fell behind,
-- patch and secure the cluster,
-- manage index lifecycle so that disks did not fill.
-
-AWS launched CloudWatch Logs in 2014 so that every AWS service could deliver logs to a common, managed destination with no infrastructure to operate. Over time it gained native integrations with Lambda (every function logs there by default), ECS, EKS, API Gateway, VPC Flow Logs, CloudTrail and dozens of other services, plus analytics features (Logs Insights in 2018), data protection (2022), the Infrequent Access log class (2023), field indexes and log transformation (2024), cross-account centralisation rules and unified data management (2025) and the Log Analytics console experience (2026).
-
-#### Benefits over older methods
-
-| Concern | Files on servers | Self-managed ELK cluster | Amazon CloudWatch Logs |
-|---------|------------------|--------------------------|------------------------|
-| Survives instance or container loss | No | Yes | Yes |
-| Infrastructure to operate | None, but no central view | Collectors, indexers, storage, upgrades | None |
-| Native AWS service integration | No | Via custom shippers | Built in for Lambda, ECS, EKS, API Gateway, VPC, CloudTrail and many more |
-| Scaling | Per server | Capacity planned | Automatic |
-| Access control | OS users | Cluster-specific | IAM, resource policies, KMS |
-| Retention management | Manual rotation | Index lifecycle policies | Per log group setting |
-| Pricing | Disk only | Servers and storage whether used or not | Per GB ingested, stored and scanned |
-
-!!! note "CloudWatch Logs is not the only answer"
-    Many organisations still use third-party observability platforms, or run OpenSearch as their primary log store. Even then, CloudWatch Logs is usually the first hop for AWS-native sources (Lambda, VPC Flow Logs, many vended logs), with subscription filters forwarding data onward. Knowing CloudWatch Logs well is therefore necessary regardless of the final destination.
+- **Compute is ephemeral and numerous.** A Fargate task, pod or Lambda environment can disappear with its local files, and nobody can log in to 400 containers to find one failed request.
+- **There may be no host at all.** Lambda and Fargate offer no operating system to log in to, so logs must leave the workload as they are written.
+- **Requests cross services.** The story of one request can only be reconstructed if every service's logs land in one queryable place with a shared identifier.
+- **Logs are evidence.** Security investigations, audits and regulations require logs to be retained, tamper-resistant and access-controlled, which is impossible on servers an attacker may have compromised.
+- **No logging cluster to operate.** Before managed services, teams ran ELK stacks and handled scaling, back-pressure, patching and disk lifecycle; CloudWatch Logs (2014) gives every AWS service a managed destination with per-log-group retention and IAM control.
+- **The usual first hop.** Even organisations that use OpenSearch or a third-party platform normally land AWS-native logs in CloudWatch Logs first and forward them with subscription filters.
 
 ### Core Concepts
 
@@ -561,7 +529,7 @@ flowchart TB
 !!! example "Worked estimate"
     A microservices platform of 30 services on ECS writes 20 GB of Standard-class application logs per day and keeps them for 30 days. Monthly ingestion is about 600 GB, costing roughly 600 x 0.50 = USD 300. Stored data is compressed; at a typical compression ratio the retained 30 days might occupy around 100 to 150 GB, costing a few US dollars per month. Engineers run queries scanning 2 TB per month in total, costing 2,000 x 0.005 = USD 10. **Ingestion dominates.** If half the volume is DEBUG output that is never queried, reducing log level in production saves about USD 150 per month, far more than any storage or query optimisation.
 
-The cost levers that follow from this model (ingest less, set retention, choose the class and destination, tag for attribution) are listed in [Cost Optimization](#cost-optimization) below.
+The cost levers that follow from this model are therefore to ingest less (appropriate log levels in production), set explicit retention, choose the Infrequent Access class or direct delivery to Amazon S3 for passive logs, and tag log groups for cost attribution.
 
 #### Performance Characteristics
 
@@ -725,346 +693,15 @@ The unified CloudWatch agent reads a JSON configuration, commonly stored in Syst
 | `distribution` | `ByLogStream` or `Random` for Kinesis destinations; `Random` spreads load across shards |
 | Account-level policy `selectionCriteria` | Exclude specific log groups, for example the destination's own logs to avoid loops |
 
-### Design Considerations
-
-#### Scalability
-
-CloudWatch Logs itself scales without intervention. Design for scalability at the edges: batch writes in shippers, size Fluent Bit sidecars and DaemonSets for peak volume, and put Kinesis or Firehose between log groups and any consumer that cannot absorb bursts. Naming conventions and account-level policies scale governance to thousands of log groups without per-group manual work.
-
-#### Availability
-
-The logging path must be **less critical than the request path**. Non-blocking drivers, bounded buffers and asynchronous shippers ensure that an impaired logging service degrades observability rather than availability. For regional resilience of the logs themselves, replicate to a backup Region.
-
-#### Reliability
-
-Logs are only reliable if they arrive complete. Common loss points are: containers killed before buffers flush (handle `SIGTERM` and allow a flush period, [Chapter 2.2](../unit2/topic2.md)), events older than 14 days during backfill, timestamps skewed by bad host clocks, oversized events, and non-blocking buffer overflow. Monitor shipper metrics (Fluent Bit output errors and retries, agent logs) and alarm on the **absence** of expected logs, for example a metric filter with a `defaultValue` of 0 on a heartbeat event.
-
-#### Durability
-
-CloudWatch Logs stores data redundantly within a Region for the retention period. For records that must outlive CloudWatch retention, copy them to S3 (with versioning and, for regulatory records, S3 Object Lock in compliance mode) through Firehose or export.
-
-#### Latency
-
-For operational use, seconds of ingestion latency are acceptable. Where near-real-time reaction is needed (for example, block an IP address after repeated authentication failures), use a subscription filter to Lambda or Kinesis rather than polling queries.
-
-#### Cost
-
-Cost is dominated by ingestion volume. The most effective levers are at the source (log level, sampling, not logging payloads), the log class, retention and delivery destination. [Section 7.3](../unit7/topic3.md) discusses the overall cost of observability; here the rule is simple: **every log line is a small, recurring invoice**.
-
-#### Performance
-
-Logging has a CPU and latency cost inside the application. Synchronous logging to a remote endpoint from inside a request handler is an anti-pattern; write to `stdout` (or a local buffer) and let the platform ship asynchronously. Serialising large objects to JSON on every request can be surprisingly expensive in hot paths.
-
-#### Maintainability
-
-Keep the logging schema, log group definitions, retention, metric filters and subscriptions in infrastructure as code next to the service that owns them (Unit V). Use a shared logging library so that schema changes propagate by dependency upgrade rather than by editing 30 services.
-
-#### Operational complexity
-
-CloudWatch Logs is low-complexity to operate; complexity lives in governance: who may read which log groups, how long each class of log is kept, how logs from 50 accounts are aggregated, and who owns each subscription pipeline.
-
-!!! question "Architect's checklist for every new service"
-    What is the log group name, class and retention? Is the output structured JSON conforming to the organisation schema? Are trace and correlation IDs present on every line, including after asynchronous hops? Which events deserve metric filters and alarms? Could this service log personal data, and is a data protection policy attached? Is the log group included in organisation centralisation? What is the expected daily volume and cost?
-
 ### AWS Best Practices
 
-| Pillar | CloudWatch Logs practice |
-|--------|--------------------------|
-| Operational Excellence | Structured JSON with a shared schema; correlation and trace IDs; log groups, retention, filters and alarms in IaC; runbooks that include saved Logs Insights queries; Live Tail during deployments |
-| Security | Customer managed KMS keys for sensitive groups; least-privilege read access by team; data protection policies; centralise security logs to a Log Archive account that workload teams cannot modify; deletion protection; VPC endpoints |
-| Reliability | Non-blocking drivers and bounded buffers so logging cannot fail the application; graceful shutdown flushes; alarms on missing logs; backup Region for critical logs |
-| Performance Efficiency | Asynchronous shipping; batching; field indexes for frequent query fields; route high-volume analytics to OpenSearch when query patterns demand indexing |
-| Cost Optimization | Explicit retention; appropriate log levels; Infrequent Access for passive logs; vended logs direct to S3; archive to S3 lifecycle tiers; tag for attribution |
-| Sustainability | Log less but better: every stored and scanned gigabyte consumes energy; expire data you will never use; prefer metrics (EMF) over logging the same number repeatedly |
-
-### Security Considerations
-
-#### IAM and least privilege
-
-Different principals need very different log permissions:
-
-| Principal | Required actions | Notes |
-|-----------|------------------|-------|
-| Lambda execution role | `logs:CreateLogGroup`, `logs:CreateLogStream`, `logs:PutLogEvents` | The `AWSLambdaBasicExecutionRole` managed policy grants these; scope to the function's log group where possible |
-| ECS task execution role (for `awslogs`) | `logs:CreateLogStream`, `logs:PutLogEvents` (plus `logs:CreateLogGroup` if auto-create is used) | **Execution role**, not the task role, because the ECS agent writes the logs |
-| ECS task role (for FireLens) | Permissions for the Fluent Bit outputs, such as `logs:PutLogEvents` or `firehose:PutRecordBatch` | The Fluent Bit sidecar runs with the task role |
-| EKS Fluent Bit service account | `logs:PutLogEvents`, `logs:CreateLogStream`, `logs:DescribeLogStreams` | Via EKS Pod Identity or IRSA ([Chapter 3.1](../unit3/topic1.md)) |
-| EC2 CloudWatch agent | `CloudWatchAgentServerPolicy` managed policy | Via the instance profile |
-| Developer, read-only | `logs:StartQuery`, `logs:GetQueryResults`, `logs:FilterLogEvents`, `logs:GetLogEvents`, `logs:DescribeLogGroups` on their team's prefix | Do not grant `logs:Unmask` by default |
-| Security analyst | Read on security log groups, `logs:Unmask` where justified | Audited through CloudTrail |
-
-```json
-{
-  "Version": "2012-10-17",
-  "Statement": [
-    {
-      "Sid": "QueryOwnTeamLogsOnly",
-      "Effect": "Allow",
-      "Action": [
-        "logs:StartQuery",
-        "logs:GetQueryResults",
-        "logs:StopQuery",
-        "logs:FilterLogEvents",
-        "logs:GetLogEvents",
-        "logs:DescribeLogStreams"
-      ],
-      "Resource": [
-        "arn:aws:logs:us-east-1:111122223333:log-group:/ecs/prod/payments-*",
-        "arn:aws:logs:us-east-1:111122223333:log-group:/ecs/prod/payments-*:log-stream:*"
-      ]
-    },
-    {
-      "Sid": "ListGroupsForConsole",
-      "Effect": "Allow",
-      "Action": ["logs:DescribeLogGroups", "logs:DescribeQueries", "logs:GetQueryResults"],
-      "Resource": "*"
-    }
-  ]
-}
-```
-
-!!! danger "Logs are a high-value target"
-    Logs often contain the most sensitive operational data an organisation holds: user identifiers, IP addresses, internal hostnames, error messages that reveal code paths, and occasionally secrets that were logged by mistake. An attacker who gains read access to logs learns a great deal; an attacker who gains delete access can erase evidence. Separate the permission to **write** logs (workloads), **read** logs (engineers by team), **unmask** logs (few), and **delete or change retention** (platform administrators only, ideally through IaC pipelines).
-
-#### Encryption with KMS
-
-All log data is encrypted at rest. Associating a **customer managed KMS key** with a log group adds key-level control, key usage audit in CloudTrail and separation of duties; the key policy must allow the regional CloudWatch Logs service principal, scoped with the `kms:EncryptionContext:aws:logs:arn` condition. Key policies, encryption context and the confused deputy conditions are covered in [8.3 Encryption at Rest with AWS KMS](../unit8/topic3.md#encryption-at-rest-with-aws-kms).
-
-!!! warning "Disabling the key disables the logs"
-    If the KMS key is disabled, scheduled for deletion, or its policy no longer allows CloudWatch Logs, ingestion into and queries of that log group fail. Treat log-group keys as production dependencies with change control.
-
-#### Secrets never belong in logs
-
-Secrets Manager and Parameter Store ([Chapter 2.2](../unit2/topic2.md)) keep credentials out of code and task definitions; a single `print(os.environ)` or a logged HTTP request with an `Authorization` header puts them straight back into a log group readable by many people. Adopt allow-list logging (log named fields, not whole objects), redact headers in HTTP client logging, and use data protection policies with the AWS secret-key identifiers as a safety net.
-
-#### Network controls
-
-Workloads in private subnets without a NAT gateway need an **interface VPC endpoint for CloudWatch Logs** (`com.amazonaws.<region>.logs`). The endpoint's security group must allow HTTPS (TCP 443) from the workload security groups. An endpoint policy can restrict which log groups may be written through it. For Fargate tasks in private subnets, a missing Logs endpoint (and no NAT) is a classic cause of tasks failing to start with log driver errors.
-
-#### Security Groups, Network ACLs and public versus private resources
-
-CloudWatch Logs has no public or private resource setting of its own; it is reached over an AWS API endpoint. What matters is that shippers can reach the endpoint (security groups and network ACLs permitting outbound 443 and return traffic) and that the IAM and endpoint policies prevent data exfiltration to log groups in other accounts. The `aws:ResourceAccount` or `aws:ResourceOrgID` condition keys in endpoint policies help enforce this.
-
-#### Logging, audit and compliance
-
-- CloudTrail records CloudWatch Logs control plane calls (for example `DeleteLogGroup`, `PutRetentionPolicy`, `DeleteSubscriptionFilter`). Alarm on these for security log groups.
-- AWS Config rules check retention (`cw-loggroup-retention-period-check`) and encryption (`cloudwatch-log-group-encrypted`).
-- AWS Control Tower creates a Log Archive account for organisation CloudTrail and AWS Config logs; extend the same principle to application security logs.
-- CloudWatch Logs is in scope for common compliance programmes (for example SOC, PCI DSS, ISO and HIPAA eligibility); confirm current scope in AWS Artifact.
-
-### Performance Optimization
-
-#### Asynchronous, batched shipping
-
-The application should write to `stdout` or a local buffer and continue; the driver, agent or Fluent Bit batches events and calls `PutLogEvents` asynchronously. Direct synchronous calls to `PutLogEvents` from request-handling code add latency and couple availability to the logging service.
-
-#### Caching and connection reuse
-
-When code must call CloudWatch Logs APIs directly (custom shippers, query automation), create the SDK client once per process and reuse it so TLS connections persist. Cache `DescribeLogGroups` results rather than listing groups before every write.
-
-#### Parallelism and distribution
-
-Fluent Bit can run multiple output workers. For subscriptions to Kinesis, use `distribution: Random` so that a single noisy log stream does not create a hot shard.
-
-#### Filtering at the source
-
-Dropping unneeded events before they leave the host (Fluent Bit `grep` filters, CloudWatch agent `filters`, application log levels) is simultaneously a performance, cost and sustainability optimisation.
-
-#### Storage and query optimisation
-
-Consistent JSON field names and field indexes make queries faster. Splitting extremely high-volume, low-value streams (for example health-check access logs) into separate log groups with short retention keeps operational log groups small and quick to query.
-
-#### Monitoring the logging pipeline
-
-| Signal | Source | Meaning |
-|--------|--------|---------|
-| `IncomingBytes`, `IncomingLogEvents` | `AWS/Logs` metrics per log group | Volume trends; sudden growth indicates a verbose deployment |
-| `ForwardedBytes`, `DeliveryErrors`, `DeliveryThrottling` | `AWS/Logs` subscription metrics | Health of subscription delivery |
-| `ThrottleCount` and `CallCount` usage metrics | `AWS/Usage` | Approaching API quotas |
-| Fluent Bit output retries and errors | Fluent Bit metrics endpoint or its own logs | Shipper back-pressure |
-| Absence of heartbeat events | Metric filter with default value 0 | Silent logging failure |
-
-!!! tip "Alarm on log volume anomalies"
-    A tenfold increase in `IncomingBytes` for one log group after a deployment usually means someone shipped DEBUG logging or a retry loop. Alarming on this ([Section 7.3](../unit7/topic3.md) covers anomaly detection alarms) catches a cost incident within hours rather than at the end of the month.
-
-### Cost Optimization
-
-| Technique | Effect |
-|-----------|--------|
-| Pay-as-you-go | No fixed cost; idle log groups cost only storage |
-| Production log levels | Often the largest single saving: INFO or WARN in production, and no full request or response bodies |
-| Sampling | Log 1 in N successful requests in full, all errors always |
-| Infrequent Access class | Roughly halves ingestion price for high-volume logs that feed no automation |
-| Retention on every group | Stops unbounded storage growth |
-| Vended logs direct to S3 | Cheaper delivery for high-volume network and security logs |
-| Archive to S3 with lifecycle rules | S3 Standard-IA, Glacier Instant Retrieval and Deep Archive for long-term records |
-| Field indexes and narrow queries | Lower Logs Insights scan cost |
-| Avoid high-cardinality metric filter dimensions | Prevents custom metric sprawl |
-| Firehose with Parquet conversion | Smaller archives and cheaper Athena scans |
-| Centralisation without extra copies | First copy is free; each backup copy costs per GB |
-| Cost Explorer and tags | Attribute log cost to teams and services |
-| Trusted Advisor and Config rules | Detect log groups without retention |
-
-!!! info "Reserved capacity and Savings Plans"
-    CloudWatch Logs has no reserved capacity or Savings Plans. Savings come from ingesting less, choosing the right class and destination, and expiring data. The compute running shippers (Fargate, EC2 nodes) benefits from Savings Plans and Spot like any other workload.
-
-!!! example "Cost comparison for VPC Flow Logs"
-    An organisation produces 5 TB of VPC Flow Logs per month. Delivered to CloudWatch Logs as vended logs, the first 5 TB falls in the top tier at about USD 0.50 per GB, roughly USD 2,500 per month for ingestion before storage. Delivered directly to S3, the per-GB delivery price starts at about half that, and S3 storage is cheaper than CloudWatch Logs storage, with Athena available for investigations. If flow logs are only queried during security investigations, direct-to-S3 is the better design; if they drive real-time detections via metric filters, CloudWatch Logs Standard is justified. Always recompute with current prices.
-
-### Integration with Other AWS Services
-
-#### AWS Lambda
-
-Every Lambda function writes to CloudWatch Logs by default: the runtime captures `stdout` and `stderr` and the platform adds records such as `START`, `END` and `REPORT` (with duration, billed duration, memory size, maximum memory used and init duration). Each **execution environment** writes to its own log stream, so one stream corresponds to one warm container, not one invocation.
-
-```mermaid
-sequenceDiagram
-    participant F as Lambda function code
-    participant R as Lambda runtime and platform
-    participant L as CloudWatch Logs
-    F->>R: logger.info JSON event with correlationId
-    R->>R: Apply ApplicationLogLevel filter, add requestId
-    R->>L: PutLogEvents to /aws/lambda/orders-api stream per environment
-    R->>L: platform.report with durationMs and maxMemoryUsedMB
-    Note over L: Metric filters, subscriptions and Logs Insights act on these events
-```
-
-Architectural points:
-
-- Use **advanced logging controls** (JSON format, log levels) and Powertools for AWS Lambda for consistent structured logs.
-- Create the log group in IaC with retention; otherwise Lambda creates it on first invocation with no retention.
-- The `REPORT` line is itself valuable data: Logs Insights can compute memory over-provisioning from `@maxMemoryUsed` and `@memorySize` (7.2.2).
-- For very high-volume functions, consider delivering logs directly to S3 or Firehose using the Delivery log class, keeping only errors in CloudWatch Logs.
-
-#### Amazon ECS: awslogs and FireLens
-
-[Chapter 2.2](../unit2/topic2.md) configured the `awslogs` driver. The choice between the two ECS logging approaches is architectural:
-
-| Criterion | `awslogs` driver | FireLens with Fluent Bit |
-|-----------|------------------|--------------------------|
-| Setup | One `logConfiguration` block | Additional sidecar container and configuration |
-| Destinations | CloudWatch Logs only | CloudWatch Logs, Firehose, Kinesis, OpenSearch, S3, third-party, several at once |
-| Filtering and parsing before ingestion | Minimal (multi-line only) | Full Fluent Bit filters: grep, modify, parsers, Lua |
-| Resource cost | None beyond the ECS agent or Fargate platform | Sidecar CPU and memory per task |
-| Operational burden | Very low | Moderate: sidecar image versions and configuration |
-| When to choose | Default for most services | Multiple destinations, cost filtering, enrichment, or OpenSearch as primary store |
-
-```mermaid
-flowchart LR
-    subgraph Task["ECS task on Fargate"]
-        APP["app container stdout"] -->|"awsfirelens driver"| FB["log_router container: AWS for Fluent Bit image"]
-    end
-    FB -->|"cloudwatch_logs output: errors and warnings"| CWL[("CloudWatch Logs /ecs/prod/orders")]
-    FB -->|"kinesis_firehose output: all events"| FH["Firehose"]
-    FH --> S3[("S3 archive in Parquet")]
-    FH --> OS["OpenSearch domain"]
-```
-
-!!! tip "Keep the log router itself observable"
-    Send the Fluent Bit sidecar's own logs to CloudWatch Logs with the `awslogs` driver. When the router fails, its own logs are the only place the error appears.
-
-#### Amazon EKS: Fluent Bit and control plane logs
-
-On EKS, containers write to `stdout`; the container runtime writes those streams to files under `/var/log/containers` on the node. A **Fluent Bit DaemonSet** (one pod per node) tails those files, enriches events with Kubernetes metadata (namespace, pod, container, labels) and ships them. The **Amazon CloudWatch Observability EKS add-on** installs both the CloudWatch agent (for Container Insights metrics, [Section 7.1.1](../unit7/topic1.md#infrastructure-and-application-monitoring-with-amazon-cloudwatch)) and Fluent Bit, creating log groups such as `/aws/containerinsights/<cluster>/application`, `/dataplane` and `/host`.
-
-EKS also offers **control plane logging**, delivered to `/aws/eks/<cluster>/cluster`: API server, audit, authenticator, controller manager and scheduler logs. The **audit log** records who did what to the Kubernetes API and is essential for security investigations ([Chapter 3.3](../unit3/topic3.md)). Enable at least audit and authenticator logs in production.
-
-| EKS log source | Collected by | Destination |
-|----------------|-------------|-------------|
-| Application containers | Fluent Bit DaemonSet | `/aws/containerinsights/<cluster>/application` or custom groups |
-| Node system services (kubelet, containerd) | Fluent Bit | `/aws/containerinsights/<cluster>/dataplane` |
-| Host logs | Fluent Bit | `/aws/containerinsights/<cluster>/host` |
-| Control plane components | EKS managed | `/aws/eks/<cluster>/cluster` |
-| Fargate pods | Built-in Fluent Bit log router configured by a `aws-logging` ConfigMap | CloudWatch Logs, Firehose, OpenSearch |
-
-#### Amazon EC2
-
-Install the **CloudWatch agent** (through Systems Manager Distributor or the AMI build), store its configuration in Parameter Store, and grant `CloudWatchAgentServerPolicy` through the instance profile. Instances in an Auto Scaling group are disposable, so logs must be shipped continuously rather than collected at termination.
-
-#### Amazon API Gateway
-
-API Gateway produces two kinds of log. **Execution logs** (REST APIs) record internal processing and are verbose, so enable them at ERROR level in production and at INFO only while debugging. **Access logs** record one line per request in a format you define with `$context` variables; define them as JSON and include `$context.requestId`, `$context.extendedRequestId`, `$context.identity.sourceIp`, `$context.status`, `$context.responseLatency`, `$context.integrationLatency` and the X-Ray trace ID. The request ID becomes the correlation ID passed to backends ([Chapter 1.7](../unit1/topic7.md)).
-
-#### Other AWS sources
-
-| Source | Why it is aggregated |
-|--------|---------------------|
-| VPC Flow Logs | Network forensics and rejected-traffic detection ([Chapter 1.6](../unit1/topic6.md)) |
-| AWS CloudTrail | API audit; a trail can deliver to CloudWatch Logs for metric filters on security events |
-| Route 53 Resolver query logs | DNS-based threat investigation |
-| AWS WAF | Blocked and allowed web requests |
-| Amazon RDS and Aurora | Error, slow query, general and audit logs ([Chapter 1.5](../unit1/topic5.md)) |
-| AWS CodeBuild | Build logs for CI pipelines (Unit V) |
-| Amazon Bedrock | Model invocation logs for generative AI governance |
-| AWS Step Functions | Execution history for Express workflows |
-
-#### Downstream integrations
-
-| Service | Integration | Purpose |
-|---------|-------------|---------|
-| Amazon CloudWatch metrics and alarms | Metric filters, EMF | Alerting ([Section 7.3](../unit7/topic3.md)) |
-| Amazon Data Firehose | Subscription filter | Archive to S3, index into OpenSearch, forward to partners |
-| Amazon Kinesis Data Streams | Subscription filter | Real-time fan-out ([Chapter 6.3](../unit6/topic3.md)) |
-| AWS Lambda | Subscription filter | Real-time reaction and custom forwarding |
-| Amazon OpenSearch Service | Subscription, Firehose, OpenSearch Ingestion, direct query | Search and analytics (7.2.3) |
-| Amazon S3, Athena, S3 Tables | Export, Firehose, Iceberg tables | Archive and SQL analytics |
-| Amazon EventBridge | Alarms and anomaly events | Automated response ([Section 7.3.2](../unit7/topic3.md#automated-incident-response-with-aws-lambda)) |
-| AWS Security Hub, Amazon GuardDuty | Consume security logs such as CloudTrail, VPC Flow Logs, DNS logs | Threat detection |
-
-### Common Architecture Patterns
-
-#### Pattern 1: per-service log groups with platform defaults
-
-The simplest correct pattern for a single account: every service writes structured JSON to its own log group defined in IaC with retention, metric filters on key error events, and Logs Insights for investigation. This is where most teams in DSO303 projects should start.
-
-#### Pattern 2: log archive account (hub and spoke)
-
-```mermaid
-flowchart LR
-    subgraph Spokes["Workload accounts"]
-        S1["Account A log groups"]
-        S2["Account B log groups"]
-        S3["Account C log groups"]
-    end
-    subgraph Hub["Log Archive account"]
-        CL[("Centralised CloudWatch Logs")]
-        FH["Firehose"]
-        B[("S3 bucket with Object Lock")]
-        OS["OpenSearch for security analytics"]
-    end
-    S1 -->|"centralisation rule"| CL
-    S2 -->|"centralisation rule"| CL
-    S3 -->|"centralisation rule"| CL
-    CL -->|"account-level subscription"| FH
-    FH --> B
-    FH --> OS
-```
-
-Workload teams keep their own logs for day-to-day operations; the organisation keeps an immutable, centrally governed copy that workload administrators cannot alter. This is the standard pattern for regulated industries and aligns with AWS Control Tower.
-
-#### Pattern 3: log routing with FireLens (fan-out at the source)
-
-Fluent Bit sends errors to CloudWatch Logs (for alarms and quick queries) and the full stream to Firehose (for cheap archive and OpenSearch). This is a **fan-out** pattern at collection time, reducing CloudWatch ingestion cost while preserving complete data elsewhere.
-
-#### Pattern 4: logs to metrics
-
-Rather than alarming directly on logs, convert significant events into metrics (metric filters or EMF) and alarm on metrics. Metrics are cheaper to store, faster to evaluate and easier to graph. Logs remain the evidence you drill into after the alarm fires.
-
-#### Pattern 5: event-driven log reaction
-
-A subscription filter with a narrow pattern (for example repeated `AuthenticationFailed` events) invokes a Lambda function that takes an action such as adding an IP address to a WAF IP set, or publishes an event to EventBridge for the incident automation described in [Section 7.3.2](../unit7/topic3.md#automated-incident-response-with-aws-lambda). This is the **event-driven** pattern from [Chapter 1.7](../unit1/topic7.md) applied to operational data.
-
-#### Pattern 6: tiered storage by value
-
-| Tier | Store | Retention | Example data |
-|------|-------|-----------|--------------|
-| Hot, operational | CloudWatch Logs Standard | 7 to 30 days | Application logs used for alarms and debugging |
-| Warm, investigative | CloudWatch Logs Infrequent Access or OpenSearch UltraWarm | 30 to 180 days | Access logs, verbose logs |
-| Cold, compliance | S3 Glacier storage classes | Years | Audit records |
-
-#### Pattern 7: correlation across asynchronous boundaries
-
-Apply the propagation rule from [Correlation IDs and trace context](#correlation-ids-and-trace-context) to every broker: message attributes (SQS, SNS), event detail (EventBridge) and record headers (Kinesis, Kafka), logged at every consumer. Combined with Logs Insights queries across several log groups, this reconstructs sagas and choreographed workflows ([Chapter 4.3](../unit4/topic3.md)).
+- **Operational Excellence:** log structured JSON with a shared schema that includes correlation and trace IDs.
+- **Operational Excellence:** define log groups, retention, filters and alarms in IaC, and keep saved Logs Insights queries in runbooks.
+- **Security:** use customer managed KMS keys and data protection policies for sensitive log groups, and grant read access by team.
+- **Security:** centralise security logs in a Log Archive account that workload teams cannot modify.
+- **Reliability:** use non-blocking drivers and bounded buffers so that logging can never fail the application, and alarm on missing logs.
+- **Cost Optimization:** set explicit retention, use appropriate log levels, and choose Infrequent Access or direct-to-S3 delivery for passive logs.
+- **Sustainability:** log less but better, and prefer EMF metrics over logging the same number repeatedly.
 
 ### Industry Use Cases
 
@@ -1109,36 +746,6 @@ Apply the propagation rule from [Correlation IDs and trace context](#correlation
 | Retention values are fixed steps | Choose the nearest value above the requirement |
 | Blocking versus non-blocking trade-off in containers | Choose per service; monitor buffer drops |
 
-### Common Mistakes
-
-#### Beginner Mistakes
-
-| Mistake | Consequence | Correction |
-|---------|-------------|------------|
-| Logging unstructured prose | Queries require fragile `parse` expressions; metric filters are brittle | Structured JSON with a shared schema |
-| Writing logs to files inside containers | Logs vanish with the task or pod | Log to `stdout` and `stderr` |
-| No correlation ID | Cannot follow a request across services | Generate at the edge and propagate everywhere |
-| Leaving retention at never expire | Storage cost grows forever | Set retention in IaC |
-| One log group for everything | Coarse access control and expensive queries | One group per service per environment |
-| Printing whole objects or requests | Secrets and personal data in logs, large volume | Log selected fields only |
-| Giving the ECS task role log permissions for `awslogs` | Tasks fail to start with log driver errors | Grant log permissions to the task execution role |
-| Private subnets without NAT or a Logs VPC endpoint | Fargate tasks cannot deliver logs and fail to start | Add the `logs` interface endpoint |
-
-#### Production Mistakes
-
-| Mistake | Consequence | Correction |
-|---------|-------------|------------|
-| DEBUG logging left on in production | Log bill exceeds compute bill | INFO by default, dynamic level control, alarms on volume |
-| Auto-created log groups | No retention, no KMS key, inconsistent names | Pre-create in IaC; Config rule to detect drift |
-| Blocking log mode without monitoring | Logging throttle causes application outage | Non-blocking by default; if blocking, monitor back-pressure |
-| Infrequent Access chosen for an alarmed log group | Metric filters and subscriptions cannot be created | Standard for any group feeding automation |
-| High-cardinality metric filter dimensions | Thousands of custom metrics and a large bill | Low-cardinality dimensions; EMF for deliberate metrics |
-| Subscription loop | A Lambda destination logs to a group that is itself subscribed, recursively | Exclude destination log groups from account-level policies |
-| No alarm on missing logs | A broken shipper hides an incident | Heartbeat metric filters with default value 0 |
-| Workload administrators can delete security logs | Evidence can be erased after compromise | Central Log Archive account, deletion protection, SCPs |
-| KMS key policy changed carelessly | Ingestion and queries fail | Change control on log keys |
-| Large stack traces split into many events | Hard to read and query | Multi-line patterns in drivers and Fluent Bit |
-
 ### Summary
 
 CloudWatch Logs is the aggregation layer of AWS observability. It receives events from every compute model and from AWS services themselves, stores them in log groups whose settings (class, retention, encryption, data protection, filters, indexes) encode the architect's governance decisions, and routes them onward to metrics, alarms, real-time consumers, archives and search engines.
@@ -1173,34 +780,12 @@ flowchart LR
 
 ### Why This Service or Concept Exists
 
-#### The problem: logs that cannot be questioned
-
-Aggregating logs in one place solves only half the problem. During an incident an engineer must answer questions such as:
-
-- "How many 5xx responses did the checkout service return in the last 30 minutes, per minute?"
-- "Which customers were affected by the payment failures?"
-- "What happened to order o-1001 across all services?"
-- "Is this error new since the last deployment, or has it always been there?"
-
-Before interactive log query engines, the options were poor: download log files and use `grep` (impossible at scale and slow), write custom scripts against the `FilterLogEvents` API (which returns raw events without aggregation), or ship everything to a separately operated search cluster (costly and slow to set up). The questions are often unknown in advance, so pre-computing metrics for every possible question is also impossible.
-
-#### Why AWS built Logs Insights
-
-AWS introduced Logs Insights in 2018 to provide **schema-on-read analytics**: store logs cheaply as they are, and impose structure at query time. The engine distributes each query across many workers, scans the selected data in parallel, and returns aggregated results in seconds for typical operational volumes. Because the price is per gigabyte scanned, a team that queries rarely pays almost nothing, and there is no cluster to size. Subsequent additions (field indexes in 2024, OpenSearch PPL and SQL in December 2024, scheduled queries in November 2025, joins, lookups and the Log Analytics experience in 2026) moved it from a simple search tool towards a general log analytics engine.
-
-#### Benefits over older methods
-
-| Concern | `grep` over files | `FilterLogEvents` scripts | Self-managed search cluster | Logs Insights |
-|---------|-------------------|---------------------------|-----------------------------|---------------|
-| Setup | Access to hosts | Custom code | Cluster build and ingestion pipeline | None |
-| Aggregation (counts, percentiles) | Manual | Manual | Yes | Yes, built in |
-| Works on historical data already ingested | If files still exist | Yes | Only data indexed after setup | Yes |
-| Cost when idle | None | None | Cluster runs continuously | None |
-| Cross-service correlation | Very hard | Hard | Yes | Yes, across up to thousands of log groups |
-| Visualisation | No | No | Yes | Yes, time series and bar charts |
-
-!!! tip "Schema on read versus schema on write"
-    Logs Insights applies structure at **read** time: it discovers JSON fields and parses text when the query runs. OpenSearch (7.2.3) applies structure at **write** time: it maps and indexes fields during ingestion. Schema on read is flexible and cheap to store but costs compute on every query; schema on write is expensive to ingest and store but makes repeated queries fast. This single trade-off explains most of the difference between the two tools.
+- **Aggregation is only half the problem.** During an incident engineers must ask questions such as error counts per minute, affected customers or the path of one order across services.
+- **Older options were poor.** `grep` over files does not scale, `FilterLogEvents` scripts return raw events without aggregation, and a separate search cluster is costly and slow to set up.
+- **Questions are unknown in advance**, so pre-computing a metric for every possible question is impossible.
+- **Schema on read.** Logs Insights (2018) stores logs as they are and imposes structure at query time, scanning data in parallel and returning aggregated results in seconds.
+- **Pay only when asked.** Pricing is per gigabyte scanned with no cluster to size, so rarely queried logs cost almost nothing, and the engine works on data already ingested.
+- **Contrast with OpenSearch.** OpenSearch applies structure at write time, so it costs more to ingest and store but answers repeated queries quickly; this single trade-off explains most of the difference between the two tools.
 
 ### Core Concepts
 
@@ -1399,7 +984,7 @@ fields @timestamp, @log, service, event, message
 
 The `@log` field shows which log group each row came from, so the result reads as a timeline of the request across services. Richer correlation is available through:
 
-- ==`join`==, which combines events from two log groups on a matching field (syntax of the form `join type=inner left=a right=b where a.requestId = b.requestId`), for example joining API Gateway access logs with backend error logs;
+- `join`, which combines events from two log groups on a matching field (syntax of the form `join type=inner left=a right=b where a.requestId = b.requestId`), for example joining API Gateway access logs with backend error logs;
 - **sub-queries**, where the output of an inner query scopes an outer query (for example: find principals with repeated access denied errors, then list everything else those principals did);
 - **lookup tables**, uploaded reference data (for example account ID to owning team and environment) used with the `lookup` command to enrich results; scheduled queries can refresh lookup tables automatically.
 
@@ -1612,7 +1197,7 @@ Key architectural properties:
 !!! example "Worked estimate: the cost of a dashboard"
     A Logs Insights dashboard widget queries the last 24 hours of a log group that ingests 50 GB per day. Each refresh scans about 50 GB, costing 50 x 0.005 = USD 0.25. If the dashboard auto-refreshes every 5 minutes, 24 hours a day, that is 288 refreshes per day, about USD 72 per day or USD 2,160 per month, for one widget. The same number from a metric filter or EMF metric costs a few cents. **Queries are for questions; metrics are for screens that are always on.**
 
-The resulting recommendations (narrow scopes, field indexes, metrics instead of always-on widgets, scheduled queries) are consolidated in [Cost Optimization](#cost-optimization_1) below.
+The resulting recommendations are to narrow the time range and log group scope, use field indexes, publish metrics instead of always-on query widgets, and use scheduled queries rather than repeated manual runs.
 
 #### Performance Characteristics
 
@@ -1730,287 +1315,15 @@ Logs Insights is a regional capability of CloudWatch Logs with the same multi-AZ
 | Destination | S3 for reports and archives, EventBridge for automation, lookup table for enrichment |
 | Roles | Separate execution and delivery roles with least privilege |
 
-### Design Considerations
-
-#### Scalability
-
-Query scale is bounded by bytes scanned. Architect for it: consistent log group naming so prefixes select exactly the right scope, field indexes on lookup fields, centralisation so that one query covers many accounts, and metrics for anything queried continuously.
-
-#### Availability
-
-During a major incident many engineers query at once while dashboards refresh. The 100-query concurrency quota can be reached. Keep incident dashboards metric-based and reserve Logs Insights capacity for investigation.
-
-#### Reliability
-
-Query results are only as reliable as the logs. Missing correlation IDs, inconsistent field names and events dropped at ingestion all produce silently incomplete answers. Validate important saved queries regularly against known test events.
-
-#### Durability
-
-Logs Insights stores query results for 7 days only. Evidence needed for post-incident reviews or audits should be exported (scheduled query to S3, or download attached to the incident record).
-
-#### Latency
-
-Seconds for focused queries, minutes for broad ones. For sub-second repeated exploration over large volumes, OpenSearch with indexed data is the appropriate tool (7.2.3).
-
-#### Cost
-
-Cost equals bytes scanned multiplied by price, multiplied by the number of times the query runs. The multiplier matters most: an automated query every minute costs 1,440 times more per day than a query run once.
-
-#### Performance
-
-Structured logs avoid `parse`; indexed fields avoid full scans; narrow selections avoid planning overhead.
-
-#### Maintainability
-
-Store saved queries, index policies and scheduled queries in IaC. Name fields consistently across services so that one query works across all of them.
-
-#### Operational complexity
-
-Low: there is nothing to run. The complexity is organisational: training engineers in the query languages, curating a library of trusted queries, and governing who can query and unmask what.
-
-!!! question "Before you write a dashboard widget with Logs Insights"
-    How often will it refresh, and how many bytes will each refresh scan? Could a metric filter or EMF metric provide the same number? Is the query concurrency quota shared with incident responders? Does the widget reveal data (such as user identifiers) to viewers who should not see it?
-
 ### AWS Best Practices
 
-| Pillar | Logs Insights practice |
-|--------|------------------------|
-| Operational Excellence | Curated, parameterised saved queries in runbooks; queries defined in IaC; `diff` after every deployment; post-incident query evidence exported |
-| Security | Least-privilege `StartQuery` scoped to log group prefixes; `logs:Unmask` granted rarely; audit query activity in CloudTrail; cross-account access through a monitoring account rather than shared credentials |
-| Reliability | Consistent schemas and correlation IDs so queries are complete; alternative CLI scripts when the console is unavailable |
-| Performance Efficiency | Field indexes, `filterIndex`, narrow scopes, structured logs, metrics for repeated questions |
-| Cost Optimization | Minimise bytes scanned; limit dashboard auto-refresh; scheduled queries instead of repeated manual runs |
-| Sustainability | Every scan consumes compute; avoid wasteful repeated wide queries; index what you look up often |
-
-### Security Considerations
-
-#### IAM and least privilege
-
-Grant query rights per team on log group prefixes. Because `StartQuery` is authorised against each queried log group, a user who selects a group outside their permissions receives an access denied error rather than partial data.
-
-```json
-{
-  "Version": "2012-10-17",
-  "Statement": [
-    {
-      "Sid": "RunQueriesOnTeamLogGroups",
-      "Effect": "Allow",
-      "Action": ["logs:StartQuery"],
-      "Resource": "arn:aws:logs:us-east-1:111122223333:log-group:/ecs/prod/orders-*"
-    },
-    {
-      "Sid": "ReadResultsAndManageQueries",
-      "Effect": "Allow",
-      "Action": [
-        "logs:GetQueryResults",
-        "logs:StopQuery",
-        "logs:DescribeQueries",
-        "logs:DescribeQueryDefinitions",
-        "logs:DescribeLogGroups"
-      ],
-      "Resource": "*"
-    },
-    {
-      "Sid": "NeverUnmask",
-      "Effect": "Deny",
-      "Action": "logs:Unmask",
-      "Resource": "*"
-    }
-  ]
-}
-```
-
-#### Masked data and unmask
-
-When a data protection policy masks a field, Logs Insights returns masked values. Only principals with `logs:Unmask` can use the `unmask()` function to see original values, and every such query is recorded in CloudTrail. Treat `logs:Unmask` like access to a production database containing personal data.
-
-#### Encryption
-
-Log groups encrypted with customer managed KMS keys remain queryable provided the key policy allows CloudWatch Logs to use the key. Scheduled query execution roles also need `kms:Decrypt` on such keys.
-
-#### Query strings are logged
-
-CloudTrail records the query string of `StartQuery`. Do not paste secrets or personal data into query strings (for example searching for a full card number); search for identifiers instead.
-
-#### Cross-account access
-
-Use CloudWatch cross-account observability (monitoring and source accounts linked through Observability Access Manager) or centralisation, rather than sharing IAM users across accounts. Restrict which source accounts and which telemetry types (logs, metrics, traces) are shared.
-
-#### Compliance
-
-Query results downloaded to laptops or pasted into tickets leave the controlled environment. Establish rules for handling query output that contains personal data, consistent with the organisation's data protection obligations.
-
-### Performance Optimization
-
-#### Query optimisation checklist
-
-| Technique | Why it helps |
-|-----------|--------------|
-| Narrow the time range first | Bytes scanned scale with time |
-| Select only relevant log groups or prefixes | Bytes scanned scale with groups |
-| Use `filterIndex` on indexed fields | Skips unindexed groups and non-matching events |
-| Filter early in the pipeline | Less data flows to `parse`, `stats` and `sort` |
-| Use structured fields instead of `parse` | Avoids per-event regular expression cost |
-| Anchor and simplify regular expressions | Cheaper matching |
-| Limit `stats ... by` to low-cardinality groups | Smaller aggregation state |
-| Use `limit` with `sort` | Smaller result transfer |
-| Run `estimate` before broad queries | Know the scan size in advance |
-| Prefer metrics for always-on views | Avoid repeated scans |
-
-#### Caching and reuse
-
-Logs Insights does not offer a user-controlled result cache. Reuse happens at the design level: scheduled queries write results to S3 for many readers, lookup tables precompute enrichment, and metrics precompute aggregates.
-
-#### Parallelism
-
-The engine parallelises across log groups and time. Automation that needs many independent answers can run several queries concurrently within the quota, polling with backoff.
-
-#### Monitoring query usage
-
-Review query statistics (`bytesScanned`) in automation and CloudTrail `StartQuery` events to find expensive recurring queries and dashboards. Cost Explorer shows Logs Insights scanning under CloudWatch usage types.
-
-### Cost Optimization
-
-| Technique | Effect |
-|-----------|--------|
-| Pay per query | No cost when nobody queries |
-| Narrow scopes | Select the fewest log groups and the shortest time range; cost falls in direct proportion. Check `estimate` (or the console's scanned-bytes information) before wide queries |
-| Field indexes and `filterIndex` | Large reductions for ID lookups across many groups |
-| Metrics instead of always-on query widgets | Avoids thousands of repeated scans |
-| Scheduled queries with appropriate frequency | Replace ad hoc repetition; avoid over-frequent schedules |
-| Infrequent Access log class | Same query price, lower ingestion; queryable when needed |
-| Archive and Athena for multi-year analysis | Cheaper for very large historical scans over compressed columnar data |
-| Cost allocation | Tag log groups; review Cost Explorer for query spend |
-
-!!! info "Reserved capacity and Savings Plans"
-    There is no reserved capacity for Logs Insights. If an organisation runs heavy, continuous analytical workloads over logs, the question becomes whether indexed storage in OpenSearch (with reserved instances) is cheaper than repeated scanning, which is the subject of 7.2.3.
-
-### Integration with Other AWS Services
-
-| Service | Integration | Why |
-|---------|-------------|-----|
-| CloudWatch dashboards | Logs Insights widgets | Visualise query results ([Section 7.3.1](../unit7/topic3.md#creating-cloudwatch-dashboards-and-alarms)), with the cost caveat above |
-| CloudWatch alarms | Alarms on metrics derived from logs; Logs Insights results can back alarms through supported query-based alarm features | Alert on log-derived conditions ([Section 7.3.1](../unit7/topic3.md#creating-cloudwatch-dashboards-and-alarms)) |
-| Amazon EventBridge | Scheduled query results | Trigger automation such as Lambda or Step Functions ([Section 7.3.2](../unit7/topic3.md#automated-incident-response-with-aws-lambda)) |
-| Amazon S3 | Scheduled query results, exports | Reports and archives |
-| AWS Lambda | Automation using `StartQuery` | Enrich incident tickets with query output |
-| Amazon OpenSearch Service | Shared PPL and SQL; direct query over CloudWatch Logs | Same language in both tools (7.2.3) |
-| CloudWatch cross-account observability | Monitoring account queries | Organisation-wide investigation |
-| AWS X-Ray and Application Signals | Trace ID in logs links to traces | Move between trace and log views ([Section 7.1](../unit7/topic1.md)) |
-| Amazon Q Developer and CloudWatch investigations | Automated investigation uses log queries | [Section 7.3.2](../unit7/topic3.md#automated-incident-response-with-aws-lambda) |
-
-```mermaid
-flowchart LR
-    AL["Alarm fires: checkout error rate"] --> RB["Runbook in Systems Manager or wiki"]
-    RB --> SQ["Saved query: errors by type for service, parameter window"]
-    SQ --> LI["Logs Insights"]
-    LI --> P["pattern and diff show new TimeoutException after release 2.3.0"]
-    P --> TR["Trace ID from log opens X-Ray trace"]
-    TR --> RC["Root cause: new dependency call without timeout, Chapter 4.3"]
-    RC --> RBK["Roll back through CodeDeploy, Unit V"]
-```
-
-### Common Architecture Patterns
-
-The following query patterns recur across almost every cloud-native system. They are shown in Logs Insights QL and assume the structured schema from 7.2.1.
-
-#### Pattern 1: RED metrics from access logs
-
-```text
-filter ispresent(status)
-| stats count(*) as requests,
-        sum(status >= 500) as errors,
-        sum(status >= 500) * 100 / count(*) as errorRatePct,
-        pct(responseLatency, 50) as p50,
-        pct(responseLatency, 99) as p99
-  by bin(5m)
-```
-
-#### Pattern 2: top-N offenders
-
-```text
-filter level = "ERROR"
-| stats count(*) as errors by service, errorType
-| sort errors desc
-| limit 10
-```
-
-#### Pattern 3: request timeline by correlation ID
-
-```text
-fields @timestamp, @log, service, event, message
-| filterIndex correlationId = "{{correlationId}}"
-| sort @timestamp asc
-```
-
-#### Pattern 4: slowest requests with context
-
-```text
-filter ispresent(durationMs)
-| sort durationMs desc
-| display @timestamp, service, path, durationMs, correlationId, traceId
-| limit 20
-```
-
-#### Pattern 5: Lambda right-sizing and cold starts
-
-```text
-filter @type = "REPORT"
-| stats max(@maxMemoryUsed / 1024 / 1024) as maxUsedMB,
-        max(@memorySize / 1024 / 1024) as configuredMB,
-        pct(@duration, 99) as p99DurationMs,
-        count(*) as invocations
-  by bin(1h)
-```
-
-A function configured with 1,024 MB whose maximum used memory is 180 MB is over-provisioned; [Section 7.3.3](../unit7/topic3.md#performance-optimization-using-aws-tools) covers right-sizing tools.
-
-#### Pattern 6: deployment regression check
-
-```text
-filter level in ["ERROR", "FATAL"]
-| pattern @message
-| diff
-```
-
-Run over the 30 minutes after a deployment; new patterns are candidate regressions, and the check can be automated as a pipeline stage (Unit V).
-
-#### Pattern 7: per-tenant impact
-
-```text
-filter event = "PaymentDeclined"
-| stats count(*) as declines, count_distinct(customerId) as customers by tenantId
-| sort declines desc
-```
-
-#### Pattern 8: security investigation over VPC Flow Logs
-
-```text
-filter action = "REJECT"
-| stats count(*) as rejects by srcAddr, dstPort
-| sort rejects desc
-| limit 25
-```
-
-#### Pattern 9: failed authentication bursts
-
-```text
-filter event = "AuthenticationFailed"
-| stats count(*) as failures by sourceIp, bin(5m)
-| filter failures > 20
-| sort failures desc
-```
-
-#### Pattern 10: queue consumer lag evidence (Chapter 6.3)
-
-```text
-filter event = "MessageProcessed"
-| fields (processedAt - sentTimestamp) / 1000 as ageSeconds
-| stats avg(ageSeconds) as avgAge, max(ageSeconds) as maxAge by bin(5m)
-```
-
-!!! tip "Build a query library"
-    Store these patterns as parameterised saved queries per service. A library of 20 trusted queries shortens most incident investigations more than any new tool.
+- **Operational Excellence:** keep curated, parameterised saved queries in runbooks and define them in IaC.
+- **Operational Excellence:** run a `diff` pattern comparison after every deployment.
+- **Security:** scope `StartQuery` permissions to log group prefixes and grant `logs:Unmask` rarely.
+- **Reliability:** keep consistent schemas and correlation IDs so that queries return complete answers.
+- **Performance Efficiency:** use field indexes, `filterIndex`, narrow time ranges and narrow log group scopes.
+- **Cost Optimization:** minimise bytes scanned, and use metrics or scheduled queries instead of auto-refreshing query widgets.
+- **Sustainability:** avoid repeated wide scans and index fields that are looked up often.
 
 ### Industry Use Cases
 
@@ -2049,37 +1362,6 @@ filter event = "MessageProcessed"
 | Field indexes forward-only and 30-day coverage | Create indexes early; full scans for older data |
 | Regional scope | Centralise logs |
 | Recomputes every time | OpenSearch or metrics for repeated heavy analytics |
-
-### Common Mistakes
-
-#### Beginner Mistakes
-
-| Mistake | Consequence | Correction |
-|---------|-------------|------------|
-| Querying "last 30 days" for a problem that started an hour ago | Slow, expensive query | Start narrow, widen only if needed |
-| Selecting all log groups by habit | Large scans and noisy results | Select the service's groups or a precise prefix |
-| Case mismatch in field names | Zero results | Check discovered fields; agree a schema |
-| Assuming `filter` reduces cost | Unexpected bill | Understand bytes scanned; use indexes |
-| Using `parse` on JSON logs | Fragile, slow | Reference discovered JSON fields directly |
-| Forgetting `bin()` for charts | No visualisation | `stats ... by bin(5m)` |
-| Trusting a generated query blindly | Wrong conclusions | Review scope, fields and aggregation |
-
-#### Production Mistakes
-
-| Mistake | Consequence | Correction |
-|---------|-------------|------------|
-| Always-on dashboards built on wide Logs Insights queries | Large recurring cost; concurrency exhaustion during incidents | Metrics for always-on views |
-| No field indexes on correlation fields | Slow, costly incident lookups across many groups | Account-level index policy on `correlationId`, `requestId` |
-| Queries written during incidents from scratch | Delay and errors under pressure | Curated, tested, parameterised saved queries in runbooks |
-| Granting broad `logs:*` to everyone | Unmasking and deletion rights spread widely | Scoped query policies; deny `logs:Unmask` by default |
-| Scheduled query window not matching schedule | Double counting or gaps | Align window with interval |
-| Relying on query results as the only evidence | Evidence lost after 7 days | Export to S3 or the incident record |
-| Inconsistent field names across services | Cross-service queries silently miss data | Organisation logging schema and shared libraries |
-| Query results used as proof of absence | "No errors found" when the query scoped the wrong groups, class or Region | Confirm scope and `recordsScanned` before concluding; test saved queries against known events |
-| Pasting personal data into query strings | Personal data recorded in CloudTrail `StartQuery` events | Search by identifiers such as `orderId`, never by card numbers or passwords |
-
-!!! danger "The silent zero"
-    The most dangerous Logs Insights result is an empty table. An empty result can mean "nothing happened", but it can equally mean that the query selected the wrong log groups, the wrong log class, the wrong Region or account, the wrong time zone, or a field name with the wrong case. Before an empty result is used to close an incident or answer an auditor, check `recordsScanned` in the query statistics: if few or no records were scanned, the query did not look where you thought it looked.
 
 ### Summary
 
@@ -2144,37 +1426,12 @@ flowchart LR
 
 ### Why This Service or Concept Exists
 
-#### The problem: questions asked continuously over very large log volumes
-
-Logs Insights answers occasional questions well because it pays for work only when asked. Some logging workloads, however, ask the same kinds of questions continuously over very large data:
-
-- A security operations centre keeps dashboards of authentication failures, firewall rejections and suspicious API calls open all day, with analysts pivoting interactively across months of data.
-- A support team searches free text ("customer says the invoice mentions an unknown address") across billions of events and expects relevance-ranked results in under a second.
-- A platform team runs detectors and correlation rules every minute over the same streams.
-- Product teams build long-lived analytics over application events with drill-down and faceted navigation.
-
-With a scan-based engine each of these interactions re-reads the raw data. At sufficient scale and frequency, re-reading becomes slower and more expensive than paying once to build an index and then answering every question from it.
-
-#### Why AWS built OpenSearch Service
-
-Elasticsearch and its visualisation tool Kibana became the dominant open-source log analytics stack in the 2010s (the "ELK" stack with Logstash). Operating it well was hard: capacity planning, shard balancing, JVM heap tuning, upgrades, snapshots, node replacement and security hardening all fell on the user. AWS launched Amazon Elasticsearch Service in 2015 to manage these tasks. In 2021, after Elastic changed the licence of Elasticsearch, AWS and the community forked version 7.10.2 as **OpenSearch** under the Apache 2.0 licence, and the service was renamed Amazon OpenSearch Service. The OpenSearch project has been governed by the OpenSearch Software Foundation under the Linux Foundation since 2024, and the managed service supports OpenSearch versions up to 3.x (3.7 at the time of writing) as well as legacy Elasticsearch versions for existing domains.
-
-AWS then addressed the remaining operational burden in stages: OpenSearch Serverless (2023) removed cluster sizing; OpenSearch Ingestion (2023) removed self-managed Logstash or Data Prepper fleets; zero-ETL direct query (2023 to 2024) removed the need to copy data for occasional analysis; OpenSearch Optimized instances and multi-tier storage reduced storage cost; and in 2026 an engine mode optimised for log analytics added columnar storage for analytical queries.
-
-#### Benefits over older methods
-
-| Concern | Self-managed ELK on EC2 | Logs Insights only | Amazon OpenSearch Service |
-|---------|-------------------------|--------------------|---------------------------|
-| Operational effort | Very high: patches, upgrades, node failures, snapshots | None | Low (domains) to very low (Serverless) |
-| Full-text relevance search | Yes | No; regular expressions and equality only | Yes |
-| Repeated interactive queries over large data | Fast once indexed | Rescans each time | Fast once indexed |
-| Rich dashboards and exploration | Kibana | CloudWatch dashboards and Log Analytics | OpenSearch Dashboards, OpenSearch UI |
-| Detectors, correlation rules, security analytics | Plugins to install and maintain | Anomaly detection on patterns | Built-in plugins |
-| Tiered storage for cost | Hand-built | Log classes | Hot, UltraWarm, cold, writable warm |
-| Cost when idle | Cluster runs continuously | None | Domain runs continuously; Serverless NextGen can scale to zero for search workloads |
-
-!!! note "OpenSearch is not a replacement for CloudWatch Logs"
-    OpenSearch is a **second copy** of selected log data, optimised for search; CloudWatch Logs remains the landing zone (see [Designing a Centralised Logging Architecture](#designing-a-centralised-logging-architecture)). The architectural question is never "CloudWatch or OpenSearch" but "which streams justify indexed storage, for how long?"
+- **Continuous questions over large volumes.** Security operations dashboards, free-text support searches and detectors that run every minute ask the same kinds of questions all day over very large data.
+- **Indexing beats rescanning at scale.** A scan-based engine re-reads raw data for every interaction; above some frequency and volume, building an index once becomes faster and cheaper.
+- **Managed open-source search.** Operating Elasticsearch or OpenSearch yourself means capacity planning, shard balancing, heap tuning, upgrades and snapshots; the managed service takes over these tasks.
+- **Open licence.** OpenSearch was forked from Elasticsearch 7.10.2 in 2021 under the Apache 2.0 licence and has been governed by the OpenSearch Software Foundation since 2024.
+- **Less to operate over time.** Serverless collections, OpenSearch Ingestion, zero-ETL direct query and tiered storage progressively removed cluster sizing, ingestion fleets and data copying.
+- **A second copy, not a replacement.** CloudWatch Logs remains the landing zone (see [Designing a Centralised Logging Architecture](#designing-a-centralised-logging-architecture)); the architectural question is which streams justify indexed storage, and for how long.
 
 ### Core Concepts
 
@@ -2742,7 +1999,7 @@ sequenceDiagram
 
     Compare: if analysts ran Logs Insights queries over the same 14 days (700 GB) 20 times a day, scanning would cost 700 × 0.005 × 20 ≈ USD 70 per day, or USD 2,100 per month, with minutes of latency per query and no full-text relevance. At 5 such queries a day Logs Insights costs about USD 525 per month and is clearly cheaper; at 50 a day OpenSearch is clearly cheaper and far faster. **The break-even depends on query frequency, which is why the decision starts with usage patterns, not with product features.**
 
-The recommendations that follow from this model are consolidated in [Cost Optimization](#cost-optimization_2) below.
+The levers that follow from this model are to index only the streams that are searched frequently, keep hot retention short, move older indices to UltraWarm or cold storage, and use direct query for occasional analysis of data that stays in Amazon S3 or CloudWatch Logs.
 
 #### Performance Characteristics
 
@@ -2922,270 +2179,15 @@ Automated hourly snapshots are retained by the service (14 days) for recovery. M
 | VPC | Deploy the pipeline endpoint into VPC subnets for private sources |
 | Log publishing | Pipeline logs to CloudWatch Logs for troubleshooting |
 
-### Design Considerations
-
-#### Scalability
-
-Design for growth through **rollover and templates**, not ever-larger indices. Keep shard sizes in range, shard counts per node within limits, and index names grouped so that total shard count grows slowly. For multi-tenant platforms, prefer shared indices with a `tenantId` field and document-level security over one index per tenant, which multiplies shards. Serverless removes node scaling but not data modelling: mapping discipline still matters.
-
-#### Availability
-
-Use three AZs with dedicated cluster manager nodes and at least one replica for hot indices. Consider multi-AZ with standby for security analytics that must be available during an AZ failure. Remember that the most common cause of unavailability is not AZ failure but **resource exhaustion**: full disks (which block writes), high JVM memory pressure and too many shards. Alarms on free storage, JVM memory pressure, cluster status and rejected requests ([Section 7.3](../unit7/topic3.md)) are part of the availability design.
-
-#### Reliability
-
-Treat OpenSearch as a **derived store**. The ingestion path should buffer and retry (Firehose, OpenSearch Ingestion persistent buffer, Kinesis), dead-letter failures to S3, and keep the raw data in CloudWatch Logs or S3 so that any index can be rebuilt. Reject-and-retry is preferable to silently dropping data; monitor DLQ volume.
-
-#### Durability
-
-Hot data is protected by replicas across AZs and, on OpenSearch Optimized instances, by synchronous copies in S3; UltraWarm and cold data live in S3. Automated snapshots provide point-in-time recovery for 14 days. For compliance-grade retention, the archive of record should still be S3 with Object Lock (7.2.1), not the search cluster.
-
-#### Latency
-
-Two latencies matter: **ingestion latency** (event produced to searchable), typically seconds for Ingestion pipelines and tens of seconds for Firehose with buffering, plus the refresh interval; and **query latency**, milliseconds to seconds on hot data. If the requirement is "alert within 30 seconds of an event", metric filters or subscription filters (7.2.1) may be more appropriate than a search index.
-
-#### Cost
-
-The main drivers are instance hours, hot storage with replicas, and the amount of data indexed. Short hot retention, tiered storage, selective indexing, compression and Reserved Instances are the main levers. Compare the total with Logs Insights scanning and S3 with Athena for the same query pattern before committing.
-
-#### Performance
-
-Map fields deliberately (`keyword` for filters and aggregations, `text` only where full-text search is needed), use filter context, avoid leading wildcards and deep pagination, size bulk requests correctly, and keep heap pressure under control. Dashboards that aggregate over months of data should use rollups, transforms or indexed views instead of raw documents.
-
-#### Maintainability
-
-Define domains, templates, ISM policies, security roles and pipelines in code (CloudFormation, Terraform or CDK for AWS resources; version-controlled JSON applied by a pipeline for templates, ISM and roles). Standardise field names (for example OpenTelemetry semantic conventions or the organisation schema from 7.2.1) so that dashboards and detectors work across services. Plan version upgrades as regular operations.
-
-#### Operational complexity
-
-Domains demand real operational skill: shard strategy, capacity planning, upgrade testing, security role management and monitoring. Serverless and direct query reduce this significantly. An honest assessment of the team's OpenSearch expertise is part of the architecture decision.
-
-```mermaid
-flowchart TD
-    A["Need OpenSearch-style search or analytics over logs"] --> B{"Queried frequently and interactively over large volumes"}
-    B -->|"no, occasional"| DQ["Direct query over CloudWatch Logs or S3"]
-    B -->|"yes"| C{"Team can operate clusters and workload is steady"}
-    C -->|"yes"| D{"Volume large and retention long"}
-    D -->|"yes"| E["Managed domain: OR-family, optimised engine, UltraWarm or OI2 warm, Reserved Instances"]
-    D -->|"no"| F["Small managed domain, three nodes, Graviton"]
-    C -->|"no, or workload is spiky"| G["Serverless time series collection with data lifecycle policies"]
-```
-
-!!! question "Before you create an OpenSearch domain for logs"
-    Which streams will be indexed, and what questions will be asked of them, how often? How many days must be hot, how many warm, and where is the archive of record? What is the expected daily volume, and what shard count and size result? Who will operate the cluster, and how will mappings, templates, ISM and security roles be managed as code? Could direct query or Logs Insights meet the need at lower cost?
-
 ### AWS Best Practices
 
-| Pillar | OpenSearch logging practice |
-|--------|-----------------------------|
-| Operational Excellence | Templates, ISM policies, security roles and pipelines in version control; blue/green changes in off-peak windows; runbooks for red and yellow cluster status; upgrade cadence; Cluster Insights and Query Insights reviews |
-| Security | VPC access, FGAC with least-privilege roles mapped to IAM and SAML groups, document-level security for tenants, encryption everywhere, audit logs to CloudWatch Logs, no public domains with open access policies |
-| Reliability | Three AZs, dedicated cluster manager nodes, replicas, buffered ingestion with DLQs, raw data retained elsewhere for rebuilds, alarms on storage, heap and cluster status |
-| Performance Efficiency | Correct shard sizes, explicit mappings, filter context, bulk sizing, refresh intervals suited to logs, coordinator nodes for heavy query load, OR-family instances for indexing |
-| Cost Optimization | Index only what is searched, short hot retention, UltraWarm, OI2 warm or cold for older data, compression, Reserved Instances, direct query for occasional analysis, right-size after observing utilisation |
-| Sustainability | Avoid indexing data nobody queries, delete expired indices promptly, use Graviton and OpenSearch Optimized instances for better performance per watt, prefer S3-backed tiers for cold data |
-
-### Security Considerations
-
-#### Layers of access control
-
-Access to a domain is evaluated in layers; a request must pass all of them.
-
-```mermaid
-flowchart LR
-    R["Request"] --> N{"Network: VPC security group or IP-based policy"}
-    N -->|"allowed"| P{"Domain resource policy and IAM identity policy"}
-    P -->|"allowed"| F{"Fine-grained access control role mapping"}
-    F -->|"index, document and field permissions"| D["Data returned, masked where configured"]
-    N -->|"denied"| X["Rejected"]
-    P -->|"denied"| X
-    F -->|"denied"| X
-```
-
-| Layer | Mechanism | Design guidance |
-|-------|-----------|-----------------|
-| Network | VPC access with security groups; for public domains, IP conditions in the access policy | VPC access for production; reach Dashboards through a VPN, bastion, reverse proxy or OpenSearch UI |
-| AWS authorisation | Domain resource policy plus IAM identity policies; requests signed with SigV4 | Grant `es:ESHttp*` actions to specific roles (Firehose delivery role, Ingestion pipeline role, application roles) |
-| OpenSearch authorisation | FGAC roles with cluster, index, document-level and field-level permissions and field masking | Map IAM roles and SAML groups to OpenSearch roles; avoid internal users except for break-glass |
-| Serverless | Data access, network and encryption policies | Separate write and read policies per index pattern |
-
-!!! warning "The open access policy anti-pattern"
-    A domain with a public endpoint and an access policy that allows `"Principal": {"AWS": "*"}` without FGAC is readable by anyone on the internet who finds the endpoint. Exposed log clusters have been a recurring source of data breaches across the industry. The combination "public endpoint plus open policy" is acceptable only when FGAC is enabled and enforces authentication, and even then VPC access is strongly preferred for log data.
-
-#### Fine-grained access control for logging platforms
-
-FGAC is particularly valuable when several teams share one logging domain:
-
-| Requirement | FGAC feature | Example |
-|-------------|--------------|---------|
-| Teams see only their services' logs | Index permissions on patterns | `payments-team` role reads `logs-payments-*` |
-| Tenants in a shared index see only their data | Document-level security | Query `{"term": {"tenantId": "${attr.proxy.tenant}"}}` or a fixed tenant per role |
-| Hide sensitive fields | Field-level security | Exclude `request.headers.authorization` |
-| Pseudonymise fields while keeping them aggregatable | Field masking (hashing) | Mask `customerEmail` so counts per customer still work |
-| Separate operators from readers | Cluster permissions | Only the platform role can change templates and ISM policies |
-| Audit who viewed what | Audit logging | Log authentication failures and read access for sensitive indices to CloudWatch Logs |
-
-FGAC requires HTTPS, node-to-node encryption and encryption at rest, and once enabled it cannot be disabled.
-
-#### Encryption and keys
-
-Enable encryption at rest with a customer managed KMS key for regulated log data, so that key access is controlled and audited separately (7.2.1 applied the same principle to log groups). Node-to-node encryption protects replication traffic. Enforce HTTPS with a modern TLS security policy. For Serverless, the encryption policy must exist before the collection is created.
-
-#### Protecting data on the way in
-
-Sensitive data should be removed **before** indexing, because an index makes it searchable and fast to exfiltrate. Apply CloudWatch Logs data protection (7.2.1) upstream, drop or mask fields in Fluent Bit or OpenSearch Ingestion processors, and never index secrets. Data masked by CloudWatch Logs data protection remains masked in subscription filter output.
-
-#### Logging and compliance
-
-Publish OpenSearch error logs and FGAC audit logs to CloudWatch Logs, record configuration API calls in CloudTrail, and monitor for access policy changes with AWS Config rules (for example rules that detect domains outside a VPC or without encryption). Apply retention to indices consistent with data protection obligations: logs that contain personal data must be deleted when the purpose has expired, and ISM delete actions are how that promise is kept.
-
-### Performance Optimization
-
-| Area | Technique | Why |
-|------|-----------|-----|
-| Ingestion | Bulk requests of 5 to 15 MiB (about 10 MiB on OR-family), several parallel clients | Amortises request overhead, uses all shards |
-| Ingestion | `refresh_interval` of 10 to 30 seconds; temporarily `-1` with replicas 0 during large backfills | Fewer segments, less merge pressure |
-| Ingestion | Buffered, retrying pipelines (Firehose, OpenSearch Ingestion) | Absorbs bursts without rejections |
-| Mapping | `keyword` for exact fields, `text` only where needed, `index: false` for display-only fields | Less CPU and storage per document |
-| Sharding | 30 to 50 GiB shards, balanced across nodes | Parallelism without overhead |
-| Querying | Filter context for exact conditions and time ranges | Cached, unscored clauses |
-| Querying | Avoid leading wildcards, expensive scripts and deep `from` pagination; use `search_after` | Prevents full-index work |
-| Querying | Narrow index patterns (time-based names let queries skip old indices) | Fewer shards searched |
-| Aggregation | Rollups, transforms or indexed views for long-range dashboards | Pre-aggregated data |
-| Caching | Request cache for repeated aggregations on unchanging indices; node query cache for filters | Faster repeated dashboards |
-| Connection reuse | Persistent HTTP connections with keep-alive in clients and Lambda functions created outside the handler | Avoids TLS handshakes per request |
-| Topology | Dedicated coordinator nodes for heavy query fan-out | Protects data nodes |
-| Monitoring | CloudWatch metrics: `ClusterStatus.red`, `FreeStorageSpace`, `JVMMemoryPressure`, `CPUUtilization`, `ThreadpoolWriteRejected`, `ThreadpoolSearchRejected`, `IndexingLatency`, `SearchLatency`; slow logs; Query Insights | Detect saturation before failure |
-
-!!! tip "Read the thread pool rejections"
-    `ThreadpoolWriteRejected` rising means indexing requests arrive faster than the cluster can process them: increase bulk size, reduce refresh frequency, add nodes or shards, or buffer upstream. `ThreadpoolSearchRejected` rising means dashboards and queries exceed capacity: optimise queries, add replicas or coordinator nodes. Treat these as leading indicators, as queue depth was treated in [Chapter 6.3](../unit6/topic3.md).
-
-### Cost Optimization
-
-| Technique | Effect |
-|-----------|--------|
-| Index selectively | Index only streams with a demonstrated need for repeated interactive search; many need only CloudWatch Logs or S3, and direct query covers occasional needs |
-| Short hot retention | Hot storage with replicas is the most expensive per GiB |
-| UltraWarm, OI2 warm and cold tiers | Much lower cost per GiB for older data; UltraWarm and cold need no replicas |
-| Log-optimised engine | Columnar compression reduces storage for new log domains at no extra charge |
-| OpenSearch Optimized and Graviton instances | Better price-performance for indexing |
-| Reserved Instances | Large discounts for the steady baseline (one or three years), bought once sizing has stabilised |
-| Right-sizing | Use CPU, JVM pressure and storage metrics after several weeks to adjust instance type and count |
-| Compression and lean mappings | Smaller indices; map only the fields you query and disable indexing for large display-only fields (`"index": false`) |
-| Drop noise upstream | Health checks and debug logs filtered in Fluent Bit or Ingestion processors |
-| Serverless capacity limits | Cap maximum OCUs to bound spend; disable standby replicas outside production. For small or spiky workloads compare Serverless minimums and domain costs honestly; the cheapest option is sometimes not to index at all |
-| Development domains | Single-AZ, small instances, deleted when not needed |
-| Cost allocation | Tag domains, collections and pipelines; review Cost Explorer; Trusted Advisor checks for Reserved Instance opportunities |
-
-!!! info "Savings Plans"
-    At the time of writing, OpenSearch Service domain discounts are obtained through OpenSearch Reserved Instances rather than Compute Savings Plans. Verify current commitment options on the pricing page before purchasing.
-
-### Integration with Other AWS Services
-
-| Service | Integration | Why |
-|---------|-------------|-----|
-| Amazon CloudWatch Logs | Subscription filters (to Lambda, Firehose, Kinesis), direct query, "Analyze with OpenSearch" dashboards; OpenSearch publishes its own logs to CloudWatch Logs | CloudWatch is the landing zone; OpenSearch is the search tier |
-| Amazon Data Firehose | Managed delivery to domains and Serverless collections with S3 backup | Simplest managed path from subscriptions |
-| Amazon OpenSearch Ingestion | Pipelines from HTTP, OpenTelemetry, S3, Kinesis, Kafka and database sources | Scalable, buffered, transforming ingestion |
-| Amazon ECS (FireLens) | Fluent Bit `opensearch` output or HTTP to an Ingestion pipeline | Container logs without passing through CloudWatch when appropriate |
-| Amazon EKS | Fluent Bit DaemonSets, OpenTelemetry Collector (ADOT), EKS Pod Identity for signing | Kubernetes logs and traces with pod metadata |
-| AWS Lambda | Custom enrichment or indexing functions; subscription consumers | Custom logic where managed paths are insufficient |
-| Amazon S3 | Snapshots, UltraWarm and cold backing, Ingestion source, direct query over data lakes, Firehose backup | Durable storage and archives |
-| Amazon Security Lake | Direct query and ingestion of OCSF-normalised security data | Security analytics |
-| Amazon Kinesis Data Streams | Buffer between CloudWatch subscriptions or producers and Ingestion pipelines | Decoupling and replay ([Chapter 6.3](../unit6/topic3.md)) |
-| AWS X-Ray and OpenTelemetry | Trace data through ADOT and Ingestion into trace analytics | Correlate traces and logs in one tool ([Section 7.1](../unit7/topic1.md)) |
-| Amazon Cognito, IAM Identity Center, SAML IdPs | Authentication for Dashboards and OpenSearch UI | Single sign-on for analysts |
-| AWS KMS | Encryption at rest | Key control and audit |
-| Amazon CloudWatch metrics and alarms | Domain, collection and pipeline metrics | Operate the platform ([Section 7.3](../unit7/topic3.md)) |
-| Amazon EventBridge | Service events such as software update availability and Auto-Tune notifications | Automation of platform operations |
-| Amazon SNS | Alerting plugin notification channel | Route OpenSearch monitor notifications ([Section 7.3](../unit7/topic3.md)) |
-| Amazon DynamoDB | Zero-ETL through OpenSearch Ingestion | Search projections ([Chapter 6.2](../unit6/topic2.md)) |
-
-#### Architecture example: security analytics for a multi-account organisation
-
-```mermaid
-flowchart LR
-    subgraph Workloads["Workload accounts"]
-        CT["CloudTrail"]
-        VF["VPC Flow Logs"]
-        APP["Application log groups"]
-    end
-    subgraph LogArchive["Log Archive account, 7.2.1"]
-        CWL[("Centralised CloudWatch Logs")]
-        S3A[("S3 archive with Object Lock")]
-    end
-    subgraph Security["Security tooling account"]
-        KDS["Kinesis Data Streams"]
-        OSI["OpenSearch Ingestion: parse, enrich with account owner, route"]
-        DOM[("OpenSearch domain: 30 days hot, 150 days UltraWarm")]
-        SA["Security Analytics detectors and correlation rules"]
-        UI["OpenSearch UI security workspace"]
-    end
-    CT --> CWL
-    VF --> CWL
-    APP --> CWL
-    CWL -->|"cross-account subscription"| KDS
-    CWL --> S3A
-    KDS --> OSI --> DOM
-    DOM --> SA
-    DOM --> UI
-    S3A -.->|"direct query for older investigations"| UI
-```
-
-The security team investigates the last six months interactively in OpenSearch, while the seven-year archive of record remains in S3 and is reached through direct query only when an investigation needs older data.
-
-#### Architecture example: EKS platform logging with OpenSearch as the primary search tool
-
-```mermaid
-flowchart LR
-    subgraph EKS["Amazon EKS cluster"]
-        P1["Application pods: JSON to stdout"]
-        FBD["Fluent Bit DaemonSet: Kubernetes metadata, drop health checks"]
-    end
-    P1 --> FBD
-    FBD -->|"ERROR and WARN only"| CWL[("CloudWatch Logs Standard: metric filters, alarms")]
-    FBD -->|"all events over HTTPS with SigV4"| OSI["OpenSearch Ingestion with persistent buffer"]
-    OSI -->|"route by namespace"| DOM[("OpenSearch domain: data streams per namespace group")]
-    OSI -->|"failed documents"| DLQ[("S3 DLQ")]
-    OSI -->|"raw copy"| S3[("S3 archive")]
-    DOM --> UI["OpenSearch UI observability workspace"]
-```
-
-This design uses the **fan-out at collection time** pattern from 7.2.1 to keep CloudWatch ingestion small (only events that drive alarms) while OpenSearch holds the full searchable stream and S3 the archive.
-
-### Common Architecture Patterns
-
-#### Pattern 1: CloudWatch landing zone with selective indexing
-
-All logs land in CloudWatch Logs; subscription filters send only the streams that need search (for example security and customer-support logs) to OpenSearch through Firehose or Ingestion. This is the default pattern for AWS-native platforms because it keeps governance in one place and indexing cost proportional to value.
-
-#### Pattern 2: hot-warm-cold lifecycle
-
-Time-series indices roll over by size, stay hot for the period of active investigation, migrate to UltraWarm or OI2 warm for occasional search, move to cold or are deleted, all driven by ISM. The same pattern with CloudWatch log classes and S3 storage classes was described in 7.2.1 as tiering by value.
-
-#### Pattern 3: query in place first, index when justified
-
-New log sources are analysed with direct query from OpenSearch UI (or with Logs Insights). When usage shows repeated, latency-sensitive queries, the stream is promoted to indexed storage, or an indexed view is created for the specific dashboard. This avoids building indices that nobody uses.
-
-#### Pattern 4: buffered ingestion with dead-letter queues
-
-Producers never write directly to the cluster; a buffer (Kinesis, Firehose, OpenSearch Ingestion persistent buffer) absorbs bursts and outages, and failed documents go to an S3 DLQ for replay. This is the queue-based load levelling and DLQ pattern of [Chapter 6.3](../unit6/topic3.md) applied to indexing.
-
-#### Pattern 5: data streams per service group, not per service
-
-Services are grouped into a manageable number of data streams (for example by domain area or namespace group), each with appropriately sized rollover, rather than creating one index per service per day. Queries filter by the `service` field. This controls shard count while preserving per-service access control through document-level security if needed.
-
-#### Pattern 6: CQRS for observability
-
-The write model is the raw event stream (CloudWatch Logs and S3); the read models are purpose-built projections: indices for search, rollups for long-range dashboards, metrics for alarms. Each is rebuildable from the write model, exactly as in the CQRS design of [Chapter 1.5](../unit1/topic5.md).
-
-#### Pattern 7: correlated logs and traces
-
-Applications instrumented with OpenTelemetry ([Section 7.1](../unit7/topic1.md)) send traces and logs through the ADOT collector to an OpenSearch Ingestion pipeline with trace and log sub-pipelines. Because both carry `traceId`, analysts move from a slow trace to its log events in the same tool.
-
-#### Pattern 8: multi-tenant logging with document-level security
-
-A SaaS provider stores all tenants' logs in shared data streams with a `tenantId` field and exposes a tenant-facing log viewer through roles whose document-level security restricts results to the tenant. This avoids per-tenant indices (shard explosion) while enforcing isolation in the engine rather than in application code.
+- **Operational Excellence:** keep index templates, ISM policies, security roles and pipelines in version control.
+- **Operational Excellence:** keep runbooks for red and yellow cluster status and an upgrade cadence.
+- **Security:** use VPC access and fine-grained access control mapped to IAM or SAML groups; never create public domains with open access policies.
+- **Reliability:** deploy across three Availability Zones with dedicated cluster manager nodes and replicas, and buffer ingestion with dead-letter queues.
+- **Performance Efficiency:** size shards correctly, use explicit mappings and filter context, and set refresh intervals suited to logs.
+- **Cost Optimization:** index only what is searched, keep hot retention short, and move older data to UltraWarm or cold storage.
+- **Sustainability:** delete expired indices promptly and prefer Graviton-based and S3-backed tiers.
 
 ### Industry Use Cases
 
@@ -3228,39 +2230,6 @@ A SaaS provider stores all tenants' logs in shared data streams with a `tenantId
 | Serverless feature subset | Domains when specific plugins, cross-cluster features or tuning are needed |
 | One-way configuration choices | Decide network mode, engine mode and instance family deliberately; test first |
 | Regional service | Cross-cluster search or replication, or centralise data into one Region |
-
-### Common Mistakes
-
-#### Beginner Mistakes
-
-| Mistake | Consequence | Correction |
-|---------|-------------|------------|
-| Relying on dynamic mapping | Wrong field types, rejected documents, mapping explosion | Index templates with explicit mappings |
-| Mapping every string as `text` | Cannot aggregate or filter exactly; wasted CPU | `keyword` for identifiers and categories; `text` for messages |
-| Leaving the default 5 primaries on every index | Tiny or oversized shards | Size shards to 30 to 50 GiB for logs |
-| One index per service per day | Shard explosion | Data streams per service group with size-based rollover |
-| Public endpoint with an open access policy | Data exposed to the internet | VPC access and FGAC |
-| Single-node domain for real users | Any node failure means downtime and possible data loss | Three nodes across three AZs with replicas |
-| Using `must` for exact filters | Slower, uncached queries | `filter` context |
-| Treating OpenSearch as the only copy | Data loss when a domain is deleted or corrupted | Keep raw logs in CloudWatch Logs or S3 |
-
-#### Production Mistakes
-
-| Mistake | Consequence | Correction |
-|---------|-------------|------------|
-| Disk allowed to fill | Indices become read-only, ingestion stops | Alarms on `FreeStorageSpace`, ISM deletes, 25 per cent headroom |
-| JVM memory pressure ignored | Garbage collection pauses, rejected requests, node drops | Fewer shards, larger instances, alarms on `JVMMemoryPressure` |
-| No dedicated cluster manager nodes | Cluster instability under load | Three dedicated managers for production |
-| Hand-written indexers without per-item error handling | Silent data loss on partial bulk failures | Firehose or Ingestion with DLQs; inspect bulk responses |
-| No ISM policies | Unbounded growth, rising cost, eventual outage | Lifecycle policy attached by template from day one |
-| Indexing sensitive data | Searchable personal data and secrets | Mask upstream; field-level security and masking; retention limits |
-| Upgrades postponed indefinitely | Running out-of-support versions, forced upgrades under pressure | Regular upgrade cadence tested in staging |
-| Heavy long-range dashboards on raw documents | Search rejections during incidents | Rollups, transforms, indexed views, coordinator nodes |
-| Promoting every log stream to OpenSearch "just in case" | Large bill for rarely searched data | Evidence-based selection; direct query first |
-| Changing mappings in place | Mapping conflicts and failed ingestion | New index version via template, reindex, switch alias |
-
-!!! danger "A full disk is an outage"
-    When a data node's disk usage crosses the flood-stage watermark, OpenSearch places a write block on affected indices to protect the cluster. Ingestion then fails everywhere those indices live, and buffers upstream start filling. Storage exhaustion is predictable: alarm well before it ([Section 7.3](../unit7/topic3.md)), and make ISM retention, not human intervention, the mechanism that frees space.
 
 ### Summary
 

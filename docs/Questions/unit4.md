@@ -347,18 +347,18 @@
         - **Observability:** Use mesh telemetry per caller and callee plus traces, which see east–west identity that a gateway cannot.
         - **What to keep:** Istio on EKS where justified, the goal of mutual authentication, and tuned outlier detection, because each addresses a real need.
 
-3. Your organisation has decided on "zero trust between services". Define what that means concretely on AWS in terms of authentication, authorisation, encryption and audit; specify the implementation for an estate running ECS, EKS and Lambda across twelve accounts; describe the migration sequence and the specific hazards at each step; and state clearly what this programme will *not* achieve, so that the security committee's expectations are correctly set.
+3. A ticketing company exposes a public API Gateway REST API used by its own web application and by 300 resellers on three commercial tiers. During flash sales, traffic rises twentyfold within a minute, and the backend is a Lambda function with reserved concurrency of 500 writing to an Aurora cluster whose proxy allows 400 connections. Design the throttling configuration across every level API Gateway enforces. Explain how the token bucket's rate and burst should be derived for each level, how the reseller tiers are expressed, how a long-running booking confirmation must be handled given the integration timeout, what clients should observe when limits are reached, and which metrics distinguish a reseller exhausting its quota from the API failing.
 
     ??? success "Check your answer"
 
         A good answer covers:
 
-        - **Authentication:** Every call proves its caller cryptographically: SigV4 with per-service IAM roles (task roles, EKS Pod Identity, Lambda execution roles) through VPC Lattice, or mTLS with AWS Private CA certificates in a mesh.
-        - **Authorisation:** Policies naming principal, path and method (Lattice auth policies, Istio `AuthorizationPolicy`), plus resource policies on data stores, instead of CIDR rules.
-        - **Encryption and audit:** TLS on every hop and KMS at rest; Lattice access logs, mesh logs and CloudTrail centralised so every call's caller identity is reviewable.
-        - **Implementation across twelve accounts:** Organizations with SCPs, a Lattice service network per environment shared through RAM, the Gateway API Controller on EKS, Lambda as Lattice targets, and one IAM role per service.
-        - **Migration sequence and hazards:** Split shared roles (hazard: hidden callers), enrol services with permissive policies and logging, derive policies from observed access, then tighten per service with denial alarms and staged rollout (hazard: legitimate callers denied); switch mesh mTLS to strict only after a negative test.
-        - **What it will not achieve:** It does not stop a compromised service acting within its permissions, application vulnerabilities, over-broad data permissions or insider misuse; it limits lateral movement and makes access auditable.
+        - **Four levels:** Account-level (Region-wide across all APIs), stage-level, method-level and usage-plan limits per API key, each able to reject independently with `429 Too Many Requests`.
+        - **Derive from the backend:** Set the stage and method rates from what the backend sustains (for example, what 500 concurrent invocations and 400 database connections can serve at the measured request duration), not from a round number; tighter method limits on the expensive booking method than on cheap reads.
+        - **Token bucket:** The rate is the steady refill and the burst is the bucket capacity; size the burst to absorb the first seconds of a flash sale without letting a sustained surge through to the database.
+        - **Reseller tiers:** One usage plan per tier with API keys, each with rate, burst and a monthly quota; the API key identifies the reseller for metering, while a real authoriser authenticates it.
+        - **Long-running work:** The REST integration timeout is 29 seconds by default, so a confirmation that may take longer is accepted asynchronously (for example a direct integration into SQS or Step Functions) returning `202 Accepted` with a status resource.
+        - **Client experience and metrics:** Clients receive an immediate, well-formed 429 they can back off from rather than a timeout; a rise in `4XXError` with steady `5XXError` and normal `IntegrationLatency`, combined with access logs by API key ID, shows quota exhaustion by one reseller rather than an API failure.
 
 4. A partner-facing API must support a breaking change to its response schema. Four hundred integrators depend on it, you cannot force them to upgrade, and two of them are contractually guaranteed twelve months' notice. Design the versioning, deployment, measurement and deprecation strategy using API Gateway capabilities. Explain how you would know when it is safe to retire the old version, what you would do about an integrator who has not migrated at the deadline, and how the design differs from what you would do for a first-party mobile client.
 

@@ -41,31 +41,12 @@ Moving from EC2 towards Lambda:
 
 ## Why This Service or Concept Exists
 
-### The problem before cloud compute
-
-| Traditional data centre | AWS compute |
-|---|---|
-| Capacity bought before demand was known; utilisation often 10–20 percent | Pay for what you use; scale with real demand |
-| Provisioning took weeks | Seconds to minutes through an API |
-| Capital expenditure, approval for every experiment | Operating expenditure; terminate when finished |
-| Manual configuration and hardware repair | Automatic replacement by an Auto Scaling group |
-| No way to scale down: you cannot un-buy a server | Scale in as easily as out |
-
-### How AWS compute evolved
-
-Each service solved a problem the previous one left open.
-
-| Service (year) | Problem it solved | What it left open |
-|---|---|---|
-| **EC2** (2006) | Virtual machines through an API in minutes, pay as you go. Made **elasticity** possible | You still patch an OS and deploy onto each machine |
-| **Containers** | Packaging: one immutable image runs the same everywhere | **Placement**: which host runs which container, and what happens when a host dies |
-| **ECS** (2014) | AWS-native orchestration, integrated with IAM, ELB and CloudWatch | You still run the EC2 hosts |
-| **Lambda** (2014) | Run a function on demand, scale from zero, pay per millisecond | Short, stateless work only |
-| **Fargate** (2017) | Containers with no EC2 instances to manage | Higher unit price; fewer host features |
-| **EKS** (2018) | Managed **Kubernetes**, the open-source standard, for portability and ecosystem | Kubernetes complexity |
-
-!!! tip "The evolution is additive, not a replacement"
-    Lambda did not replace EC2, and EKS did not replace ECS. Mature AWS estates run all of them, each for the workload it fits: EC2 for a licensed legacy database, Kubernetes for a microservice platform, Lambda for event glue.
+- **Capacity without forecasting:** data-centre servers were bought before demand was known and often ran at 10 to 20 percent utilisation; AWS compute is paid for as used and scales with real demand.
+- **Provisioning in seconds:** an API call replaces weeks of procurement, and capacity can be scaled in as easily as out.
+- **EC2 (2006) made elasticity possible:** virtual machines through an API, although you still patch an operating system and deploy onto each machine.
+- **Containers and orchestration solved packaging and placement:** one immutable image runs the same everywhere, while ECS (2014) and EKS (2018) decide which host runs which container; Fargate (2017) removed the hosts themselves.
+- **Lambda (2014) removed servers entirely for short work:** functions run on demand, scale from zero and are billed per millisecond, but only for short, stateless tasks.
+- **The evolution is additive:** mature estates run all of these together, each for the workload it fits.
 
 ## Core Concepts
 
@@ -362,122 +343,17 @@ Instance family, purchase option and scaling policy are covered in the EC2 deep 
 
 ECS settings are covered in [2.2](../unit2/topic2.md#configuration-options) and [2.3](../unit2/topic3.md#configuration-options); EKS settings in [3.1](../unit3/topic1.md#configuration-options) and [3.3](../unit3/topic3.md#configuration-options).
 
-## Design Considerations
-
-### Choosing a compute service
-
-Work through the questions in order. The first constraint that applies decides the answer.
-
-```mermaid
-flowchart TD
-    S["Start: characterise the workload"] --> Q1{"Does it require OS level control, GPUs, licensed per host software, or a custom kernel"}
-    Q1 -->|"Yes"| EC2["Amazon EC2"]
-    Q1 -->|"No"| Q2{"Is the work event driven, short lived, and under 15 minutes"}
-    Q2 -->|"Yes"| Q3{"Is cold start latency acceptable or mitigable"}
-    Q3 -->|"Yes"| LAM["AWS Lambda"]
-    Q3 -->|"No"| Q4
-    Q2 -->|"No"| Q4{"Is the application containerised or containerisable"}
-    Q4 -->|"No"| EC2
-    Q4 -->|"Yes"| Q5{"Does the team need Kubernetes portability, extensibility, or existing K8s tooling"}
-    Q5 -->|"Yes"| EKS["Amazon EKS"]
-    Q5 -->|"No"| ECS["Amazon ECS"]
-    ECS --> Q6{"Do you need host access, GPUs, or very high steady utilisation"}
-    EKS --> Q6
-    Q6 -->|"Yes"| EC2CAP["Run on EC2 capacity"]
-    Q6 -->|"No"| FAR["Run on AWS Fargate"]
-```
-
-!!! question "Apply the framework"
-    A nightly report job reads 40 GB from S3 and runs for 40 minutes. Lambda is ruled out by the 15-minute limit. The job is containerisable, stateless and needs no host control, so an **ECS task on Fargate, triggered by EventBridge Scheduler**, fits. If it needed GPUs, it would move to **AWS Batch on EC2 Spot**.
-
-### Comparison matrix
-
-This table also serves as the advantages and limitations of each service.
-
-| Dimension | EC2 | ECS on Fargate | EKS | Lambda |
-|---|---|---|---|---|
-| Operational burden | Highest | Low | High | Lowest |
-| Billing | Per instance-second | Per task-second | Cluster fee plus nodes | Per millisecond |
-| Idle cost | Full | Full while task runs | Cluster fee plus nodes | Zero |
-| Scaling speed | Minutes | Tens of seconds | Seconds (Pods), minutes (nodes) | Milliseconds to seconds |
-| Maximum duration | Unlimited | Unlimited | Unlimited | 15 minutes |
-| Portability off AWS | Low | Medium (images port) | High | Low |
-| Skills needed | Linux administration | Docker and AWS | Deep Kubernetes | Code and event design |
-| Main advantage | Full OS control, widest hardware choice | No nodes; free control plane | Kubernetes ecosystem and portability | No infrastructure, zero idle cost |
-| Main limitation | You patch the OS; slow to scale | Higher unit price; no GPUs or DaemonSets | Complexity, cluster fee, mandatory upgrades | 15-minute limit, cold starts, payload limits |
-| Best fit | Legacy, licensed, GPU, steady heavy load | Microservices, small ops team | Large multi-team platforms | Event glue, APIs, spiky work |
-
-### Scalability and availability
-
-- **Know the bottleneck.** More compute is useless if the database runs out of connections, which is exactly what happens when 1,000 concurrent Lambda functions hit RDS. Use **RDS Proxy** or a queue in between.
-- **Scaling latency sets your headroom.** Lambda reacts in seconds, Fargate tasks in tens of seconds, EC2 instances in minutes. Slower scaling needs more spare capacity.
-- **Spread across at least two, preferably three, AZs.** This is the highest-value availability decision.
-- **Treat every node as disposable.** Handle `SIGTERM`, finish in-flight requests, and deregister from the load balancer before exiting.
-- **Run at least two copies of everything.** One replica has no availability during a deployment or node drain.
-
-!!! tip "The architect's default"
-    For a new, containerisable, stateless service with no unusual needs, start with **ECS on Fargate**, with **Lambda** for event glue. Move to **EKS** when several teams need a shared, extensible platform or genuine multi-cloud portability. Move to **EC2** when a hard constraint forces it. "We might need Kubernetes later" is speculation, not a constraint.
-
 ## AWS Best Practices
 
-| Pillar | Compute practice |
-|---|---|
-| **Operational excellence** | Define all infrastructure as code ([5.3](../unit5/topic3.md)); make deployments small and reversible; automate patching or remove it with immutable AMIs and Fargate |
-| **Security** | One IAM role per instance, task, Pod or function; no long-lived keys; compute in private subnets; IMDSv2 required |
-| **Reliability** | Multi-AZ by default; health-based replacement; queues to absorb downstream failures; raise service quotas before launch |
-| **Performance efficiency** | Choose instance family and Lambda memory from measurements; prefer Graviton; move non-urgent work out of the request path |
-| **Cost optimisation** | Savings Plans for the steady baseline only; Spot for interruptible work; switch off non-production outside working hours |
-| **Sustainability** | Higher utilisation means less energy per unit of work; Graviton does more work per watt; serverless uses nothing when idle |
+- **Operational excellence:** define all infrastructure as code ([5.3](../unit5/topic3.md)) and keep deployments small and reversible.
+- **Operational excellence:** automate patching, or remove it with immutable AMIs and Fargate.
+- **Security:** give each instance, task, Pod or function its own IAM role, use no long-lived keys, and require IMDSv2.
+- **Reliability:** run Multi-AZ by default with health-based replacement, and raise service quotas before launch.
+- **Performance efficiency:** choose instance family and Lambda memory from measurements, and prefer Graviton where dependencies allow.
+- **Cost optimisation:** use Savings Plans for the steady baseline only, Spot for interruptible work, and switch off non-production outside working hours.
+- **Sustainability:** higher utilisation and serverless scale-to-zero mean less energy per unit of work.
 
-## Security Considerations
-
-Every compute service has a way to obtain **temporary, automatically rotated credentials**. Using anything else, such as access keys in code or images, is a defect.
-
-| Compute service | Credential mechanism | Granularity |
-|---|---|---|
-| EC2 | Instance profile, read through IMDSv2 | Per instance |
-| ECS (EC2 or Fargate) | Task execution role and task role | Per task |
-| EKS | Node role, plus EKS Pod Identity or IRSA | Per Pod |
-| Lambda | Execution role | Per function |
-
-!!! danger "The node role anti-pattern in EKS"
-    Permissions on the EKS **node role** are inherited by every Pod on that node. Keep the node role minimal and give each workload its own role. See [3.1 Amazon EKS Architecture](../unit3/topic1.md#iam-for-workloads-pod-identity).
-
-Further compute-specific rules:
-
-- **Private subnets.** Only load balancers and NAT gateways belong in public subnets.
-- **No SSH from the internet.** Use Systems Manager Session Manager instead of opening port 22.
-- **Secrets at runtime.** Fetch from Secrets Manager or Parameter Store; never bake them into images or plaintext environment variables.
-- **Harden containers.** Run as non-root, scan images in ECR, and block vulnerable images in the pipeline.
-- **Lambda in a VPC is not automatically more secure.** Attach it only when it must reach private resources.
-
-IAM is covered in [8.1](../unit8/topic1.md), network security in [1.6](topic6.md) and [8.2](../unit8/topic2.md), and encryption in [8.3](../unit8/topic3.md).
-
-## Operating It: Performance, Cost and Monitoring
-
-**Performance.**
-
-- **Cache** before computing: CloudFront at the edge, ElastiCache in front of the database.
-- **Reuse connections.** In Lambda, create SDK clients and database connections **outside the handler** so warm invocations reuse them.
-- **Scale on the real bottleneck.** Request count per target for a web tier; queue depth or message age for a queue consumer. Scale out fast, scale in slowly.
-- **Right-size** with AWS Compute Optimizer, which covers EC2, Fargate and Lambda.
-
-**Cost.**
-
-| Service | You pay for | Often overlooked |
-|---|---|---|
-| EC2 | Instance-seconds, EBS storage | Unattached volumes and Elastic IPs, cross-AZ transfer |
-| ECS on EC2 | The underlying instances | Idle capacity from poor packing |
-| Fargate | Requested vCPU and GB per second | Over-sized tasks |
-| EKS | Cluster fee plus data plane | Extended-support surcharge, one load balancer per Ingress |
-| Lambda | Requests and GB-seconds | CloudWatch Logs, NAT for VPC functions, API Gateway |
-
-Match the purchase option to the shape of demand: Savings Plans for the steady baseline, scheduled scaling for predictable peaks, On-Demand with target tracking for unpredictable spikes, and Spot or Fargate Spot for interruptible work.
-
-!!! warning "NAT and data transfer are the classic surprise"
-    A NAT Gateway charges per hour **and per GB processed**. Containers pulling images from ECR, or Lambda calling S3, through NAT can cost more than the compute itself. Gateway endpoints for S3 and DynamoDB are free; add them always.
-
-**Monitoring.**
+## Monitoring and Observability
 
 | Service | Key metrics | What they reveal |
 |---|---|---|
@@ -487,49 +363,6 @@ Match the purchase option to the shape of demand: Savings Plans for the steady b
 | Lambda | `Errors`, `Duration`, `Throttles`, `ConcurrentExecutions` | `Throttles` means a concurrency limit was hit |
 
 Every service should alarm on errors, latency, saturation, and failure to scale (pending tasks, unschedulable Pods or Lambda throttles). Monitoring is covered fully in [Unit 7](../unit7/topic1.md).
-
-## Integration with Other AWS Services
-
-The services compute depends on are listed under [Architecture Components](#architecture-components). Two integrations deserve a note: **RDS Proxy** protects relational databases from Lambda connection storms, and **Step Functions** runs workflows longer than Lambda's 15-minute limit. The diagram shows how the compute services combine in one system.
-
-```mermaid
-flowchart TD
-    U["Users"] --> R53["Route 53"]
-    R53 --> CF["CloudFront with WAF"]
-    CF --> S3S["S3 static assets"]
-    CF --> ALB["Application Load Balancer"]
-    ALB --> SVC1["ECS Fargate: Orders service"]
-    ALB --> SVC2["ECS Fargate: Catalog service"]
-    SVC1 --> DDB["DynamoDB Orders table"]
-    SVC2 --> RDS["Aurora Catalog cluster"]
-    SVC1 --> EB["EventBridge OrderPlaced event"]
-    EB --> SQS["SQS fulfilment queue"]
-    EB --> SNSN["SNS notifications topic"]
-    SQS --> LFUL["Lambda fulfilment processor"]
-    SNSN --> LEMAIL["Lambda email sender"]
-    LFUL --> SFN["Step Functions shipping workflow"]
-    SFN --> ECSJOB["ECS task: label generation"]
-    ECR["ECR"] --> SVC1
-    ECR --> SVC2
-```
-
-!!! info "Reading this diagram"
-    The synchronous path (user, load balancer, service, database) is kept short. Everything that need not finish before responding, such as fulfilment, emails and shipping, runs behind EventBridge and SQS on Lambda or ECS tasks. Each component uses the compute service that fits its shape.
-
-## Common Architecture Patterns
-
-Compute choice follows the pattern. The patterns themselves are covered elsewhere.
-
-| Pattern | Typical compute | Covered in |
-|---|---|---|
-| Three-tier web application | EC2 ASG or ECS service behind an ALB | [1.7](topic7.md) |
-| Microservices | ECS or EKS, one service per team | [4.1](../unit4/topic1.md) |
-| Event-driven processing | Lambda triggered by S3, SQS or EventBridge | [1.7](topic7.md), [6.3](../unit6/topic3.md) |
-| Queue-based load levelling | ECS tasks or Lambda scaling on queue depth | [1.7](topic7.md) |
-| Batch and scheduled jobs | Fargate tasks, AWS Batch on Spot | This topic |
-| Sidecar (logging, tracing, proxy) | Extra container in the same task or Pod | [2.1](../unit2/topic1.md) |
-| Retry, circuit breaker, bulkhead | Any; Lambda reserved concurrency acts as a bulkhead | [4.3](../unit4/topic3.md#timeout-retry-with-backoff-and-jitter-circuit-breaker-bulkhead) |
-| Blue/green and canary deployment | CodeDeploy for ECS and Lambda; Lambda alias weights | [5.2](../unit5/topic2.md) |
 
 ## Industry Use Cases
 
@@ -541,41 +374,6 @@ Compute choice follows the pattern. The patterns themselves are covered elsewher
 | Banking core ledger | EC2 on Dedicated Hosts | Licensing, audit, isolation |
 | Real-time game servers | EC2 with an NLB | UDP, stateful sessions, low latency |
 | Multi-tenant SaaS platform | EKS | Many teams, extensibility, portability |
-
-## Common Mistakes
-
-### Beginner Mistakes
-
-| Mistake | Why it is wrong | Do instead |
-|---|---|---|
-| Thinking Fargate is an orchestrator | It is a **capacity mode** for ECS and EKS | Choose ECS or EKS first, then the capacity |
-| Thinking ECS costs more than EKS | ECS has **no** control plane fee; EKS charges per cluster | Compare total cost, not labels |
-| Application servers in public subnets | Compute exposed to the internet | Private subnets; only load balancers public |
-| Opening SSH (port 22) to `0.0.0.0/0` | Invites brute-force attacks | Systems Manager Session Manager |
-| Access keys in code, AMIs or images | Long-lived credentials leak | Instance profiles, task roles, execution roles |
-| Using the `latest` image tag | Non-deterministic deploys, no clean rollback | Immutable tags such as the Git commit SHA |
-| Writing state to a container's or instance's disk | Lost on restart, scale-in or replacement; instance store is lost on stop | S3, DynamoDB, RDS or EFS |
-| Confusing the task execution role with the task role | Your code uses the **task role** | Keep both minimal and separate |
-| Confusing reserved and provisioned concurrency | Reserved caps and guarantees; provisioned pre-warms | Use each for its purpose |
-| Using T instances for sustained high CPU | Credits run out and the instance is throttled | M or C families |
-| Running databases on compute-optimised C instances | Too little memory per vCPU | Memory-optimised R or X families |
-| Expecting memory metrics in EC2 by default | The hypervisor cannot see guest memory | Install the CloudWatch agent |
-| Assuming Lambda is always cheapest | Steady high volume can cost more | Model costs with real volumes |
-| Thinking Multi-AZ means multi-Region | Multi-AZ is inside one Region | Separate deployments plus Route 53 for multi-Region |
-
-### Production Mistakes
-
-| Mistake | Consequence | Do instead |
-|---|---|---|
-| High-concurrency Lambda connecting straight to RDS | Database connection exhaustion | RDS Proxy, reserved concurrency or a queue |
-| No reserved concurrency anywhere | One runaway function throttles every other function | Reserve for critical functions; cap the rest |
-| No DLQ on asynchronous processing | Events silently lost after retries | DLQ or on-failure destination with an alarm |
-| ASG health check type left as `EC2` | Instances with a broken application stay in service | Use `ELB` health checks |
-| Scaling on CPU when the bottleneck is a queue | The system never scales when it should | Scale on the metric that reflects the constraint |
-| No graceful shutdown | Requests dropped at every deployment and scale-in | Handle `SIGTERM` and drain |
-| Long Lambda timeouts "to be safe" | A hung dependency bills up to 15 minutes per call | Timeout slightly above observed p99 |
-| Not testing at the concurrency quota | Throttling discovered on launch day | Load-test and raise quotas in advance |
-| No rollback mechanism | A bad release becomes a long outage | Deployment circuit breaker, blue/green or canary |
 
 ## Summary
 

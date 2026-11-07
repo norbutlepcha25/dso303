@@ -6,15 +6,16 @@
 
 #### Beginner Questions
 
-1. What is the difference between the bucket ARN and an object ARN, and which S3 actions apply to each?
+1. Explain the difference between an object key and a prefix, and why S3 has no real folders.
 
     ??? success "Check your answer"
 
         A good answer covers:
 
-        - **Bucket ARN:** `arn:aws:s3:::bucket` identifies the bucket itself and is the resource for bucket-level actions such as `s3:ListBucket`, `s3:GetBucketPolicy` and `s3:PutBucketVersioning`.
-        - **Object ARN:** `arn:aws:s3:::bucket/key` (usually `bucket/*` or `bucket/prefix/*`) is the resource for object-level actions such as `s3:GetObject`, `s3:PutObject` and `s3:DeleteObject`.
-        - **Common error:** granting `s3:GetObject` on the bucket ARN, or `s3:ListBucket` on the object ARN, matches nothing, so policies normally need two statements or two resources.
+        - **Key:** the full, unique name of an object within a bucket, a single flat string such as `logs/2026/08/10/app-server-01.log.gz`.
+        - **Prefix:** any leading substring of a key, conventionally delimited by `/`; prefixes scope IAM policies and lifecycle rules and partition request-rate scaling.
+        - **No folders:** the data model is a flat map from key strings to objects; a "folder" created in the console is a zero-byte object whose key ends in `/`.
+        - **Folder-like listings:** passing a delimiter to `ListObjectsV2` rolls keys that share a common prefix into `CommonPrefixes`, which produces the appearance of a folder listing.
 
 2. Which mechanism delivers S3 credentials to a Lambda function, and why should application code not pass credentials explicitly to the SDK client?
 
@@ -60,16 +61,17 @@
 
 #### Intermediate Questions
 
-1. Compare EKS Pod Identity and IRSA in terms of setup, trust policy design and support for session tags.
+1. Compare how an EC2 instance, an ECS task, an EKS pod and a Lambda function obtain short-lived credentials for S3, and explain why the same container image can run unchanged on each platform.
 
     ??? success "Check your answer"
 
         A good answer covers:
 
-        - **Setup:** Pod Identity needs only the EKS Pod Identity Agent add-on and an association created through the EKS API; IRSA needs an IAM OIDC provider per cluster and a service account annotation.
-        - **Trust policy:** Pod Identity trusts the single service principal `pods.eks.amazonaws.com`, so one role can be reused across clusters unchanged; IRSA trust policies name each cluster's OIDC provider and the `sub` of each namespace and service account.
-        - **Session tags:** Pod Identity attaches session tags such as cluster name, namespace and service account, enabling attribute-based access control; IRSA does not provide these tags.
-        - **Recommendation:** Pod Identity for new EKS clusters; IRSA remains for compatibility and for environments where Pod Identity is not supported.
+        - **EC2:** an instance profile, with credentials served by the Instance Metadata Service (IMDSv2).
+        - **ECS:** the task role (`taskRoleArn`), served through the container credentials endpoint; the task execution role is used by ECS to pull images and write logs and should not carry application S3 permissions.
+        - **EKS:** EKS Pod Identity through the Pod Identity Agent, or IRSA, in which a projected service account token is exchanged with STS.
+        - **Lambda:** the execution role, whose temporary credentials the runtime injects as environment variables.
+        - **Portability:** the AWS SDKs use a default credential provider chain that discovers whichever source is present, so code constructs the S3 client without passing credentials and the same image works on every platform.
 
 2. A Lambda function writes thumbnails back into the bucket that triggers it. Describe two design changes that prevent recursion, and explain what Lambda's recursive loop detection does.
 
@@ -82,16 +84,17 @@
         - **Recursive loop detection:** Lambda detects that the same event chain has invoked the function repeatedly through supported services, including S3, and stops further invocations after a limited number of loops.
         - **Caveat:** loop detection is a safety net that limits cost, not a design; the event is dropped or sent to a failure destination, so the design must still prevent the loop.
 
-3. Explain how CloudFront OAC allows a bucket to remain private, including the bucket policy condition that restricts access to one distribution.
+3. Compare S3 Event Notifications with the S3 EventBridge integration in terms of enablement, filtering, destinations, multiple consumers, replay and cost, and state when you would use each.
 
     ??? success "Check your answer"
 
         A good answer covers:
 
-        - **Private bucket:** Block Public Access stays on; the bucket policy grants `s3:GetObject` only to the service principal `cloudfront.amazonaws.com`.
-        - **Signing:** CloudFront signs origin requests with SigV4 through Origin Access Control, so S3 can authenticate them.
-        - **One distribution:** a condition `StringEquals` on `AWS:SourceArn` equal to the distribution's ARN prevents other CloudFront distributions, including other accounts', from using the bucket.
-        - **Extras:** OAC supports SSE-KMS objects when the key policy allows the CloudFront service principal, and users reach content only through the CDN with TLS.
+        - **Enablement:** Event Notifications need a notification configuration per destination; the EventBridge integration is one bucket-level setting that sends all supported events to the default bus.
+        - **Filtering:** Event Notifications filter only on event type, key prefix and key suffix; EventBridge rules can match any field, such as key patterns, size, requester or source IP.
+        - **Destinations and consumers:** Event Notifications reach Lambda, SQS standard queues and SNS standard topics, and overlapping filters are not allowed, so multiple consumers need SNS fan-out; EventBridge supports many rules with up to five targets each.
+        - **Replay and cost:** only EventBridge offers archive and replay; Event Notifications add no S3 charge and have the lowest latency, while EventBridge charges per event.
+        - **Choice:** Event Notifications for a single, simple consumer such as one thumbnail function; EventBridge when several teams consume the events, filtering must go beyond prefix and suffix, replay is valuable, or events cross accounts.
 
 4. Describe how S3 Inventory, Athena and Batch Operations can be combined to re-encrypt every object in a bucket that is not encrypted with a specific KMS key.
 
@@ -129,28 +132,29 @@
         - **Deletes:** `Object Deleted` events trigger idempotent removal of derived outputs, guarded by the same version check so a stale delete does not remove newer output.
         - **Robustness:** visibility timeout longer than processing time, partial failure handling, DLQ alarms and redrive after fixes.
 
-2. Evaluate S3 Express One Zone, S3 general purpose buckets with Mountpoint caching, and Amazon FSx for Lustre as data sources for a distributed GPU training job on EKS. Consider latency, durability, cost and operational effort.
+2. A machine learning team proposes to keep all of its training data in S3 Express One Zone. Evaluate the proposal against S3 general purpose buckets in terms of latency, durability scope, bucket model and cost, and design how the two should be used together.
 
     ??? success "Check your answer"
 
         A good answer covers:
 
-        - **S3 Express One Zone:** single-digit millisecond latency and very high request rates in one AZ; lower durability scope (one AZ), higher storage price; suited to a performance tier or cache holding data reproducible from S3 Standard; co-locate GPUs in the same AZ.
-        - **General purpose bucket with Mountpoint caching:** cheapest and most durable, minimal operations through the Mountpoint CSI driver, but tens of milliseconds first-byte latency; works well with large, sequentially read shard files and local caching across epochs.
-        - **FSx for Lustre:** POSIX file system with very high aggregate throughput and sub-millisecond latency, linked to S3; best for many small files and random access, but a provisioned file system to size, pay for and operate.
-        - **Judgement:** prefer S3 with large shards plus Mountpoint for cost; add Express One Zone or Lustre only when profiling shows GPUs starving on I/O; S3 Standard remains the source of truth.
+        - **Latency:** Express One Zone offers single-digit millisecond latency and very high request rates; general purpose buckets deliver the first byte in tens of milliseconds.
+        - **Durability scope:** Express One Zone stores data in one Availability Zone in a directory bucket, whereas general purpose storage classes such as S3 Standard span three or more zones, so an AZ failure affects only the Express copy.
+        - **Bucket model:** directory buckets use real directories, session-based authentication through `CreateSession` (handled by current SDKs) and names ending in a zone suffix, unlike the flat namespace of general purpose buckets.
+        - **Cost:** Express One Zone has lower request charges but higher storage charges than S3 Standard, so it is a performance tier, not bulk storage.
+        - **Design:** keep the full dataset in a general purpose bucket as the durable source of truth, copy the active training subset into Express One Zone in the same zone as the training compute, and treat the Express copy as reproducible.
 
-3. Construct a data perimeter for an organisation that must prevent exfiltration of S3 data from ECS and EKS workloads. Specify the SCP, RCP, bucket policy and endpoint policy statements and explain which threat each addresses.
+3. Design the storage configuration for a bucket of audit records that must remain immutable for seven years, survive accidental deletion and cost as little as possible, and explain what happens when an operator issues a `DELETE` on one of the records.
 
     ??? success "Check your answer"
 
         A good answer covers:
 
-        - **SCP (identity side):** deny S3 actions by organisation principals unless the resource is in the organisation (`aws:ResourceOrgID`), addressing exfiltration to attacker-owned buckets using stolen or misused credentials.
-        - **RCP (resource side):** deny access to organisation buckets by principals outside the organisation (`aws:PrincipalOrgID`), except approved AWS service principals, addressing external access via mistaken policies.
-        - **Bucket policy:** deny requests not arriving through the approved VPC endpoints (`aws:SourceVpce`) or from expected networks, addressing use of credentials stolen from a task and replayed elsewhere.
-        - **VPC endpoint policy:** allow only principals and buckets in the organisation, addressing compromised workloads copying data to external buckets through the endpoint.
-        - **Supporting controls:** no NAT path to S3, task roles and Pod Identity with least privilege, SSE-KMS with key policies, and CloudTrail data events with GuardDuty for detection.
+        - **Versioning:** enabled, because Object Lock and replication require it and because every overwrite or delete then preserves earlier versions.
+        - **Object Lock:** Compliance mode with a seven-year retention period, because nobody, including the root user, can override it before expiry; Governance mode would let privileged users override it.
+        - **Lifecycle:** transition records to S3 Glacier Deep Archive once they are rarely read (its 180-day minimum storage duration is irrelevant for seven-year data), accept restore times of around twelve hours, expire noncurrent versions and abort incomplete multipart uploads.
+        - **DELETE behaviour:** a `DELETE` without a version identifier only inserts a delete marker that hides the object; the locked version remains, continues to be billed, and cannot be permanently deleted until its retention period ends.
+        - **Optional copy:** Cross-Region Replication to another account for protection against Regional or account-level loss, at roughly double the storage cost.
 
 4. A shared bucket's policy has reached its size limit because 60 applications have statements in it. Propose a migration to Access Points with delegation, including how existing clients are moved without downtime.
 
@@ -255,27 +259,29 @@
         - **For 30 accounts:** AWS Backup with organisation policies and a delegated administrator is the stronger choice for governance and audit; DLM suits narrow EBS-only use cases or AMI lifecycle.
         - **Both:** rely on tags, so tagging standards must be enforced.
 
-3. Describe how to share an encrypted AMI with another account and Region, including the KMS requirements.
+3. Explain why gp3 is almost always preferred over gp2, and describe how an existing gp2 volume is moved to gp3.
 
     ??? success "Check your answer"
 
         A good answer covers:
 
-        - **Key:** the AMI's snapshots must be encrypted with a customer managed key; snapshots encrypted with `aws/ebs` cannot be shared.
-        - **Share:** add the target account to the AMI launch permissions and the snapshots' create-volume permissions, and grant that account use of the key in its key policy (Decrypt, CreateGrant, DescribeKey, ReEncrypt, GenerateDataKey).
-        - **Cross-Region:** copy the AMI to the target Region, re-encrypting with a customer managed key in that Region, then share it.
-        - **Recommended:** the target account copies the shared AMI and re-encrypts it with its own key, removing dependence on the source key; EC2 Image Builder distribution can automate this.
+        - **Baseline performance:** gp3 includes 3,000 IOPS and 125 MiB/s regardless of size, whereas gp2 provides 3 IOPS per GiB, so 3,000 sustained IOPS on gp2 required a 1,000 GiB volume.
+        - **Independent provisioning:** gp3 IOPS and throughput are provisioned independently of capacity, so performance is bought without buying unused storage.
+        - **No burst credits:** gp3 delivers consistent provisioned performance, while small gp2 volumes rely on a burst bucket and drop abruptly to baseline when credits run out.
+        - **Price:** gp3 costs roughly twenty percent less per GiB than gp2.
+        - **Migration:** an online `ModifyVolume` operation through Elastic Volumes changes the type while the volume stays attached.
 
-4. A burstable-bandwidth instance performs well during the first half hour of a batch job and then slows significantly. Which metrics would confirm the cause, and what would you change?
+4. Compare instance store with Amazon EBS, and give two workloads for which instance store is a deliberate and correct choice.
 
     ??? success "Check your answer"
 
         A good answer covers:
 
-        - **Likely cause:** the instance's EBS bandwidth burst credits are exhausted, so it falls back to its baseline EBS throughput or IOPS.
-        - **Metrics:** instance-level `EBSByteBalance%` and `EBSIOBalance%` falling to zero, with volume throughput flattening at the baseline and queue length rising.
-        - **Volume check:** confirm it is not a gp2 burst balance problem (`BurstBalance`) or a volume limit.
-        - **Change:** choose an instance type whose baseline EBS bandwidth meets the sustained need, or reduce I/O (larger I/O sizes, data locality); raising volume IOPS alone will not help.
+        - **Instance store:** NVMe or SSD storage physically attached to the host, offering the highest I/O performance because no network is involved.
+        - **Ephemeral data:** instance store data is lost when the instance stops, hibernates or terminates, or when the underlying hardware fails.
+        - **EBS:** network-attached block storage in one Availability Zone whose data persists independently of the instance and can be snapshotted.
+        - **Correct uses of instance store:** scratch space, caches, temporary shuffle data in Spark, and replicated distributed databases such as Cassandra that keep their own copies across nodes.
+        - **Design error:** a single-copy production database on instance store, because data loss is a design property of the storage, not bad luck.
 
 5. When would you choose ECS task-attached EBS volumes rather than Amazon EFS for an ECS service?
 
@@ -301,17 +307,18 @@
         - **Tenant selection:** tenants name the class in their PVC; admission policies (for example Kyverno or Gatekeeper) and ResourceQuotas per namespace restrict which classes and how much storage each tenant may use.
         - **Cost attribution:** the CSI driver propagates tags (namespace, PVC, tenant) to volumes and snapshots, activated as cost allocation tags and reported in Cost Explorer.
 
-2. Evaluate running Apache Kafka on EKS with EBS versus Amazon MSK for a company with a small platform team, considering availability, operations, performance and cost.
+2. Design an availability and recovery plan for a self-managed PostgreSQL cluster running on EBS-backed EKS nodes, covering instance failure, volume impairment, Availability Zone impairment, Regional impairment and logical corruption. For each, state how the failure is detected and how the service recovers.
 
     ??? success "Check your answer"
 
         A good answer covers:
 
-        - **Kafka on EKS with EBS:** full control and potentially lower raw infrastructure cost, but the team must operate brokers, KRaft or ZooKeeper, upgrades, rebalancing, zonal volume placement and recovery.
-        - **Availability:** self-managed requires replicas across three AZs with careful StatefulSet and storage design; MSK provides managed multi-AZ brokers and automated replacement.
-        - **Performance:** both can perform well; MSK offers tiered storage and Express brokers, while self-managed tuning depends on team expertise.
-        - **Cost:** MSK costs more per broker hour, but staff time, incidents and on-call usually dominate for a small team.
-        - **Recommendation:** MSK (or MSK Serverless) for a small platform team; self-managed only with strong Kafka expertise or requirements MSK cannot meet.
+        - **Instance failure:** the volume survives; node health checks detect the failure and the orchestrator reschedules the pod to another node in the same zone, where the volume is reattached.
+        - **Volume impairment:** detected through the attached EBS status check and stalled I/O alarms; recovery is failover to a database replica on another volume.
+        - **Availability Zone impairment:** volumes are zonal, so replicas must already run in other zones (topology-aware scheduling with `WaitForFirstConsumer`), or data is restored from Regional snapshots into a surviving zone.
+        - **Regional impairment:** cross-Region snapshot copies automated by Data Lifecycle Manager or AWS Backup, plus infrastructure as code to rebuild the cluster in the recovery Region.
+        - **Logical corruption or deletion:** replication copies the damage, so recovery uses point-in-time snapshots, Recycle Bin for deleted snapshots and AWS Backup Vault Lock against malicious deletion.
+        - **Validation:** restores are tested regularly and failover is rehearsed with Fault Injection Service EBS I/O actions.
 
 3. Design a ransomware-resilient backup architecture for EBS-based workloads using AWS Backup, logically separate accounts, Vault Lock, Recycle Bin and SCPs, and describe the restore procedure.
 
@@ -458,40 +465,42 @@
 
 #### Advanced Questions
 
-1. Design a model distribution architecture in which a CI/CD pipeline publishes new model versions to EFS and Lambda and ECS consumers switch versions atomically without reading partially written files.
+1. Recommend a throughput mode and lifecycle configuration for four workloads in one organisation's EFS estate: WordPress uploads on ECS, an ML model store for Lambda, a CI build cache and shared notebook home directories on EKS. Identify one kind of workload for which EFS should not be used, and justify your recommendations.
 
     ??? success "Check your answer"
 
         A good answer covers:
 
-        - **Publish:** the pipeline writes each model to a new versioned directory (for example `/models/v42/`), never overwriting files in place, and verifies checksums after the write.
-        - **Atomic switch:** after the write completes, the pipeline updates a pointer, either an atomic rename of a `current` symlink or a small manifest file written to a temporary name and renamed, or a version in Parameter Store or AppConfig.
-        - **Consumers:** Lambda and ECS read the pointer and load from the immutable versioned directory, caching the model in memory and reloading when the pointer changes.
-        - **Consistency:** close-to-open semantics plus rename guarantee no reader sees a partially written file.
-        - **Lifecycle:** retain previous versions for rollback and delete old directories after a grace period.
+        - **WordPress uploads:** Elastic throughput; transition to Infrequent Access after 30 days and back to Standard on first access.
+        - **ML model store:** Elastic throughput; keep current models in Standard and move old versions to IA, and monitor `MeteredIOBytes` because many environments repeatedly loading large models make Elastic charges grow.
+        - **CI build cache:** Elastic, or Provisioned if the load is steady and heavy; short retention with clean-up by job.
+        - **Notebook home directories:** Elastic; IA after 30 days and Archive after 90 days.
+        - **Not EFS:** long-running HPC scratch belongs on FSx for Lustre, and transactional databases belong on RDS, Aurora or DynamoDB rather than a shared file system.
+        - **Justification:** Elastic suits spiky and unknown demand and avoids the Bursting-mode trap of small file systems; General Purpose performance mode gives the lowest latency for all four.
 
-2. A research group needs 200 GB/s aggregate throughput for training jobs with data sourced from S3. Evaluate EFS, FSx for Lustre and Mountpoint for S3, and justify a choice.
-
-    ??? success "Check your answer"
-
-        A good answer covers:
-
-        - **EFS:** shared and simple, but the default Elastic throughput quota is 60 GiB/s of reads per file system even in the largest Regions, far below 200 GB/s, and per-GB charges make it costly.
-        - **FSx for Lustre:** designed for hundreds of GB/s aggregate throughput and sub-millisecond latency, with a data repository association to S3 that lazily loads and exports data; persistent or scratch deployment types.
-        - **Mountpoint for S3:** S3 can deliver very high aggregate throughput with massive parallelism and costs least, but it is not fully POSIX and is optimised for large sequential reads.
-        - **Choice:** FSx for Lustre linked to S3 for the training jobs, scaled to the throughput target, with S3 as the durable source; Mountpoint is a viable cheaper option if the data is in large shard files.
-
-3. Explain how you would migrate 80 TB of NFS data with 30 million small files from an on-premises NAS to EFS with less than one hour of downtime.
+2. A build system that performs millions of small-file `stat()`, `open()` and `readdir()` calls is moved onto EFS and becomes much slower than it was on local disk. Using the EFS architecture, explain the cause and propose design changes.
 
     ??? success "Check your answer"
 
         A good answer covers:
 
-        - **Plan:** use AWS DataSync with an agent near the NAS, over Direct Connect or VPN, into EFS; tune parallelism because 30 million small files are metadata-bound.
-        - **Bulk copy:** run the initial full transfer while the NAS remains in production, which may take days.
-        - **Incremental syncs:** repeat DataSync tasks to copy only changes, shortening each run until it fits well within an hour.
-        - **Cut-over:** stop writes (read-only NAS), run a final incremental sync and verification, switch clients to EFS mount targets or DNS, and keep the NAS read-only for rollback.
-        - **Preparation:** pre-create access points, permissions and POSIX ownership mapping, and test application performance on EFS with small files before cut-over.
+        - **Cause:** EFS separates a distributed metadata layer from a data layer across Availability Zones, so every file operation, including metadata operations, is a network round trip through the mount target.
+        - **Misleading figures:** headline throughput is an aggregate over many parallel clients; a single process working file by file sees per-operation latency, not aggregate throughput.
+        - **Directory shape:** very large flat directories slow `readdir` and `lookup`, so directories should be sharded by prefix.
+        - **Parallelism:** issue I/O across threads, processes and clients so that latency overlaps.
+        - **Placement:** keep hot small-file sets local (image layers, `emptyDir`, Lambda `/tmp`) and use EFS only for data that must be shared or is large; keep General Purpose performance mode, since Max I/O raises latency.
+
+3. Analyse five failure modes of an EFS-backed web tier running in three Availability Zones: a mount target missing in one zone, a security group that does not allow NFS, a One Zone file system, the `hard` mount option during a loss of connectivity, and an accidental recursive delete. For each, state the symptom and the design control.
+
+    ??? success "Check your answer"
+
+        A good answer covers:
+
+        - **Missing mount target:** clients in that zone cannot reach a zone-local mount target, so mounts hang and time out; create a mount target in every zone the compute tier uses, otherwise a Regional file system does not protect those clients.
+        - **Security group:** the NFS client retries silently until it times out; the mount target security group must allow inbound TCP 2049 from the client security groups.
+        - **One Zone file system:** a zone failure makes the file system unavailable to every replica; use a Regional file system for production.
+        - **`hard` mount option:** I/O is retried indefinitely, which preserves integrity but hangs processes while the file system is unreachable; health checks and timeouts must detect and replace hung replicas.
+        - **Recursive delete:** replication protects against Regional failure, not logical deletion; restore from AWS Backup recovery points, which support item-level restore.
 
 4. Describe how you would detect and alert on a Lambda-driven connection surge against an EFS file system, and how you would prevent it from affecting other workloads sharing the file system.
 
@@ -504,17 +513,18 @@
         - **Prevent:** cap the function with reserved concurrency, use provisioned concurrency for predictable warm environments, and cache data in the execution environment.
         - **Isolate:** give the Lambda workload its own access point and, if contention persists, its own file system, so a surge cannot affect other workloads.
 
-5. Construct a failover and failback runbook for EFS Replication, including access points, policies, compute, DNS and validation steps.
+5. Design the security configuration of a production EFS file system shared by ECS tasks, EKS pods and Lambda functions, and explain how each layer contributes to defence in depth.
 
     ??? success "Check your answer"
 
         A good answer covers:
 
-        - **Preparation:** EFS Replication to the DR Region, with mount targets, security groups, access points and the file system policy pre-created there through IaC, and compute definitions referencing the DR file system and access point IDs.
-        - **Failover:** declare the incident, delete the replication configuration so the destination becomes writable, scale up compute in the DR Region, and switch DNS through Route 53 failover.
-        - **Validation:** check file counts or checksums on critical paths, application health checks and write tests through each access point.
-        - **Failback:** create replication from the DR file system back to the primary Region (or a new file system), wait for synchronisation, schedule a short write freeze, delete that replication, and switch compute and DNS back.
-        - **Rehearsal:** run the runbook in a test environment regularly and record the achieved RPO and RTO.
+        - **Encryption:** encryption at rest with a KMS key chosen at creation (it cannot be changed later) and TLS in transit through efs-utils.
+        - **File system policy:** deny when `aws:SecureTransport` is false; allow `ClientMount` and `ClientWrite` only to named workload roles and only through a mount target; deny `ClientRootAccess` to everyone except a break-glass role.
+        - **Identities:** the ECS task role with `iam: ENABLED`, the Lambda execution role with `ClientMount` (and `ClientWrite`) plus VPC permissions, and EKS pods through the CSI driver and access points.
+        - **Access points:** one per application or PVC, enforcing a root directory and a fixed POSIX uid and gid, optionally required through the `elasticfilesystem:AccessPointArn` condition.
+        - **Network and audit:** mount target security groups allow TCP 2049 only from client security groups, and CloudTrail records mount authorisation events when IAM authorisation is used.
+        - **Defence in depth:** IAM decides whether a workload may mount and with which permissions, and the access point decides which directory and identity it sees.
 
 ### 6.1.4 Caching Strategies with Amazon ElastiCache
 
@@ -656,17 +666,17 @@
         - **Stock and price:** handle the authoritative stock decrement separately (DynamoDB conditional writes or a queue), not through the cache.
         - **Protection:** pre-warm caches, load test, rate limit at the edge and keep a stale-while-revalidate fallback.
 
-3. Size a node-based ElastiCache cluster for 50 million sessions of 2 KB each with a peak of 200,000 operations per second, and compare with an ElastiCache Serverless estimate in terms of billing dimensions.
+3. A team must choose in-memory stores for (a) a product catalogue cache backed by Aurora with steady, predictable load, (b) a cache for a new service whose traffic is unknown, and (c) shopping-cart state that is stored nowhere else and must not lose acknowledged writes. Recommend an option for each and justify it with the replication and durability semantics involved.
 
     ??? success "Check your answer"
 
         A good answer covers:
 
-        - **Memory:** 50 million × 2 KB = 100 GB of values; with key and per-entry overhead (allow roughly 25 to 50 percent) about 125 to 150 GB, plus reserved memory headroom (about 25 percent), so roughly 170 to 200 GB of node memory.
-        - **Node layout:** for example eight shards of a memory-optimised node with about 26 GB usable each (around 210 GB), each with one replica across AZs for availability (16 nodes); verify node sizes in the documentation.
-        - **Throughput:** 200,000 operations per second spread over eight shards is about 25,000 per shard, well within a single node's capacity.
-        - **Serverless:** billed for GB-hours of data stored (about 100 to 150 GB continuously) plus ECPUs; each 2 KB operation consumes about 2 ECPUs, so a peak of 200,000 operations per second is about 400,000 ECPUs per second.
-        - **Comparison:** steady, large workloads usually favour node-based with reserved nodes; spiky ones may favour Serverless; compare with the pricing calculator.
+        - **(a) Catalogue cache:** node-based ElastiCache for Valkey with Multi-AZ replicas, because the data is also in Aurora, load is predictable, and reserved nodes reduce the cost of a steady baseline.
+        - **(b) Unknown traffic:** ElastiCache Serverless for Valkey, which needs no node or shard sizing and bills by GB-hours of data stored and ECPUs consumed.
+        - **(c) Cart state:** Amazon MemoryDB, because it acknowledges a write only after it is persisted to a durable Multi-AZ transaction log.
+        - **Why not ElastiCache for (c):** ElastiCache replication is asynchronous, so a failover can lose the most recent acknowledged writes (unless the newer synchronous transaction log option is verified and enabled).
+        - **Trade-offs:** MemoryDB adds single-digit milliseconds to write latency, and Valkey is the default engine because it is priced lower than Redis OSS.
 
 4. Evaluate the risks of using ElastiCache-based distributed locks for preventing double payment, and propose a safer design.
 
@@ -680,17 +690,17 @@
         - **Downstream:** pass an idempotency key to the payment provider so it deduplicates charges.
         - **Role of the lock:** at most an optimisation to reduce duplicate work, never the correctness guarantee.
 
-5. Design a semantic cache for a Bedrock-powered assistant, addressing similarity thresholds, tenant isolation, TTL and invalidation when source documents change.
+5. A service is moving from a single-shard cache to a Valkey cache in cluster mode. Its code performs multi-key operations that combine a user's cart and profile keys, and it uses a non-cluster client with large connection pools. Explain the changes required in key design, client choice and connection configuration, and the operational behaviour to expect during scaling.
 
     ??? success "Check your answer"
 
         A good answer covers:
 
-        - **Mechanism:** embed each prompt, search a vector index (for example Valkey vector search) for similar earlier prompts, and return the stored response when similarity exceeds a threshold.
-        - **Threshold:** tune on labelled pairs; too low returns wrong answers, too high gives few hits; use stricter thresholds for high-risk domains.
-        - **Tenant isolation:** include tenant ID and access scope in the key or index filter so no response crosses tenants or permissions.
-        - **TTL:** set TTLs appropriate to content volatility.
-        - **Invalidation:** record which source documents contributed to each response, and when a document changes (S3 or knowledge base sync event) delete the cached entries linked to it.
+        - **Hash slots:** in cluster mode keys are distributed across shards by hash slot, and multi-key operations require all keys to be in the same slot.
+        - **Key design:** use hash tags such as `{user:42}:cart` and `{user:42}:profile` so a user's keys share a slot.
+        - **Client:** a cluster-aware client (for example Valkey GLIDE, `RedisCluster` in Python or Lettuce in Java) keeps a slot-to-node map, follows `MOVED` and `ASK` redirections and refreshes topology; a non-cluster client fails with `MOVED` errors.
+        - **Connections:** small pools matched to in-flight requests, short connect timeouts, tight command timeouts and few retries with backoff and jitter, because every connection consumes server memory and large pools across many pods exhaust `maxclients`.
+        - **Scaling behaviour:** online scaling migrates hash slots between shards and can cause brief elevated latency, so clients must refresh topology and respect low DNS TTLs after failover.
 
 ---
 
@@ -771,16 +781,16 @@
         - **Pool size:** allow for variance and bursts; a pool of about 3 to 5 connections per task is ample.
         - **Configuration:** short connection timeout so requests fail fast, and monitoring of pool wait time to validate the choice.
 
-3. Compare the External Secrets Operator and the Secrets Store CSI Driver for delivering a rotated database credential to pods.
+3. Explain how Aurora Serverless v2 scale to zero with automatic pause works, give two conditions that prevent an instance from pausing, and name two environments in which it pays off.
 
     ??? success "Check your answer"
 
         A good answer covers:
 
-        - **External Secrets Operator:** syncs the secret from Secrets Manager into a Kubernetes Secret on a refresh interval; pods consume it as environment variables or files, but environment variables need a pod restart after rotation.
-        - **Secrets Store CSI Driver:** mounts the secret as a file through the AWS provider directly from Secrets Manager; with rotation polling enabled the file updates, optionally syncing to a Kubernetes Secret.
-        - **Security:** CSI avoids storing the secret in etcd unless sync is enabled; ESO stores it in etcd, which must then be encrypted with KMS.
-        - **Rotation handling:** either way the application must reread the credential (or reconnect on authentication failure), or use alternating-users rotation so the old credential still works.
+        - **Mechanism:** on supported engine versions the minimum capacity can be 0 ACUs; after no user connections for `SecondsUntilAutoPause`, the instance pauses, compute charges stop and storage charges continue.
+        - **Resume:** the next connection attempt resumes the instance, so the first request waits and client connection timeouts must exceed the resume time; this is rarely acceptable on customer-facing paths.
+        - **Conditions that prevent pausing:** any open connection, including idle pool connections, RDS Proxy connections, monitoring agents and replication, and some replication or integration features.
+        - **Where it pays off:** ephemeral pull-request environments, nightly-only batch databases, training and lab environments, and per-tenant databases for dormant tenants.
 
 4. Explain how RDS Blue/Green Deployments keep the green environment current, and give one schema change that is compatible and one that is not.
 
@@ -932,16 +942,18 @@
         - **Trade-offs:** filtering reads more items than returned (cost and latency grow with rider history); the extra edge adds write cost per trip and must be maintained transactionally or idempotently.
         - **Choice:** acceptable for a low-frequency pattern; add an index only if the pattern becomes frequent.
 
-2. Using the RideLink cost model, calculate the monthly write request units if versioning is replaced by 1 KB non-transactional history events, and state the percentage saving.
+2. Compare DynamoDB Streams with Kinesis Data Streams for DynamoDB in terms of retention, ordering and duplicates, number of consumers and capacity management, and state when you would choose each.
 
     ??? success "Check your answer"
 
         A good answer covers:
 
-        - **Current model:** 64 WRU per trip, of which five versioned status changes cost 40 WRU (5 × 2 items × 2 KB × 2 for transactions).
-        - **Replacement:** each status change becomes a standard `META` update (2 WRU) plus a 1 KB history event (1 WRU), so 5 × 3 = 15 WRU.
-        - **New total:** 64 − 40 + 15 = 39 WRU per trip; monthly 3,000,000 × 39 = 117 million WRU, compared with 192 million.
-        - **Saving:** 75 million WRU, about 39 percent; the trade-off is losing atomic, full-item version history.
+        - **Retention:** DynamoDB Streams keeps records for 24 hours; Kinesis Data Streams for DynamoDB is configurable from 24 hours up to 365 days.
+        - **Ordering and duplicates:** DynamoDB Streams records each change exactly once in the exact order of modifications per item; the Kinesis option may deliver records out of order and occasionally duplicated, so consumers reorder and deduplicate with `ApproximateCreationDateTime` and item keys.
+        - **Consumers:** DynamoDB Streams supports at most about two concurrent readers per shard before throttling; Kinesis supports many consumers, including enhanced fan-out.
+        - **Capacity:** DynamoDB Streams shards are managed automatically with the table; with Kinesis the team manages stream capacity in on-demand or provisioned mode.
+        - **Choice:** DynamoDB Streams for one or two consumers needing strict per-item ordering and simplicity; Kinesis for many consumers, long retention, replay, or analytics through Firehose or Flink.
+        - **Risk:** with DynamoDB Streams a record not processed within 24 hours is lost, so `IteratorAge` must be alarmed on every consumer.
 
 3. Configure a Lambda event source mapping for an audit archive that must never block and must retain failed records for investigation. Justify each setting.
 
@@ -1105,17 +1117,17 @@
         - **Key points:** start from the user, hop to friends, hop to their purchases, exclude the user's own purchases, deduplicate.
         - **Good practice:** use parameters, and add `LIMIT` or `limit()` to bound fan-out for users with many friends.
 
-2. Compare a DynamoDB adjacency list with Neptune for a feature requiring five-hop traversals. Discuss latency, cost and development effort.
+2. Compare the labelled property graph and RDF models supported by Neptune, and recommend one for (a) a fraud detection application and (b) integrating research datasets from several institutions that use shared vocabularies.
 
     ??? success "Check your answer"
 
         A good answer covers:
 
-        - **DynamoDB adjacency list:** each hop is a separate query from the application, so five hops mean many sequential round trips with fan-out multiplying requests; latency and read cost grow quickly.
-        - **Neptune:** the traversal runs inside the engine in one query; latency depends on the neighbourhood visited, typically milliseconds when bounded.
-        - **Cost:** DynamoDB is cheaper for simple key-value use and scales to zero cost at idle; Neptune has continuous instance (or minimum NCU) cost.
-        - **Development effort:** DynamoDB requires hand-written traversal, deduplication and pagination logic; Neptune expresses the query declaratively.
-        - **Judgement:** for frequent five-hop traversals Neptune is the better fit; DynamoDB suits one-hop relationships.
+        - **Property graph:** vertices and edges with IDs, labels and native properties on both; schema-optional; queried with Gremlin or openCypher.
+        - **RDF:** subject, predicate and object triples (stored as quads in Neptune) identified by global IRIs, described by ontologies and shared vocabularies, and queried with SPARQL; properties on edges need reification, RDF-star or named graphs.
+        - **(a) Fraud detection:** a property graph, because a development team is building an application that traverses its own data.
+        - **(b) Research integration:** RDF, because the dominant problem is integrating data from many sources with shared vocabularies and globally unique identifiers, often with W3C standards compliance.
+        - **Constraint:** the two models are stored separately in Neptune, so SPARQL cannot query data loaded as a property graph, and vice versa.
 
 3. Explain how Neptune Serverless scaling works, including its minimum capacity, and when you would mix provisioned and serverless instances in one cluster.
 
@@ -1166,16 +1178,17 @@
         - **Failover:** in a Regional outage, promote a secondary (managed failover or detach-and-promote), update write routing and DNS, and accept an RPO of seconds; rehearse regularly.
         - **Trade-off:** writes from distant continents incur cross-Region latency.
 
-2. A fraud graph has a small number of vertices with tens of millions of edges. Propose a remodelling strategy and quantify how it bounds traversal fan-out.
+2. Analysts run PageRank and community detection on the Neptune Database cluster that serves an online recommendation API, and API latency degrades. Design a separation using Neptune Analytics, including how the analytical graph is loaded and kept current and how analytical results reach the online path.
 
     ??? success "Check your answer"
 
         A good answer covers:
 
-        - **Remodelling:** replace direct edges to the supernode with bucketing, inserting intermediate vertices (for example by hash or time period) that each hold a bounded number of edges.
-        - **Bound:** with 10 million edges split into 1,000 buckets, each bucket holds about 10,000 edges, and a traversal restricted to one or a few relevant buckets expands thousands rather than millions of edges.
-        - **Alternatives:** demote the supernode to a property when no traversal needs it, filter edges by time or type before expanding, and traverse from the low-degree side.
-        - **Fraud specifics:** flag shared infrastructure vertices (public Wi-Fi IPs, default device fingerprints) and cap fan-out with `limit()`.
+        - **Diagnosis:** this mixes OLTP and OLAP on one cluster; Neptune Database is designed for many small, low-latency traversals, and its default query timeout signals that long analytical queries belong elsewhere.
+        - **Separation:** create a Neptune Analytics graph, a separate memory-optimised engine sized in m-NCUs that runs whole-graph algorithms and vector search with openCypher.
+        - **Loading and refresh:** load the analytical copy from S3 exports or from Neptune Database on a schedule matched to how fresh the scores must be; it is an analytical copy, not the system of record.
+        - **Returning results:** write algorithm outputs such as scores back as properties in Neptune Database (for example through the bulk loader) or to another serving store, so the API reads precomputed values in milliseconds.
+        - **Interim measure:** isolate analyst readers on a custom endpoint until the separation is complete, and bound traversal depth and fan-out in the online queries.
 
 3. Design a GraphRAG solution for a university's regulations and policy documents using Amazon Bedrock and Neptune Analytics. Explain when it would outperform vector-only RAG and what its operational costs are.
 
@@ -1330,17 +1343,17 @@
 
 #### Advanced Questions
 
-1. Design a data mesh on AWS in which three domain teams publish data products from their own Redshift workgroups to a central governance layer. Address datashares, Lake Formation permissions, cross-account access, cost allocation and data contracts.
+1. Design a data-sharing architecture in which an ETL producer workgroup serves a curated star schema to a BI workgroup, a data science workgroup and a partner's AWS account. Explain consistency, compute isolation and cross-account authorisation, and why this design is the warehouse form of the bulkhead pattern.
 
     ??? success "Check your answer"
 
         A good answer covers:
 
-        - **Data products:** each domain owns a Redshift workgroup, publishes curated schemas as datashares with documented contracts (schema, freshness, quality), and versions breaking changes.
-        - **Governance layer:** datashares are registered through AWS Glue Data Catalog and Lake Formation, where permissions (database, table, column, row) are granted centrally to consumers.
-        - **Cross-account access:** producers share to consumer accounts or the governance account; consumers associate the share and query it with their own compute, so no data is copied.
-        - **Cost allocation:** consumers pay for their own query compute; producers pay for storage and production compute; tags per domain support chargeback.
-        - **Data contracts:** schema checks in CI, quality checks on publication and deprecation windows protect consumers.
+        - **Mechanism:** the producer creates a datashare containing the curated schema; consumers read it live and transactionally consistent without copying data.
+        - **Compute isolation:** each consumer queries on its own compute, so dashboards, data science workloads and heavy ETL do not compete for the same resources.
+        - **Cross-account access:** the producer administrator authorises the partner account and the consumer associates the datashare; cross-Region consumers incur data transfer charges, and Lake Formation-managed datashares can centralise permissions.
+        - **Bulkhead:** separate compute over the same data means heavy ETL cannot starve dashboards, which is the bulkhead pattern applied to the warehouse.
+        - **Governance:** consumers receive presentation models rather than raw replicated tables, so producer schema changes stay behind a stable interface.
 
 2. A SaaS provider must offer tenant-level embedded analytics with strict isolation for 500 tenants. Compare a shared warehouse with row-level security against per-tenant workgroups with data sharing, considering security, cost, noisy neighbours and operations.
 
@@ -1377,17 +1390,17 @@
         - **Dashboards:** incremental materialized views joining orders with product and customer dimensions refreshed every minute; QuickSight in direct query mode.
         - **Failure handling:** MSK retention allows reprocessing, idempotent MERGE logic, monitoring of ingestion and integration lag with alarms, and DLQs for orchestration failures.
 
-5. Evaluate Redshift, Athena, EMR and OpenSearch for a platform that must support ad hoc exploration of 2 PB of raw logs, sub-second product search, nightly feature engineering for ML, and high-concurrency financial dashboards. Propose a combined architecture and explain the data flows between engines.
+5. Choose and justify an ingestion path into Redshift for each of the following: (a) clickstream from Kinesis Data Streams that dashboards need within seconds, (b) daily partner files delivered to S3, (c) order data owned by an Aurora PostgreSQL microservice, and (d) an occasional join with a small, current reference table in RDS for PostgreSQL. Relate your answer to the golden rule where relevant.
 
     ??? success "Check your answer"
 
         A good answer covers:
 
-        - **Raw logs (2 PB, ad hoc):** store in S3 as partitioned Parquet with the Glue Data Catalog, queried by Athena (or Redshift Spectrum).
-        - **Product search (sub-second):** OpenSearch Service, fed by a pipeline from the catalogue source.
-        - **Nightly feature engineering:** EMR (Spark) or EMR Serverless reading from and writing to S3.
-        - **Financial dashboards (high concurrency):** Redshift with curated star schemas, materialized views and concurrency scaling.
-        - **Data flows:** sources land raw data in S3; EMR produces features and curated datasets in S3; curated data is loaded into Redshift or queried through Spectrum; product changes stream into OpenSearch; one catalogue governs the lake.
+        - **(a) Clickstream:** streaming ingestion into a materialized view with `AUTO REFRESH YES`, parsing payloads into SUPER, which avoids staging in S3; Firehose is the alternative when Lambda transformation or several destinations are needed.
+        - **(b) Partner files:** `COPY` from S3 with input split into many compressed or columnar files, a manifest for exact file lists, and a staging table merged into the target for idempotent loads.
+        - **(c) Order data:** a zero-ETL integration from Aurora, treating replicated tables as a read-only raw layer with staging views and presentation models on top, so a column rename changes only the staging view.
+        - **(d) Reference join:** a federated query, used sparingly and preferably against a read replica, because it runs on the service's production database.
+        - **Golden rule:** analytics must not query service databases directly, so recurring analytics use zero-ETL or events, and federated queries remain a controlled exception.
 
 ---
 
@@ -1462,26 +1475,29 @@
         - **Failure:** if the worker crashes, heartbeats stop and the message becomes visible again quickly.
         - **Why not 12 hours:** a crashed worker's message would stay invisible for up to 12 hours, delaying retries and hiding failures.
 
-2. Calculate the target number of ECS tasks for a queue with 18,000 visible messages if each message takes 0.2 seconds and the acceptable latency is 30 seconds. Show the backlog-per-task calculation.
+2. Compare short polling and long polling in SQS, explain why a short poll can return an empty response from a queue that contains messages, and describe the cost effect of long polling.
 
     ??? success "Check your answer"
 
         A good answer covers:
 
-        - **Acceptable backlog per task:** latency ÷ processing time = 30 ÷ 0.2 = 150 messages per task.
-        - **Target tasks:** 18,000 ÷ 150 = 120 tasks.
-        - **Implementation:** metric math computing `ApproximateNumberOfMessagesVisible ÷ RunningTaskCount`, with a target tracking policy at 150.
-        - **Checks:** respect the service maximum and downstream capacity.
+        - **Short polling:** `WaitTimeSeconds = 0`; the request queries only a sampled subset of the storage hosts and returns immediately.
+        - **False empty responses:** because messages are distributed across many hosts, the sampled subset may hold none of them even though the queue is not empty.
+        - **Long polling:** `WaitTimeSeconds` between 1 and 20 (or the queue default `ReceiveMessageWaitTimeSeconds`); all hosts are queried and the call returns as soon as a message is available or the wait ends.
+        - **Cost:** every empty response is a billable request, so long polling removes most empty receives and lowers cost.
+        - **Client setting:** the HTTP socket read timeout must exceed the long-poll wait time, or clients and proxies drop connections early.
 
-3. Explain the difference between reserved concurrency and event source mapping maximum concurrency for a Lambda function consuming SQS, and which one you would use to protect a database.
+3. Describe the purpose of the Lambda event source mapping options `BatchSize`, `MaximumBatchingWindowInSeconds`, `ScalingConfig.MaximumConcurrency` and `FilterCriteria` for an SQS queue, and explain the risk of `FilterCriteria` when other consumers need the filtered messages.
 
     ??? success "Check your answer"
 
         A good answer covers:
 
-        - **Reserved concurrency:** caps the function's total concurrent executions; with SQS, excess polling can cause throttled invocations and messages returned to the queue, possibly reaching the DLQ.
-        - **ESM maximum concurrency:** limits how many concurrent invocations that event source mapping drives, without throttling; messages simply wait in the queue.
-        - **Protecting a database:** use maximum concurrency on the event source mapping, sized to what the database can sustain (reserved concurrency can be added as an overall cap, set higher than maximum concurrency).
+        - **`BatchSize`:** up to 10 messages per invocation for FIFO and up to 10,000 for standard queues; larger batches reduce invocations, and more than 10 requires a batching window.
+        - **`MaximumBatchingWindowInSeconds`:** waits up to 300 seconds to fill a batch, trading latency for fewer invocations and lower cost.
+        - **`ScalingConfig.MaximumConcurrency`:** caps concurrent invocations for this mapping (2 to 1,000) to protect downstream systems such as a database.
+        - **`FilterCriteria`:** discards non-matching messages before invocation.
+        - **Risk:** filtered-out messages are deleted from the queue, so filtering is not routing; when other consumers need those messages, route with SNS or EventBridge instead.
 
 4. Write the redrive policy and redrive allow policy for a source queue `payments` and DLQ `payments-dlq` in account 111122223333, and explain why the DLQ retention should be 14 days.
 
@@ -1540,17 +1556,17 @@
         - **Kinesis Data Streams:** retains records (24 hours by default, extendable) and lets any consumer re-read from a timestamp or sequence number, preserving per-shard order.
         - **Choice:** publish to Kinesis for the analytics consumer that must re-read 24 hours (with retention extended beyond 24 hours for safety); use EventBridge or SNS-to-SQS for other business consumers, possibly fed from the same producer or a pipe.
 
-4. Describe a complete secure deployment of an SQS consumer on EKS using infrastructure as code and CI/CD: the queue with SSE-KMS and DLQ, the VPC endpoint, EKS Pod Identity, KEDA scaling, CloudWatch alarms and a pipeline stage that validates visibility timeout against the consumer's configured processing timeout.
+4. Design a claim-check implementation for a document-processing queue whose payloads range from 10 KB to 50 MB. Address where payloads are stored, what the message carries, the billing arithmetic, clean-up, and the failure cases the design must handle.
 
     ??? success "Check your answer"
 
         A good answer covers:
 
-        - **Queue:** SQS with SSE-KMS using a customer managed key, a DLQ with redrive policy, and a queue policy denying non-TLS access and requests not through the VPC endpoint, all defined in Terraform or CDK.
-        - **Network:** an SQS interface VPC endpoint with private DNS in the cluster's subnets and an endpoint policy restricted to the queue.
-        - **Identity:** EKS Pod Identity association giving the consumer service account a role with receive, delete and change-visibility permissions plus `kms:Decrypt`.
-        - **Scaling and alarms:** KEDA `aws-sqs-queue` scaler using Pod Identity, with alarms on age of oldest message, DLQ depth and errors.
-        - **Pipeline check:** a stage reads the consumer's configured processing timeout from the manifests and fails the deployment if the queue's visibility timeout is not greater than it (with margin).
+        - **Storage:** payloads above a threshold are written to S3 and the message carries only a pointer, as implemented by the SQS Extended Client Library; even with a 1 MiB maximum message size, queues are a poor place for large blobs.
+        - **Flow:** `PutObject`, then `SendMessage` with the pointer; the consumer receives the message, calls `GetObject`, processes the document and deletes the message (and optionally the object).
+        - **Billing:** SQS bills each 64 KB chunk of a payload as one request, so a 1 MiB message costs as much as 16 small messages on send and again on receive, which makes the pointer approach cheaper.
+        - **Clean-up:** S3 lifecycle rules expire payload objects, with an expiry longer than queue and DLQ retention so that a redriven message still finds its payload.
+        - **Failure cases:** a producer that uploads but fails to send leaves orphan objects for lifecycle to remove; a consumer that deletes the object before the message breaks redelivery; at-least-once delivery requires idempotent processing.
 
 5. A payment workflow uses API Gateway to SQS to Lambda to a third-party API. During a partner outage lasting six hours, the DLQ fills and some messages expire. Perform a post-incident analysis: identify the configuration errors (retention, maxReceiveCount, retry strategy, circuit breaking) and propose a redesign using visibility-based backoff, a circuit breaker (Chapter 4.3), longer retention and DLQ redrive.
 
@@ -1678,17 +1694,18 @@
 
 #### Advanced Questions
 
-1. Design an event distribution platform for a retailer with 40 microservices across 10 AWS accounts. Justify where you would use SNS topics, SQS queues and EventBridge buses, how you would handle ownership, schema versioning, encryption, cross-account policies and monitoring, and how CI/CD would validate filter policies.
+1. A central platform account publishes `order-events`; an analytics team in another account and a disaster-recovery copy in another Region must both consume it through SQS. Specify every policy, confirmation and encryption requirement, and explain the limitations of cross-Region delivery.
 
     ??? success "Check your answer"
 
         A good answer covers:
 
-        - **Topology:** EventBridge buses for cross-account domain events with content-based routing (hub-and-spoke or per-domain buses); SNS topics for high fan-out within a domain or to email, SMS and webhooks; SQS queues owned by each consumer for buffering and retries.
-        - **Ownership:** producers own buses or topics and their schemas; consumers own their rules, subscriptions and queues, defined in their repositories.
-        - **Schema versioning:** a schema registry, versioned `detail-type` or `schemaVersion` attributes, backward-compatibility checks in CI.
-        - **Security:** customer managed KMS keys with service principal permissions; bus, topic and queue policies restricted by `aws:PrincipalOrgID` and source ARNs.
-        - **Monitoring and CI/CD:** alarms on failed deliveries, DLQ depth and age of oldest message; pipelines test filter policies and event patterns against sample events (`TestEventPattern`) before deployment.
+        - **Topic access policy:** allows `sns:Subscribe` for the consumer account's principal.
+        - **Queue policy:** each queue allows `sns.amazonaws.com` to send, conditioned on `aws:SourceArn` equal to the topic ARN.
+        - **Confirmation:** if the queue owner creates the subscription no confirmation is needed; if the topic owner creates it, the queue owner must confirm.
+        - **Encryption:** each encrypted queue uses a customer managed key whose key policy allows SNS to use `kms:GenerateDataKey` and `kms:Decrypt`; the topic's key policy allows the publisher.
+        - **Cross-Region limits:** delivery adds latency and inter-Region data transfer charges and has documented restrictions for opt-in Regions; it is useful for DR copies and regional consumers but is not a multi-Region active-active design by itself.
+        - **Consumers:** both consumers remain idempotent because delivery is at least once.
 
 2. A bank requires ordered delivery of account events to four consumers, 20,000 messages per second at peak, replay for 90 days and PII masking for one analytics consumer. Evaluate SNS FIFO with high-throughput mode, archive and data protection policies against an alternative using Kinesis Data Streams, and recommend a design.
 
@@ -1713,17 +1730,18 @@
         - **Lambda throttling and poison messages:** Lambda `Throttles`, errors and SQS `ApproximateAgeOfOldestMessage` and DLQ depth; adjust maximum concurrency, add partial batch responses and fix or redrive poison messages.
         - **Duplicate delivery:** detect through idempotency table hits; make consumers idempotent with event IDs.
 
-4. Explain how you would migrate a monolith's synchronous notification calls (email, partner webhooks and three internal services) to SNS-based choreography with the transactional outbox pattern, including a rollout plan that avoids lost or duplicated notifications.
+4. Explain why business-critical microservices should consume an SNS topic through SQS queues rather than subscribing directly, and design the fan-out configuration for payment, inventory and fraud services, including how a new marketing consumer is later added.
 
     ??? success "Check your answer"
 
         A good answer covers:
 
-        - **Outbox:** the monolith writes the business change and notification events to an outbox table in the same transaction.
-        - **Relay:** a relay (polling or CDC) publishes outbox rows to an SNS topic with an event ID, retrying until acknowledged.
-        - **Subscribers:** email through a queue-fed worker, partner webhooks via queue and controlled-rate worker, and three internal services each with their own SQS queue; all consumers idempotent on event ID.
-        - **Rollout:** run in shadow mode first (publish events while synchronous calls continue, with consumers in dry-run), then switch each notification type with a feature flag from synchronous to event-driven one at a time, verifying counts.
-        - **Avoiding loss or duplicates:** never both send synchronously and via events for the same type at once; reconcile counts; keep rollback flags.
+        - **Why queues:** a queue gives durability while a service is redeployed or down, load levelling at the consumer's own pace, independent `maxReceiveCount` and DLQ per service, visibility through queue depth and age, and DLQ redrive after fixes.
+        - **Topology:** one queue per consuming service (not per instance), each with a filter policy, for example all events for payment, `OrderPlaced` for inventory and `total >= 500` for fraud.
+        - **Policies and keys:** queue policies allowing `sns.amazonaws.com` with `aws:SourceArn`, and customer managed KMS keys whose policies allow SNS, because SNS cannot use the AWS managed `aws/sqs` key.
+        - **Delivery format:** raw message delivery unless a consumer needs the envelope.
+        - **Idempotency:** duplicates can arise at both the SNS and SQS layers, so consumers use a business key such as `orderId` plus `eventType`, not the message IDs.
+        - **New consumer:** marketing creates its own queue, subscribes it with a numeric filter and deploys its consumer without any change to the order service.
 
 5. A multi-tenant SaaS platform publishes tenant events to a standard SNS topic consumed through SQS by a shared worker fleet. A single large tenant causes latency for all others. Propose solutions using SNS message group IDs with SQS fair queues, per-tier topics or queues, and maximum concurrency controls, and discuss the trade-offs of each.
 
@@ -2035,17 +2053,18 @@
         - **Spoofing prevention:** each account may publish only its own sources (bus policy conditions per account), and schemas validated in CI.
         - **Archive, replay and DR testing:** archives on the hub bus with retention matching regulatory needs, replay rehearsed, and regular failover tests of global endpoints with measured RTO and RPO.
 
-2. Critically evaluate the claim that "EventBridge should be the only messaging service in a cloud-native organisation", using the integrated decision matrix and a cost-at-scale argument.
+2. An order fulfilment process must request payment from another domain, wait for the result, and then announce completion to shipping and loyalty services. Explain how Step Functions orchestration and EventBridge choreography are combined, where the boundary between them lies, and how the workflow waits for an asynchronous reply.
 
     ??? success "Check your answer"
 
         A good answer covers:
 
-        - **Against the claim:** the decision matrix shows each service fits a different shape; EventBridge is a content-based router, not a work queue, stream or ordered log.
-        - **Gaps:** EventBridge does not buffer work with competing consumers (SQS), offers no ordering or deduplication (SQS FIFO, SNS FIFO), and no high-volume replayable stream for many readers (Kinesis, MSK).
-        - **Cost at scale:** EventBridge charges per event published and per hop; at tens of thousands of events per second (for example clickstream), Kinesis shard or throughput pricing is far cheaper.
-        - **Where it is right:** routing business and AWS operational events across teams and accounts.
-        - **Conclusion:** use EventBridge for routing, combined with SQS, SNS and Kinesis where their properties are needed.
+        - **Principle:** orchestrate within a bounded context and choreograph between contexts.
+        - **Start:** an `Order Placed` rule on the bus starts the Step Functions fulfilment workflow in the orders domain.
+        - **Request and wait:** the workflow publishes `Payment Requested` through the `events:putEvents` integration with `.waitForTaskToken`, carrying the task token as opaque metadata.
+        - **Reply:** the payments service publishes `Payment Captured` with the token, and a rule (or a small Lambda function) calls `SendTaskSuccess` or `SendTaskFailure`, so the workflow can wait for days without polling.
+        - **Completion:** the workflow publishes `Order Fulfilled`, which shipping and loyalty consume through their own rules without knowing about Step Functions.
+        - **Observability:** `Step Functions Execution Status Change` events feed alerting and dashboards.
 
 3. Design an auto-remediation platform for Config and GuardDuty findings across 200 accounts that supports notify-only mode, exemptions, approvals for high-impact actions, idempotency and full audit.
 

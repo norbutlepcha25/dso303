@@ -57,29 +57,29 @@
         - **Origin Shield, if enabled:** a further centralised caching layer can be checked before the origin.
         - **Origin last:** only on a miss at every layer does CloudFront fetch from the origin over the AWS backbone and populate the caches on the way back.
 
-6. Your application runs six EC2 instances in `ap-southeast-1a` behind an ALB whose subnets span three AZs. Identify the availability flaw and describe two concrete fixes, including the Auto Scaling configuration involved.
+6. Classify the following as Global, Regional or Zonal, and for each state who is responsible for making it resilient to the loss of an Availability Zone: IAM, an S3 bucket, a DynamoDB table, an EC2 instance, an EBS volume, a subnet, a CloudFront distribution.
 
     ??? success "Check your answer"
 
         A good answer covers:
 
-        - **Flaw:** all instances are in one AZ, so the multi-AZ ALB has no healthy targets if `ap-southeast-1a` fails; the load balancer's spread is irrelevant when the compute is zonal.
-        - **Fix 1:** place instances in an Auto Scaling group whose subnet list covers all three AZs (for example two per AZ), with AZ rebalancing so the group stays evenly spread.
-        - **Fix 2:** set the ASG health check type to `ELB` with a sensible grace period, and attach it to the ALB target group so failed instances are replaced automatically.
-        - **Static stability:** size the group so the two surviving AZs can carry peak load without launching anything (for example over-provision to 150 percent of need across three AZs).
-        - **Cross-zone load balancing:** keep it enabled on the ALB so traffic is spread evenly across targets.
+        - **Global:** IAM and CloudFront are single logical services for the whole account; there is no Region or AZ to choose.
+        - **Regional:** an S3 bucket and a DynamoDB table live in one chosen Region and span multiple AZs internally, so AWS provides AZ resilience automatically.
+        - **Zonal:** an EC2 instance, an EBS volume and a subnet are bound to one AZ, so the architect must provide redundancy across AZs.
+        - **Consequence:** Regional managed services give multi-AZ resilience for free, while zonal building blocks make multi-AZ design your responsibility.
+        - **Nuance:** an S3 bucket name is globally unique, but the bucket itself lives in one Region.
 
-7. A distribution forwards all cookies and all query strings to a dynamic origin. Explain the effect on cache hit ratio, origin load, and cost, and propose a corrected cache-policy design for a site with `/static/*` and `/api/*` paths.
+7. Distinguish durability from availability. Using S3 Standard and a single EBS volume as examples, describe what happens to each during an Availability Zone failure and during an accidental deletion.
 
     ??? success "Check your answer"
 
         A good answer covers:
 
-        - **Cache hit ratio:** every distinct cookie and query string becomes part of the cache key, so the cache is fragmented and almost every request misses.
-        - **Origin load:** the origin serves nearly every request, so CloudFront adds a hop without offloading anything.
-        - **Cost:** origin compute and data-transfer costs stay high, and the latency benefit of edge caching is lost.
-        - **Corrected design:** a `/static/*` behaviour with a cache policy that forwards no cookies or query strings (or only a version parameter), long TTLs and versioned file names.
-        - **API behaviour:** a `/api/*` behaviour using the managed caching-disabled policy plus an origin request policy that forwards only the headers, cookies and query strings the API actually needs.
+        - **Durability:** the probability that data is not lost; **availability:** the probability that data can be reached right now.
+        - **S3 Standard in an AZ failure:** objects are replicated across multiple AZs, so they remain both durable and reachable.
+        - **Single EBS volume in an AZ failure:** the volume is replicated only inside its AZ, so it becomes unavailable (though not necessarily lost) until the AZ recovers, unless snapshots allow a restore elsewhere.
+        - **Accidental deletion:** neither durability figure helps, because a deletion is carried out durably; versioning, Object Lock and backups or snapshots are the protection.
+        - **Lesson:** eleven nines of durability says nothing about reachability or about human error.
 
 8. Compare RDS Multi-AZ, RDS read replicas, and cross-Region read replicas along three axes: replication mode (sync/async), purpose (HA/scale/DR), and effect on RPO.
 
@@ -92,65 +92,66 @@
         - **Cross-Region read replicas:** asynchronous across Regions; purpose is disaster recovery and local reads in another geography; RPO equals cross-Region lag, typically seconds.
         - **Key distinction:** the Multi-AZ standby in an instance deployment is not readable, while replicas are readable but never zero-RPO.
 
-9. Explain how you would restrict an AWS Organization to two approved Regions, and why `iam:*`, `cloudfront:*`, and `route53:*` typically must be exempted from that restriction.
+9. For each requirement, choose an extension of the Region model (Local Zone, Wavelength Zone, Outposts, GovCloud or sovereign Region) and justify it: (a) a game studio needs single-digit-millisecond latency for players in one large city with no nearby Region; (b) a factory must keep processing on its own premises but wants the same AWS APIs; (c) a mobile augmented-reality application needs ultra-low latency over 5G; (d) a government agency must meet strict legal and personnel restrictions.
 
     ??? success "Check your answer"
 
         A good answer covers:
 
-        - **Mechanism:** a Service Control Policy attached to the root or relevant OUs that denies actions when `aws:RequestedRegion` is not one of the two approved Regions.
-        - **Structure:** use a `Deny` statement with `NotAction` (or exemptions) so the restriction applies to everything except listed global services.
-        - **Why exempt global services:** IAM, CloudFront and Route 53 are global services whose control-plane requests are served through `us-east-1`, so a Region restriction would block them entirely.
-        - **Other exemptions to consider:** STS, Organizations, Support and billing-related APIs behave similarly.
-        - **Verification:** test the SCP in a sandbox OU first, because an over-broad deny can lock administrators out.
+        - **(a) Local Zone:** a single-zone extension of a parent Region placed in an additional metro, giving single-digit-millisecond latency to users in that city.
+        - **(b) Outposts:** AWS-managed racks installed in the customer's own data centre, so workloads stay on-site while using AWS APIs and tooling.
+        - **(c) Wavelength Zone:** AWS infrastructure embedded in telecom 5G networks, so traffic from mobile devices reaches compute without leaving the carrier network.
+        - **(d) GovCloud or a sovereign Region:** Regions with additional legal and personnel restrictions designed for government and regulated workloads.
+        - **Common thread:** each extension trades the full multi-AZ Region for proximity or a specific compliance property, so resilience must be considered separately.
 
-10. Your team claims "we are multi-AZ, therefore we survive AZ failure." Name three hidden single-AZ dependencies that could falsify this claim (consider NAT, data, and control-plane assumptions).
-
-    ??? success "Check your answer"
-
-        A good answer covers:
-
-        - **NAT gateway:** a single NAT gateway in one AZ means private subnets in the other AZs lose outbound connectivity when that AZ fails; deploy one NAT gateway per AZ.
-        - **Data tier:** a single-AZ database, cache, EFS One Zone file system or self-managed database on one EC2 instance is a zonal single point of failure.
-        - **Control-plane assumptions:** recovery that relies on launching new instances, changing DNS or scaling during the event may fail when control planes are impaired; pre-provision capacity instead.
-        - **Other hidden dependencies:** a single-AZ Interface endpoint, an uneven subnet list, or capacity that only fits if every AZ is healthy.
-        - **Proof:** only a failure drill (for example removing an AZ from service) validates the claim.
-
-11. Design a multi-Region architecture for a payments API with RPO ≤ 1 second and RTO ≤ 5 minutes. Specify the data technology, the traffic-steering mechanism and its health signal, and how you avoid control-plane dependence during failover. State the consistency trade-off you accepted.
+10. Explain the difference between high availability, fault tolerance and disaster recovery. Give one AWS mechanism for each and state which one a multi-AZ deployment alone cannot provide.
 
     ??? success "Check your answer"
 
         A good answer covers:
 
-        - **Data technology:** Aurora Global Database (typical cross-Region lag under a second) or DynamoDB Global Tables; for payments, a single writer Region is safer than multi-writer last-writer-wins.
-        - **Traffic steering:** Route 53 failover or Global Accelerator with health checks on a deep application endpoint, or Route 53 Application Recovery Controller routing controls as the switch.
-        - **Avoiding control-plane dependence:** pre-provision the standby Region's compute at full capacity, pre-create DNS records and health checks, and fail over by toggling data-plane routing controls rather than creating resources.
-        - **RTO:** detection plus switch plus promotion must fit within five minutes, which rules out restore-from-backup approaches.
-        - **Consistency trade-off:** asynchronous cross-Region replication means an RPO of up to about a second; the design accepts that a small number of in-flight transactions may need reconciliation, typically by idempotency keys and a ledger reconciliation process.
+        - **High availability:** the system keeps operating despite a component failure, possibly with brief degradation; for example a multi-AZ deployment behind a load balancer or RDS Multi-AZ failover.
+        - **Fault tolerance:** the system keeps operating with no user-visible interruption; for example active-active redundancy across AZs, or S3 replicating every object across at least three AZs.
+        - **Disaster recovery:** restoring service in a different location after a large-scale event; for example backup and restore, pilot light, warm standby or active-active across Regions.
+        - **What multi-AZ cannot provide:** recovery from the loss of a whole Region, which is disaster recovery and requires a second Region.
+        - **Metrics:** DR is sized by RTO (how long recovery may take) and RPO (how much data loss is tolerable).
 
-12. Explain _static stability_ and redesign the following to satisfy it: "On AZ failure, a Lambda triggered by a CloudWatch alarm updates the Auto Scaling group to launch replacements and calls the Route 53 API to change weights."
-
-    ??? success "Check your answer"
-
-        A good answer covers:
-
-        - **Static stability:** a system remains functional during a failure without needing to make changes, launch resources or call control planes.
-        - **Problem with the original:** it depends on CloudWatch alarms, Lambda, the Auto Scaling control plane and the Route 53 control-plane API, all of which may be impaired during the event.
-        - **Redesign capacity:** run enough capacity in every AZ that losing one leaves sufficient capacity (for example 50 percent over-provisioning across three AZs).
-        - **Redesign traffic shifting:** rely on load balancer health checks (a data-plane function) to stop sending traffic to the failed AZ, and use Route 53 health checks or ARC routing controls rather than API calls that change records.
-        - **Result:** failure handling becomes automatic data-plane behaviour, with scaling as an optional improvement rather than a requirement.
-
-13. A microservices platform on EKS shows large inter-AZ data-transfer charges and elevated p99 latency. Discuss the tension between AZ-spread for resilience and AZ-affinity for cost/latency, and describe a topology-aware routing approach that balances them.
+11. A university runs two systems: a public course catalogue that can tolerate a recovery time of 24 hours and the loss of a day's edits, and a student payments service whose regulator requires recovery within 15 minutes with at most one minute of data loss. Place each system on the disaster-recovery ladder, justify the choice in terms of RTO, RPO and cost, and explain why using the same strategy for both would be a mistake.
 
     ??? success "Check your answer"
 
         A good answer covers:
 
-        - **The tension:** spreading replicas across AZs gives resilience but each cross-AZ call adds latency and data-transfer charges in both directions.
-        - **Topology-aware routing:** enable Kubernetes topology-aware routing (traffic distribution preferring the same zone) so Services route to endpoints in the caller's AZ when enough exist there.
-        - **Keep the spread:** use topology spread constraints so each AZ has enough replicas of every service to serve its local callers.
-        - **Fallback:** routing must fall back to other AZs when local endpoints are unhealthy, so resilience is preserved.
-        - **Measure:** use VPC Flow Logs or cost allocation to confirm inter-AZ bytes fall and watch p99 latency.
+        - **The ladder:** backup and restore, pilot light, warm standby and active-active, in increasing order of cost and decreasing RTO and RPO.
+        - **Course catalogue:** backup and restore is sufficient; an RTO of hours and an RPO of a day fit periodic backups copied to another Region, at the lowest cost.
+        - **Payments service:** warm standby (a scaled-down but complete stack in a second Region with continuously replicated data) meets a 15-minute RTO and a one-minute RPO; backup and restore or pilot light would be too slow to bring compute up reliably.
+        - **Why not active-active:** it would give near-zero RTO but at roughly double cost and with harder multi-Region data consistency, which the requirement does not demand.
+        - **Why one strategy for both is wrong:** applying warm standby to the catalogue wastes money, and applying backup and restore to payments breaks the regulatory requirement; the strategy is chosen per workload from its RTO and RPO.
+
+12. A user in Sydney is served from `us-east-1`. Using the physics of light in fibre, explain why the round trip is about 200 milliseconds however fast the servers are. Then evaluate which parts of that latency CloudFront can and cannot remove for (a) static assets and (b) authenticated writes, and state what would remove the remaining latency.
+
+    ??? success "Check your answer"
+
+        A good answer covers:
+
+        - **Physics:** light in fibre adds about 5 microseconds per kilometre each way; Sydney to Virginia is far enough that the round trip alone is about 200 ms, and no server optimisation removes it.
+        - **(a) Static assets:** a cache hit is served from a nearby Edge Location, so the long round trip disappears for cached content; the origin is contacted once per cache lifetime instead of once per user.
+        - **(b) Authenticated writes:** these must reach the origin, so CloudFront cannot remove the distance; it can only reduce overhead by terminating TLS near the user and carrying traffic over the AWS private backbone.
+        - **Remaining latency:** only placing the application and its data in a Region closer to the users (for example `ap-southeast-2`) removes the round trip for writes, which raises data-residency and replication questions.
+        - **Lesson:** Regions solve latency at continental scale; the edge solves it for the last mile and for cacheable content.
+
+13. A university plans three workloads: (a) a licensed legacy student-records application that needs operating-system access; (b) a new web API for a mobile app; (c) staff email. For each, choose a cloud service model (IaaS, PaaS, FaaS or SaaS) and a deployment model (cloud, hybrid or on-premises), and justify each choice in terms of control versus operational work.
+
+    ??? success "Check your answer"
+
+        A good answer covers:
+
+        - **The trade-off:** moving from IaaS to PaaS to FaaS to SaaS hands more of the stack to the provider, reducing operational work but also control.
+        - **(a) Legacy records application:** IaaS (EC2), because licensing and OS-level access require control of the operating system; possibly hybrid if some systems must remain on campus during migration.
+        - **(b) New web API:** FaaS or PaaS (Lambda behind API Gateway, or a managed container platform), because a new application can be built for managed services and gains scaling without server management.
+        - **(c) Staff email:** SaaS, because email is not a differentiating capability and a provider can run it entirely.
+        - **Deployment model:** cloud for the new workloads; hybrid where on-premises dependencies or data-residency constraints remain.
+        - **Principle:** no model is better in general; choose the highest abstraction the workload's constraints allow.
 
 14. Your global user base is 60% in regions where you have no AWS Region within 150 ms. Compare three remedies  additional Regions (active-active), CloudFront with an aggressive caching strategy, and Global Accelerator  for a workload that is 80% cacheable reads and 20% authenticated writes. Recommend and justify a combination.
 
@@ -273,17 +274,17 @@
         - **Drain old tasks:** once new tasks are healthy, old tasks are deregistered, connections drain for the deregistration delay, and the tasks are stopped.
         - **Complete or roll back:** the deployment completes when only new tasks remain; the deployment circuit breaker can roll back automatically if new tasks fail to stabilise.
 
-9. An EKS cluster's pods must call Amazon S3. Describe the IRSA mechanism end to end  the OIDC provider, the IAM trust policy, the ServiceAccount annotation, and the token projection  and explain why this is superior to attaching permissions to the node instance role.
+9. Explain how AWS Lambda scales. Describe what an execution environment is, what concurrency means, why the default concurrency limit is a shared resource, and how reserved and provisioned concurrency differ.
 
     ??? success "Check your answer"
 
         A good answer covers:
 
-        - **OIDC provider:** the EKS cluster's OIDC issuer is registered as an IAM identity provider, so IAM can trust tokens it signs.
-        - **Trust policy:** the IAM role trusts that provider for `sts:AssumeRoleWithWebIdentity`, with a condition restricting the `sub` claim to a specific namespace and ServiceAccount.
-        - **ServiceAccount annotation:** the ServiceAccount carries `eks.amazonaws.com/role-arn`, and the pod spec uses that ServiceAccount.
-        - **Token projection:** the pod identity webhook mounts a projected, short-lived service account token and sets environment variables so the SDK exchanges it for temporary role credentials.
-        - **Why better than the node role:** permissions are scoped per workload rather than shared by every pod on the node, giving least privilege and clear audit (EKS Pod Identity is a newer, simpler alternative).
+        - **Execution environment:** a Firecracker microVM that handles one request at a time; a free warm environment is reused, otherwise a new one is created (a cold start).
+        - **Concurrency:** the number of environments running at once; under load, per-request latency stays flat while concurrency rises.
+        - **Shared limit:** the default of 1,000 concurrent executions per account per Region (a soft quota) is shared by every function, so one busy function can throttle the others; raise it before a launch.
+        - **Reserved concurrency:** caps and guarantees a function's concurrency, protecting other functions and downstream databases; setting it to zero is an emergency stop.
+        - **Provisioned concurrency:** pre-warms environments to remove cold starts, at extra cost.
 
 10. A team reports that their Lambda function occasionally returns duplicate results to downstream systems. Explain the delivery semantics involved for asynchronous invocation and for an SQS event source, and describe how you would make the function idempotent.
 
@@ -321,17 +322,18 @@
         - **Cost driver:** the 20 percent utilisation and peaks favour elastic capacity, so each stage should show measured savings.
         - **When to stop:** stop when the next stage's engineering cost exceeds its benefit, or when the team lacks the operational maturity for distributed systems.
 
-13. Critically evaluate the claim that "serverless is always cheaper". Construct a quantitative crossover argument comparing AWS Lambda against ECS on Fargate for a workload of average duration 200 milliseconds and 512 MB of memory. Identify the approximate request rate at which the continuously provisioned container becomes cheaper, state your assumptions explicitly, and then explain why the purely financial crossover is not by itself sufficient grounds for the architectural decision.
+13. A team runs ten ECS services on an EC2 capacity provider whose instances average 35 percent utilisation, and asks whether to move them to Fargate. Using the Fargate capacity model, evaluate the move. Address billing, the scaling layers, features that Fargate does not support, Spot options and engineering time, and state the conditions under which you would keep EC2.
 
     ??? success "Check your answer"
 
         A good answer covers:
 
-        - **Lambda cost per request (assumed us-east-1 x86 list prices, no free tier):** 0.2 s x 0.5 GB = 0.1 GB-s x 0.0000166667 USD plus 0.0000002 USD per request, about 1.87 USD per million requests.
-        - **Lambda cost per sustained request per second:** about 2.6 million requests per month per request per second, so about 4.8 USD per month for each request per second of steady load.
-        - **Fargate baseline:** two tasks of 1 vCPU and 2 GB across two AZs cost roughly 70 to 75 USD per month (about 0.049 USD per task-hour) whatever the traffic.
-        - **Crossover:** if those two tasks can serve the load, Fargate becomes cheaper above roughly 15 requests per second sustained; Lambda wins below that and for spiky or idle traffic.
-        - **Why cost alone is insufficient:** API Gateway versus ALB costs, cold starts and p99 latency, operational effort, team skills, scaling speed and failure modes all change the decision.
+        - **Fargate is capacity, not an orchestrator:** the services stay on ECS; only the capacity provider changes.
+        - **Billing:** EC2 bills per instance-second whether full or not, while Fargate bills per requested vCPU and GB per second; at 35 percent utilisation, below the roughly 60 to 70 percent threshold, Fargate is likely to be cheaper despite its higher unit rate.
+        - **Scaling layers:** on EC2, both the task count and the instance count must scale; on Fargate only service auto scaling remains, which removes a whole layer of operational work.
+        - **Unsupported features:** daemon-style host agents, privileged containers and GPUs are not available on Fargate, so any service that needs them must stay on EC2.
+        - **Spot and commitments:** Fargate Spot is available on ECS for interruptible tasks, and Compute Savings Plans cover Fargate as well as EC2.
+        - **Keep EC2 when:** utilisation can be raised and held high and steady through better packing, or the workloads need GPUs or host-level features; include engineering time for patching and scaling nodes, which often outweighs the raw price difference.
 
 14. An organisation runs a stateful, latency-sensitive trading engine that requires sub-millisecond inter-node communication, cannot tolerate noisy neighbours, and must satisfy a regulatory requirement for hardware isolation and detailed audit evidence. Design the compute layer, addressing placement groups, instance tenancy, enhanced networking with Elastic Fabric Adapter or SR-IOV, IMDS hardening, and the observability and audit trail required. Explain which cloud-native principles you are deliberately sacrificing and why that sacrifice is defensible here.
 
@@ -512,29 +514,30 @@
         - **Design around it:** use a StorageClass with `volumeBindingMode: WaitForFirstConsumer`, keep node capacity in every AZ, and use StatefulSets with replicas across AZs and application-level replication.
         - **Workload fit:** EBS for the stateful analytics database needing low latency; EFS or S3 for shared content used by stateless services.
 
-14. A machine learning team's training jobs are bottlenecked reading a fifty-terabyte dataset from S3 across two hundred instances. Analyse where the bottleneck could be  client concurrency, prefix partitioning, instance network capacity, or storage throughput  and describe how you would measure each. Then propose a solution and explain why the durable system of record should remain S3.
+14. A self-managed PostgreSQL database on EC2 shows rising query latency. CloudWatch shows `VolumeQueueLength` climbing and `BurstBalance` falling towards zero on its gp2 data volume. Explain what each metric indicates, diagnose the problem, and compare gp3, io2 and instance store as remedies, stating why instance store is unsuitable for the database files.
 
     ??? success "Check your answer"
 
         A good answer covers:
 
-        - **Client concurrency:** too few parallel connections or small sequential reads; measure per-instance throughput and use multipart ranged GETs and more threads.
-        - **Prefix partitioning:** S3 supports at least 5,500 GET requests per second per prefix; spread keys across prefixes and watch for `503 SlowDown` errors.
-        - **Instance network capacity:** check the instance type's network bandwidth and whether it is saturated using network metrics.
-        - **Storage throughput:** compare aggregate demand with what S3 delivers; distributed training often needs a high-throughput cache layer.
-        - **Solution:** stage data into FSx for Lustre linked to the S3 bucket (or use Mountpoint for S3 with caching); S3 remains the system of record because it is durable, cheap and the shared source for all jobs.
+        - **`VolumeQueueLength`:** I/O requests waiting for the volume; a sustained rise means the volume cannot keep up with demand.
+        - **`BurstBalance`:** the remaining burst credits of a gp2 volume; when it reaches zero, performance falls back to the size-based baseline.
+        - **Diagnosis:** the workload's I/O exceeds the gp2 baseline, so credits drain and requests queue, which shows up as query latency.
+        - **gp3:** provisions IOPS and throughput independently of size with no credit mechanism, so it is the usual default and fix; **io2:** for high, consistent IOPS where gp3 limits are not enough, at higher cost.
+        - **Instance store is unsuitable:** it is fast but ephemeral; data is lost when the instance stops or terminates, so it suits only scratch data or data replicated elsewhere.
+        - **Check the instance too:** the instance type's EBS bandwidth can cap performance regardless of the volume settings.
 
-15. Your organisation's monthly AWS bill shows storage costs growing twenty percent per quarter while data volume grows only five percent. Design a systematic investigation using Storage Lens, S3 Inventory, Cost Explorer, and Trusted Advisor. Identify at least six specific, distinct sources of waste you would expect to find, and give the remediation for each. State which remediations are safe to automate and which require human judgement.
+15. A web application currently keeps everything on the EBS root volumes of its EC2 instances: user-uploaded documents, a shared configuration directory read by every instance, temporary image-processing files, and nightly database backups. Redesign the storage, assigning each data set to S3, EBS, EFS or instance store. For each, state the scope of the chosen service, what happens in an Availability Zone failure, and how accidental deletion is handled.
 
     ??? success "Check your answer"
 
         A good answer covers:
 
-        - **Investigation:** Cost Explorer by usage type to find which storage dimension grew, Storage Lens for bucket-level trends and noncurrent bytes, S3 Inventory for object-level analysis, Trusted Advisor for idle and underused resources.
-        - **Waste 1 and 2:** noncurrent versions without expiry, and incomplete multipart uploads; remediate with lifecycle rules (safe to automate).
-        - **Waste 3 and 4:** unattached EBS volumes and old snapshots; remediate with Data Lifecycle Manager or AWS Backup retention after confirming ownership (requires human judgement).
-        - **Waste 5 and 6:** gp2 volumes that should be gp3, and data in Standard that is rarely read; remediate with Elastic Volumes and Intelligent-Tiering or lifecycle transitions (generally safe to automate).
-        - **Others:** over-provisioned io1/io2 IOPS, duplicate datasets, and logs without retention; deletions of data or snapshots always need human approval.
+        - **Uploaded documents to S3:** written whole and read by name; Regional across three or more AZs, so they survive an AZ failure; versioning (and Object Lock if required) protects against deletion.
+        - **Shared configuration to EFS:** many instances need concurrent POSIX access; Regional with a mount target in every AZ, so it survives an AZ failure; backups protect against deletion.
+        - **Temporary processing files to instance store:** scratch data that can be recreated, so losing it on stop or termination is acceptable.
+        - **Database backups to S3:** not EBS, because an EBS volume is bound to one AZ; S3 with versioning and a lifecycle rule bounds cost while protecting history.
+        - **Result:** the instances become stateless, so they can be replaced or scaled freely, and every data set is placed by its access pattern and required scope.
 
 ---
 
@@ -573,16 +576,17 @@
         - **Replica requirement:** offload read-heavy reporting or high read traffic from the primary.
         - **Multi-AZ requirement:** survive an AZ or instance failure with near-zero data loss and minimal downtime.
 
-4. Describe the cache-aside pattern in sequence. What happens on a cache hit, and what happens on a cache miss?
+4. Using the caching terms in this topic, define hit ratio, TTL, eviction and invalidation. Then calculate the average read latency for a 90 percent hit ratio when a cache read takes 0.5 ms and a database read takes 10 ms, and explain why a small fall in hit ratio has a large effect.
 
     ??? success "Check your answer"
 
         A good answer covers:
 
-        - **Read request:** the application first checks the cache for the key.
-        - **Cache hit:** the value is returned directly from the cache with no database call.
-        - **Cache miss:** the application reads from the database, writes the result to the cache with a TTL, then returns it.
-        - **Writes:** the application updates the database and invalidates (or updates) the cache entry so stale data is not served for long.
+        - **Hit ratio:** hits divided by total requests, the key measure of cache effectiveness; **TTL:** the time after which an entry expires.
+        - **Eviction:** discarding entries when memory is full, according to a policy such as LRU; **invalidation:** removing or updating an entry when the source data changes.
+        - **Calculation:** `0.9 × 0.5 + 0.1 × 10 = 0.45 + 1.0 = 1.45 ms` on average.
+        - **Sensitivity:** misses cost twenty times as much as hits, so each percentage point of hit ratio lost adds disproportionately to average latency and database load (at 80 percent the average is 2.4 ms).
+        - **Why caching works:** locality, because a small fraction of items receives most requests.
 
 5. An RDS instance is created with a backup retention period of zero. Explain precisely what capability is lost and why this is dangerous in production.
 
@@ -640,17 +644,18 @@
         - **Failover behaviour:** RDS Proxy keeps client connections open and reduces failover time by routing to the new writer; use IAM authentication and Secrets Manager for credentials.
         - **Alternative:** consider DynamoDB for access patterns that suit it, as it has no connections to exhaust.
 
-10. Explain the thundering-herd problem in caching. Describe three distinct mitigations and explain the circumstances under which each is preferable.
+10. Explain how PACELC extends the CAP theorem. Then, for each read path in a student portal, choose strongly consistent or eventually consistent reads and justify the choice: (a) the course description page; (b) a student's profile immediately after they edit it; (c) the remaining balance on a student's prepaid printing account before a print job is charged.
 
     ??? success "Check your answer"
 
         A good answer covers:
 
-        - **Thundering herd:** many requests miss the cache at once (for example when a popular key expires) and all hit the database simultaneously.
-        - **Mitigation 1, request coalescing or locking:** only one request rebuilds the entry while others wait or serve stale data; best for very hot keys.
-        - **Mitigation 2, TTL jitter:** randomise expiry times so many keys do not expire together; best after bulk loads or cache warm-ups.
-        - **Mitigation 3, proactive refresh or warming:** refresh hot entries before expiry or pre-populate the cache after deployment; best when the hot set is predictable.
-        - **Additional defence:** stale-while-revalidate and database-side protection such as connection limits.
+        - **CAP:** during a network partition a distributed store must choose consistency or availability; partition tolerance is not optional.
+        - **PACELC:** else, in normal operation, the store chooses between latency and consistency, which is the trade-off met on every read.
+        - **(a) Course description:** eventually consistent; slightly stale text costs nothing, and the read is cheaper and faster (for example half the DynamoDB read capacity, or a read replica).
+        - **(b) Profile after an edit:** read-your-own-writes; route that user's reads to the primary (or use a strongly consistent read) for a short window, otherwise the edit appears lost.
+        - **(c) Balance before charging:** strongly consistent, from the primary or partition leader, because a stale balance could allow an overdraft.
+        - **Principle:** paths within one application can legitimately choose differently, guided by the business cost of staleness.
 
 11. Design the complete data architecture for a global e-commerce platform serving customers in North America, Europe, and Asia. It must guarantee that orders and payments are transactionally correct, serve product catalogue reads at under 20 milliseconds p99 in all three regions, support full-text product search, retain seven years of order history for audit, and survive the loss of an entire AWS Region. Specify every data store, justify each against a stated rejected alternative, identify precisely where eventual consistency is introduced, and explain how the design prevents that eventual consistency from producing an incorrect financial outcome.
 
@@ -676,17 +681,18 @@
         - **Consistency:** base-table patterns can be strongly consistent; both GSI patterns are eventually consistent.
         - **Sixth pattern:** full-text search does not fit DynamoDB; stream changes via DynamoDB Streams to OpenSearch Service and query there.
 
-13. Critically evaluate the claim that "DynamoDB is cheaper than Aurora". Construct a quantitative comparison for a workload of 5,000 reads and 500 writes per second on items averaging 3 KB, with 2 TB of stored data. State every assumption explicitly, identify the conditions under which each service wins, and then explain why the financial comparison alone is insufficient grounds for the architectural decision.
+13. A service uses Aurora PostgreSQL behind an ElastiCache (Valkey) cache, with DynamoDB for session data. During a busy period CloudWatch shows `Evictions` rising and `CacheHitRate` falling on the cache, `CPUUtilization` and `DatabaseConnections` rising on Aurora, and `ThrottledRequests` on the DynamoDB table. Explain the chain of cause and effect, identify the most likely root cause for each service, and specify the alarms and diagnostic tools you would use.
 
     ??? success "Check your answer"
 
         A good answer covers:
 
-        - **DynamoDB provisioned (us-east-1 list prices, assumptions stated):** 3 KB reads need 1 RCU strongly consistent or 0.5 eventually consistent, so 2,500 to 5,000 RCU; 3 KB writes need 3 WCU each, so 1,500 WCU; at about 0.00013 USD per RCU-hour and 0.00065 USD per WCU-hour this is roughly 240 to 475 USD plus about 710 USD per month.
-        - **DynamoDB storage:** 2 TB at about 0.25 USD per GB-month is roughly 500 USD, giving a total around 1,450 to 1,700 USD per month before backups and Global Tables.
-        - **Aurora:** cost is dominated by instance hours (a writer plus at least one replica sized for 5,000 reads per second), plus storage at about 0.10 USD per GB-month (about 200 USD) and I/O charges or the I/O-Optimised option.
-        - **When each wins:** DynamoDB wins for key-value access at steady or spiky scale with no idle instances; Aurora wins when queries are relational, ad hoc or join-heavy, when caching absorbs most reads, or when on-demand DynamoDB would be used at sustained high load.
-        - **Why cost is insufficient:** access patterns, query flexibility, transactional needs, team skills, operational effort and migration risk matter as much as the monthly bill.
+        - **Cache:** rising evictions with falling hits means the working set no longer fits in memory, so the cache is too small for the busy-period data.
+        - **Knock-on effect on Aurora:** every miss becomes a database read, so CPU and connections rise; a modest drop in hit ratio multiplies database load.
+        - **DynamoDB throttling:** signals under-provisioned capacity or a hot partition; Contributor Insights reveals whether a few keys receive most traffic.
+        - **Alarms:** `CacheHitRate` and `Evictions` on ElastiCache; `DatabaseConnections`, `CPUUtilization`, `FreeStorageSpace` and `ReplicaLag` on Aurora; `ThrottledRequests` on DynamoDB.
+        - **Diagnosis tools:** Performance Insights for the Aurora query load and Contributor Insights for DynamoDB hot keys.
+        - **Remedies:** size the cache to the working set, fix the partition key or capacity mode, and only then consider scaling the database.
 
 14. A financial institution requires a ledger that is auditable, tamper-evident, strictly ordered, and able to sustain 20,000 appends per second, with the ability to reconstruct account balances at any historical instant. Design the persistence layer using an event-sourcing approach. Address the choice of store, the key schema or table design, optimistic concurrency control, snapshotting strategy, the read model and how it is maintained, retention and archival to S3, encryption and key management, and the audit trail. Identify the specific failure modes your design accepts and explain why they are tolerable.
 
@@ -854,17 +860,18 @@
         - **No dependency on the failed Region:** traffic shifts because health checks fail, which is a data-plane decision outside the Region; both Regions already run at full capacity.
         - **Choice:** Global Accelerator gives the fastest, DNS-cache-independent failover within the 60-second RTO; Route 53 latency with health checks is acceptable if TTL plus detection fits; plain failover routing suits active-passive rather than active-active.
 
-13. A financial services organisation requires that (a) no workload subnet has any route to the internet, (b) all outbound traffic from 30 VPCs is inspected by a stateful firewall with domain-name filtering, (c) each business unit's VPCs cannot reach another business unit's VPCs, and (d) all of this must be auditable. Design the network. Name every component, describe the Transit Gateway route-table structure, explain how egress inspection is enforced, and describe the evidence you would produce for an auditor.
+13. Users report intermittent timeouts from an API that runs behind API Gateway, with backends in private subnets that call external services through NAT gateways and a Route 53 failover record in front. Design the observability that would locate the fault. For each signal (VPC Flow Logs, NAT gateway metrics, API Gateway `Latency` and `IntegrationLatency`, Route 53 health checks, CloudTrail), state what it can reveal and how you would use it in this investigation.
 
     ??? success "Check your answer"
 
         A good answer covers:
 
-        - **Network components:** Transit Gateway hub, workload VPCs with no IGW or NAT, a central egress/inspection VPC with AWS Network Firewall (stateful rules with domain allow lists) and NAT gateways, plus an Organizations SCP preventing IGW creation.
-        - **TGW route tables:** one route table per business unit associated with its VPCs, propagating only to the inspection VPC and shared services, so business units cannot route to each other.
-        - **Egress enforcement:** each workload VPC's default route points to the TGW, TGW routes `0.0.0.0/0` to the inspection VPC, and appliance mode keeps flows symmetric through the firewall.
-        - **Auditability:** Network Firewall alert and flow logs, VPC Flow Logs, AWS Config rules (no IGWs, no `0.0.0.0/0` routes to IGW), CloudTrail, and Reachability Analyzer or Network Access Analyzer reports as evidence.
-        - **Account structure:** central networking account sharing TGW via Resource Access Manager.
+        - **API Gateway metrics:** if `Latency` is high but `IntegrationLatency` is low, the delay is in API Gateway itself; if both are high, the backend or its dependencies are slow.
+        - **NAT gateway metrics:** `ErrorPortAllocation` above zero indicates port exhaustion, which causes intermittent outbound connection failures; `BytesOutToDestination` shows the volume crossing the NAT.
+        - **VPC Flow Logs:** accepted and rejected flow metadata (not payloads) shows whether traffic is being rejected by a security group or NACL, or never arriving.
+        - **Route 53 `HealthCheckStatus`:** shows whether the failover record has flipped or is flapping between endpoints.
+        - **CloudTrail:** shows who changed a security group, route table or NACL just before the timeouts began.
+        - **Approach:** work from the outside in, alarming on each signal so the next incident is detected before users report it.
 
 14. Your API Gateway front end can accept 10,000 requests per second, but the downstream relational database supports 400 concurrent connections and the business requires that no request be lost. Design the complete request path including back-pressure, and calculate the queue-depth and worker-concurrency implications if a five-minute burst arrives at 10,000 requests per second while workers drain at 400 per second. State what the client experiences at each stage.
 
@@ -878,17 +885,18 @@
         - **Drain time:** 2,880,000 / 400 = 7,200 seconds, about two hours after the burst ends, well within SQS retention.
         - **Client experience:** immediate acknowledgement, then completion up to two hours later via polling or a callback; requests are not lost because SQS stores them durably, and a DLQ captures poison messages.
 
-15. An organisation's monthly bill shows large charges for `NatGateway-Bytes`, `DataTransfer-Regional-Bytes`, and `PublicIPv4:InUseAddress`. Describe a systematic investigation using VPC Flow Logs, Athena, and Cost Explorer, then propose a remediation for each of the three charges. For each remediation, state the new cost it introduces and the conditions under which the change would **not** be worthwhile.
+15. An organisation built four VPCs that all use `10.0.0.0/16` and now must connect them to each other and to an on-premises network. Explain why this is difficult, evaluate the options (VPC peering, Transit Gateway, PrivateLink, secondary CIDR blocks), and propose an address plan that would prevent the problem for future VPCs.
 
     ??? success "Check your answer"
 
         A good answer covers:
 
-        - **Investigation:** Cost Explorer filtered by usage type to find which VPC and Region dominate; VPC Flow Logs queried with Athena to identify top source and destination pairs through NAT and across AZs; public IPv4 insights through VPC IP Address Manager.
-        - **`NatGateway-Bytes`:** add Gateway endpoints for S3 and DynamoDB and Interface endpoints for heavily used services such as ECR; new cost is Interface endpoint hours and per-GB charges, not worthwhile for low-volume services.
-        - **`DataTransfer-Regional-Bytes`:** keep chatty traffic in the same AZ (topology-aware routing, same-AZ NAT gateways); new cost is reduced resilience if over-applied, not worthwhile where cross-AZ spread is required for availability.
-        - **`PublicIPv4:InUseAddress`:** remove unnecessary public IPs, put instances behind load balancers or NAT, consider IPv6; new cost is NAT or load balancer charges, not worthwhile if it adds a NAT gateway for a handful of addresses.
-        - **Process:** set budgets and cost anomaly alerts to catch regressions.
+        - **Why it is difficult:** a VPC's CIDR cannot be changed and subnets cannot be resized, so address planning is close to irreversible.
+        - **Peering:** forbids overlapping CIDRs and is non-transitive, so it cannot connect these VPCs at all.
+        - **Transit Gateway:** routes between many VPCs and on-premises, but cannot route correctly between identical address ranges either.
+        - **PrivateLink:** exposes a specific service through an endpoint in the consumer VPC, which works despite overlap because traffic is not routed between the networks.
+        - **Secondary CIDR blocks:** can add new non-overlapping space for new workloads, but do not fix the existing overlapping subnets; a full fix means migrating workloads to re-addressed VPCs.
+        - **Future plan:** allocate non-overlapping blocks hierarchically per environment, account and Region, leave headroom, allow for container IP consumption, and include on-premises ranges in the plan.
 
 ---
 
@@ -962,16 +970,17 @@
         - **Mitigation 2:** SnapStart (for example for Java) or smaller packages and lazy initialisation; low or no extra cost but engineering effort.
         - **Note:** higher memory can also shorten cold starts at a slightly higher per-millisecond rate.
 
-7. A microservice needs to call three other services to build a response. Describe two design changes that would reduce user-perceived latency and improve resilience.
+7. Describe the API-first workflow from specification to production. Name the artefacts produced before implementation code, explain how API Gateway enforces the contract at runtime, and explain how contract tests prevent drift.
 
     ??? success "Check your answer"
 
         A good answer covers:
 
-        - **Parallelise:** call the three services concurrently instead of sequentially, so latency becomes the slowest call rather than the sum.
-        - **Use cached or precomputed data:** maintain a local read model fed by events (CQRS) or cache responses, removing calls from the request path.
-        - **Resilience:** apply timeouts, retries with backoff and jitter, and circuit breakers so one slow service does not hang the response.
-        - **Graceful degradation:** return a partial response when a non-critical dependency fails.
+        - **Specification first:** architects and consumers co-author an OpenAPI 3.x specification (paths, schemas, status codes, authentication) and review it like code, with linting.
+        - **Artefacts before code:** the reviewed specification, generated mock servers so consumers can integrate immediately, and generated server stubs and client SDKs.
+        - **Runtime enforcement:** the specification is imported into API Gateway, which applies request validation, authentication, throttling and versioning.
+        - **Contract tests:** run in CI to verify the implementation never drifts from the agreed contract.
+        - **Benefit:** frontend and backend teams build in parallel, and the contract evolves additively with new versions only for breaking changes.
 
 8. Compare choreography and orchestration for a five-step order-fulfilment process. Which would you choose and why?
 
@@ -1020,17 +1029,18 @@
         - **Per-tenant observability and cost:** tenant ID in structured logs, metrics dimensions and traces; cost allocation tags or per-tenant metering for showback.
         - **Well-Architected justification:** security (isolation), reliability (bounded blast radius), performance efficiency (tiered capacity), cost optimisation (pooling where safe) and operational excellence (automated onboarding).
 
-12. A payment system must move funds between two microservices that own separate databases. ACID transactions are impossible. Design a solution using the Saga pattern, specify compensating actions, explain how you guarantee the event is published if and only if the database write succeeds, and describe how you would prove correctness to an auditor.
+12. A university's enrolment flow calls the timetable, fees, library and email services synchronously in a chain, all sharing one database. Analyse the design using technology, temporal and location coupling and cohesion, explain why it is a distributed monolith, and propose a redesign that combines the microservices, event-driven and API-first patterns. State the new consistency behaviour the redesign introduces.
 
     ??? success "Check your answer"
 
         A good answer covers:
 
-        - **Saga steps:** debit the source account (local transaction), then credit the destination account; each is a local transaction in its owning service.
-        - **Compensation:** if the credit fails, issue a compensating refund to the source account; compensations must be idempotent and retriable.
-        - **Coordination:** Step Functions orchestration with `Retry` and `Catch` invoking compensation states, giving a recorded execution history.
-        - **Atomic publish:** the transactional outbox pattern writes the business change and the event in the same database transaction, and a relay (or change stream) publishes it, so the event exists if and only if the write committed.
-        - **Proof for auditors:** idempotency keys, Step Functions execution history, an append-only ledger of state transitions, and reconciliation reports showing every transfer reached a terminal state.
+        - **Temporal coupling:** every service must be available at the same moment, so one slow or failed service fails enrolment; **location coupling:** the enrolment service must know every downstream service.
+        - **Technology and data coupling:** a shared database couples schemas, so changes need coordinated releases; this is the distributed monolith (split physically, coupled logically).
+        - **Microservices:** split by bounded context with a database per service, each independently deployable.
+        - **Event-driven:** enrolment publishes an `EnrolmentConfirmed` event to a broker (SNS or EventBridge), and timetable, fees, library and email consume it independently; consumers are idempotent because delivery is at least once.
+        - **API-first:** the enrolment API contract is agreed and enforced at API Gateway before implementation.
+        - **Consistency trade-off:** the system becomes eventually consistent; the student sees enrolment confirmed before every downstream service has processed the event.
 
 13. An organisation with 45 microservices reports that deployment frequency has dropped and incidents take an average of four hours to diagnose. Diagnose the likely architectural and organisational causes, and propose a prioritised twelve-month remediation plan.
 
@@ -1044,17 +1054,18 @@
         - **Next two quarters:** independent pipelines per service, contract tests, breaking shared databases and replacing synchronous chains with events where appropriate.
         - **Final quarter:** realign teams to bounded contexts, merge services that always change together, and measure DORA metrics to confirm improvement.
 
-14. Evaluate serverless versus containers for a workload of 400 million requests per month, average duration 180 ms, average memory 512 MB, with a strict p99 latency requirement of 100 ms. Show your reasoning on cost, latency, and operational burden, and state what additional information you would need to make a final recommendation.
+14. For each requirement, choose SQS, SNS, EventBridge or Kinesis Data Streams and justify the choice by its messaging model: (a) a queue of image-resize jobs that must be retried on failure; (b) an `OrderPlaced` event that three services must each receive; (c) events routed to different targets according to their content, with the ability to replay last week's events; (d) an ordered clickstream that several independent consumers read at their own pace. Then explain why every consumer in this design must be idempotent, and what you would monitor.
 
     ??? success "Check your answer"
 
         A good answer covers:
 
-        - **Lambda cost (assumed us-east-1 x86 list prices, no free tier):** 400 million x 0.18 s x 0.5 GB = 36 million GB-s, about 600 USD, plus about 80 USD in request charges, roughly 680 USD per month, plus API Gateway (about 400 USD for an HTTP API or 1,400 USD for a REST API).
-        - **Container comparison:** average load is about 154 requests per second, about 28 concurrent requests, which a small Fargate or EC2 fleet across AZs with an ALB can serve for a few hundred USD per month.
-        - **Latency:** a 100 ms p99 is threatened by cold starts on Lambda, needing provisioned concurrency (extra cost); containers stay warm and give steadier tail latency.
-        - **Operational burden:** Lambda has the least operations; containers need image, scaling and patching work (reduced with Fargate).
-        - **Information needed:** peak-to-average ratio and traffic shape, CPU versus I/O profile, payload sizes, dependency latency, team skills and existing platform.
+        - **(a) SQS:** a point-to-point queue; messages are hidden while processed, deleted on success, retried otherwise, and sent to a dead-letter queue after repeated failures.
+        - **(b) SNS:** pub/sub; the service pushes a copy to every subscription (often an SQS queue per consumer).
+        - **(c) EventBridge:** rules match on event content and deliver to the targets of every matching rule; archives allow replay.
+        - **(d) Kinesis Data Streams:** an ordered, partitioned log kept for the retention period; each consumer tracks its own position and can replay.
+        - **Idempotency:** SQS standard, SNS and EventBridge deliver at least once, so duplicates occur in production; consumers record processed event IDs, for example with a DynamoDB conditional write.
+        - **Monitoring:** alarm on DLQ depth above zero, `ApproximateAgeOfOldestMessage`, Lambda `Errors` and `Throttles`, and EventBridge `FailedInvocations`.
 
 15. Design an event-driven data platform ingesting 200,000 IoT telemetry events per second that must support real-time alerting (sub-second), hourly aggregation, and ad-hoc historical analysis over two years of data. Specify the services, partitioning strategy, storage tiers, failure handling, and cost controls.
 

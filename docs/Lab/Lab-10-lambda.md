@@ -16,8 +16,8 @@
     [limits that decide whether Lambda fits](../unit1/topic3.md#limits-that-decide-whether-lambda-fits) ·
     [S3 buckets, objects and keys](../unit6/topic1.md#buckets-objects-keys-and-prefixes) ·
     [S3 event sources](../unit6/topic1.md#event-sources) ·
-    [consuming S3 from Lambda](../unit6/topic1.md#consuming-s3-from-aws-lambda) ·
-    [S3 event notifications](../unit6/topic3.md#amazon-s3-event-notifications) ·
+    [consuming S3 from Lambda](../unit6/topic1.md#event-sources) ·
+    [S3 event notifications](../unit6/topic3.md#message-queues-with-amazon-sqs) ·
     [IAM roles](../unit8/topic1.md#iam-roles) ·
     [identity-based versus resource-based policies](../unit8/topic1.md#identity-based-versus-resource-based-policies) ·
     [the confused deputy problem](../unit8/topic1.md#the-confused-deputy-problem) ·

@@ -7,7 +7,7 @@
 
 1. describing the application's desired state as Kubernetes objects (Deployments, Services, ConfigMaps);
 2. delivering those objects to the cluster's API server;
-3. letting the cluster's controllers make reality match them (reconciliation, see [3.1](topic1.md#what-kubernetes-does)).
+3. letting the cluster's controllers make reality match them (reconciliation, see [3.1](topic1.md#why-this-service-or-concept-exists)).
 
 Deployment involves three separate concerns. Mixing them up causes most beginner confusion:
 
@@ -19,10 +19,11 @@ Deployment involves three separate concerns. Mixing them up causes most beginner
 
 ## Why This Service or Concept Exists
 
-- **An image alone is not a running application.** Something must decide how many copies run, where, how traffic reaches them, and what happens when one fails. Kubernetes objects describe that.
-- **A usable cluster is more than one API call.** It needs IAM roles, subnets, add-ons, nodes, access entries and a load balancer controller, created **in the right order**. Tools like `eksctl` understand this dependency graph.
-- **Typing commands does not scale.** Hand-run `kubectl` leaves no reviewed record and spreads cluster credentials. Teams store manifests in Git and deploy through pipelines. (**GitOps** tools such as Argo CD or Flux go further by pulling from Git; covered in later study.)
-- **Environments differ.** Dev, staging and production differ in replicas, sizes and image versions. Copying YAML per environment causes drift. **Helm** (parameterised packages) and **Kustomize** (base + overlays) solve this.
+- **An image alone is not a running application:** Kubernetes objects describe how many copies run, where they run, how traffic reaches them and what happens when one fails.
+- **A usable cluster is more than one API call:** IAM roles, subnets, add-ons, nodes, access entries and a load balancer controller must be created in the right order, a dependency graph that tools such as `eksctl` understand.
+- **Typing commands does not scale:** hand-run `kubectl` leaves no reviewed record, so teams keep manifests in Git and deploy through pipelines (GitOps tools such as Argo CD or Flux, which pull from Git, are left to later study).
+- **Environments differ:** dev, staging and production vary in replicas, sizes and image versions, and **Helm** (parameterised packages) or **Kustomize** (base plus overlays) express those differences without copying YAML.
+- **Releases must be safe and reversible:** rolling updates, probes and revision history let a new version replace the old one without downtime and be undone quickly.
 
 ## Core Concepts
 
@@ -364,46 +365,18 @@ Cluster-level settings are in [3.1](topic1.md#configuration-options); node group
 | **Values management** | Committed files or `--set` | Committed files |
 | **Secrets** | Kubernetes Secret, or Secrets Manager via driver | Secrets Manager; never plaintext in Git |
 
-## Design Considerations
-
-| Quality | Meaning | Design levers | Trade-off |
-|---|---|---|---|
-| **Reproducibility** | Cluster and apps can be rebuilt from code | IaC, manifests in Git, versioned images | Every change needs a commit |
-| **Safety of change** | A bad release does not reach every user | Readiness probes, `maxUnavailable: 0`, `rollout status` | Slower rollouts |
-| **Recoverability** | Rollback is fast and trustworthy | Immutable tags, `rollout undo`, `helm rollback` | Image versioning discipline |
-
-### Manifests versus Helm
-
-| Characteristic | Plain manifests | Helm charts |
-|---|---|---|
-| Purpose | Describe resources | Package and parameterise applications |
-| Environment variation | Separate files or Kustomize overlays | One chart, per-environment values |
-| Rollback | Deployment revisions | Built-in release revisions |
-| Learning curve | Lower | Higher |
-
-Use plain manifests for simple apps with few environments. Use Helm for reusable apps, many variations, or third-party software. Do not adopt Helm just because it exists.
-
 ## AWS Best Practices
 
-| Pillar | Practice |
-|---|---|
-| **Operational Excellence** | Cluster as code, workloads as manifests in Git; `kubectl rollout status` in every pipeline; rehearse upgrades in non-production |
-| **Security** | Least-privilege pipeline access; no secrets in images or Git; scan images |
-| **Reliability** | Multiple replicas across AZs; correct readiness and liveness probes; `maxUnavailable: 0` |
-| **Performance Efficiency** | Small images; requests from observed usage; no CPU limits on latency-sensitive services |
-| **Cost Optimization** | Right-size requests (they drive node count); share clusters with namespaces; delete unused clusters and load balancers |
-| **Sustainability** | Accurate requests and switching off idle non-production environments |
+- **Operational Excellence:** keep the cluster as code and workloads as manifests in Git, and rehearse upgrades in non-production first.
+- **Operational Excellence:** run `kubectl rollout status` after every apply so the pipeline reports real success, not mere acceptance.
+- **Security:** give the pipeline least-privilege cluster access and keep secrets out of images and Git.
+- **Reliability:** run multiple replicas across Availability Zones with correct readiness and liveness probes and `maxUnavailable: 0`.
+- **Reliability:** deploy unique, immutable image tags so every rollback restores known code.
+- **Performance Efficiency:** keep images small and set requests from observed usage.
+- **Cost Optimization:** right-size requests, because they drive node count, and delete unused clusters and load balancers.
+- **Sustainability:** switch off idle non-production environments.
 
-## Operating It: Performance, Cost and Monitoring
-
-**Performance.** Rollout time ≈ number of batches × (image pull + start + readiness). Small images and a `startupProbe` for slow apps keep it short. A readiness probe that passes too early sends traffic to Pods that cannot serve it. Preview changes with `helm template` or `kubectl diff -f`.
-
-**Cost.** Requests drive node count, so over-requesting silently inflates the bill. Scale non-production down when unused.
-
-!!! warning "Deleting a Deployment does not delete everything"
-    Load balancers (from Services or Ingresses) and EBS volumes (from persistent volume claims) are AWS resources that can outlive the Kubernetes objects or even the cluster. Delete Services, Ingresses and PVCs **before** deleting the cluster, then check the console.
-
-**Monitoring.**
+## Monitoring and Observability
 
 | Signal | Source | Tells you |
 |---|---|---|
@@ -433,35 +406,6 @@ Useful alarms: a Deployment that stops progressing, sustained Pod restarts, risi
 - **`kubectl apply` reports acceptance, not success.**
 - **Secrets need extra components** such as Secrets Manager plus a driver.
 - **Multi-layer debugging.** A failure may be the app, the image, a permission, scheduling or a probe.
-
-## Common Mistakes
-
-### Beginner mistakes and misconceptions
-
-| Mistake | Reality | Do instead |
-|---|---|---|
-| "`kubectl` creates the EKS cluster" | Cluster creation is an AWS operation | Use `eksctl`, console or IaC |
-| "`eksctl` replaces `kubectl`" | One builds the cluster, the other manages workloads | Use both, each for its job |
-| "Helm is mandatory" | Useful, not required | Plain manifests for simple apps |
-| Treating `kubectl apply` as success | It returns when stored, not running | Follow with `kubectl rollout status` |
-| `image: myapp:latest` | Pods may run different code; rollback meaningless | Unique tag per build |
-| No resource requests | Scheduler overpacks nodes | Set requests from observed usage |
-| Liveness probe checks the database | A DB blip restarts every replica | Dependencies go in readiness |
-| Fixing things with `kubectl edit` | Unreviewed and later overwritten | Change the manifest, apply, commit |
-| Committing a Secret to Git | Credential exposed in history forever | Secrets Manager with a driver |
-| Copying YAML per environment | Copies drift apart | One chart or base, per-env values |
-| Running databases in Kubernetes by default | More operational burden | Prefer RDS or DynamoDB |
-
-### Production mistakes
-
-| Mistake | Consequence | Remedy |
-|---|---|---|
-| Pipeline with cluster-admin credentials | One compromised build controls the cluster | Scope pipeline access tightly |
-| Upgrading without checking removed APIs | Workloads break; rollback is only possible for 7 days and only one version back | Check Upgrade insights and manifests; upgrade non-production first |
-| Mixing `eksctl` and Terraform on one cluster | Conflicting state, hidden stacks | One provisioning tool per cluster |
-| `--set` in automation | Real config hidden in a pipeline script | Committed values files |
-| Assuming a stalled rollout recovers | Stays failed | `rollout status` + `rollout undo` in the pipeline |
-| Deleting the cluster before Services and volumes | Orphaned load balancers and EBS keep billing | Scripted teardown, then verify |
 
 ## Summary
 

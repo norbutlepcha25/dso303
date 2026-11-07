@@ -15,23 +15,11 @@ The key mental shift: stop thinking of infrastructure as **hardware** and start 
 
 ## Why This Service or Concept Exists
 
-Before cloud computing, running a production application meant:
-
-1. **Capital expenditure (CapEx).** Buying servers, storage, network gear, power and cooling, often 6 to 12 months before the first user.
-2. **Capacity guessing.** Forecasting peak demand years ahead. Over-provisioning wasted money; under-provisioning caused outages at the moment of success.
-3. **Single points of failure.** Most companies had one data centre. A fire, flood or fibre cut took the business offline.
-4. **Undifferentiated heavy lifting.** Engineers racked servers and replaced disks instead of building features.
-5. **Unaffordable global reach.** Low latency on every continent required data centres on every continent.
-
-AWS inverts each problem:
-
-| Traditional approach | AWS approach | Benefit |
-|---|---|---|
-| Buy hardware up front (CapEx) | Rent capacity per second/hour (OpEx) | No upfront investment; cost tracks usage |
-| Forecast capacity years ahead | Elastic scaling on demand | Capacity matches actual load |
-| One data centre, one fault domain | Multiple AZs per Region, multiple Regions | Engineered fault isolation |
-| Build your own global footprint | 30+ Regions, 100+ AZs, 700+ PoPs already built | Global deployment in minutes |
-| Operate power, cooling, physical security | AWS operates the facility layer | Teams focus on applications |
+- **No up-front capital expenditure:** capacity is rented per second or hour, so cost tracks usage instead of being paid months before the first user.
+- **No capacity guessing:** elastic scaling matches capacity to actual load rather than to a forecast made years ahead.
+- **Engineered fault isolation:** multiple Availability Zones per Region, and multiple Regions, replace the single data centre that one fire or fibre cut could take offline.
+- **Global reach in minutes:** an existing footprint of Regions, Availability Zones and edge locations replaces building data centres on every continent.
+- **Less undifferentiated heavy lifting:** AWS operates power, cooling and physical security, so engineers build features instead of racking servers.
 
 ## Cloud Service Models
 
@@ -260,82 +248,7 @@ The services in steps 3 to 5 are introduced in [1.3](topic3.md), [1.4](topic4.md
     <p align='right' style="font-size:0.8em"><i>Image Source: AI generated (Google Gemini)</i></p>
 </figure>
 
-## Design Considerations
-
-### Choosing a Region
-
-Criteria, in the order most organisations apply them:
-
-1. **Compliance and data residency.** A legal constraint overrides everything else.
-2. **Latency to users.** Pick the Region closest to your users; measure, do not assume.
-3. **Service availability.** Confirm every service and instance type you need exists there.
-4. **Cost.** Identical resources can differ noticeably in price between Regions.
-5. **Sustainability** and proximity to partners or on-premises sites.
-
-<figure markdown="span">
-    ![Region selection flow: compliance, then latency, then service availability, then cost](../img/U1/regionselection.png){width="80%"}
-    <figcaption>Region Selection Work Flow</figcaption>
-    <p align='right' style="font-size:0.8em"><i>Image Source: AI Generated (Google Gemini)</i></p>
-</figure>
-
-### Using AZs
-
-- VPC **subnets** are created per AZ. Load balancers, Auto Scaling groups, ECS services and EKS node groups take a **list of subnets**: that list is your AZ spread.
-- Use **at least two AZs** for HA; **three is preferred**. Losing one of three AZs removes only about a third of capacity and leaves a majority for clustered systems.
-- **Availability is limited by the weakest link.** A multi-AZ application tied to a single-AZ database inherits the database's availability.
-- Design for **static stability**: run enough spare capacity in every AZ that a failure needs no new launches or control-plane actions to recover.
-
-### Latency anchors
-
-| Path | Typical latency |
-|---|---|
-| Within one AZ | Under 1 ms |
-| Between AZs in a Region | About 1 to 2 ms |
-| User to nearest Edge Location | About 5 to 30 ms |
-| Between Regions / user to a remote Region | Tens to hundreds of ms |
-
-These numbers explain why synchronous replication stops at the Region boundary, and why CloudFront exists.
-
-### Single-AZ, multi-AZ or multi-Region?
-
-| Option | When to use | Cost of the choice |
-|---|---|---|
-| Single-AZ | Development and test only | One AZ event takes the system down |
-| **Multi-AZ** | **The production default** | Small cross-AZ data-transfer charges |
-| Multi-Region | Only when RTO/RPO, global latency or regulation demands it | Can double infrastructure cost; multiplies pipelines, monitoring and data-consistency questions |
-
-!!! danger "The single-AZ production system"
-    Running production in one AZ to avoid cross-AZ transfer charges is a classic false economy. AZ-level events happen every year somewhere. Multi-AZ is the non-negotiable production baseline in this module.
-
-## Operating It: Security, Performance, Cost and Monitoring
-
-**Security**
-
-- Treat Regions as **compliance boundaries**. Organisations can block resource creation outside approved Regions using the `aws:RequestedRegion` condition key in a Service Control Policy (see [8.1](../unit8/topic1.md)).
-- **KMS keys are Regional**: data encrypted in one Region needs a key strategy to be readable in another (see [8.3](../unit8/topic3.md)).
-- The ACM certificate used by CloudFront must be requested in **`us-east-1`**.
-- Edge services absorb attacks before they reach your Region: **Shield Standard** is automatic and free on CloudFront and Route 53; **WAF** filters web attacks at the edge (see [8.2](../unit8/topic2.md)).
-- Keep origins private: with **Origin Access Control (OAC)**, an S3 bucket stays private while CloudFront serves it globally.
-
-**Performance**
-
-- Serve users from the edge; choose Regions by measured latency.
-- Use **versioned file names** (`app.3f9a1c.js`) with long TTLs instead of frequent invalidations.
-- Put in the cache key **only** what changes the response. Forwarding all cookies or query strings fragments the cache and destroys the hit ratio.
-
-**Cost: placement drives the bill**
-
-| Traffic | Billed? |
-|---|---|
-| Data transfer **in** from the Internet | Free |
-| Data transfer **out** to the Internet | Billed per GB |
-| Between AZs | Billed (about $0.01/GB each direction) |
-| Between Regions | Billed at higher rates |
-| From AWS origins (S3, ALB) to CloudFront | Free |
-
-Because origin fetches are free, a high cache hit ratio can make CloudFront **cheaper** than serving directly from the Region while also being faster. Chatty microservices spread across AZs pay cross-AZ charges constantly. Use **price classes** to exclude expensive edge geographies if your users are local.
-
-**Monitoring**
+## Monitoring and Observability
 
 - Global services such as CloudFront publish CloudWatch metrics to **`us-east-1`**.
 - Compare metrics **per AZ**: one AZ diverging from the others is the classic early sign of a zonal problem. Averages hide it.
@@ -365,30 +278,6 @@ Because origin fetches are free, a high cache hit ratio can make CloudFront **ch
 | **Latency solved at two scales**: Regions for continents, the edge for the last mile | **Caching adds consistency problems**: stale content, invalidation cost, personalised content caches poorly |
 | **Attacks absorbed at the edge** before they reach your Regional resources | **Operational multiplication**: each extra Region multiplies pipelines, dashboards and on-call load |
 
-## Common Mistakes
-
-### Beginner Mistakes
-
-| Mistake | Why it is wrong | Do instead |
-|---|---|---|
-| Deploying everything into one AZ or subnet | One AZ event takes everything down | Spread across at least two, ideally three AZs |
-| Assuming `us-east-1a` is the same zone in every account | AZ names are shuffled per account | Use AZ IDs across accounts |
-| "CloudFront caches content in AZs" | Caches live in Edge Locations, not AZs | Keep the three layers distinct |
-| Believing data replicates between Regions automatically | It never does without explicit configuration | Configure cross-Region replication deliberately |
-| Hard-coding a Region in code or templates | Blocks multi-Region deployment later | Make the Region a parameter |
-| Making an S3 bucket public "so CloudFront works" | Exposes the data directly | Use Origin Access Control |
-| Requesting the CloudFront certificate in the wrong Region | CloudFront only uses ACM certificates from `us-east-1` | Request it in `us-east-1` |
-
-### Production Mistakes
-
-| Mistake | Consequence | Remedy |
-|---|---|---|
-| Multi-AZ compute with a single-AZ database or single NAT gateway | Hidden zonal single point of failure | Make every tier multi-AZ |
-| Forwarding all cookies and headers to the origin | Hit ratio collapses; "CloudFront does not help" | Minimal cache key |
-| Recovery that depends on launching new resources | Fails when the control plane is impaired | Static stability: spare capacity already running |
-| Never testing AZ or Region failover | DR exists only in a diagram | Regular failure drills |
-| Leaving default quotas in the DR Region | Failover cannot scale | Raise quotas in advance |
-
 ## Summary
 
 The AWS global infrastructure is a three-layer answer to three permanent problems: **Regions** answer law and geography, **Availability Zones** answer failure, and **Edge Locations with CloudFront** answer the speed of light.
@@ -401,7 +290,7 @@ The AWS global infrastructure is a three-layer answer to three permanent problem
 | **Edge and CloudFront** | Edge Locations cache and terminate connections near users; they cannot run EC2 |
 | **HA, fault tolerance, DR** | HA survives with brief degradation, fault tolerance with none; DR recovers elsewhere, sized by RTO and RPO |
 | **Service scope** | Global, Regional and Zonal; Regional managed services give multi-AZ for free, Zonal ones make it your job |
-| **Cost** | Placement drives cost: egress, cross-AZ and cross-Region traffic are billed; CloudFront can reduce egress cost |
+| **Cost** | Placement drives cost: egress, cross-AZ and cross-Region traffic are billed, so resilience has a per-gigabyte price |
 
 **Next:** with the physical foundation in place, [1.2 AWS IAM](topic2.md) explains who is allowed to do what on it.
 

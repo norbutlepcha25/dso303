@@ -120,34 +120,11 @@ flowchart TB
 
 ### Why This Service or Concept Exists
 
-#### The problem: keys are harder to protect than data
-
-Encrypting data is easy; any programming language offers AES in a few lines. The difficult problems are all about the **keys**:
-
-- Where is the key stored? If it sits in a configuration file next to the encrypted data, encryption adds nothing.
-- Who can use it, and how is that decided and changed?
-- How is its use audited, so that a breach can be scoped ("which records did the attacker decrypt?")?
-- How is it rotated without re-encrypting petabytes of data?
-- How is it made highly available and durable? Losing the key means losing all data encrypted under it.
-- How is it destroyed, provably, when data must be erased?
-
-Before managed key services, organisations either stored keys in software (weak) or bought on-premises hardware security modules (strong, but expensive, complex to cluster, and difficult to integrate with applications and storage systems).
-
-#### Why AWS introduced KMS
-
-AWS introduced KMS in 2014 to make **strong key management the default rather than a specialist project**. KMS provides HSM-backed keys without customers operating HSMs, a policy language consistent with IAM, automatic CloudTrail logging, regional high availability and durability, and native integration so that services such as S3 and EBS can encrypt data with a customer's key by setting one parameter.
-
-#### Benefits over older methods
-
-| Concern | Keys in application config or code | On-premises HSM | AWS KMS |
-|---------|------------------------------------|-----------------|---------|
-| Key exposure | Keys readable by anyone with file or repository access | Keys never leave HSM | Keys never leave KMS HSMs in plaintext |
-| Access control | Filesystem or none | HSM-specific user model | Key policies, IAM, grants, condition keys |
-| Audit | Usually none | HSM logs, separately managed | CloudTrail for every call, integrated with the rest of AWS |
-| Availability and durability | Your responsibility | Your cluster design | Managed, regional, highly durable |
-| Rotation | Manual re-encryption | Manual | Automatic or on-demand rotation without re-encrypting data |
-| Service integration | None | Custom connectors | Native in over a hundred AWS services |
-| Cost | Hidden operational cost | High capital and staff cost | Approximately a dollar per key per month plus per-request charges (verify pricing) |
+- **Keys are harder to protect than data:** encrypting is easy, but storing, authorising, auditing, rotating and destroying keys is difficult, and a key next to its data adds nothing.
+- **Losing a key loses the data:** keys must be highly available and durable, because everything encrypted under them becomes unreadable without them.
+- **Older options were weak or costly:** software keys were easy to steal, while on-premises HSMs were strong but expensive and hard to integrate.
+- **Managed HSM-backed keys:** KMS keeps keys inside its HSMs, controls them with policies consistent with IAM, and logs every use in CloudTrail.
+- **Encryption by default:** native integration lets services such as S3, EBS and RDS encrypt with a customer's key by setting one parameter, with rotation that needs no re-encryption.
 
 ### Core Concepts
 
@@ -488,7 +465,7 @@ flowchart LR
 
 #### Server-side and client-side encryption choices for S3
 
-[Section 6.1](../unit6/topic1.md#encryption-and-kms) introduced the S3 encryption options. With the mechanics above, they can now be compared as key-control decisions.
+[Section 6.1](../unit6/topic1.md#encryption-across-the-storage-services) introduced the S3 encryption options. With the mechanics above, they can now be compared as key-control decisions.
 
 | Option | Who holds the key | KMS involved | Audit of key use | Typical requirement |
 |--------|-------------------|--------------|------------------|---------------------|
@@ -683,90 +660,15 @@ FIPS 140-3 validated HSMs; no plaintext key export; SigV4-authenticated TLS API;
 | EBS encryption by default | Per Region, with a default key | Enable in every Region, with a customer managed key for production |
 | S3 default encryption | SSE-S3, SSE-KMS, DSSE-KMS; Bucket Key on or off | SSE-KMS with Bucket Key for confidential data |
 
-### Design Considerations
-
-| Concern | Design question | Guidance |
-|---------|-----------------|----------|
-| Key granularity | One key per what? | Per application, data domain, environment and classification; per tenant only when tenant-level revocation or crypto-shredding is required. Too few keys increase blast radius; too many increase cost and policy sprawl |
-| Availability | What happens if the key is disabled? | Treat keys as tier-0 dependencies; protect `DisableKey` and `ScheduleKeyDeletion`; monitor them |
-| Durability | Can data outlive the key? | Only if the key remains; plan retention of keys for the retention period of data and backups |
-| Latency | How many KMS calls per request? | Aim for zero per request in hot paths through caching and envelope encryption |
-| Cost | Request volume | Bucket Keys, caching, fewer keys |
-| Multi-account | Where do keys live? | Either in each workload account (simpler, service-local) or in a central security account (central control, cross-account complexity); many organisations keep keys with the workload and enforce standards through SCPs and IaC |
-| Disaster recovery | Can the DR Region decrypt backups? | Copy backups with re-encryption under a destination-Region key; use multi-Region keys only when client-side ciphertext must decrypt in both Regions |
-| Maintainability | How are key policies managed? | As code, reviewed, with policy validation (IAM Access Analyzer) |
-
 ### AWS Best Practices
 
-| Pillar | Practice for encryption at rest |
-|--------|-------------------------------|
-| Operational Excellence | Define keys and key policies in IaC; tag keys; document key ownership; automate compliance checks with AWS Config rules such as encryption-enabled rules for S3, EBS and RDS |
-| Security | Encrypt all data at rest; customer managed keys for sensitive data; separate administrators from users; encryption context; `kms:ViaService`; protect deletion; audit with CloudTrail; use IAM Access Analyzer to detect external access to keys |
-| Reliability | Protect keys against deletion and disabling; plan cross-Region key availability for DR; monitor throttling |
-| Performance Efficiency | Envelope encryption, Bucket Keys, data key caching, service-side caching |
-| Cost Optimization | Consolidate keys by domain; Bucket Keys; avoid unnecessary custom key stores |
-| Sustainability | Fewer KMS calls and less re-encryption reduce compute; lifecycle-delete data and retire keys that protect nothing |
-
-### Security Considerations
-
-- **IAM and least privilege**: grant `kms:Decrypt` only to roles that need plaintext; grant `kms:Encrypt` or `kms:GenerateDataKey` separately to writers. A log producer may need only to encrypt.
-- **Key policy hygiene**: avoid `"Principal": "*"` without strong conditions; include the account delegation statement deliberately; validate with IAM Access Analyzer.
-- **Confused deputy protection**: when allowing service principals such as `logs.amazonaws.com` or `sns.amazonaws.com`, add `aws:SourceArn` or `aws:SourceAccount` conditions.
-- **Private access**: use a KMS interface VPC endpoint ([Section 8.2](../unit8/topic2.md)) so private workloads reach KMS without the internet, and optionally endpoint policies.
-- **Organisation guardrails**: SCPs that deny `kms:ScheduleKeyDeletion` except for a break-glass role, deny creation of unencrypted resources, and deny `kms:PutKeyPolicy` outside the security pipeline.
-- **Logging and alerting**: EventBridge rules on `DisableKey`, `ScheduleKeyDeletion` and `PutKeyPolicy` that notify the security team.
-- **Compliance**: customer managed keys with documented rotation and access reviews are commonly required evidence for PCI DSS, HIPAA and ISO 27001 audits.
-
-### Performance Optimization
-
-| Technique | Effect |
-|-----------|--------|
-| Envelope encryption | Bulk encryption local; one KMS call per data key |
-| Data key caching (Encryption SDK) | Reuses data keys within bounded limits |
-| S3 Bucket Keys | Large reduction in KMS calls for SSE-KMS |
-| Reuse SDK clients and connections | Avoid TLS handshake cost per KMS call |
-| Exponential backoff with jitter | Handle `ThrottlingException` gracefully ([Chapter 4.3](../unit4/topic3.md) retry pattern) |
-| Monitor KMS usage | CloudWatch metrics for KMS API usage against quotas, and Service Quotas alarms |
-| Prefer symmetric operations | Symmetric operations are faster and have higher quotas than asymmetric ones |
-
-### Cost Optimization
-
-- Enable **S3 Bucket Keys** on SSE-KMS buckets unless per-object audit context is a hard requirement.
-- Consolidate keys by domain instead of per resource; delete keys that protect no data (after confirming, with CloudTrail, that they are unused for a long period, and after the waiting period).
-- Use AWS managed or AWS owned keys for non-sensitive data where no cross-account or custom policy is needed.
-- Cache decrypted data keys and secrets in applications.
-- Use **Cost Explorer** filtered by the KMS service and by usage type (requests versus keys) to find expensive request patterns; use **Trusted Advisor** and CloudTrail data to identify unused keys.
-
-### Integration with Other AWS Services
-
-| Service | How KMS is used | Architect's note |
-|---------|-----------------|------------------|
-| Amazon EBS | Volume data keys via grants; encryption by default per Region | Snapshots inherit the key; share only with customer managed keys |
-| Amazon RDS and Aurora | Storage, snapshots, read replicas, backups | Encryption chosen at creation; to encrypt an unencrypted database, snapshot, copy encrypted, restore |
-| Amazon DynamoDB | Always encrypted with AWS owned, AWS managed or customer managed key | Customer managed key enables audit and revocation |
-| Amazon ECR | Repository encryption with AES-256 (AWS owned) or KMS | KMS encryption must be chosen at repository creation |
-| AWS Lambda | Environment variables encrypted at rest; optional customer managed key; optional encryption helpers for client-side encryption of variable values | Prefer Secrets Manager for secrets rather than encrypted environment variables |
-| Amazon ECS on Fargate | Ephemeral storage encrypted; customer managed key option for ephemeral storage and managed storage | Configure at cluster level |
-| Amazon EKS | Envelope encryption of Kubernetes Secrets in etcd with a KMS key (enabled by default on newer cluster versions with AWS owned keys; customer managed key optional) | [Chapter 3.3](../unit3/topic3.md) |
-| CloudWatch Logs | Log group encryption with a customer managed key | Key policy must allow `logs.<region>.amazonaws.com` with `kms:EncryptionContext:aws:logs:arn` |
-| Amazon SQS, SNS, Kinesis | Server-side encryption with KMS | Producers need `kms:GenerateDataKey`; consumers need `kms:Decrypt`; event sources such as EventBridge or S3 need key policy permission |
-| AWS Backup | Vault encryption with KMS; cross-account and cross-Region copy | Use a separate backup account with its own keys for ransomware resilience |
-| Secrets Manager, Parameter Store, AWS Private CA | Protect secrets and CA keys | Covered in later parts |
-
-!!! example "Architecture example: encrypted event pipeline"
-    An S3 bucket encrypted with SSE-KMS sends object-created events to an SQS queue also encrypted with a customer managed key. For this to work, the queue's key policy must allow the S3 service principal to call `kms:GenerateDataKey` and `kms:Decrypt` (with `aws:SourceArn` set to the bucket). The consuming Lambda function's role needs `kms:Decrypt` on the queue key to receive messages and on the bucket key to read the object. Missing one of these statements produces silent message loss or `AccessDenied` errors, a common Unit VI integration problem (see [6.1](../unit6/topic1.md) and [6.3](../unit6/topic3.md)).
-
-### Common Architecture Patterns
-
-| Pattern | Description | When to use |
-|---------|-------------|-------------|
-| Default encryption everywhere | Every storage service encrypted with at least AWS managed keys, enforced by Config and SCPs | Baseline for every account |
-| Key per data domain | One customer managed key per bounded context of the microservice architecture ([Chapter 4.1](../unit4/topic1.md)) | Aligns key access with service ownership |
-| Tenant isolation with encryption context | One key, with `tenantId` in context, and ABAC conditions per tenant role | Multi-tenant SaaS with many tenants |
-| Key per tenant | Separate key per tenant | Tenants require revocation or crypto-shredding of their own data |
-| Central backup vault account | Backups copied to an isolated account with its own keys | Ransomware and insider resilience |
-| Client-side encryption before storage | Encryption SDK encrypts fields before they reach the database | Storage and DBAs must not see plaintext |
-| Sign and verify | Asymmetric KMS key signs tokens or artefacts; verifiers use the public key | Code signing, JWT issuance, document signing |
+- **Security:** encrypt all data at rest, using customer managed keys for sensitive data.
+- **Security:** separate key administrators from key users, and bind usage with encryption context and `kms:ViaService`.
+- **Security:** protect keys against deletion and disabling, audit their use with CloudTrail, and detect external access with IAM Access Analyzer.
+- **Operational Excellence:** define keys and key policies in IaC, tag keys with their owners, and check encryption compliance with AWS Config rules.
+- **Reliability:** plan cross-Region key availability for disaster recovery and monitor KMS request throttling.
+- **Performance Efficiency:** use envelope encryption, S3 Bucket Keys and data key caching to reduce KMS calls.
+- **Cost Optimization:** consolidate keys by data domain and avoid custom key stores unless a requirement demands them.
 
 ### Industry Use Cases
 
@@ -791,20 +693,6 @@ FIPS 140-3 validated HSMs; no plaintext key export; SigV4-authenticated TLS API;
 - **Operational risk of self-inflicted outages**: a disabled or deleted key stops dependent services.
 - **Policy complexity**: key policies, IAM, grants and SCPs interact in ways that confuse newcomers.
 - **Cost at scale** if Bucket Keys and caching are not used.
-
-### Common Mistakes
-
-| Mistake | Consequence | Correction |
-|---------|-------------|------------|
-| Removing the account delegation statement from a key policy | Key becomes unmanageable; IAM policies stop working | Keep it, or ensure an explicit administrator statement; validate with Access Analyzer |
-| Using `aws/ebs` or `aws/rds` for data that must be shared | Snapshots cannot be shared cross-account | Use customer managed keys |
-| Scheduling deletion of an "unused" key | Old backups or archives become unreadable | Check CloudTrail for usage, disable first, wait, use 30-day window |
-| Granting `kms:*` to application roles | Applications can change policies or delete keys | Grant only cryptographic actions needed |
-| Storing plaintext data keys | Encryption becomes ineffective | Keep plaintext data keys only in memory |
-| Placing personal data in encryption context | Sensitive data exposed in CloudTrail | Use opaque identifiers |
-| Forgetting service principals in key policies for SNS, SQS, CloudWatch Logs | Silent delivery failures | Add service principal statements with source conditions |
-| No backoff on throttling | Cascading failures under load | Retries with exponential backoff and jitter; caching; quota increases |
-| Assuming rotation re-encrypts data | False sense of compliance | Understand that rotation affects new encryptions only |
 
 ### Summary
 
@@ -831,9 +719,11 @@ ACM sits at the **edge and ingress layer** of the architecture: CloudFront distr
 
 ### Why This Service or Concept Exists
 
-Encryption in transit protects confidentiality and integrity against eavesdropping and man-in-the-middle attacks, and **authenticates the server** (and, with mTLS, the client). Before managed certificates, teams bought certificates from a CA, generated private keys on servers, installed certificates manually and tracked expiry dates in spreadsheets. Expired certificates are one of the most common causes of preventable outages, and private keys copied between servers are a frequent source of compromise.
-
-ACM addresses both: **private keys for ACM certificates are generated and protected by AWS and never exposed** (except for the deliberately exportable type), and **renewal is automatic** when validation remains in place. Public certificates used with integrated services are provided at no additional charge, removing cost as an excuse for unencrypted endpoints.
+- **Protection on the wire:** TLS protects confidentiality and integrity against eavesdropping and man-in-the-middle attacks, and authenticates the server (and, with mTLS, the client).
+- **Manual certificates cause outages:** certificates bought and installed by hand, with expiry tracked in spreadsheets, make expired certificates a common cause of preventable outages.
+- **Copied private keys cause compromise:** private keys generated on and copied between servers are a frequent source of leaks.
+- **Managed keys and renewal:** ACM generates and protects private keys that are never exposed (except for exportable certificates) and renews certificates automatically while validation remains in place.
+- **No cost barrier:** public certificates on integrated services are free, removing cost as an excuse for unencrypted endpoints.
 
 ### Core Concepts
 
@@ -1023,67 +913,15 @@ Clients reach AWS service APIs over HTTPS by default, but some can be configured
 | mTLS | TLS with certificates presented by both client and server |
 | Short-lived certificate mode | Private CA mode for certificates valid up to seven days, at lower cost |
 
-### Design Considerations
-
-- **Scalability**: TLS termination at ALB, NLB and CloudFront scales automatically; do not build custom TLS proxies for scale.
-- **Availability**: certificates are deployed in the integrated service, so serving does not depend on ACM availability; the risk is expiry, handled by DNS validation and monitoring.
-- **Latency**: terminate TLS as close to users as possible (CloudFront edge) with TLS 1.3 and session resumption; keep origin connections persistent.
-- **Security versus observability**: termination enables WAF and layer-7 routing; passthrough prevents both. Re-encryption is the usual compromise for regulated data.
-- **Certificate strategy**: prefer many specific certificates managed as code over one wildcard shared widely; a wildcard's compromise affects every subdomain.
-- **Operational complexity**: private PKI adds trust distribution, revocation and hierarchy design; use it when internal identity is genuinely needed.
-
 ### AWS Best Practices
 
-| Pillar | Practice |
-|--------|----------|
-| Operational Excellence | Certificates in IaC with DNS validation records; expiry alarms and EventBridge rules; Config rules for listeners |
-| Security | TLS 1.2 minimum, TLS 1.3 preferred; HTTPS redirects; HSTS; `aws:SecureTransport` denies; mTLS for B2B and service-to-service where identity matters; restrict who can request or import certificates |
-| Reliability | DNS validation; monitor renewal events; avoid imported certificates or automate their replacement |
-| Performance Efficiency | TLS at the edge, HTTP/2 and HTTP/3 on CloudFront, connection reuse to origins |
-| Cost Optimization | Use free public ACM certificates on integrated services; short-lived mode for high-volume private workload certificates; share one Private CA across accounts with RAM |
-| Sustainability | Offload TLS to managed services running on efficient hardware instead of self-managed proxy fleets |
-
-### Security Considerations
-
-- IAM: restrict `acm:ImportCertificate`, `acm:DeleteCertificate`, `acm:ExportCertificate` and all `acm-pca:*` issuance actions to specific roles; issuance from a private CA is equivalent to minting identities.
-- Security groups ([Section 8.2](../unit8/topic2.md#vpc-design-and-security-groups)): allow 443 from the internet only to the load balancer or CloudFront origin-facing ranges; keep targets private.
-- Private versus public resources: internal ALBs with private certificates for internal APIs; public ALBs only where needed.
-- Logging: ALB access logs record TLS protocol and cipher per request (useful for finding legacy clients before tightening policies); CloudFront logs; CloudTrail for ACM and Private CA.
-- Compliance: PCI DSS requires strong cryptography on public networks and commonly end-to-end encryption; FIPS endpoints and FIPS TLS policies for US government workloads.
-
-### Performance Optimization and Cost Optimization
-
-| Area | Technique |
-|------|-----------|
-| Handshake cost | TLS 1.3, session resumption, CloudFront edge termination, keep-alive to origins |
-| Connection reuse | Reuse SDK and HTTP clients in Lambda and containers so TLS handshakes are not repeated per request |
-| Load balancing | Offload TLS to ALB and NLB rather than application CPUs |
-| Certificate cost | Free public certificates on integrated services; exportable certificates only where necessary |
-| Private CA cost | One shared CA hierarchy per organisation, short-lived mode where suitable; review with Cost Explorer |
-
-### Integration with Other AWS Services
-
-| Service | Integration |
-|---------|-------------|
-| Route 53 | Automatic creation of DNS validation records |
-| CloudFront | Viewer certificates from us-east-1; origin protocol policy HTTPS only; response headers policy for HSTS |
-| ALB and NLB | HTTPS and TLS listeners, SNI, trust stores for mTLS, TLS policies |
-| API Gateway | Custom domains, mTLS truststores |
-| AWS WAF | Inspection requires termination at CloudFront, ALB or API Gateway |
-| EventBridge and CloudWatch | Expiry and renewal monitoring |
-| EKS | AWS Load Balancer Controller annotations referencing ACM certificate ARNs; cert-manager with Private CA issuer |
-| ECS Service Connect and VPC Lattice | Private CA and ACM certificates for internal traffic |
-| KMS | Protects exported private keys and Private CA keys |
-
-### Common Architecture Patterns
-
-| Pattern | Description |
-|---------|-------------|
-| Edge termination with encrypted origin | CloudFront (us-east-1 certificate) to ALB over HTTPS (Regional certificate) to ECS targets over HTTPS |
-| API gateway pattern with mTLS | Partners authenticate with client certificates at API Gateway; backend Lambda receives validated identity |
-| Zero-trust service network | VPC Lattice with HTTPS and IAM auth policies, or Istio mTLS on EKS, so every call is encrypted and authenticated |
-| Private PKI hub | Central Private CA in a security account shared through RAM to workload accounts |
-| Expiry automation | EventBridge rule on expiry events to SNS or chat and a ticketing workflow ([Section 7.3](../unit7/topic3.md#creating-cloudwatch-dashboards-and-alarms)) |
+- **Security:** require TLS 1.2 as a minimum and prefer TLS 1.3, with HTTPS redirects and HSTS on web endpoints.
+- **Security:** deny unencrypted API access with `aws:SecureTransport` and use mTLS where client identity matters.
+- **Security:** restrict who can request or import certificates.
+- **Operational Excellence:** manage certificates and DNS validation records in IaC, and alarm on expiry through CloudWatch and EventBridge.
+- **Reliability:** prefer DNS validation, monitor renewal events, and avoid imported certificates or automate their replacement.
+- **Performance Efficiency:** terminate TLS at the edge, enable HTTP/2 and HTTP/3 on CloudFront, and reuse connections to origins.
+- **Cost Optimization:** use free public ACM certificates on integrated services and share one Private CA across accounts with AWS RAM.
 
 ### Industry Use Cases
 
@@ -1107,18 +945,6 @@ Clients reach AWS service APIs over HTTPS by default, but some can be configured
 - **Private PKI costs and complexity** with AWS Private CA.
 - Termination at managed services means the provider's infrastructure sees plaintext, which some strict regimes disallow (then use passthrough).
 
-### Common Mistakes
-
-| Mistake | Consequence | Correction |
-|---------|-------------|------------|
-| Requesting a CloudFront certificate in the application's Region | Certificate not selectable in CloudFront | Request in us-east-1 |
-| Email validation or deleted CNAME | Renewal fails, outage at expiry | DNS validation; keep records in IaC; monitor |
-| HTTP listener without redirect | Users and APIs send data in clear | Redirect 80 to 443; HSTS |
-| Origin protocol HTTP only on CloudFront | Unencrypted segment across the internet | Origin protocol policy HTTPS only |
-| Old TLS policies left in place | Weak ciphers accepted | Adopt current TLS 1.2+/1.3 policies after checking access logs |
-| mTLS on API Gateway with default endpoint enabled | Clients bypass mTLS | Disable the execute-api endpoint |
-| Designing new meshes on App Mesh | Forced migration | Use VPC Lattice, Service Connect or Istio |
-
 ### Summary
 
 Encryption in transit on AWS is built from TLS at every hop, with ACM providing managed, auto-renewing public certificates for integrated services and AWS Private CA providing internal identities. The architect decides where TLS terminates (termination, re-encryption or passthrough), where client identity is required (mTLS on API Gateway, ALB, VPC Lattice, Service Connect or Istio), which TLS policies are acceptable, and how expiry is monitored.
@@ -1141,17 +967,12 @@ It sits between **identity** (the IAM role of the workload) and the **protected 
 
 ### Why This Service or Concept Exists
 
-The first rule of secrets is: **if a workload can use an IAM role, it should not have a secret at all**. Calls to S3, DynamoDB, SQS or KMS from ECS, EKS (Pod Identity or IRSA), Lambda and EC2 use temporary role credentials ([Section 8.1](../unit8/topic1.md#iam-users-groups-and-roles)). Secrets remain necessary for systems that do not understand IAM: relational database users (unless IAM database authentication is used), third-party SaaS APIs, legacy systems, signing keys for webhooks, and OAuth client secrets.
-
-| Storage approach | Problems |
-|------------------|----------|
-| Hard-coded in source | Visible to everyone with repository access, persists forever in Git history, leaked by public repositories; rotation requires a redeploy |
-| Plain environment variables in task definitions or function configuration | Visible to anyone who can describe the task or function; logged by debugging tools; copied into CI logs; no rotation |
-| Configuration files on servers or container images | Baked into images and snapshots; spread across hosts |
-| Shared spreadsheets or chat | No audit, no revocation, human exposure |
-| Secrets Manager | Encrypted with KMS, IAM-controlled, CloudTrail audited, rotated automatically, retrieved at runtime |
-
-Leaked credentials are one of the most common initial access vectors in cloud breaches. Automatic rotation limits how long a leaked secret is useful, and runtime retrieval means a secret never needs to exist in code, images or pipelines.
+- **Roles first:** if a workload can use an IAM role, it should hold no secret at all ([Section 8.1](../unit8/topic1.md#iam-users-groups-and-roles)).
+- **Some systems need secrets:** database users, third-party SaaS APIs, legacy systems, webhook signing keys and OAuth client secrets do not understand IAM.
+- **Hard-coded secrets leak:** secrets in source code persist in Git history and public repositories, and rotating them requires a redeploy.
+- **Plain environment variables and files leak:** values in task definitions, function configuration and images are visible to anyone who can describe them and are copied into logs and snapshots.
+- **Managed secret storage:** Secrets Manager encrypts with KMS, controls access with IAM, audits with CloudTrail and delivers secrets at runtime, so they never exist in code, images or pipelines.
+- **Rotation limits damage:** automatic rotation shortens how long a leaked secret remains useful.
 
 ### Core Concepts
 
@@ -1307,7 +1128,7 @@ Workloads in private subnets reach Secrets Manager through an **interface VPC en
 | ASCP | AWS Secrets and Configuration Provider for the Kubernetes Secrets Store CSI Driver |
 | Secrets Manager Agent | Local caching service for retrieving secrets from compute environments |
 
-### Configuration Options, Design Considerations and Best Practices
+### Configuration Options and Best Practices
 
 | Decision | Options | Guidance |
 |----------|---------|----------|
@@ -1319,38 +1140,12 @@ Workloads in private subnets reach Secrets Manager through an **interface VPC en
 | Replication | None or Regions | Match the DR strategy of the application |
 | Retrieval | Injection at start, SDK with cache, extension, CSI | Prefer runtime retrieval with caching where rotation must be picked up without restarts |
 
-| Pillar | Practice |
-|--------|----------|
-| Operational Excellence | Secrets and rotation in IaC without plaintext values; alarms on rotation failures via EventBridge and CloudTrail events |
-| Security | Roles instead of secrets where possible; least privilege on secret ARNs or tags; customer managed keys for sensitive secrets; resource policies with `BlockPublicPolicy`; VPC endpoints; secret scanning in CI |
-| Reliability | Alternating-users rotation; client refresh on authentication failure; replication for DR; tested rotation |
-| Performance Efficiency | Caching clients, Lambda extension, Secrets Manager Agent |
-| Cost Optimization | Parameter Store for non-secret configuration; consolidate structured values of one credential in one secret; cache to reduce API calls |
-| Sustainability | Fewer API calls and restarts through caching |
-
-### Security Considerations
-
-- **IAM least privilege**: grant `secretsmanager:GetSecretValue` on specific secret ARNs (using a trailing `-??????` wildcard for the random suffix) or by tag, never `*`.
-- **Separate permissions**: developers may create secrets in non-production; only pipelines may write production secrets; nobody needs to read production database passwords interactively.
-- **KMS**: key policy must allow the retrieving role through `kms:ViaService` for `secretsmanager.<region>.amazonaws.com`.
-- **Network**: interface VPC endpoints and `aws:SourceVpce` conditions; security groups allow rotation functions to reach databases.
-- **Logging**: CloudTrail records every `GetSecretValue` (not the value); alert on unusual retrieval patterns and on `DeleteSecret`, `PutResourcePolicy` and rotation failures.
-- **Compliance**: rotation evidence and access reviews support PCI DSS, SOC 2 and ISO 27001 controls.
-
-### Integration with Other AWS Services and Common Patterns
-
-| Integration or pattern | Description |
-|------------------------|-------------|
-| RDS, Aurora, Redshift, DocumentDB | Managed master passwords and rotation templates |
-| ECS and Fargate | `secrets` in task definitions |
-| EKS | ASCP and CSI driver or External Secrets Operator with Pod Identity |
-| Lambda | Extension or caching SDK; rotation functions |
-| CodeBuild and CloudFormation | Buildspec secrets and dynamic references |
-| EventBridge | Rotation and secret change events trigger notifications or redeployments |
-| Security Hub and Config | Controls such as "secrets should have rotation enabled" and "unused secrets should be removed" |
-| Centralised secrets account | Secrets in a security account shared cross-account with resource policies and customer managed keys; trade-off against service ownership |
-| Rotation-aware retry | On authentication error, refresh secret and retry once ([Chapter 4.3](../unit4/topic3.md) retry pattern) |
-| IAM database authentication | Replace database passwords with short-lived IAM tokens for supported engines, removing the secret |
+- **Security:** use roles instead of secrets wherever possible, and grant least privilege on secret ARNs or tags.
+- **Security:** use customer managed keys for sensitive secrets, `BlockPublicPolicy` on resource policies, VPC endpoints, and secret scanning in CI.
+- **Operational Excellence:** define secrets and rotation in IaC without plaintext values, and alarm on rotation failures through EventBridge.
+- **Reliability:** use alternating-users rotation, refresh clients on authentication failure, and replicate secrets to match the DR strategy.
+- **Performance Efficiency:** retrieve through caching clients, the Lambda extension or the Secrets Manager Agent.
+- **Cost Optimization:** keep non-secret configuration in Parameter Store and store the structured values of one credential in one secret.
 
 ### Industry Use Cases
 
@@ -1368,18 +1163,6 @@ Workloads in private subnets reach Secrets Manager through an **interface VPC en
 | KMS encryption, IAM control and CloudTrail audit | Applications must be written to tolerate rotation |
 | Cross-account sharing and multi-Region replication | Environment-variable injection in ECS does not refresh without restarts |
 | Native integration with ECS, EKS, Lambda, CodeBuild and CloudFormation | Adds a runtime dependency unless cached appropriately |
-
-### Common Mistakes
-
-| Mistake | Consequence | Correction |
-|---------|-------------|------------|
-| Putting secret values in CloudFormation parameters or Terraform variables with defaults | Values visible in templates, state files and console | Let Secrets Manager generate values; use dynamic references; protect Terraform state |
-| Granting `GetSecretValue` on `*` | Any compromised workload can read every secret | Scope to ARNs or tags |
-| Enabling rotation without application refresh logic | Outage after first rotation | Cache with TTL and refresh on authentication failure; alternating users |
-| Rotation function cannot reach Secrets Manager or the database | Rotation stuck in `AWSPENDING` | VPC endpoint or NAT route; security group rules |
-| Using `aws/secretsmanager` for cross-account secrets | Access denied in other account | Customer managed key with key policy |
-| Printing secrets in logs or CI output | Leak | Structured logging with redaction; CodeBuild masking |
-| Storing secrets used by IAM-capable services | Unnecessary long-lived credentials | Use IAM roles |
 
 ### Summary
 

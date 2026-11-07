@@ -170,17 +170,17 @@
         - **Correlation:** the investigator links the function version or deployment to the pipeline run, and the run to the engineer via the source identity and GitHub audit logs.
         - **Limitation:** source identity persists across role chaining but not into the Lambda runtime's own role session, so correlation via deployment metadata is needed.
 
-5. Compare IAM Roles Anywhere, long-lived access keys and a VPN to an EC2-hosted proxy for giving on-premises servers access to S3, considering security, operations and failure modes.
+5. A SaaS monitoring vendor assumes roles in many customers' accounts, and an Amazon SNS topic in your account is allowed to be used by an AWS service principal. Explain the two forms of the confused deputy problem these create and how each is prevented in policy.
 
     ??? success "Check your answer"
 
         A good answer covers:
 
-        - **Roles Anywhere:** servers use X.509 certificates from a trusted CA to obtain temporary role credentials; no static secret, but PKI and certificate lifecycle must be operated.
-        - **Long-lived access keys:** simple to set up but a permanent secret on disk; leakage, rotation burden and weak auditing.
-        - **VPN plus EC2 proxy:** keeps credentials in AWS, but adds a single point of failure, scaling and patching burden, and still needs authentication to the proxy.
-        - **Failure modes:** CA or certificate expiry for Roles Anywhere; key leakage for access keys; proxy or VPN outage for the proxy design.
-        - **Recommendation:** Roles Anywhere is generally preferred for security and operations.
+        - **Definition:** a confused deputy is a more-privileged entity tricked into acting on behalf of a less-privileged one.
+        - **Cross-account third party:** if another customer learns your role ARN, they could configure the vendor to access your account; the fix is an external ID that you generate and the vendor stores per customer, checked with `sts:ExternalId` in your trust policy.
+        - **AWS service principal:** a policy granting a service principal could be exploited through another customer's resource; the fix is `aws:SourceArn` and/or `aws:SourceAccount` conditions so that the service acts only for your resources.
+        - **Least privilege still applies:** the vendor's role should carry narrow permissions, so that even a successful misuse has a small blast radius.
+        - **Audit:** CloudTrail records the assumed role session and the service calls, allowing unexpected use to be detected.
 
 ### 8.1.2 IAM Policies and Permissions
 
@@ -1165,15 +1165,17 @@
         - **Cost:** fewer calls to KMS, lowering request costs (by up to about 99 per cent).
         - **CloudTrail change:** KMS events reference the bucket ARN rather than each object ARN, and there are far fewer events.
 
-5. Describe the permissions required for an S3 bucket with SSE-KMS to send notifications to an encrypted SQS queue.
+5. A key policy allows the CloudWatch Logs service principal to use a customer managed key. Explain the confused deputy risk this creates and the condition keys that remove it.
 
     ??? success "Check your answer"
 
         A good answer covers:
 
-        - **S3 permissions:** the queue policy must allow `s3.amazonaws.com` to `sqs:SendMessage`, with `aws:SourceArn` and `aws:SourceAccount` conditions.
-        - **KMS permissions:** the queue's key must be a customer managed key whose key policy allows `s3.amazonaws.com` to use `kms:GenerateDataKey` and `kms:Decrypt`.
-        - **Note:** the AWS managed key `aws/sqs` cannot be used because its policy cannot be changed.
+        - **Risk:** a statement granting a service principal such as `logs.amazonaws.com` could be exploited by another customer's resource, making the service act as a confused deputy that uses your key on their behalf.
+        - **`aws:SourceArn`:** restricts use of the key to requests the service makes for a specific resource, such as one log group ARN.
+        - **`aws:SourceAccount`:** restricts use to requests made on behalf of resources in your own account.
+        - **Encryption context:** CloudWatch Logs supplies the log group ARN as encryption context, so a `kms:EncryptionContext` condition can also bind the key to specific log groups.
+        - **Audit:** every use appears in CloudTrail, where the context shows which log group the key protected.
 
 #### Advanced Questions
 
@@ -1531,15 +1533,17 @@
         - **Application:** refreshes credentials using a caching client or proxy IAM authentication.
         - **Testing:** rotate in staging under load to confirm zero downtime.
 
-2. Evaluate a centralised secrets account against per-account secrets for a 60-account organisation.
+2. Design the access controls for a production database secret so that only the orders service can read it, only from inside the VPC, and so that accidental exposure or deletion can be detected and reversed.
 
     ??? success "Check your answer"
 
         A good answer covers:
 
-        - **Centralised:** single point of governance and audit; but cross-account access requires resource policies, customer managed keys, and creates a large blast radius.
-        - **Per-account:** isolation and simpler permissions, but harder to govern consistently.
-        - **Recommendation:** per-account secrets with central guardrails, monitoring and IaC, plus a central account only for truly shared secrets.
+        - **Identity:** an IAM policy on the orders service role granting `secretsmanager:GetSecretValue` on that secret's ARN (or a hierarchical name prefix such as `prod/orders/`), plus `kms:Decrypt` on the secret's key through `kms:ViaService`.
+        - **Key:** a customer managed key whose key policy allows only the intended role to decrypt through Secrets Manager, so access needs both the secret permission and the key permission.
+        - **Network:** an interface VPC endpoint for Secrets Manager and a resource policy on the secret denying requests whose `aws:SourceVpce` is not that endpoint.
+        - **Exposure protection:** `BlockPublicPolicy` so that resource policies granting broad access are rejected.
+        - **Audit and recovery:** CloudTrail records every `GetSecretValue` call, and deletion uses a 7 to 30 day recovery window during which `RestoreSecret` is possible.
 
 3. Propose a strategy to eliminate as many secrets as possible from a microservice platform, and justify which remain.
 

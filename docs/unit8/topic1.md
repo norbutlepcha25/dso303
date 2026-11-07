@@ -103,41 +103,12 @@ flowchart TB
 
 ### Why This Service or Concept Exists
 
-#### The problem: shared secrets do not scale
-
-Before cloud identity services, organisations commonly managed access to infrastructure with shared administrator passwords, SSH keys copied between engineers, and service accounts whose passwords were embedded in configuration files. These practices fail in predictable ways:
-
-1. **No accountability**: when five people share one password, the logs cannot say who deleted the database.
-2. **No revocation**: when an engineer leaves, every shared secret they knew must be rotated, which is rarely done.
-3. **Secret sprawl**: long-lived credentials end up in source code, container images, CI variables and laptops, where they leak.
-4. **Coarse permissions**: a service account is typically either an administrator or useless, because fine-grained authorization was hard to express.
-
-An AWS account amplifies these risks. A single API credential can create thousands of instances for cryptocurrency mining, copy every S3 bucket, or delete every backup, within minutes and from anywhere on the internet. Credential compromise is consistently among the most common root causes of cloud security incidents.
-
-#### Why AWS introduced IAM, STS, roles and Identity Center
-
-AWS introduced these capabilities in stages, each addressing a weakness of the previous stage:
-
-| Stage | Capability | Problem solved | Remaining weakness |
-|-------|------------|----------------|--------------------|
-| Early AWS | Root account keys only | None beyond basic access | One all-powerful credential |
-| IAM users and groups | Individual identities with policies | Accountability and least privilege per person | Long-lived passwords and keys per person per account |
-| IAM roles and STS | Assumable identities with temporary credentials | No secrets to store in workloads; automatic expiry; cross-account access | Still one set of human identities per account if users are used |
-| Federation (SAML, OIDC) | Trust an external IdP | One corporate identity; joiners and leavers handled centrally | Per-account federation setup |
-| IAM Identity Center | Central workforce access to all accounts in an organisation | Single sign-on to many accounts with permission sets, temporary CLI credentials | Requires AWS Organizations for full value |
-| Workload federation (IRSA, Pod Identity, GitHub OIDC, Roles Anywhere) | Workloads outside or on top of AWS obtain role credentials from their native identity | Eliminates access keys in Kubernetes, CI/CD and on-premises servers | Requires careful trust policy conditions |
-| Centralised root access management | Remove root credentials from member accounts | Root credential risk across many accounts | Management account root still needs protection |
-
-#### Benefits over older methods
-
-| Concern | Shared secrets and local accounts | IAM roles, STS and Identity Center |
-|---------|-----------------------------------|-------------------------------------|
-| Credential lifetime | Months or years | Minutes to hours; automatic expiry |
-| Secret storage in workloads | Passwords in configuration files | None; the platform delivers credentials to the workload |
-| Joiner and leaver process | Manual per system | Central IdP; removal cuts access everywhere |
-| Accountability | Shared accounts hide the actor | Every session carries a named identity, recorded in CloudTrail |
-| Cross-account access | Duplicate users per account | One role assumption with an explicit trust relationship |
-| Least privilege | Coarse service accounts | Per-role policies, boundaries and conditions |
+- **Shared secrets do not scale:** shared administrator passwords and copied keys give no accountability, cannot be revoked when people leave, and sprawl into code, images and laptops where they leak.
+- **Cloud credentials are high-impact:** one leaked AWS key can launch, copy or delete resources across an account within minutes and from anywhere, so credential compromise is a leading cause of cloud incidents.
+- **Individual identities:** IAM users and groups gave each person a named identity with least-privilege permissions recorded in CloudTrail.
+- **Temporary credentials:** IAM roles and STS replaced stored secrets with short-lived, automatically expiring credentials that the platform delivers to workloads and that also enable cross-account access.
+- **Central workforce access:** federation and IAM Identity Center let one corporate identity reach many accounts, so a leaver is removed once and loses access everywhere.
+- **Keyless workloads everywhere:** workload federation (IRSA, EKS Pod Identity, GitHub OIDC, IAM Roles Anywhere) removes access keys from Kubernetes, CI/CD and on-premises servers.
 
 ### Core Concepts
 
@@ -292,7 +263,7 @@ A **confused deputy** is a more-privileged entity tricked into acting on behalf 
 | Platform | Identity mechanism | Trust principal | Credential delivery | Chapter |
 |----------|--------------------|-----------------|---------------------|---------|
 | EC2 instance | Role via instance profile | `ec2.amazonaws.com` | Instance Metadata Service (IMDSv2 required as best practice) | [1.3](../unit1/topic3.md) |
-| ECS task (EC2 or Fargate) | **Task role** for application calls; **task execution role** for the ECS agent to pull images, fetch secrets and write logs | `ecs-tasks.amazonaws.com` | Container credential endpoint (`AWS_CONTAINER_CREDENTIALS_RELATIVE_URI`) | [2.2](../unit2/topic2.md#security-considerations), [2.3](../unit2/topic3.md) |
+| ECS task (EC2 or Fargate) | **Task role** for application calls; **task execution role** for the ECS agent to pull images, fetch secrets and write logs | `ecs-tasks.amazonaws.com` | Container credential endpoint (`AWS_CONTAINER_CREDENTIALS_RELATIVE_URI`) | [2.2](../unit2/topic2.md), [2.3](../unit2/topic3.md) |
 | EKS pod, IRSA | Role per Kubernetes service account through the cluster's OIDC provider | `Federated` OIDC provider; `sts:AssumeRoleWithWebIdentity` | Projected service account token file and `AWS_ROLE_ARN` | [3.1](../unit3/topic1.md#iam-for-workloads-pod-identity) |
 | EKS pod, Pod Identity | Role associated with a service account through an EKS Pod Identity association | `pods.eks.amazonaws.com`; `sts:AssumeRole` and `sts:TagSession` | Pod Identity Agent on each node | [3.1](../unit3/topic1.md#iam-for-workloads-pod-identity) |
 | EKS nodes | Node IAM role through an instance profile | `ec2.amazonaws.com` | IMDS | [3.1](../unit3/topic1.md) |
@@ -302,7 +273,7 @@ A **confused deputy** is a more-privileged entity tricked into acting on behalf 
 | On-premises servers | IAM Roles Anywhere with X.509 certificates from a trusted CA | `rolesanywhere.amazonaws.com` | Credential helper process | This part |
 
 !!! warning "Task role versus task execution role"
-    The **task execution role** is used by the ECS agent before your code runs (image pull, secrets injection, log delivery); the **task role** is used by your application code. Confusing the two is a common and costly mistake. See [2.2 Amazon ECS](../unit2/topic2.md#security-considerations) for the full treatment of the ECS roles.
+    The **task execution role** is used by the ECS agent before your code runs (image pull, secrets injection, log delivery); the **task role** is used by your application code. Confusing the two is a common and costly mistake. See [2.2 Amazon ECS](../unit2/topic2.md) for the full treatment of the ECS roles.
 
 #### IRSA versus EKS Pod Identity
 
@@ -520,64 +491,15 @@ Policy size and attachment quotas are listed under Service Limits in [Part 8.1.2
 | Password policy for IAM users | Length, complexity, reuse, expiry | Long passwords with MFA; avoid forced frequent expiry which encourages weak patterns |
 | STS endpoint | Global or Regional | Regional |
 
-### Design Considerations
-
-| Concern | Consideration |
-|---------|---------------|
-| Scalability | One role per workload per account scales; one IAM user per person per account does not. Use permission sets and IaC-generated roles |
-| Availability | Workloads depend only on the IAM data plane; avoid runtime IAM changes; keep break-glass access independent of the IdP |
-| Reliability | Credential refresh is automatic on AWS compute; long-running jobs using role chaining must handle one-hour expiry |
-| Latency | Cache credentials; use Regional STS endpoints |
-| Cost | Free; the real cost is the operational burden of long-lived secrets |
-| Maintainability | Name roles by workload and purpose (`orders-api-task-role`), use paths, tags and IaC; avoid console-created roles |
-| Operational complexity | Identity Center plus Organizations centralises complexity once, instead of repeating it per account |
-
-!!! example "Granularity: one role per what?"
-    A frequent design question is how many roles to create. A useful rule is **one role per workload identity per environment**: the orders API task role in production is separate from the orders API task role in staging and from the payments worker role. Sharing a role between services means the least-privileged service inherits the permissions of the most-privileged one, and CloudTrail can no longer distinguish them. Creating a role per ECS task or per Lambda function costs nothing and is easily automated in CloudFormation, CDK or Terraform.
-
 ### AWS Best Practices
 
-| Pillar | Identity best practice |
-|--------|------------------------|
-| Operational Excellence | Manage roles, permission sets and trust policies as code; name sessions meaningfully; document break-glass procedures and test them |
-| Security | Use temporary credentials; federate humans through Identity Center; require phishing-resistant MFA; protect and minimise root; remove unused identities |
-| Reliability | Create roles ahead of need; use Regional STS; design for IdP outage with break-glass |
-| Performance Efficiency | Rely on SDK credential caching; avoid per-request `AssumeRole` |
-| Cost Optimization | Remove unused identities, which also reduces audit effort; avoid paid tooling to manage secrets that roles make unnecessary |
-| Sustainability | Fewer long-lived secrets and fewer duplicate identities mean less rotation automation and less operational churn |
-
-### Security Considerations
-
-- **Least privilege begins with identity design**: separate roles per workload make least-privilege policies possible.
-- **Encryption**: credentials are only transmitted over TLS; SigV4 never sends the secret key. Secrets that are not AWS credentials, such as database passwords, belong in AWS Secrets Manager with rotation ([Section 8.3](topic3.md)).
-- **Private versus public access**: roles used by workloads in private subnets can be restricted to specific VPC endpoints with `aws:SourceVpce` or `aws:SourceVpc` in resource policies ([Section 8.2](topic2.md) explains VPC endpoints).
-- **Logging**: every STS call and every API call made with the resulting credentials is logged in CloudTrail with the role session ARN, session name and source identity. Alarm on root sign-in, console sign-in without MFA, `CreateAccessKey`, and changes to trust policies.
-- **Compliance**: frameworks such as ISO 27001, SOC 2 and PCI DSS require unique IDs per user, MFA for administrative access and timely de-provisioning; Identity Center with an IdP satisfies these far more easily than IAM users.
-
-### Integration with Other AWS Services
-
-| Service | Integration | Why |
-|---------|-------------|-----|
-| Amazon ECS | Task role and task execution role | Per-task credentials without keys ([Chapter 2.2](../unit2/topic2.md#security-considerations)) |
-| Amazon EKS | IRSA and Pod Identity (access entries are covered under [Part 8.1.2](#iam-policies-and-permissions)) | Per-pod credentials ([Chapter 3.1](../unit3/topic1.md#iam-for-workloads-pod-identity)) |
-| AWS Lambda | Execution role | Function permissions ([Chapter 1.3](../unit1/topic3.md)); the invoke-side resource-based policy is covered in [Part 8.1.2](#iam-policies-and-permissions) |
-| CodeBuild, CodePipeline, GitHub Actions | Service roles and OIDC federation | Keyless deployments (Chapters [5.1](../unit5/topic1.md) and [5.2](../unit5/topic2.md)) |
-| CloudFormation, CDK, Terraform | Service roles and deployment roles | Pipelines deploy with a scoped role, not a person's credentials ([Chapter 5.3](../unit5/topic3.md)) |
-| Amazon Cognito | Identity pools exchange end-user tokens for role credentials | Mobile and web clients calling AWS directly |
-| CloudTrail | Records all IAM and STS activity | Audit and incident response (Unit VII) |
-| AWS Secrets Manager | Stores non-AWS secrets | Complements roles for database and third-party credentials ([Section 8.3](topic3.md)) |
-| IAM Access Analyzer | Finds external and unused access | Continuous review ([Part 8.1.2](#iam-policies-and-permissions)) |
-
-### Common Architecture Patterns
-
-| Pattern | Description | When to use |
-|---------|-------------|-------------|
-| Hub-and-spoke cross-account roles | A central tooling or security account assumes standard roles (for example `SecurityAudit`, `Deployment`) in every workload account | Central security tooling, central CI/CD |
-| Per-workload role | Each microservice, function or pod has its own role | Always, for least privilege and attribution |
-| Keyless CI/CD | Pipelines authenticate with OIDC and assume environment-specific deploy roles | All modern pipelines |
-| Break-glass | A tightly controlled emergency identity independent of the IdP, with alarms | Every organisation |
-| Just-in-time elevation | Users request temporary assignment of a privileged permission set with approval | Production administration |
-| Third-party access with external ID | Vendor assumes a role with an external ID and narrow permissions | SaaS monitoring, cost tools, security scanners |
+- **Security:** use temporary credentials, federate humans through Identity Center, and require phishing-resistant MFA.
+- **Security:** protect and minimise use of the root user, and remove identities and access keys that last-accessed data shows are unused.
+- **Operational Excellence:** manage roles, permission sets and trust policies as code, and give role sessions meaningful names.
+- **Operational Excellence:** document break-glass procedures and test them regularly.
+- **Reliability:** create roles ahead of need, use Regional STS endpoints, and plan for an identity provider outage with break-glass access.
+- **Performance Efficiency:** rely on SDK credential caching instead of calling `AssumeRole` on every request.
+- **Cost Optimization:** fewer long-lived secrets and duplicate identities mean less rotation automation and less audit effort.
 
 ### Industry Use Cases
 
@@ -604,30 +526,6 @@ Policy size and attachment quotas are listed under Service Limits in [Part 8.1.2
 - Identity Center depends on its home Region and on the external IdP.
 - Workload identity differs per platform (IMDS, ECS endpoint, Pod Identity, web identity), so teams must learn several mechanisms.
 
-### Common Mistakes
-
-#### Beginner mistakes
-
-| Mistake | Consequence | Correction |
-|---------|-------------|------------|
-| Using the root user for daily work | Unlimited blast radius | Create administrative access through Identity Center; lock root away with MFA |
-| Creating access keys and pasting them into code or `.env` files | Keys leak through Git | Use the SDK default credential chain and roles |
-| Attaching policies to individual users | Unmanageable permissions | Use groups or, better, Identity Center groups and permission sets |
-| Confusing ECS task role and task execution role | Tasks fail to start or application gets `AccessDenied` | Execution role for the agent, task role for the application |
-| Believing `arn:aws:iam::ACCOUNT:root` in a trust policy means only root | Unintended delegation to all principals in that account | Name specific role ARNs, or add conditions such as `aws:PrincipalArn` |
-
-#### Production mistakes
-
-| Mistake | Consequence | Correction |
-|---------|-------------|------------|
-| OIDC trust policy for GitHub without a `sub` condition, or with `repo:*` | Any GitHub repository can assume the role | Condition on `aud` and an exact `sub` such as `repo:org/app:environment:prod` |
-| One shared role for all microservices | Lateral movement; no attribution | One role per workload |
-| No external ID for third-party roles | Confused deputy exposure | Require `sts:ExternalId` |
-| Service principal trust without `aws:SourceArn` or `aws:SourceAccount` | Cross-customer confused deputy | Add both conditions |
-| Creating IAM roles at runtime during failover | Recovery depends on the IAM control plane | Pre-create roles in all Regions' stacks |
-| Break-glass access never tested | Unavailable when needed | Test quarterly and alarm on use |
-| IMDSv1 left enabled | Server-side request forgery can steal instance role credentials | Require IMDSv2 |
-
 ### Summary
 
 Identities answer the first half of every authorization decision: who is asking. The root user is an emergency identity to be protected and, in organisations, removed from member accounts. IAM users are long-lived identities that are now an exception. Groups are an administrative convenience for users. Roles are the centre of modern AWS identity: they have no long-term credentials, are assumed through STS by trusted principals defined in a trust policy, and deliver short-lived credentials to people, services and pipelines. Humans should sign in through IAM Identity Center federated with the corporate IdP; workloads should use the identity mechanism of their platform: instance profiles, ECS task roles, EKS Pod Identity or IRSA, Lambda execution roles, OIDC federation for CI/CD and Roles Anywhere outside AWS.
@@ -650,15 +548,11 @@ Permissions in AWS are **default deny**. A request is allowed only if some appli
 
 ### Why This Service or Concept Exists
 
-Traditional access control lists grant coarse rights to named users on individual objects, and role systems in applications are usually hard-coded. Cloud platforms need something more expressive:
-
-- thousands of services and tens of thousands of distinct actions, each needing separate control,
-- resources created and destroyed dynamically, often identified by patterns and tags rather than names,
-- context-sensitive decisions (only from our VPC, only with MFA, only in these Regions, only over TLS),
-- delegation across teams and accounts without surrendering control,
-- central guardrails that apply regardless of local decisions.
-
-The IAM policy language provides a single, declarative, machine-evaluable grammar for all of these. Because policies are JSON documents, they can be **versioned, reviewed, tested and deployed as code**, exactly like the infrastructure they protect.
+- **Scale of control:** thousands of services and tens of thousands of actions each need separate, fine-grained control that coarse access control lists cannot express.
+- **Dynamic resources:** resources are created and destroyed constantly, so permissions must target patterns and tags rather than fixed names.
+- **Context-sensitive decisions:** access often depends on context such as source VPC, MFA, Region or TLS, which the policy language expresses as conditions.
+- **Safe delegation:** teams and accounts need to grant each other access without surrendering control, and organisations need central guardrails that local decisions cannot override.
+- **Policies as code:** because policies are declarative JSON documents, they can be versioned, reviewed, tested and deployed exactly like the infrastructure they protect.
 
 ### Core Concepts
 
@@ -994,73 +888,15 @@ Explicit deny precedence, default deny, conditions, boundaries, session policies
 | S3 access control | Bucket policies and IAM only, or ACLs | Set Object Ownership to bucket owner enforced to disable ACLs; enable Block Public Access |
 | Pipeline policy checks | None, validation only, custom checks | Validation plus `CheckNoNewAccess` or `CheckAccessNotGranted` on changed policies |
 
-### Design Considerations
-
-| Concern | Consideration |
-|---------|---------------|
-| Scalability | ABAC and policy variables keep the number of policies roughly constant as resources grow |
-| Availability | Deny statements with conditions such as `aws:SourceVpce` can block legitimate traffic during network changes; test before deploying and include exemptions for AWS service principals (`aws:PrincipalIsAWSService`) |
-| Reliability | Overly narrow policies break deployments when services add dependencies; generate policies from observed activity and test in staging |
-| Maintainability | Name statements with `Sid`, keep one purpose per policy, store policies in the same repository as the service |
-| Operational complexity | Layering (identity, resource, boundary, SCP, RCP) gives defence in depth but makes debugging harder; document which layer owns which control |
-| Cost | Free, apart from paid Access Analyzer features |
-
-!!! example "Designing least privilege iteratively"
-    A realistic workflow for a new microservice is: (1) in development, attach a broad but bounded policy, for example DynamoDB and SQS actions on resources tagged with the project; (2) run integration tests for a representative period; (3) use Access Analyzer policy generation to produce a policy from CloudTrail activity; (4) review and refine it, replacing wildcards with ARNs; (5) validate it and add a custom policy check to the pipeline; (6) deploy to staging and production; (7) watch unused access findings and remove permissions that remain unused. Least privilege is a **process**, not a one-time document.
-
 ### AWS Best Practices
 
-| Pillar | Policy best practice |
-|--------|----------------------|
-| Operational Excellence | Policies as code, reviewed in pull requests, validated and checked in CI; clear `Sid` names; alarms on IAM policy changes |
-| Security | Default deny, least privilege, explicit denies for invariants, conditions for network and TLS, boundaries for delegation, ABAC with tag governance, remove unused access |
-| Reliability | Test policy changes in lower environments; use Policy Simulator before deploying denies; avoid manual console edits |
-| Performance Efficiency | Prefer ABAC and variables over enumerations that approach size quotas |
-| Cost Optimization | Use free validation and generation extensively; target paid analysis where it matters |
-| Sustainability | Fewer, reusable customer managed policies reduce drift and review effort |
-
-### Security Considerations
-
-- **Privilege escalation paths**: permissions such as `iam:CreatePolicyVersion`, `iam:AttachRolePolicy`, `iam:PutRolePolicy`, `iam:UpdateAssumeRolePolicy`, `iam:PassRole` combined with `lambda:CreateFunction` or `ec2:RunInstances`, and `sts:AssumeRole` on privileged roles allow a principal to grant itself more access. Treat them as administrative and restrict them with boundaries and SCPs.
-- **Encryption and KMS**: access to encrypted data requires both the data service permission and `kms:Decrypt` allowed by the **key policy**; key policies are resource-based policies with special rules covered in [Section 8.3](topic3.md).
-- **Secrets Manager**: secret resource policies can restrict access to specific roles and VPC endpoints ([Section 8.3](topic3.md)).
-- **Network conditions**: `aws:SourceVpce` and `aws:SourceVpc` create private-only access; security groups and network ACLs remain the network layer ([Section 8.2](topic2.md)).
-- **Public resources**: S3 Block Public Access at account level, Access Analyzer public findings and `CheckNoPublicAccess` checks prevent accidental exposure.
-- **Logging**: CloudTrail records denied requests with `errorCode` `AccessDenied`; a spike in denials can indicate an attacker probing permissions or a broken deployment.
-- **Compliance**: least-privilege evidence (generated policies, unused access findings, pipeline check logs) supports audits.
-
-### Performance Optimization
-
-Policy evaluation itself needs no tuning. Performance issues are indirect: excessive `AssumeRole` calls, repeated `AccessDenied` retries in application code, and throttling of IAM control plane APIs by automation that creates or updates policies frequently. Cache credentials, fail fast on authorization errors rather than retrying them, and batch IAM changes in IaC deployments.
-
-### Cost Optimization
-
-Enable Access Analyzer unused access at the organisation level once, rather than per account; restrict internal access analysis to genuinely critical resources; and run custom policy checks only when policies change. The largest cost benefit of least privilege is indirect: it limits the blast radius and cost of incidents such as a compromised credential launching expensive instances.
-
-### Integration with Other AWS Services
-
-| Service | Integration |
-|---------|-------------|
-| Amazon S3 | Bucket policies, Block Public Access, Access Points policies, conditions such as `aws:SourceVpce` and `s3:x-amz-server-side-encryption` |
-| AWS Lambda | Execution role (identity) plus function resource-based policy for invokers such as API Gateway, EventBridge, S3 and SNS |
-| Amazon SQS and SNS | Queue and topic policies allowing publishers across services and accounts, with `aws:SourceArn` |
-| AWS KMS | Key policies, grants and `kms:ViaService` conditions ([Section 8.3](topic3.md)) |
-| Amazon ECR | Repository policies for cross-account image pulls by ECS and EKS |
-| Amazon API Gateway | IAM authorization with SigV4 and resource policies restricting callers and VPC endpoints ([Chapter 1.7](../unit1/topic7.md), [Chapter 4.2](../unit4/topic2.md)) |
-| Amazon EKS | Access entries and access policies mapping IAM principals to Kubernetes permissions ([Chapter 3.1](../unit3/topic1.md#eks-security-and-iam-integration)) |
-| AWS CloudFormation | Service roles and `iam:PassRole`; stack policies; policies defined as code |
-| AWS Security Hub and EventBridge | Receive Access Analyzer findings for aggregation and automated remediation (Unit VII) |
-
-### Common Architecture Patterns
-
-| Pattern | Description |
-|---------|-------------|
-| Data perimeter | Combine identity policies, resource policies, VPC endpoint policies, SCPs and RCPs using `aws:PrincipalOrgID`, `aws:ResourceOrgID` and `aws:SourceVpce` so that only trusted identities access trusted resources from expected networks |
-| Delegated administration with boundaries | Developers create workload roles, always capped by a platform boundary |
-| ABAC for microservices | Each service role carries `service` and `environment` tags; resources carry the same tags; a single policy grants access where tags match |
-| Token vending for multi-tenancy | A trusted broker assumes a role with a session policy or session tags scoped to one tenant and hands the credentials to less-trusted tenant code |
-| Policy-as-code pipeline | Lint, validate, custom-check and simulate policies before deployment |
-| Deny-by-exception | Explicit deny statements protect invariants (no non-TLS access, no deletion of backups) with narrow exemptions via `aws:PrincipalArn` |
+- **Security:** start from default deny and grant least privilege, removing unused access identified by IAM Access Analyzer and last-accessed data.
+- **Security:** use explicit denies for invariants, conditions for network and TLS requirements, and permissions boundaries for delegated administration.
+- **Security:** adopt ABAC only together with governance of who can set the tags it depends on.
+- **Operational Excellence:** manage policies as code, reviewed in pull requests and validated in CI, with clear `Sid` names.
+- **Reliability:** test policy changes in lower environments and with the Policy Simulator before deploying new denies, and avoid manual console edits.
+- **Performance Efficiency:** prefer ABAC and policy variables over long enumerations that approach policy size quotas.
+- **Cost Optimization:** favour a small set of reusable customer managed policies, which reduces drift and review effort.
 
 ### Industry Use Cases
 
@@ -1084,28 +920,6 @@ Enable Access Analyzer unused access at the organisation level once, rather than
 - Size and attachment quotas constrain large permission sets.
 - ABAC depends on consistent tagging and tag support per service.
 - Least privilege requires ongoing effort as services evolve.
-
-### Common Mistakes
-
-#### Beginner mistakes
-
-| Mistake | Consequence | Correction |
-|---------|-------------|------------|
-| `"Action": "*", "Resource": "*"` to "make it work" | Full administrator access | Start from specific actions; use policy generation |
-| Using the object ARN for `s3:ListBucket` | `AccessDenied` on listing | Use the bucket ARN for bucket-level actions and `bucket/*` for object actions |
-| Expecting an `Allow` to override a `Deny` | Confusion when access is denied | Explicit deny always wins |
-| Adding `Principal` to an identity-based policy | Validation error | `Principal` belongs only in resource-based and trust policies |
-| Confusing `NotAction` with deny | Massive over-privilege | Use `NotAction` mainly with `Deny` |
-
-#### Production mistakes
-
-| Mistake | Consequence | Correction |
-|---------|-------------|------------|
-| Unrestricted `iam:PassRole` | Privilege escalation through Lambda, EC2 or CloudFormation | Restrict to role ARNs or paths and `iam:PassedToService` |
-| Network-condition deny without exemptions for AWS services | Breaks services that call on your behalf, such as CloudFormation or Athena | Add `aws:PrincipalIsAWSService` or `aws:ViaAWSService` exemptions |
-| ABAC without controls on tagging | Anyone who can tag can gain access | Deny tag changes on governance keys; tag policies |
-| Bucket policy granting `"Principal": "*"` with a condition that can be absent | Public exposure if the key is missing from requests | Use `...IfExists` deliberately, or `Null` checks; validate with Access Analyzer |
-| Leaving development-era broad policies in production | Large blast radius | Generate, review and replace policies before go-live; monitor unused access |
 
 ### Summary
 
@@ -1131,39 +945,12 @@ AWS Organizations sits in the Management and Governance category. It is the foun
 
 ### Why This Service or Concept Exists
 
-#### The account is the strongest boundary
-
-Within one account, isolation relies on correctly written policies, and a single mistake can expose everything. Between accounts, the default is **no access at all**: resources, IAM, quotas and billing are separate, and any access must be granted explicitly on both sides. Separate accounts therefore provide:
-
-| Benefit | Explanation |
-|---------|-------------|
-| Security isolation | A compromise or misconfiguration in development cannot reach production |
-| Blast radius control | Quota exhaustion, runaway costs or a faulty deployment is contained to one account |
-| Clear ownership | Each account has an owning team; costs and findings map naturally to teams |
-| Simpler policies | Policies inside a single-purpose account can be broader without being dangerous |
-| Compliance scoping | Regulated workloads (for example card data) live in accounts that auditors can scope precisely |
-| Independent quotas | Service quotas are per account and Region, so noisy neighbours are isolated |
-
-#### The problem Organizations solves
-
-Many accounts without central management create new problems: separate invoices, repeated security setup, inconsistent guardrails, and no way to stop an account administrator from disabling CloudTrail or using an unapproved Region. AWS Organizations addresses these by providing:
-
-1. **Central account lifecycle**: create, invite, move and close accounts through APIs.
-2. **Consolidated billing**: one payer, combined usage for volume tiers, and shared Reserved Instance and Savings Plans discounts.
-3. **Hierarchy**: OUs that group accounts by function or risk, so policies attach once and inherit.
-4. **Central guardrails**: SCPs, RCPs and declarative policies that local administrators cannot override.
-5. **Organisation-wide service integration**: one switch to enable CloudTrail, Config, GuardDuty or Identity Center across all accounts.
-
-#### Benefits over older methods
-
-| Concern | Independent accounts | AWS Organizations |
-|---------|---------------------|-------------------|
-| Billing | Separate invoices and no shared discounts | Consolidated billing with shared volume discounts and commitments |
-| Guardrails | Trust every account administrator | SCPs, RCPs and declarative policies enforced centrally |
-| New account setup | Manual, inconsistent | Automated with Control Tower Account Factory or IaC |
-| Security services | Enabled per account | Enabled organisation-wide with delegated administrators |
-| Audit | Trails configured per account, can be disabled | Organisation trail that member accounts cannot modify |
-| Human access | Users per account | Identity Center across the organisation |
+- **The account is the strongest boundary:** within one account isolation depends on correct policies, whereas between accounts the default is no access at all.
+- **Blast radius control:** separate accounts contain compromises, runaway costs, quota exhaustion and faulty deployments to one environment or workload.
+- **Ownership and compliance scoping:** single-purpose accounts map naturally to owning teams and let auditors scope regulated workloads precisely.
+- **Many accounts need central management:** without Organizations, each account has its own invoice, repeated security setup and an administrator who could disable CloudTrail.
+- **Central guardrails:** SCPs, RCPs and declarative policies attached to OUs set limits that local administrators cannot override.
+- **Organisation-wide services:** consolidated billing, automated account creation and one-switch enablement of CloudTrail, Config, GuardDuty and Identity Center across all accounts.
 
 ### Core Concepts
 
@@ -1412,67 +1199,14 @@ Preventive guardrails that account administrators cannot bypass, organisation tr
 | Audit | Organisation trail with Log Archive account | Always; add Object Lock and SCP protection |
 | Account vending | Manual, Account Factory, AFT, custom pipeline | Account Factory or AFT |
 
-### Design Considerations
-
-| Concern | Consideration |
-|---------|---------------|
-| Scalability | OU-level policies scale to thousands of accounts; per-account exceptions do not |
-| Availability | A faulty SCP can break every workload; stage rollouts and keep exemptions for break-glass roles |
-| Reliability | Guardrails should protect recovery mechanisms: backups, logs and replication must be undeletable by workload principals |
-| Latency | None for enforcement |
-| Cost | Organizations is free; Control Tower's Config usage and log storage are the main costs |
-| Maintainability | Keep SCPs in version control and deploy via pipeline; document every guardrail's purpose and owner |
-| Operational complexity | More accounts mean more networking and cross-account access design; automate baselines with StackSets and Account Factory |
-
 ### AWS Best Practices
 
-| Pillar | Organisation-level best practice |
-|--------|----------------------------------|
-| Operational Excellence | Automate account vending and baselines; policies as code; delegate service administration |
-| Security | Minimal management account; organisation trail; SCP invariants; RCP data perimeter; declarative baselines; centralised root access |
-| Reliability | Separate accounts per environment and workload to contain failures and quotas; protect backups with SCPs and backup policies |
-| Performance Efficiency | Independent quotas per account prevent contention |
-| Cost Optimization | Consolidated billing; shared Savings Plans; tag policies for cost allocation; sandbox budgets and Region restrictions |
-| Sustainability | Region restrictions and sandbox clean-up reduce idle resources |
-
-### Security Considerations
-
-- **IAM and least privilege**: only a small group should access the management account, ideally through Identity Center with MFA; daily security work happens in delegated administrator accounts.
-- **Encryption and KMS**: RCPs can require organisation-only access to KMS keys; key management is covered in [Section 8.3](topic3.md).
-- **Secrets Manager**: RCPs can prevent secrets being shared outside the organisation.
-- **Network**: SCPs can deny creation of internet gateways in workload accounts that should route through a central egress VPC ([Section 8.2](topic2.md)); declarative VPC Block Public Access enforces this at the service level.
-- **Logging**: organisation trail, Config aggregator and Security Hub in the security account; SCPs prevent disabling them.
-- **Compliance**: Control Tower controls map to frameworks; account-level separation narrows audit scope.
-
-### Cost Optimization
-
-Consolidated billing aggregates usage for tiered pricing and shares Reserved Instances and Savings Plans across accounts (sharing can be restricted per account). Tag policies make cost allocation reliable, AWS Budgets and Cost Explorer operate at organisation level, and SCPs can prevent expensive instance families or unapproved Regions in sandbox accounts. Trusted Advisor and Compute Optimizer can be enabled organisation-wide.
-
-### Integration with Other AWS Services
-
-| Service | Integration |
-|---------|-------------|
-| IAM Identity Center | Organisation instance assigns permission sets across accounts |
-| AWS CloudTrail | Organisation trail and CloudTrail Lake event data stores |
-| AWS Config | Organisation aggregator and conformance packs; detective controls |
-| GuardDuty, Security Hub, Inspector, Macie, Detective | Delegated administrator in the security account |
-| IAM Access Analyzer | Organisation zone of trust; unused access across accounts |
-| AWS Backup | Backup policies and cross-account vaults |
-| CloudFormation StackSets | Deploy baselines (roles, alarms, Config rules) to all accounts in an OU automatically |
-| AWS RAM | Share subnets, Transit Gateways and other resources within the organisation |
-| AWS Budgets and Cost Explorer | Organisation-wide cost visibility |
-| CloudWatch cross-account observability | Monitoring account linked to workload accounts (Unit VII) |
-
-### Common Architecture Patterns
-
-| Pattern | Description |
-|---------|-------------|
-| Landing zone with core accounts | Management, Log Archive, Security Tooling, Network, Shared Services, workload OUs |
-| Environment-per-account | Separate development, staging and production accounts per workload; pipelines deploy across them with cross-account roles (Unit V) |
-| Data perimeter | SCPs for the identity perimeter, RCPs and resource policies for the resource perimeter, endpoint policies for the network perimeter |
-| Guardrail tiers | Root invariants, OU-specific controls, sandbox allow list, suspended OU deny-all |
-| Account vending machine | Account Factory or AFT creates accounts with baseline roles, networking and budgets from a pull request |
-| Delegated security operations | Security account administers organisation security services; management account untouched |
+- **Security:** keep the management account minimal and run no workloads in it.
+- **Security:** enforce invariants with SCPs, a data perimeter with RCPs, and service baselines with declarative policies.
+- **Security:** use an organisation trail and centralised root access management for member accounts.
+- **Operational Excellence:** automate account vending and baselines, manage organisation policies as code, and delegate service administration to dedicated accounts.
+- **Reliability:** separate accounts per environment and workload to contain failures and quota exhaustion, and protect backups with SCPs and backup policies.
+- **Cost Optimization:** use consolidated billing, share Savings Plans, apply tag policies for cost allocation, and restrict sandbox Regions and budgets.
 
 ### Industry Use Cases
 
@@ -1496,28 +1230,6 @@ Consolidated billing aggregates usage for tiered pricing and shares Reserved Ins
 - Multi-account designs add networking, cross-account access and cost-allocation complexity.
 - Control Tower is opinionated; customisation beyond its model requires additional tooling.
 - Policy quotas and size limits force careful policy design.
-
-### Common Mistakes
-
-#### Beginner mistakes
-
-| Mistake | Consequence | Correction |
-|---------|-------------|------------|
-| Believing an SCP grants permissions | Users still get `AccessDenied` | SCPs only limit; IAM policies must allow |
-| Running workloads in the management account | Guardrails do not apply there | Keep the management account empty of workloads |
-| Detaching `FullAWSAccess` without an allow-list replacement | Everything denied in affected accounts | Keep `FullAWSAccess` with deny-list SCPs, or design a complete allow list |
-| Expecting SCPs to restrict external principals accessing your bucket | They do not | Use RCPs and resource policies |
-| Structuring OUs by department | Frequent reorganisation, inconsistent controls | Structure by environment and policy needs |
-
-#### Production mistakes
-
-| Mistake | Consequence | Correction |
-|---------|-------------|------------|
-| Attaching an untested SCP at the root | Organisation-wide outage | Test OU, staged rollout, simulation and validation |
-| No exemption for break-glass or platform roles | Unable to repair during incidents | `ArnNotLike aws:PrincipalArn` exemptions for tightly controlled roles |
-| Region deny SCP without exempting global services | IAM, Organizations, Route 53, CloudFront and support calls fail | Use `NotAction` for global services |
-| Organisation trail bucket writable by workload accounts | Logs can be tampered with | Log Archive account, Object Lock, restricted policies |
-| Security staff working in the management account | Excessive privilege, wider attack surface | Delegated administrators |
 
 ### Summary
 

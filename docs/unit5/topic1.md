@@ -1,11 +1,5 @@
 # AWS CI/CD Services: CodeCommit, CodeBuild and CodeDeploy
 
-!!! tip "Classroom demo files"
-    [Download CI/CD source](../downloads/pipeline-source.zip){ download } · [All classroom files](../downloads/cloudboard-classroom.zip){ download }
-
-
----
-
 ## Definition
 
 **Continuous integration and continuous delivery (CI/CD)** is the practice of automating the path from a source-code change to a verified, deployable artefact and then to running software, such that the path is repeatable, auditable, and fast enough that developers integrate their work continuously rather than in large batches.
@@ -19,23 +13,91 @@ AWS provides this as three composable services, plus an orchestrator covered in 
 | **AWS CodeDeploy** | Managed deployment orchestration with health monitoring and rollback | How does an artefact become running software without an outage? |
 | **AWS CodePipeline** ([chapter 5.2](topic2.md)) | Workflow orchestration across the above and beyond | In what order, with what gates, and what happens when a stage fails? |
 
-These are collectively the **AWS Developer Tools** or **AWS Code services**. Architecturally they sit *outside* the runtime architecture  they are the control plane for change, not part of the request path  which has two consequences worth stating early. First, their availability affects your ability to *deploy*, not your ability to *serve*; a CodeBuild outage is an inconvenience, not an incident. Second, they hold credentials that can modify everything in the account, which makes them a higher-value target than most of the workloads they deploy.
+These are collectively the **AWS Developer Tools** or **AWS Code services**.
 
 !!! note "A pipeline is not the same thing as automation"
 
     Automating a bad deployment process produces a fast bad deployment process. The value of a pipeline comes from what it *verifies* and what it can *undo*  the tests, the gates, the health checks, the rollback  not from the fact that a machine rather than a human is typing the commands. A pipeline with no tests and no rollback is a mechanism for reaching production faster than you can think, which is measurably worse than deploying by hand.
 
----
-
 ## Why This Service or Concept Exists
 
-### The problem: deployment was the risk
+- **Manual deployment is a self-reinforcing trap:** when deploying is slow and risky, teams deploy less often, which makes each release larger and riskier still.
+- **Small, frequent changes are safer:** a ten-line change has a small blast radius and is easy to verify and revert, so frequency becomes a component of safety rather than a threat to it.
+- **Hand-configured build servers drift:** a build that depends on a long-lived machine cannot be reproduced, whereas a fresh, specified build environment produces the same artefact every time.
+- **Verification must not depend on memory:** an automated pipeline applies the same tests, scans and checks to every change, and records the evidence.
+- **Recovery must be built in:** deployment strategies that keep the previous version running and roll back automatically on an alarm turn a bad release into a short incident.
+- **Delivery performance becomes measurable:** the [DORA delivery metrics](#dora-delivery-metrics) show that throughput and stability improve together when changes are small, automated and reversible.
 
-The second problem is the deployment itself. When deployment is manual, slow and risky, the rational response is to deploy less often  which makes each deployment larger, which makes it riskier, which justifies deploying even less often. This is a stable, self-reinforcing bad state, and it is where most organisations start.
+## Core Concepts
 
-The way out is counter-intuitive and it is the central insight of modern delivery: **deploy more often, not less.** A change of ten lines has a small blast radius, is easy to reason about, and is easy to revert. A change of ten thousand lines has none of those properties. Frequency is not opposed to safety; frequency is a *component* of safety, provided each deployment is small, verified, observable and reversible.
+### Continuous integration, delivery and deployment
 
-The **DORA metrics** capture this. DORA (DevOps Research and Assessment, now part of Google Cloud) currently defines **five** software delivery performance metrics, grouped into two factors, and the key point is that they are read as a set:
+These three terms are used interchangeably in conversation and mean distinct things in engineering.
+
+| Practice | Definition | What it requires |
+|---|---|---|
+| **Continuous integration** | Every developer merges to the mainline at least daily; every merge is automatically built and tested | A fast, reliable automated test suite; trunk-based development or very short-lived branches |
+| **Continuous delivery** | Every change that passes the pipeline is *deployable* to production at any time; the decision to release is a business decision | Everything CI requires, plus automated deployment, environment parity, and reversible changes |
+| **Continuous deployment** | Every change that passes the pipeline *is* deployed to production, with no human gate | Everything CD requires, plus high confidence in the tests, progressive delivery, and automated rollback.
+
+### Build once, deploy many
+
+An artefact is built **exactly once** from a given commit and then promoted unchanged through every environment: development, staging, production. Environment-specific behaviour comes from **configuration injected at deployment time**  environment variables, Parameter Store, Secrets Manager, ConfigMaps  never from rebuilding.
+
+<figure markdown="span">
+    ![One commit is built once into an immutable, versioned image that is deployed to dev, staging and production, each with its own configuration](../img/U5/t1/build-once-deploy-many.png){width="80%"}
+    <figcaption>Build Once, Deploy Many</figcaption>
+    <p align='right' style="font-size:0.8em"><i>Image Source: AI generated</i></p>
+</figure>
+
+### The deployment strategies, and what each trades
+
+| Strategy | Mechanism | Rollback | Cost | Use when |
+|---|---|---|---|---|
+| **In-place (rolling)** | Replace instances or tasks in batches | Redeploy the previous version: slow | No extra capacity | Stateless workloads that tolerate mixed versions briefly |
+| **Blue/green** | Stand up a full new environment, shift traffic, keep the old one | Shift traffic back: seconds | Double capacity during deployment | Production workloads where rollback speed matters |
+| **Canary** | Shift a small percentage, wait, then the rest | Shift back: seconds | Double capacity (as blue/green) | Changes whose failure mode is visible in metrics |
+| **Linear** | Shift equal increments at fixed intervals | Shift back: seconds | Double capacity | Gradual exposure where a single canary step is too coarse |
+| **All-at-once** | Everything, simultaneously | Redeploy: slow | None | Development environments only |
+
+Two observations that students consistently miss. First, **canary and linear are traffic-shifting patterns layered on top of blue/green**  they need both versions running simultaneously, which is what makes rollback instantaneous. Second, **the rollback column is the important one.** Blue/green costs double capacity for the duration of a deployment, and buys a rollback measured in seconds rather than in redeployment time. For anything customer-facing that is a good trade, because the expensive resource is not compute, it is the duration of a bad change.
+
+{{ embed("https://www.youtube.com/watch?v=RThb3koc5DM", "Software Deployment Strategies Used by Netflix, Amazon and Facebook", "ByteMonk, YouTube", intro="The video below walks through these strategies as large organisations use them. Watch it with the table above open, and for each strategy note which column of the table the speaker is emphasising.") }}
+
+### Feature flags and the separation of deploy from release
+
+**Deployment** puts code on a server. **Release** exposes behaviour to users. Conflating them forces every change to be user-visible the moment it ships, which makes large changes terrifying and forces long-lived branches.
+
+Feature flags separate the two: merge and deploy the code continuously with the feature disabled, then enable it for internal users, then a percentage, then everyone  as a configuration change taking effect in seconds. **AWS AppConfig** provides this with validation, gradual rollout and automatic rollback on a CloudWatch alarm. The operational value during an incident is large: disabling a flag is far faster and far less risky than deploying a revert, and it is the fastest mitigation available in most systems.
+
+The cost is real and should be stated: every flag is a branch in production, so the number of possible states doubles per flag. Flags need owners and expiry dates, and removing them is part of the work, not an optional tidy-up.
+
+### Build reproducibility and the supply chain
+
+A build takes source and produces an artefact. Between those sits everything the build downloads  and that is where the supply chain lives.
+
+| Risk | Mechanism | Mitigation |
+|---|---|---|
+| **Dependency drift** | An unpinned version resolves differently between builds | Lockfiles committed to the repository; `npm ci`, not `npm install` |
+| **Base-image drift** | `FROM node:20` changes under you | Pin by digest: `FROM node:20@sha256:…` |
+| **Dependency confusion** | An attacker publishes a public package matching your internal name | Scoped registries; CodeArtifact with an explicit upstream order |
+| **Malicious install scripts** | A package's postinstall step runs with your build credentials | A least-privilege build role; no long-lived credentials in the build environment |
+| **Compromised artefact after build** | Something modifies the artefact between build and deploy | Content-addressed artefacts; signing with AWS Signer; verification at deploy |
+| **Unknown transitive dependencies** | You cannot answer "are we affected by CVE-X?" | Generate an **SBOM** on every build and store it with the artefact |
+
+!!! danger "The build role is a primary security boundary"
+
+    A build executes arbitrary code from your repository and from every dependency it downloads, using the build role's credentials. If that role can deploy to production, then anyone who can merge to a branch  or who can compromise any of your several hundred transitive dependencies  can deploy to production. The correct structure separates **the build identity** (read source, write artefacts, read specific parameters) from **the deploy identity** (change infrastructure), so that compromising a build does not grant deployment. [Chapter 5.2](topic2.md) implements this with per-stage roles in CodePipeline.
+
+### Trunk-based development
+
+CI in the strict sense requires that everyone integrates to one mainline frequently. The branching model that supports it is **trunk-based development**: short-lived branches (hours to a day or two), small pull requests, and incomplete work hidden behind feature flags rather than isolated on a branch.
+
+The alternative  GitFlow with long-lived `develop`, `release` and `feature` branches  was designed for versioned software shipped to customers on a schedule, and it is a poor fit for a continuously deployed service. Its long-lived branches recreate exactly the deferred-integration cost that CI exists to remove. This is a case where the tooling is neutral and the practice decides the outcome.
+
+### DORA delivery metrics
+
+The **DORA metrics** measure whether frequent, small deployments are in fact delivering safely. DORA (DevOps Research and Assessment, now part of Google Cloud) currently defines **five** software delivery performance metrics, grouped into two factors, and the key point is that they are read as a set:
 
 | Factor | Metric | What it measures | Why it must be read with the others |
 |---|---|---|---|
@@ -90,94 +152,6 @@ The **DORA metrics** capture this. DORA (DevOps Research and Assessment, now par
 
     !!! warning "Read the metrics as a set"
         A higher deployment frequency is not an improvement on its own. If Week 2 had shown 15 deployments with a 30% change fail rate, the team would be shipping faster and breaking production more often. DORA metrics measure whether delivery is becoming both faster *and* more reliable.
-
-### What AWS provides, and what it does not
-
-| Concern | Without managed services | With AWS |
-|---|---|---|
-| Git hosting | Operate a Git server, its storage, backups and availability | CodeCommit: managed, multi-AZ, IAM-controlled |
-| Build compute | A fleet of build servers, idle most of the time, drifting from each other | CodeBuild: ephemeral, per-build containers, per-minute billing |
-| Build environment consistency | "Works on the build server"  a mutable, hand-configured machine | A container image specified in configuration, identical every run |
-| Build scaling | A build queue at 5 p.m. on a Friday | Concurrent builds up to an account quota; reserved fleets when warm start matters |
-| Deployment orchestration | Shell scripts over SSH, with no health model | CodeDeploy: lifecycle hooks, health checks, traffic shifting, automatic rollback |
-| Gradual traffic shifting | Bespoke load-balancer scripting | Canary and linear configurations, integrated with ALB, Lambda aliases and ECS |
-| Rollback | Redeploy the previous version and hope | Automatic rollback on a CloudWatch alarm, with the old version still running |
-| Audit trail | Whatever the shell history retained | CloudTrail on every API call; deployment history per revision |
-
-## Core Concepts
-
-### Continuous integration, delivery and deployment
-
-These three terms are used interchangeably in conversation and mean distinct things in engineering.
-
-| Practice | Definition | What it requires |
-|---|---|---|
-| **Continuous integration** | Every developer merges to the mainline at least daily; every merge is automatically built and tested | A fast, reliable automated test suite; trunk-based development or very short-lived branches |
-| **Continuous delivery** | Every change that passes the pipeline is *deployable* to production at any time; the decision to release is a business decision | Everything CI requires, plus automated deployment, environment parity, and reversible changes |
-| **Continuous deployment** | Every change that passes the pipeline *is* deployed to production, with no human gate | Everything CD requires, plus high confidence in the tests, progressive delivery, and automated rollback.
-
-### Build once, deploy many
-
-An artefact is built **exactly once** from a given commit and then promoted unchanged through every environment: development, staging, production. Environment-specific behaviour comes from **configuration injected at deployment time**  environment variables, Parameter Store, Secrets Manager, ConfigMaps  never from rebuilding.
-
-<figure markdown="span">
-    ![One commit is built once into an immutable, versioned image that is deployed to dev, staging and production, each with its own configuration](../img/U5/t1/build-once-deploy-many.png){width="80%"}
-    <figcaption>Build Once, Deploy Many</figcaption>
-    <p align='right' style="font-size:0.8em"><i>Image Source: AI generated</i></p>
-</figure>
-
-Violating this has a specific and severe consequence: **you have tested something you are not shipping.** A rebuild can differ through an unpinned dependency, a changed base image, a different build-agent toolchain, or a non-deterministic build step. The property this gives you is the one that makes the whole pipeline meaningful: the thing verified in staging and the thing running in production are byte-identical, so any behavioural difference must come from configuration or data  which narrows an incident investigation enormously.
-
-The corollary is that **artefacts must be immutable and content-addressed**. A container tag of `latest` is not an artefact identifier; `sha256:9f2c…` is. [Chapter 5.2](topic2.md) returns to this with ECR image digests.
-
-### The deployment strategies, and what each trades
-
-| Strategy | Mechanism | Rollback | Cost | Use when |
-|---|---|---|---|---|
-| **In-place (rolling)** | Replace instances or tasks in batches | Redeploy the previous version: slow | No extra capacity | Stateless workloads that tolerate mixed versions briefly |
-| **Blue/green** | Stand up a full new environment, shift traffic, keep the old one | Shift traffic back: seconds | Double capacity during deployment | Production workloads where rollback speed matters |
-| **Canary** | Shift a small percentage, wait, then the rest | Shift back: seconds | Double capacity (as blue/green) | Changes whose failure mode is visible in metrics |
-| **Linear** | Shift equal increments at fixed intervals | Shift back: seconds | Double capacity | Gradual exposure where a single canary step is too coarse |
-| **All-at-once** | Everything, simultaneously | Redeploy: slow | None | Development environments only |
-
-Two observations that students consistently miss. First, **canary and linear are traffic-shifting patterns layered on top of blue/green**  they need both versions running simultaneously, which is what makes rollback instantaneous. Second, **the rollback column is the important one.** Blue/green costs double capacity for the duration of a deployment, and buys a rollback measured in seconds rather than in redeployment time. For anything customer-facing that is a good trade, because the expensive resource is not compute, it is the duration of a bad change.
-
-!!! warning "Mixed-version compatibility is a design requirement, not an accident"
-
-    Every strategy except all-at-once runs two versions of your application simultaneously, against the same database, the same queues and the same caches. This means **version N and version N+1 must be compatible with each other and with the same schema**. The practical rule is **expand and contract**: add a nullable column, deploy code that writes both old and new, backfill, deploy code that reads new, and only then remove the old column  across several releases. A migration that drops a column in the same release as the code that stops using it makes rollback impossible, which silently disables the safety property the whole pipeline was built to provide.
-
-{{ embed("https://www.youtube.com/watch?v=RThb3koc5DM", "Software Deployment Strategies Used by Netflix, Amazon and Facebook", "ByteMonk, YouTube", intro="The video below walks through these strategies as large organisations use them. Watch it with the table above open, and for each strategy note which column of the table the speaker is emphasising.") }}
-
-### Feature flags and the separation of deploy from release
-
-**Deployment** puts code on a server. **Release** exposes behaviour to users. Conflating them forces every change to be user-visible the moment it ships, which makes large changes terrifying and forces long-lived branches.
-
-Feature flags separate the two: merge and deploy the code continuously with the feature disabled, then enable it for internal users, then a percentage, then everyone  as a configuration change taking effect in seconds. **AWS AppConfig** provides this with validation, gradual rollout and automatic rollback on a CloudWatch alarm. The operational value during an incident is large: disabling a flag is far faster and far less risky than deploying a revert, and it is the fastest mitigation available in most systems.
-
-The cost is real and should be stated: every flag is a branch in production, so the number of possible states doubles per flag. Flags need owners and expiry dates, and removing them is part of the work, not an optional tidy-up.
-
-### Build reproducibility and the supply chain
-
-A build takes source and produces an artefact. Between those sits everything the build downloads  and that is where the supply chain lives.
-
-| Risk | Mechanism | Mitigation |
-|---|---|---|
-| **Dependency drift** | An unpinned version resolves differently between builds | Lockfiles committed to the repository; `npm ci`, not `npm install` |
-| **Base-image drift** | `FROM node:20` changes under you | Pin by digest: `FROM node:20@sha256:…` |
-| **Dependency confusion** | An attacker publishes a public package matching your internal name | Scoped registries; CodeArtifact with an explicit upstream order |
-| **Malicious install scripts** | A package's postinstall step runs with your build credentials | A least-privilege build role; no long-lived credentials in the build environment |
-| **Compromised artefact after build** | Something modifies the artefact between build and deploy | Content-addressed artefacts; signing with AWS Signer; verification at deploy |
-| **Unknown transitive dependencies** | You cannot answer "are we affected by CVE-X?" | Generate an **SBOM** on every build and store it with the artefact |
-
-!!! danger "The build role is a primary security boundary"
-
-    A build executes arbitrary code from your repository and from every dependency it downloads, using the build role's credentials. If that role can deploy to production, then anyone who can merge to a branch  or who can compromise any of your several hundred transitive dependencies  can deploy to production. The correct structure separates **the build identity** (read source, write artefacts, read specific parameters) from **the deploy identity** (change infrastructure), so that compromising a build does not grant deployment. [Chapter 5.2](topic2.md) implements this with per-stage roles in CodePipeline.
-
-### Trunk-based development
-
-CI in the strict sense requires that everyone integrates to one mainline frequently. The branching model that supports it is **trunk-based development**: short-lived branches (hours to a day or two), small pull requests, and incomplete work hidden behind feature flags rather than isolated on a branch.
-
-The alternative  GitFlow with long-lived `develop`, `release` and `feature` branches  was designed for versioned software shipped to customers on a schedule, and it is a poor fit for a continuously deployed service. Its long-lived branches recreate exactly the deferred-integration cost that CI exists to remove. This is a case where the tooling is neutral and the practice decides the outcome.
 
 ## AWS Service Deep Dive
 
@@ -543,122 +517,16 @@ Read structurally, these divide into three groups. The **producers**  the Git pr
 
 ---
 
-## Design Considerations
-
-```mermaid
-flowchart TD
-    A["Is every change tested automatically<br/>before it can reach production?"] -->|"no"| B["Fix this first.<br/>A pipeline without tests ships bugs faster"]
-    A -->|"yes"| C["Is one artefact built per commit<br/>and promoted unchanged?"]
-    C -->|"no"| D["You are testing something<br/>you are not shipping"]
-    C -->|"yes"| E["Can version N and N+1<br/>run simultaneously?"]
-    E -->|"no"| F["Expand and contract the schema first.<br/>Otherwise rollback is impossible"]
-    E -->|"yes"| G["Is there a metric that detects<br/>a bad change within minutes?"]
-    G -->|"no"| H["Build it. Gradual rollout<br/>without a signal decides nothing"]
-    G -->|"yes"| I["Blue/green or canary<br/>with alarm-triggered rollback"]
-    I --> J["Is the build role separate<br/>from the deploy role?"]
-    J -->|"no"| K["Any dependency in your build<br/>can deploy to production"]
-    J -->|"yes"| L["Deploy continuously"]
-```
-
-| Quality | What it means here | Design levers | The trade-off you accept |
-|---|---|---|---|
-| **Lead time** | Commit to production | Fast tests, parallel stages, caching, Lambda compute | Speed pressure tempts teams to remove verification, which is the wrong saving |
-| **Change failure rate** | Proportion of deployments that degrade service | Small changes, good tests, canaries, staging parity | More gates means slower delivery; too many gates means batching, which raises failure rate again |
-| **Recoverability** | How fast a bad change is undone | Blue/green, alarm-triggered rollback, feature flags, reversible migrations | Double capacity during deployment; flags add production state |
-| **Reproducibility** | Identical output from identical input | Ephemeral builds, pinned dependencies and base images, lockfiles | Pinning means deliberate dependency updates rather than automatic ones |
-| **Blast radius** | How much breaks when a deployment is wrong | Deployment configuration, canary percentage, per-cell deployment | Smaller batches deploy more slowly in wall-clock time |
-| **Security** | Who and what can change production | Per-stage roles, artefact signing, branch protection, scanning | Least privilege is more IAM work than one broad role |
-| **Auditability** | Who deployed what, when, and why | CloudTrail, pull-request history, immutable artefacts, deployment history | Requires discipline: no out-of-band changes, ever |
-| **Cost** | Build minutes, idle fleets, double capacity | ARM, caching, right-sizing, reserved capacity only when justified | Reserved fleets cost while idle; caching adds complexity |
-| **Operational complexity** | What an engineer faces when the pipeline breaks | Fewer, well-understood stages; good failure messages | Every gate is a component that can itself fail and block delivery |
-
-!!! danger "The property that makes frequent deployment safe is rollback, not testing"
-
-    Testing reduces the probability that a change is bad. Rollback bounds the *cost* of a bad change, and it bounds it regardless of why the change was bad  including the failure modes your tests could not have anticipated, which in practice are most of them. This is why blue/green with an alarm-triggered rollback is worth its double capacity, and why an irreversible database migration is a far more serious architectural defect than a gap in test coverage. A team with excellent tests and no rollback path deploys nervously; a team with adequate tests and instant rollback deploys constantly.
-
----
-
 ## AWS Best Practices
 
-### Operational Excellence
-
-Define the pipeline itself in code  CloudFormation, CDK or Terraform  and review changes to it exactly as you review application changes; a pipeline configured by hand in a console is the build server of chapter 5.1's cautionary tale, wearing a managed-service badge. Make build failures loud and specific: configure CodeBuild reports so a failed test is visible without reading a log, and route build and deployment state changes through EventBridge to a chat channel the team actually reads. Keep the pipeline fast, because a pipeline slower than about fifteen minutes stops being a feedback mechanism and becomes something developers work around. Record every deployment against a commit and a change record, and treat an out-of-band console change to production as an incident in its own right  not because it is forbidden, but because it silently invalidates every guarantee the pipeline provides.
-
-### Security
-
-Separate build identity from deploy identity: the build role reads source, writes artefacts and reads specific parameters, and it must not be able to change production. Store nothing long-lived in the build environment  use Secrets Manager and Parameter Store references, and for external Git providers use CodeConnections rather than personal access tokens. Protect the mainline branch with IAM conditions or provider-side branch protection so that the only path to production is a reviewed pull request. Scan dependencies and images on every build and fail the build on critical findings, generating an SBOM alongside the artefact so that the next zero-day is a query rather than an archaeology project. Sign artefacts with AWS Signer and verify at deployment, so that "this image came from our pipeline" is a checkable claim. And enable privileged mode only on projects that genuinely build container images.
-
-### Reliability
-
-Build once and deploy many, always. Deploy with a strategy that keeps the previous version running  blue/green or canary  and configure automatic rollback on a CloudWatch alarm watching user-visible behaviour. Make every database migration backward-compatible across at least one release, using expand and contract, because a migration that forbids rollback disables the pipeline's central safety property. Validate the green environment with a real smoke test over a test listener in `BeforeAllowTraffic` rather than trusting a container health check, which only proves the process started. Ensure the pipeline is never a runtime dependency of the application, and document the manual deployment and rollback path for the case where the pipeline itself is unavailable during an incident.
-
-### Performance Efficiency
-
-Cache dependencies deliberately, keying the cache on lockfile contents so a dependency change invalidates it correctly. Prefer ARM/Graviton compute where the toolchain allows: it is usually both cheaper and faster, and it is the single easiest improvement available in most build configurations. Parallelise independent work  lint, unit tests and image build frequently need not be sequential, and batch builds express that natively. Use Lambda compute for short builds where cold start dominates total time, and reserved-capacity fleets only once you have measured that queue time, not build time, is the constraint. Right-size rather than defaulting: measure the build at two compute sizes before choosing, because build-minute pricing means a faster larger instance is often cheaper in total.
-
-### Cost Optimization
-
-Build minutes are billed per minute of actual build, so the highest-leverage cost work is making builds shorter: caching, ARM, right-sizing, and not rebuilding unchanged components. Reserved-capacity fleets are billed for provisioned capacity whether or not you use it, so they are justified by sustained high volume, not by a busy Friday. Blue/green deployments double capacity for the duration of the deployment, which is a real but bounded cost and almost always the right purchase. Set build timeouts tightly so a hung build costs minutes rather than hours. Apply ECR lifecycle policies so that years of per-commit images do not accumulate silently  this is [chapter 5.2](topic2.md)'s topic, and it is one of the most commonly overlooked line items in a delivery estate.
-
-### Sustainability
-
-Shorter builds, cached dependencies and ARM compute all reduce energy per change, and the aggregate over thousands of builds is substantial. Not rebuilding what has not changed is the largest single saving available. Avoiding whole-fleet redeployments for configuration changes  using AppConfig or environment updates instead  avoids recomputing artefacts that are already correct. And deleting unused artefacts and images through lifecycle policies removes storage that is doing nothing but existing.
-
----
-
-## Security Considerations
-
-**The build role is the account's most under-examined privilege.** A build executes your repository's code plus every dependency it downloads, with the build role's credentials available at the container credential endpoint. If that role can deploy, then a compromised transitive dependency can deploy. The structural fix is separation: a build role scoped to reading source, writing to one artefact location and reading named parameters; a *separate* deploy role assumed by the pipeline's deploy stage. This is the single most valuable IAM decision in a delivery system and it is very frequently skipped because one broad role is quicker to write.
-
-**Secrets belong in Secrets Manager or Parameter Store, referenced rather than embedded.** A plaintext CodeBuild environment variable is visible in the project configuration, in `StartBuild` calls recorded by CloudTrail, to anyone with `codebuild:BatchGetProjects`, and frequently in build logs when a script echoes its environment. Buildspec `secrets-manager` and `parameter-store` blocks fetch values at build start without exposing them in configuration.
-
-**Branch protection is an access-control mechanism, not a workflow preference.** If a developer can push directly to `main` and `main` deploys to production, then every developer has direct production write access, and the pull-request process is advisory. Enforce it with CodeCommit approval rule templates and `codecommit:References` IAM conditions, or with provider-side branch protection for GitHub and GitLab.
-
-**Artefact provenance must be verifiable, not assumed.** Tag by commit SHA, deploy by digest, sign with AWS Signer, and verify the signature at deployment. Without this, "the image in ECR" is a claim about a mutable tag rather than a fact about a specific build, and mutable tags are how the wrong artefact reaches production without anybody doing anything obviously wrong.
-
-**Dependency confusion deserves a specific defence.** If your build resolves `@acme/internal-utils` from a public registry when the internal one is unreachable, an attacker who publishes that name publicly owns your build. CodeArtifact with an explicit upstream order, scoped registries, and a build that fails rather than falling back are the defences.
-
-**Privileged mode is a real escalation.** Docker-in-Docker requires it, and it weakens the isolation of the build container. Enable it only where images are genuinely built, and treat those projects as higher-sensitivity than the rest.
-
-**CloudTrail is the audit record, and it only works if the pipeline is the only path.** Every deployment through the pipeline is attributable to a commit, a reviewer and a role. A single manual `aws ecs update-service` from an engineer's laptop breaks that chain for everything downstream  which is why out-of-band changes should be alarmed on, not merely discouraged.
-
----
-
-## Performance Optimization
-
-**Measure the phases before optimising anything.** CodeBuild reports per-phase durations; in most projects the time is concentrated in one place  dependency installation, image build, or a slow test suite  and optimising elsewhere achieves nothing. Teams routinely upgrade compute to fix a build whose time is entirely dependency download.
-
-**Cache with a correct key.** Dependency caches keyed on the lockfile hash restore when dependencies are unchanged and invalidate when they change. A cache keyed on the branch name silently serves stale dependencies; a cache with no invalidation is worse than no cache, because it produces builds that are fast and wrong.
-
-**Use local Docker layer caching for image builds**, and order the Dockerfile so that layers change in increasing frequency: base image, system packages, dependency manifests, dependency install, then application source last. A Dockerfile that copies the whole source before installing dependencies invalidates the dependency layer on every commit, which is the most common reason container builds are slow.
-
-**Parallelise independent stages.** Lint, unit tests, security scanning and image build often have no ordering dependency. CodeBuild batch builds express this natively, and [chapter 5.2](topic2.md) shows the CodePipeline equivalent with parallel actions in a stage.
-
-**Choose compute against measured behaviour.** A `LARGE` instance that halves a build's duration costs the same total as a `MEDIUM` that takes twice as long, and delivers feedback twice as fast  build-minute pricing makes this trade unusually clean. Separately, ARM/Graviton is typically both cheaper per minute and faster for compiled and container workloads.
-
-**Attack cold start where it dominates.** For a 45-second lint job, a 40-second container provision is most of the wall-clock time; Lambda compute starts in under a second and removes it. For sustained high build volume, reserved fleets keep instances warm. Neither helps a twenty-minute build, where provisioning is noise.
-
-**Do not rebuild what has not changed.** In a monorepo, path-based webhook filters and per-component pipelines prevent every commit from rebuilding everything. This is simultaneously the largest performance, cost and sustainability win available, and it is usually the last thing teams do.
-
----
-
-## Cost Optimization
-
-| What you pay for | Dimension | Frequently overlooked |
-|---|---|---|
-| **CodeBuild on-demand** | Per build-minute by compute type | Long builds caused by uncached dependencies, not by slow compute |
-| **CodeBuild reserved fleets** | Provisioned capacity, billed whether used or not | Reserved capacity bought for a perceived queue problem that was actually a caching problem |
-| **CodeBuild oversizing** | Larger compute per minute | Sometimes *cheaper* overall if it shortens the build enough  measure rather than assume either way |
-| **x86 versus ARM** | Per-minute rate | ARM is usually cheaper *and* faster; the easiest saving in most estates |
-| **CodeCommit** | Active users, storage, requests above the free allowance | Rarely material |
-| **CodeDeploy** | Free for EC2, Lambda and ECS; charged per on-premises instance update | The real cost is the double capacity during blue/green |
-| **Blue/green capacity** | Duplicate tasks or instances during deployment | Almost always worth it; longer termination waits extend it |
-| **ECR storage** | Per GB-month | Per-commit images accumulating for years without a lifecycle policy |
-| **S3 artefact store** | Storage and requests | Pipeline artefacts retained indefinitely with no lifecycle rule |
-| **CloudWatch Logs** | Ingestion and storage | Verbose build logs at default infinite retention |
-| **Hung builds** | Full build-minute price until timeout | A default 8-hour timeout on a 4-minute build |
-
-**The structural lesson** is that a delivery estate's cost is dominated by time and by accumulation. Time: shorter builds through caching, ARM and not rebuilding unchanged components. Accumulation: lifecycle policies on ECR, the artefact bucket and log groups. Both are configuration rather than architecture, both are cheap to fix, and both are invisible until someone reads the bill.
+- **Operational Excellence:** define the pipeline itself in code and review changes to it exactly as application changes are reviewed, keeping it fast enough (roughly fifteen minutes) to remain a feedback mechanism.
+- **Operational Excellence:** record every deployment against a commit, and treat an out-of-band console change to production as an incident because it invalidates the pipeline's guarantees.
+- **Security:** separate the build identity, which reads source and writes artefacts, from the deploy identity, which alone can change production.
+- **Security:** reference secrets from Secrets Manager or Parameter Store, scan dependencies and images on every build, and sign artefacts with AWS Signer so their origin can be verified at deployment.
+- **Reliability:** build once, deploy with a strategy that keeps the previous version running, and roll back automatically on a CloudWatch alarm watching user-visible behaviour.
+- **Reliability:** keep every database migration backward-compatible for at least one release (expand and contract), so that rollback remains possible.
+- **Performance Efficiency:** cache dependencies keyed on the lockfile, parallelise independent work with batch builds, and prefer ARM (Graviton) build compute where the toolchain allows.
+- **Cost Optimization and Sustainability:** shorten builds, set tight build timeouts, avoid rebuilding unchanged components, and apply lifecycle policies so unused artefacts and images do not accumulate.
 
 ---
 
@@ -707,56 +575,6 @@ The first five rows are the DORA software delivery metrics, using the names and 
 **Deployment markers on dashboards** are a small practice with a large payoff: overlay deployment events on your application metrics so that "this started at 14:32" and "we deployed at 14:31" are visible in one glance. A very large share of incidents are caused by the most recent deployment, and making that correlation immediate removes the first twenty minutes of most investigations.
 
 **CloudTrail answers the audit questions**: who started this deployment, with which role, from where, and against which artefact. Combined with immutable artefacts tagged by commit SHA, this makes "what is running in production and who put it there" a query rather than an investigation. 
-
-## Integration with Other AWS Services
-
-| Service | Why it integrates with CI/CD |
-|---|---|
-| **AWS CodePipeline** | Orchestrates source, build, test, approval and deploy stages; the subject of [chapter 5.2](topic2.md) |
-| **AWS CodeConnections** | Managed connection to GitHub, GitLab and Bitbucket without personal access tokens |
-| **Amazon ECR** | Immutable container artefact storage with scanning, lifecycle policies and digests |
-| **Amazon S3** | Artefact storage for non-container builds and the pipeline artefact store |
-| **AWS CodeArtifact** | Private package registry with controlled upstreams; the dependency-confusion defence |
-| **Amazon ECS and AWS Fargate** | Deployment target via CodeDeploy blue/green or native ECS deployments |
-| **Amazon EKS** | Deployment target via the CodePipeline EKS action, or GitOps with Argo CD |
-| **AWS Lambda** | Deployment target with alias-based canary and linear traffic shifting |
-| **AWS CloudFormation and CDK** | Deploy infrastructure from the same pipeline that deploys application code ([chapter 5.3](topic3.md)) |
-| **AWS Secrets Manager and Parameter Store** | Build-time and runtime configuration and secrets, injected rather than baked in |
-| **AWS AppConfig** | Feature flags separating release from deployment; the fastest incident mitigation available |
-| **AWS Signer** | Artefact signing and verification, making provenance checkable |
-| **Amazon Inspector** | Continuous vulnerability scanning of images in ECR and of Lambda functions |
-| **AWS Security Hub** | Aggregated findings from scanning across the estate |
-| **Amazon CloudWatch** | Build and deployment metrics, logs, and the alarms that drive automatic rollback |
-| **Amazon EventBridge** | State-change events for notification, automation and pipeline triggering |
-| **AWS CloudTrail** | The audit record of every build, deployment and configuration change |
-| **AWS Systems Manager** | Parameter Store, and Automation runbooks i`nvoked from deployment events |
-| **AWS Organizations and multiple accounts** | Separate accounts per environment; the strongest blast-radius boundary for deployment |
-| **Amazon SNS and AWS Chatbot** | Human notification of build and deployment outcomes |
-
-```mermaid
-flowchart TD
-    DEV["Developer"] --> PR["Pull request with required approvals"]
-    PR --> GIT["CodeCommit or GitHub via CodeConnections"]
-    GIT --> EB["EventBridge"]
-    EB --> CB["CodeBuild: lint, test, scan, build"]
-    CB --> CA["CodeArtifact: pinned dependencies"]
-    CB --> SEC["Secrets Manager and Parameter Store"]
-    CB --> ECR["ECR: image tagged with the commit SHA"]
-    ECR --> INS["Amazon Inspector enhanced scanning"]
-    INS --> SH["AWS Security Hub"]
-    CB --> SIGN["AWS Signer: sign the artefact"]
-    SIGN --> CD["CodeDeploy"]
-    CD --> ECS["Amazon ECS blue/green"]
-    CD --> LAM["Lambda alias canary"]
-    CD --> EC2["EC2 Auto Scaling group"]
-    APPC["AWS AppConfig feature flags"] -.->|"release, separate from deploy"| ECS
-    CWALM["CloudWatch alarm on user-visible error rate"] -.->|"automatic rollback"| CD
-    ECS --> CWM["CloudWatch metrics, logs, X-Ray"]
-    CWM --> CWALM
-    CT["CloudTrail"] -.->|"who deployed what, when"| AUDIT["Audit and compliance"]
-```
-
-Read architecturally, this shows the three groups from earlier working together. The **producers** run left to right across the top: a reviewed change becomes a build that resolves pinned dependencies from CodeArtifact and injects configuration rather than baking it in. The **custodians** sit in the middle: ECR holds the artefact immutably, Inspector and Security Hub judge it, Signer proves where it came from. The **changers** sit on the right: CodeDeploy moves traffic gradually across three different compute platforms with the same model, AppConfig separates release from deployment, and the CloudWatch alarm closes the loop by watching what users experience and pulling the change back automatically when that degrades. The feedback arrow from application metrics to the rollback is the single most important line in the diagram  without it, everything upstream is a faster way to reach production with no way back.
 
 ## Industry Use Cases
 
@@ -809,47 +627,6 @@ Read architecturally, this shows the three groups from earlier working together.
 **Multi-account and multi-Region delivery is significantly more complex than the single-account tutorials suggest.** Cross-account roles, KMS key policies that permit the deploying account to decrypt artefacts, and Region-specific resources all have to be right, and the failure messages are not always illuminating.
 
 **Emergency changes will happen.** Every organisation eventually faces an incident where the pipeline is too slow or is itself broken. The mature response is a documented, audited break-glass path  not pretending the situation will not arise, which reliably produces an undocumented one.
-
----
-
-## Common Mistakes
-
-### Beginner Mistakes
-
-| Mistake | Why it is wrong | What to do instead |
-|---|---|---|
-| Building separately per environment | You test one artefact and ship a different one | Build once; promote the same artefact with injected configuration |
-| Tagging images `latest` | Not an identifier; you cannot say what is running | Tag with the commit SHA; deploy by digest |
-| `docker push` in `post_build` with no success check | Publishes artefacts from failed builds | Guard on `$CODEBUILD_BUILD_SUCCEEDING` |
-| Plaintext secrets in build environment variables | Visible in configuration, API calls and logs | `secrets-manager` and `parameter-store` buildspec references |
-| `npm install` rather than `npm ci` | Ignores the lockfile; builds are not reproducible | `npm ci`, and commit the lockfile |
-| No cache configured | Every build redownloads every dependency | Cache keyed on the lockfile hash |
-| `AllAtOnce` deployment configuration in production | The whole fleet breaks before anyone reacts | `HalfAtATime` at minimum; canary for user-facing changes |
-| Canary with no CloudWatch alarm | Nothing is watching; the canary is a delay | An alarm on user-visible behaviour, with automatic rollback enabled |
-| Bake time shorter than the alarm evaluation window | The alarm cannot fire before the shift completes | Bake for at least the alarm's evaluation period, with margin |
-| Health check treated as a smoke test | Proves the process started, not that it works | A real request over the test listener in `BeforeAllowTraffic` |
-| An `ApplicationStop` script that can fail | Blocks all future deployments, from the *old* revision | Make it idempotent and tolerant; test the failure path |
-| A build role with `AdministratorAccess` | Every dependency in the build can do anything | Scope to the specific source, artefacts, parameters and repository |
-| Deploying from a developer's laptop | Breaks the audit chain and the artefact guarantee | The pipeline is the only path; alarm on out-of-band changes |
-| A migration that drops a column in the same release that stops using it | Rollback becomes impossible | Expand and contract across releases |
-| Building on every push to every branch | Cost and queue time with no signal | Webhook filter groups: pull requests and the mainline |
-
-### Production Mistakes
-
-| Mistake | Consequence | Remedy |
-|---|---|---|
-| No rollback ever tested | It does not work, discovered during an incident | Exercise rollback deliberately, on a schedule, in production |
-| Pipeline is a runtime dependency of the application | A pipeline outage becomes a production outage | Nothing in the request path may depend on the pipeline |
-| No documented manual deployment path | During a pipeline outage there is no way to ship a fix | A tested break-glass runbook, audited when used |
-| Reserved fleets bought to fix slow builds | Cost rises; builds are still slow | Measure queue time versus build time first; usually the fix is caching |
-| Alarms on CPU rather than user-visible metrics | Rollback never triggers for the failures that matter | Alarm on error rate, latency and business outcomes |
-| ECR with no lifecycle policy | Years of per-commit images, growing silently | Lifecycle rules by count and age, keeping tagged releases |
-| Build failures on `main` tolerated for days | The gate has stopped being a gate | Alarm on mainline build failure; fixing it is the team's top priority |
-| One shared IAM role across all pipeline stages | No separation of duties; a build compromise is a deploy compromise | A role per stage, scoped to that stage's actions |
-| Approval stages used as a substitute for tests | The approver has no information to refuse with | Approvals for business timing; tests for correctness |
-| Long-lived feature branches with a CI server attached | Deferred integration, which is the problem CI exists to solve | Trunk-based development with feature flags |
-| Termination wait set to zero | The blue environment is gone; manual rollback is a redeploy | Minutes to hours, sized to how fast a problem would surface |
-| No deployment markers on dashboards | Every incident investigation starts from scratch | Overlay deployment events on application metrics |
 
 ---
 

@@ -127,18 +127,17 @@
 
 ### Advanced Questions
 
-1. An organisation runs one EKS cluster per team  nineteen in total  and its control plane costs have become a line item in the annual budget. Analyse the trade-offs of consolidating to three clusters. Address blast radius, upgrade coordination, noisy neighbours, isolation mechanisms available within a cluster, cost attribution, and the specific circumstances that would justify keeping a cluster separate.
+1. A cluster created by a CI pipeline role has been handed to the platform team. Engineers whose IAM identities have `AdministratorAccess` receive `Unauthorized` from `kubectl`; a developer with an access entry receives `Forbidden` when reading Secrets in the `payments` namespace; and auditors ask who deleted a node group last week. Analyse each situation against the authentication, mapping and authorisation layers of EKS cluster access, give the precise remedy for each, and explain which log source answers the auditors and why the other one does not.
 
     ??? success "Check your answer"
 
         A good answer covers:
 
-        - **Blast radius:** fewer clusters mean a bad upgrade, webhook or add-on affects many teams at once.
-        - **Upgrade coordination:** each cluster upgrade must wait for every team's workloads to be compatible; fewer clusters, but harder ones.
-        - **Noisy neighbours:** shared nodes need ResourceQuotas, LimitRanges, accurate requests and possibly dedicated node pools with taints.
-        - **In-cluster isolation:** namespaces, RBAC, NetworkPolicies, per-workload IAM roles, Pod Security Admission; these are soft isolation, not a security boundary equal to separate clusters or accounts.
-        - **Cost attribution:** use namespace labels with split cost allocation or Kubecost-style tooling; control plane fees saved are small next to node costs.
-        - **Keep separate when:** regulatory or hard tenancy isolation is required, workloads differ greatly in risk or upgrade cadence, or production must be isolated from non-production.
+        - **`Unauthorized`:** IAM authentication succeeds, but no access entry maps the engineers' principals to a Kubernetes identity; IAM permissions alone grant nothing inside the cluster, and only the creating identity (the pipeline role) has bootstrap administrator access.
+        - **Remedy 1:** using the pipeline role, create access entries (authentication mode `API` or `API_AND_CONFIG_MAP`) for the engineers with a suitable access policy, and add a cluster-admin entry for a human-assumable break-glass role.
+        - **`Forbidden`:** the developer is recognised, but the access policy or RBAC binding does not allow `get` on Secrets in `payments`; grant it only if justified, scoped to that namespace, because Secrets are base64-encoded rather than encrypted in the API.
+        - **Auditors:** deleting a node group is an **EKS API** call, recorded in CloudTrail; the control plane `audit` log records **Kubernetes API** activity (who read a Secret or applied a manifest) and does not see EKS API operations.
+        - **Principle:** IAM authenticates, the access entry maps, and Kubernetes authorisation decides; each error message points at one layer.
 
 2. Design the complete network architecture for an EKS cluster that must support 4,000 Pods across three Availability Zones, connect to an on-premises network over AWS Direct Connect that has already allocated most of the RFC 1918 space, and enforce per-workload network boundaries visible to a non-Kubernetes security team. Specify the addressing scheme, CNI configuration, and segmentation mechanisms, justify each, and identify the requirement your design satisfies least well.
 
@@ -178,17 +177,17 @@
         - **Further defects:** no private path for nodes, no break-glass access, no least privilege for the pipeline.
         - **Legitimate intent:** pipeline convenience, auditability, low cost and low IAM overhead; satisfy them with in-VPC runners or GitOps, access entries in Terraform, right-sized or Spot/Graviton nodes, and reusable Pod Identity roles.
 
-5. An EKS cluster serving a payments platform must meet a 99.99 per cent availability target. Evaluate honestly what a single well-designed EKS cluster can and cannot deliver against that target. Identify every single point of failure that remains after multi-AZ node distribution, `topologySpreadConstraints`, and PodDisruptionBudgets are in place, and describe what a multi-cluster architecture would add, what it would cost, and how you would decide whether the addition is justified.
+5. A university's EKS cluster runs a Kubernetes version that leaves standard support next month. It uses the default upgrade policy, managed node groups on the EKS-optimized AMI, and the VPC CNI, CoreDNS and `kube-proxy` add-ons. Evaluate what happens, financially and operationally, if the team does nothing; compare the alternative upgrade policy; and set out an upgrade plan, explaining how version steps, the rollback window and component ordering constrain it.
 
     ??? success "Check your answer"
 
         A good answer covers:
 
-        - **Target:** 99.99 per cent allows about 52 minutes of downtime a year; the EKS SLA for a standard control plane is 99.95 per cent monthly uptime (99.99 per cent only with the paid Provisioned Control Plane tier), though running Pods keep serving during a brief API outage.
-        - **Remaining single points of failure:** the cluster as a unit (bad add-on version, admission webhook, upgrade or misapplied manifest affects every AZ); the Region; shared dependencies such as one database, one ALB or DNS configuration; the deployment pipeline itself.
-        - **Multi-cluster adds:** independent failure domains, blue/green cluster upgrades, and optionally Regional failover with Route 53 health-checked routing.
-        - **Multi-cluster costs:** duplicated nodes and data replication, cross-cluster state and failover complexity, more operational effort; the control plane fee is minor.
-        - **Decision:** compare the error budget with the measured frequency of cluster-level incidents, and with the cost of downtime; justify only if those failures would otherwise exceed the budget.
+        - **Doing nothing (`EXTENDED`, the default):** the cluster enters 12 months of extended support at six times the control plane price; when that ends, AWS upgrades the control plane automatically but not the nodes or add-ons, leaving them behind and possibly incompatible.
+        - **`STANDARD` policy:** avoids extended-support charges, but AWS auto-upgrades the control plane at the end of standard support on its schedule, so removed APIs can break deployments without a planned change.
+        - **Plan:** check Upgrade insights and manifests for removed APIs; rehearse in non-production; upgrade the control plane one minor version at a time; move each add-on to a compatible version; then roll the node groups with PodDisruptionBudgets that allow at least one disruption.
+        - **Constraints:** the `kubelet` may run behind the control plane but never ahead of it; a rollback is possible only to the previous minor version within 7 days, after first rolling back upgraded node groups, so upgrades are treated as one-way.
+        - **Lesson:** an annual, rehearsed upgrade cadence keeps the cluster in standard support and avoids forced upgrades.
 
 ---
 
@@ -239,14 +238,15 @@
         - **Why control plane first:** `kubelet` may run behind the API server (up to three minor versions) but never ahead of it.
         - **Before starting:** check Upgrade insights and manifests for removed APIs, and rehearse in non-production.
 
-5. Explain in one paragraph why `kubectl edit` should not be used to change production, and describe what should be done instead.
+5. Explain what a kubeconfig context for an EKS cluster contains, how `kubectl` obtains credentials without storing a password, and why you should check the current context before every change.
 
     ??? success "Check your answer"
 
         A good answer covers:
 
-        - **Why not:** `kubectl edit` changes live state with no review, no record in Git and no reproducibility; the next deployment from Git silently overwrites it (or GitOps reverts it), and nobody can tell what production really runs.
-        - **Instead:** change the manifest or values file in Git, review it through a pull request, and let the pipeline or GitOps controller apply it, followed by `kubectl rollout status`.
+        - **Creation:** `aws eks update-kubeconfig --name <cluster> --region <region>` writes a context into `~/.kube/config`.
+        - **Contents:** the cluster's API endpoint, its certificate, and a command (`aws eks get-token`) that fetches a short-lived token before each request; the cluster identity is whichever AWS identity is active.
+        - **Why check:** `kubectl` acts on the current context (and its default namespace), so a command meant for a test cluster can change production; confirm with `kubectl config current-context` and give production contexts clearly different names.
 
 ### Intermediate Questions
 
@@ -285,17 +285,18 @@
         - **Pods stuck terminating** (long `terminationGracePeriodSeconds`, a finalizer, or a hung `preStop`): the Pod shows `Terminating` for a long time; fix the app shutdown or finalizer.
         - **Method:** read the drain output or node group update error first; it names the Pod that cannot be evicted.
 
-4. Explain the security argument for GitOps over a CI pipeline that runs `kubectl apply`. Then describe two failure modes that GitOps introduces and how you would mitigate each.
+4. A cluster has just been created with Custom configuration and EKS Auto Mode switched off. Describe the six build stages in order and, for each, the symptom you would observe if that stage were skipped or wrong. Then explain why CoreDNS showing `Pending` immediately after creation is not, by itself, a fault.
 
     ??? success "Check your answer"
 
         A good answer covers:
 
-        - **Security argument:** with GitOps an in-cluster controller pulls from Git, so no external CI system holds cluster-admin credentials; compromise of CI no longer means compromise of every cluster.
-        - **Further benefits:** every change is a reviewed, attributable Git commit, and drift from Git is detected and corrected.
-        - **Failure mode 1:** Git becomes the attack path (write access equals deploy access); mitigate with branch protection, mandatory review, signed commits and restricted repository permissions.
-        - **Failure mode 2:** self-healing reverts emergency manual fixes or fights other controllers (for example an HPA changing `replicas`); mitigate with a documented break-glass process and ignore rules for controller-owned fields.
-        - **Other acceptable mode:** the GitOps controller itself fails or is misconfigured; monitor sync status and alert on failed syncs.
+        - **1. Prerequisites** (cluster role, node role, VPC, subnets, NAT): creation fails, or nodes cannot pull images from ECR.
+        - **2. Control plane** (API server, `etcd`, cluster security group): nothing else can proceed.
+        - **3. Access entries** for people and pipelines: everyone except the creator receives `Unauthorized`.
+        - **4. Core add-ons** (VPC CNI, `kube-proxy`, CoreDNS): nodes never become `Ready`, or DNS fails.
+        - **5. Node group:** every Pod stays `Pending`; **6. Controllers** (AWS Load Balancer Controller, metrics-server): Ingress creates no ALB and autoscaling has no metrics.
+        - **CoreDNS `Pending`:** `CreateCluster` makes the control plane only, so until a node group exists CoreDNS has nowhere to run; "nowhere to run" differs from "broken", and it starts once nodes join.
 
 5. A service returns 5xx errors during every deployment despite all Pods reporting `Ready`. Explain the two most likely mechanisms, the single observation that distinguishes them, and the fix for each.
 
@@ -311,31 +312,29 @@
 
 ### Advanced Questions
 
-1. Design the complete deployment architecture for a regulated financial platform where no human may deploy directly to production, every change must be attributable, secrets must never appear in version control, and a bad release must not reach more than five per cent of users before automated validation. Specify the provisioning, packaging, delivery, secret management, and progressive delivery mechanisms; justify each choice; and identify the requirement your design satisfies least completely and why.
+1. A team packages its `student-portal` service as a Helm chart and deploys it to development, staging and production. Design the chart's values strategy, the pipeline commands for each release, the checks that prove a release succeeded, and the rollback procedure. Justify each choice from how Helm release revisions, image tags and Kubernetes rollouts behave, and identify one failure your process still cannot recover from automatically.
 
     ??? success "Check your answer"
 
         A good answer covers:
 
-        - **Provisioning:** clusters and AWS resources through IaC (Terraform or eksctl config) run only by a pipeline with reviewed plans; no human production credentials except a logged break-glass role.
-        - **Packaging:** Helm or Kustomize with values in Git; images built once, tagged by commit, referenced by digest, scanned and signed.
-        - **Delivery:** GitOps (Argo CD or Flux) pulls from protected branches; pull request approval plus Git history, CloudTrail and EKS audit logs give attribution.
-        - **Secrets:** AWS Secrets Manager synchronised by External Secrets Operator or the Secrets Store CSI Driver; only references live in Git.
-        - **Progressive delivery:** Argo Rollouts or Flagger canary at five per cent using ALB weighted routing, with automated analysis on error rate and latency metrics and automatic abort.
-        - **Weakest requirement:** "five per cent of users" is really five per cent of requests unless routing is sticky by user, and database schema changes cannot be canaried; also the break-glass path is a deliberate exception to "no human".
+        - **Values:** `values.yaml` holds defaults as the chart's public interface; committed `values-dev.yaml`, `values-staging.yaml` and `values-prod.yaml` hold only the differences; number-like values are quoted; no `--set` in automation, because it leaves no record.
+        - **Images:** a unique, immutable tag (or digest) per build set in the values file, never `latest`, so every Pod runs the same code and a rollback restores known code.
+        - **Pipeline:** `helm template` (or `kubectl diff`) to review the rendered output, then `helm upgrade --install portal ./student-portal-chart -f values-prod.yaml --wait` with `--rollback-on-failure` (Helm 4) or `--atomic` (Helm 3), followed by `kubectl rollout status`.
+        - **Rollback:** `helm history portal` and `helm rollback portal <revision>`, which works because each install or upgrade is a numbered release revision; `kubectl rollout undo` reverts only the Deployment.
+        - **Remaining gap:** a release whose readiness probe passes but which returns errors or wrong results is reported as successful; Kubernetes does not roll back on error rates, so that needs monitoring and a human or additional tooling.
 
-2. An organisation with sixty microservices across four EKS clusters has no consistent deployment approach, no PodDisruptionBudgets, resource requests copied from an old example, and a shared CI role with cluster admin. Produce a prioritised remediation plan. Justify the ordering explicitly in terms of risk reduction per unit of effort, and identify which items you would deliberately defer and why.
+2. Deployment A has 4 replicas with `maxSurge: 1` and `maxUnavailable: 0`; Deployment B has 4 replicas with `maxSurge: 25%` and `maxUnavailable: 25%`. Both are updated to an image whose readiness probe never passes. Trace each rollout, state how much ready capacity each retains, describe what the cluster reports after `progressDeadlineSeconds` and what a pipeline must do. Then explain how the outcome changes if the same broken check is placed in the liveness probe and the readiness probe passes.
 
     ??? success "Check your answer"
 
         A good answer covers:
 
-        - **Priority 1:** replace the shared cluster-admin CI role (largest risk, moderate effort): per-cluster, least-privilege identities or GitOps pull.
-        - **Priority 2:** PodDisruptionBudgets for critical services (low effort, prevents outages during node maintenance and upgrades).
-        - **Priority 3:** right-size requests from observed usage (Container Insights or VPA recommendations), fixing both instability and cost.
-        - **Priority 4:** a standard deployment approach (shared chart or Kustomize base, GitOps), migrated service by service, highest-risk services first.
-        - **Ordering rationale:** risk reduction per unit of effort; credential exposure is catastrophic and cheap to reduce.
-        - **Defer deliberately:** service mesh, progressive delivery and a big-bang migration of all sixty services, until the basics are consistent.
+        - **Deployment A:** a new ReplicaSet creates one surge Pod that never becomes ready; because `maxUnavailable: 0`, no old Pod is removed, so all 4 old Pods keep serving and the rollout stalls.
+        - **Deployment B:** 25 per cent of 4 is one, so one old Pod is terminated and up to two new Pods are created; none become ready, leaving 3 of 4 ready Pods and a stalled rollout.
+        - **At the deadline:** after `progressDeadlineSeconds` (default 600 seconds) the rollout is marked failed (`ProgressDeadlineExceeded`), but nothing is reverted; `kubectl apply` had already returned when the objects were stored.
+        - **Pipeline:** `kubectl rollout status` with a timeout detects the failure, followed by `kubectl rollout undo`.
+        - **Liveness instead:** new Pods pass readiness and receive traffic, so the rollout proceeds and replaces old Pods, while the liveness failures keep restarting containers; the result is a degraded or failed service rather than a safely stalled rollout, because readiness controls traffic and liveness controls restarts.
 
 3. Critique this proposed platform standard: "All applications will be packaged as Helm charts with values supplied by `--set` flags in the pipeline for flexibility; the pipeline will run `helm upgrade` and report success when the command returns; images will use branch-name tags so developers can see what is deployed; PodDisruptionBudgets will use `minAvailable` equal to the replica count for maximum availability; and cluster upgrades will be performed only when a security advisory requires them." Identify at least seven specific defects, propose a corrected standard, and state which parts of the original intent are legitimate and how you would satisfy them.
 
@@ -362,18 +361,17 @@
         - **Checks that would have caught it:** EKS Upgrade insights; scanning manifests and Helm charts with tools such as `pluto` or `kubent`; the deprecated-API request metrics and audit logs; a dry-run or test deploy against the target version in non-production.
         - **Why serious on EKS:** control plane upgrades can be rolled back only within 7 days and are otherwise one-way, and clusters reaching the end of support are upgraded automatically, so a missed removal can appear without a planned upgrade at all.
 
-5. Argue both sides of the following claim, then give your own position with justification: "For an organisation running fewer than twenty services on AWS, adopting GitOps, Helm, Kustomize, a policy engine, a secrets operator, and a progressive delivery controller costs more in operational complexity than it returns in safety, and a well-written CI pipeline running `kubectl apply` is the correct engineering choice." Address the credential argument, the drift argument, the team-size argument, and what specific threshold would change your answer.
+5. A latency-sensitive API on EKS is configured with `requests.cpu: 1`, `limits.cpu: 1`, `requests.memory: 256Mi` and `limits.memory: 2Gi`. Under load its latency rises sharply, and other Pods on the same nodes are occasionally `OOMKilled` or evicted. Explain the mechanism behind each symptom, propose corrected settings, and describe how you would derive the values and confirm the effect.
 
     ??? success "Check your answer"
 
         A good answer covers:
 
-        - **For the claim:** each tool adds learning, upgrades and failure modes; a small team may lack capacity to operate them; a well-written pipeline with `rollout status` and undo is understandable.
-        - **Credential argument:** a push pipeline holds cluster credentials, which GitOps removes; this matters regardless of service count.
-        - **Drift argument:** without GitOps, manual changes accumulate silently; with few services and strict discipline the risk is smaller but non-zero.
-        - **Team-size argument:** complexity cost falls on a few people; managed or lightweight choices (one GitOps tool, Kustomize only, Secrets Manager with External Secrets) capture most safety at low cost.
-        - **Own position:** adopt the cheap, high-value pieces first (GitOps, external secrets, Kustomize) and defer a policy engine and progressive delivery.
-        - **Threshold that would change it:** regulatory requirements, several teams sharing clusters, frequent releases with user-visible incidents, or a measured change-failure rate above an agreed level.
+        - **Latency:** the CPU limit throttles the container whenever it bursts above 1 vCPU, even when the node has idle CPU; for latency-sensitive services the recommended pattern is a CPU request with no CPU limit.
+        - **Neighbour failures:** the scheduler reserves only the 256 Mi memory request, but the Pod may grow to 2 Gi, so nodes are overpacked and run into memory pressure, causing kills and evictions of other Pods.
+        - **Correction:** set the memory request equal to the memory limit, sized from observed usage, and keep a CPU request reflecting typical use.
+        - **Deriving values:** use `kubectl top pods` and Container Insights to compare actual usage with requests over a representative period.
+        - **Confirming:** after rolling out, watch restarts and `OOMKilled` events, latency and ALB 5xx; note that larger memory requests mean fewer Pods per node and possibly more nodes.
 
 ---
 
@@ -503,18 +501,17 @@
 
 ### Advanced Questions
 
-1. Design the complete data plane for a multi-tenant SaaS platform running customer-supplied code, GPU inference, steady platform services, and nightly batch processing, with a requirement that no tenant workload shares a kernel with another. Specify the substrate for each workload class, justify each choice from the workload's properties, and identify the requirement your design satisfies least completely and why.
+1. A platform team wants three workload groups on Fargate: CI runners in namespace `ci` labelled `runner: "true"`; every Pod in short-lived `preview-*` namespaces; and a reporting job that needs an EBS volume and a node-level log-forwarding DaemonSet. Specify the Fargate profile, explain how each selector rule applies, identify which group cannot run on Fargate and why, and describe the correct procedure when the team later needs to add a label condition to the `preview-*` selector.
 
     ??? success "Check your answer"
 
         A good answer covers:
 
-        - **Customer-supplied code:** Fargate, one micro-VM per Pod, so no shared kernel; IRSA for any AWS access, NetworkPolicies and no route to internal services.
-        - **GPU inference:** Fargate has no GPUs, so dedicated GPU nodes (managed node group or Karpenter NodePool) with taints, running only platform inference code; if tenants' models run there, dedicate nodes per tenant.
-        - **Steady platform services:** On-Demand managed node groups across three AZs, with Savings Plans.
-        - **Nightly batch:** Karpenter on Spot with several instance types, tolerant of interruption.
-        - **Justification:** each choice follows from the workload's trust level, hardware need and runtime pattern.
-        - **Least well satisfied:** the no-shared-kernel rule for GPU work, which needs per-tenant dedicated nodes at significant cost (or a sandboxed runtime), and Fargate's slower start for customer code.
+        - **Profile:** a name, a Pod execution role, private subnets only, and two selectors: `namespace: ci` with labels `runner: "true"`, and `namespace: preview-*` (wildcards are allowed; up to five selectors per profile).
+        - **Selector rules:** a namespace is mandatory; labels within one selector are combined with AND; selectors within a profile are combined with OR; Pods matching no selector run on EC2 nodes.
+        - **Reporting job:** cannot run on Fargate, because EBS attaches to an instance and a DaemonSet needs a shared node; it belongs on a managed node group (or must be redesigned to use EFS and the built-in Fluent Bit router configured in `aws-observability`).
+        - **Changing the selector:** profiles are immutable, so create a new profile with the revised selector first, then delete the old one; deleting a profile stops its Pods, which become `Pending` until recreated and matched again.
+        - **Other implications:** CI Pods needing AWS access use IRSA, not Pod Identity; they start more slowly because each Pod gets a new micro-VM; and each is billed on its rounded-up requests.
 
 2. An organisation has accumulated eighteen operators across six clusters with no inventory, no version pinning, and no owners. The next Kubernetes upgrade is blocked. Produce a prioritised plan to unblock the upgrade and to prevent recurrence. Justify the ordering in terms of risk reduction per unit of effort, and state which operators you would expect to remove entirely rather than upgrade.
 

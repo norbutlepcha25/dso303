@@ -20,26 +20,11 @@
 
 ## Why This Service or Concept Exists
 
-Pods must run somewhere. Traditionally that is an EC2 node you patch, size, secure and pay for whether it is full or not. Different workloads tolerate that overhead differently.
-
-### Why Fargate exists
-
-| Workload | Why a node is a poor fit |
-|---|---|
-| Small service needing 0.25 vCPU | Smallest sensible node is much bigger and mostly idle |
-| CI job running four minutes | Launching and draining a node takes longer than the job |
-| Untrusted or customer code | Pods on a shared node share one kernel, a weaker boundary than a VM |
-| Bursty, unpredictable traffic | Capacity must be guessed in advance |
-
-Fargate makes **the Pod itself the unit of compute**: AWS creates a micro-VM sized to the Pod and bills per second. Almost every Fargate limitation follows from this one decision, so understand the reason rather than memorising the list.
-
-### Why managed node groups exist
-
-Self-managed nodes mean choosing an AMI, writing bootstrap scripts, building an Auto Scaling group, registering nodes, replacing failures and, hardest of all, **upgrading without dropping traffic**. This work is easy to get subtly wrong. Managed node groups do it behind one API and leave you the decisions that are really about the workload.
-
-### Why add-ons exist
-
-The network plugin, DNS and Service proxy are separate open-source projects with their own release cycles. Installed as loose `kubectl apply` files, nobody knows which version runs, nobody updates them, and a later cluster upgrade fails mysteriously. EKS add-ons give each one a **version, configuration and update operation**, visible in the EKS API and CloudTrail.
+- **Nodes carry overhead:** traditionally Pods run on EC2 nodes that you patch, size, secure and pay for whether they are full or not, and workloads tolerate that overhead differently.
+- **Some workloads fit nodes poorly:** a tiny service, a four-minute CI job, untrusted code or bursty traffic either leaves a node mostly idle, waits for one to launch, or shares a kernel it should not.
+- **Fargate makes the Pod the unit of compute:** AWS creates a micro-VM sized to each Pod and bills per second, and almost every Fargate limitation follows from this one decision.
+- **Self-managed nodes are easy to get subtly wrong:** choosing AMIs, writing bootstrap scripts, registering and replacing nodes and, above all, upgrading without dropping traffic is the work managed node groups take over behind one API.
+- **Core components drift when installed by hand:** the network plugin, DNS and Service proxy have their own release cycles, and EKS add-ons give each one a version, configuration and update operation visible in the EKS API and CloudTrail.
 
 ## Core Concepts
 
@@ -330,109 +315,18 @@ Three groups: **compute** (Fargate, node groups: where Pods run), **platform com
 | **Configuration** | JSON/YAML via EKS API | Keep in code (for example CoreDNS replicas) |
 | **IAM role** | IRSA or Pod Identity | Own role per add-on, not the node role |
 
-## Design Considerations
-
-### Decision framework
-
-Ask these for each workload:
-
-1. **Needs node-level features?** GPUs, DaemonSets, EBS, privileged mode, host networking → managed node group.
-2. **Untrusted or multi-tenant code?** → Fargate's per-Pod VM boundary.
-3. **Usage pattern?** Bursty, short-lived or tiny → Fargate (no idle node). Steady and dense → well-packed nodes are cheaper.
-4. **Fast scale-out on the user path?** Nodes with spare capacity respond faster than new Fargate micro-VMs.
-5. **Full cost?** Include utilisation, idle capacity, operations effort, storage and logs, not just unit price.
-
-```mermaid
-flowchart TD
-    A["A workload arrives. Where should it run?"] --> B{"Needs GPU, DaemonSet, EBS, privileged mode, or host networking?"}
-    B -->|"Yes"| C["Managed node group"]
-    B -->|"No"| D{"Untrusted or multi-tenant code?"}
-    D -->|"Yes"| E["Fargate profile"]
-    D -->|"No"| F{"Bursty, short-lived, or very small?"}
-    F -->|"Yes"| E
-    F -->|"No: steady and dense"| C
-    C --> G{"Tolerates interruption?"}
-    G -->|"Yes"| H["Spot node group above an On-Demand base"]
-    G -->|"No"| I["On-Demand node group"]
-```
-
-### Trade-offs
-
-!!! note "Core trade-off"
-    More abstraction reduces infrastructure management, but also reduces low-level control.
-
-| Quality | Fargate | Managed node groups |
-|---|---|---|
-| **Operational burden** | Lowest | Moderate |
-| **Isolation** | Per-Pod VM | Shared node kernel |
-| **Cost, steady workloads** | Higher | Lower when well packed |
-| **Cost, bursty workloads** | Lower (no idle nodes) | Higher if nodes sit idle |
-| **Elasticity** | Per Pod, slower start | Fast with headroom |
-| **Flexibility** | Constrained | High |
-
-### Architecture scenarios
-
-**Scenario 1: small internal APIs.** Moderate, unpredictable traffic; team wants minimal admin. Fargate fits if the services meet its constraints: no nodes, pay per running Pod.
-
-**Scenario 2: high-throughput service.** Needs predictable compute, high density, specific instance families and node monitoring agents. Managed node groups fit.
-
-**Scenario 3: mixed.** One cluster, both models:
-
-```mermaid
-flowchart TB
-    EKS["EKS cluster"]
-    EKS --> F["Fargate profiles"]
-    EKS --> M["Managed node groups"]
-    F --> API["Small internal APIs"]
-    F --> JOB["Short-lived CI and batch jobs"]
-    F --> UNTRUSTED["Untrusted plugin code"]
-    M --> WEB["High-throughput services"]
-    M --> GPU["GPU workloads"]
-    M --> AGENT["Workloads needing DaemonSets or EBS"]
-```
-
-**Principle:** choose the compute model **per workload**, not one model for everything.
-
 ## AWS Best Practices
 
-| Pillar | Practice |
-|---|---|
-| **Operational Excellence** | Node groups, Fargate profiles and add-ons in IaC with pinned versions; update add-ons in every upgrade |
-| **Security** | Fargate for untrusted code; own IAM role per add-on; minimal node role; Bottlerocket where suitable |
-| **Reliability** | Node groups across AZs; CoreDNS with 2+ replicas; PDBs that allow at least one disruption |
-| **Performance Efficiency** | Match compute model to workload shape; small images (especially on Fargate); keep node headroom |
-| **Cost Optimization** | Spot above an On-Demand base; Fargate where nodes would idle; Graviton where images support ARM |
-| **Sustainability** | Dense packing; scale batch node groups to zero when idle |
+- **Operational Excellence:** define node groups, Fargate profiles and add-ons in IaC with pinned versions, and update add-ons as an explicit step of every cluster upgrade.
+- **Security:** use Fargate for untrusted code, give each add-on its own IAM role, and keep the node role minimal.
+- **Security:** prefer a minimal node operating system such as Bottlerocket where it suits the workloads.
+- **Reliability:** spread node groups across Availability Zones and run CoreDNS with at least two replicas.
+- **Reliability:** write PodDisruptionBudgets that allow at least one disruption, so node updates can drain.
+- **Performance Efficiency:** match the compute model to the workload's shape and keep spare node headroom for services that must scale out fast.
+- **Cost Optimization:** run Spot above an On-Demand base with several instance types, and use Fargate where nodes would sit idle.
+- **Sustainability:** pack nodes densely and scale batch node groups to zero when idle.
 
-## Security Considerations
-
-- **Fargate isolation is a real boundary.** A container escape on a shared node reaches a kernel shared with other Pods; on Fargate it reaches an AWS kernel running one Pod. Apply it to just the namespaces that need it.
-- **No node role on Fargate to misuse.** The Pod execution role is not available to containers. On EC2 nodes, block IMDS with hop limit 1 ([3.1](topic1.md#iam-for-workloads-pod-identity)).
-- **Add-ons get their own roles**, not the node role.
-- **Harden nodes.** Encrypted EBS, Systems Manager instead of SSH, minimal AMI, regular updates.
-- **Private subnets** for Fargate Pods and nodes; NAT or VPC endpoints for egress.
-
-!!! warning "Review what you install"
-    Helm charts and add-ons often create cluster-wide permissions. Read what they create, and install only what the cluster needs.
-
-## Operating It: Performance, Cost and Monitoring
-
-**Performance.** A latency-sensitive service that must scale out fast is better on nodes with spare capacity than on Fargate. Keep images small, scale CoreDNS with the cluster, keep node headroom.
-
-**Cost.**
-
-| Lever | Helps by | Caution |
-|---|---|---|
-| Spot above On-Demand base | Big discount | Must tolerate rescheduling; use several types |
-| Fargate for bursty work | No idle nodes | Costlier for steady work |
-| Accurate requests | Fewer nodes / smaller Fargate bill | Too low hurts performance |
-| Graviton (ARM) nodes | Better price-performance | Needs ARM images; not available on Fargate |
-| Scale batch groups to zero | No idle cost | Only for work that really stops |
-
-!!! tip "Fargate is not always cheaper"
-    Cost depends on utilisation, requests and density. Compare per workload.
-
-**Monitoring.**
+## Monitoring and Observability
 
 | Signal | Source | Tells you |
 |---|---|---|
@@ -465,35 +359,6 @@ flowchart TB
 - **Your own PDBs can block node updates.**
 - **Custom AMIs** shift update responsibility back to you.
 - **Add-ons need updating** with every Kubernetes upgrade.
-
-## Common Mistakes
-
-### Beginner mistakes and misconceptions
-
-| Mistake | Why it is wrong | Do instead |
-|---|---|---|
-| "Fargate is always cheaper" | Steady workloads are often cheaper on nodes | Compare full cost per workload |
-| "Fargate eliminates Kubernetes" | Only the compute layer changes | Manage Deployments, Services, RBAC as normal |
-| "Managed node groups = managing each instance by hand" | EKS automates lifecycle | Focus on sizing and scaling |
-| "One compute model per cluster" | Models coexist | Choose per workload |
-| Whole cluster on Fargate | Loses DaemonSets, EBS, GPUs; costs more for steady work | Fargate for specific namespaces |
-| Expecting DaemonSets or EBS on Fargate | No node to run on or attach to | Fluent Bit, sidecars, EFS, or nodes |
-| Pod Identity on Fargate | Agent is a DaemonSet | IRSA |
-| Editing a Fargate profile | Immutable | Create new, delete old |
-| One instance type for Spot | One reclaimed pool removes the group | Several compatible types |
-
-### Production mistakes
-
-| Mistake | Consequence | Remedy |
-|---|---|---|
-| PDB allowing zero disruptions | Node upgrades fail with `PodEvictionFailure` | Allow at least one; check before upgrades |
-| Routinely forcing node updates | PDBs give no protection | Fix the budgets instead |
-| Add-ons skipped during upgrades | Networking or DNS failures | Update them as an explicit step of every upgrade, after the control plane |
-| CoreDNS with one replica | Cluster-wide mysterious timeouts | 2+ replicas across zones |
-| Add-ons using the node role | Every Pod gains their permissions | Own role per add-on |
-| All Spot, no On-Demand base | One capacity event removes the workload | On-Demand base + diverse Spot |
-| All nodes in one AZ | One zone failure = no capacity | Span multiple AZs |
-| No Fargate log routing | Fargate logs lost | Configure `aws-observability` at build |
 
 ## Summary
 

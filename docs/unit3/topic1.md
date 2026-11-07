@@ -22,41 +22,12 @@ In EKS, AWS runs the control plane in an AWS-managed account. The data plane run
 
 ## Why This Service or Concept Exists
 
-### What Kubernetes does
-
-Kubernetes is a container orchestration platform. Instead of starting containers by hand, you describe the **desired state** of an application, for example:
-
-- three replicas of a Pod;
-- a specific container image;
-- a fixed amount of CPU and memory;
-- a stable network address;
-- automatic replacement if a Pod fails.
-
-Kubernetes repeatedly compares desired state with actual state and corrects any difference. This loop is called **reconciliation**, and it is the idea everything else in this unit builds on.
-
-### Why a managed Kubernetes service
-
-Running Kubernetes yourself means operating `etcd`, highly available API servers, control plane upgrades, and authentication. These are the hardest parts to run well, and a failure there makes the whole cluster unmanageable.
-
-AWS runs the EKS control plane in its own account for three reasons:
-
-1. **Isolation.** Each control plane is single-tenant in its own VPC, so a mistake in your VPC cannot take it down.
-2. **Operability.** AWS can patch, scale and replace control plane instances without coordinating with you.
-3. **An SLA.** Because reliability does not depend on your VPC, AWS can offer an availability SLA on the API endpoint.
-
-The cost of this design: the control plane sits **outside** your VPC but must reach **inside** it. EKS places cross-account network interfaces (ENIs) in your subnets for this path, and that path is the source of many real-world EKS problems.
-
-### EKS or ECS?
-
-| Choose ECS when | Choose EKS when |
-|---|---|
-| The team has no Kubernetes experience | The team already has, or will hire, Kubernetes skills |
-| The workload is AWS-only | Multi-cloud, hybrid or on-premises portability is required |
-| You want the smallest operational surface | You need the Kubernetes ecosystem: Helm charts, operators, service meshes |
-| Fast time to first deployment matters most | You are building an internal platform for other teams |
-
-!!! tip "The decision is about the ecosystem, not the scheduler"
-    Both orchestrators run containers well. If you need Kubernetes-packaged software, you need Kubernetes; if not, ECS reaches the same outcome with far fewer concepts (see [2.2 Amazon ECS](../unit2/topic2.md)). Kubernetes is not automatically "more advanced".
+- **Orchestration by desired state.** Kubernetes lets you declare what an application needs (replicas, image, CPU and memory, a stable address) and continuously corrects any difference between desired and actual state, a loop called **reconciliation** that the whole unit builds on.
+- **The control plane is the hardest part to run.** Operating `etcd`, highly available API servers, upgrades and authentication yourself is difficult, and a failure there makes the whole cluster unmanageable.
+- **Isolation and operability.** AWS runs each control plane single-tenant in its own VPC in an AWS account, so a mistake in your VPC cannot take it down and AWS can patch, scale and replace it without coordinating with you.
+- **An availability SLA.** Because control plane reliability does not depend on your VPC, AWS can offer an availability SLA on the API endpoint.
+- **The price is a cross-account path.** The control plane sits outside your VPC but reaches into it through cross-account ENIs placed in your subnets, and that path is the source of many real-world EKS problems.
+- **The Kubernetes ecosystem on AWS.** Teams that need Helm charts, operators or portability get upstream Kubernetes without building it themselves; when they do not, ECS may be the better choice (see [EKS or ECS?](#eks-or-ecs)).
 
 ## Core Concepts
 
@@ -112,6 +83,18 @@ If you studied ECS in Unit 2, this mapping is the quickest way in:
 5. Controllers keep reconciling actual state with desired state.
 6. The VPC connects Pods to each other and to other AWS resources.
 7. IAM and Kubernetes RBAC decide what people and workloads may do.
+
+### EKS or ECS?
+
+| Choose ECS when | Choose EKS when |
+|---|---|
+| The team has no Kubernetes experience | The team already has, or will hire, Kubernetes skills |
+| The workload is AWS-only | Multi-cloud, hybrid or on-premises portability is required |
+| You want the smallest operational surface | You need the Kubernetes ecosystem: Helm charts, operators, service meshes |
+| Fast time to first deployment matters most | You are building an internal platform for other teams |
+
+!!! tip "The decision is about the ecosystem, not the scheduler"
+    Both orchestrators run containers well. If you need Kubernetes-packaged software, you need Kubernetes; if not, ECS reaches the same outcome with far fewer concepts (see [2.2 Amazon ECS](../unit2/topic2.md)). Kubernetes is not automatically "more advanced".
 
 ## AWS Service Deep Dive
 
@@ -375,78 +358,18 @@ Node group settings (capacity type, labels, taints) are covered in [3.3](topic3.
 !!! warning "Some settings can never change"
     The IP family and VPC are fixed at creation, and replacement control plane subnets must stay in the original Availability Zones. Changing these means building a new cluster and migrating.
 
-## Design Considerations
-
-```mermaid
-flowchart TD
-    A["Do we need Kubernetes, or would ECS do?"] -->|"ecosystem, portability"| B["EKS"]
-    A -->|"simplest, AWS-only"| Z["ECS (Unit 2)"]
-    B --> C{"How much of the data plane do we want to run?"}
-    C -->|"as little as possible"| D["Auto Mode or Fargate"]
-    C -->|"real nodes, little AMI work"| E["Managed node groups"]
-    D --> G{"Is VPC address space adequate?"}
-    E --> G
-    G -->|"tight"| H["Plan larger subnets before creating the cluster"]
-    G -->|"yes"| K{"How is the cluster administered?"}
-    H --> K
-    K -->|"from the internet"| L["Public and private endpoint with allow-list"]
-    K -->|"regulated"| M["Private endpoint with VPN or bastion"]
-    L --> N["Per-Pod IAM, IMDS hop limit 1, network policies"]
-    M --> N
-```
-
-| Quality | Design levers | Trade-off accepted |
-|---|---|---|
-| **Availability** | Three AZs, multiple replicas, PodDisruptionBudgets | Higher cost; cross-AZ traffic |
-| **Scalability** | Pod and node autoscaling, large enough subnets | More moving parts |
-| **Security** | Per-Pod IAM, private nodes, network policies, audit logs | More operational friction |
-| **Cost** | Right-sized requests, Spot, fewer shared clusters | Shared clusters share blast radius |
-| **Operability** | Managed node groups, EKS add-ons, Auto Mode | Less control the more AWS manages |
-
-### Architecture scenarios
-
-**Scenario 1: University web application.** Unpredictable traffic. Use managed node groups across three AZs, a Deployment with several replicas, an ALB via Ingress, RDS for data, and CloudWatch for observability. Kubernetes handles scheduling and recovery; managed AWS services hold state.
-
-**Scenario 2: Pod needs S3 access.** Do not put an access key in the container. Create a ServiceAccount, associate it with a narrowly scoped IAM role through EKS Pod Identity, and grant only the required S3 actions. The application's identity is now separate from the node's.
-
 ## AWS Best Practices
 
-| Pillar | Practice |
-|---|---|
-| **Operational Excellence** | Define clusters and add-ons as code ([5.3](../unit5/topic3.md)); enable control plane logging before you need it |
-| **Security** | Access entries with least privilege; one IAM role per workload; IMDSv2 hop limit 1; private nodes; RBAC on Secrets |
-| **Reliability** | Three AZs; at least two replicas of important services; health probes and PDBs (see [3.2](topic2.md)) |
-| **Performance Efficiency** | IP-mode targets; instance types that fit workload and Pod density |
-| **Cost Optimization** | Stay in standard support; avoid many small clusters; share one ALB via Ingress |
-| **Sustainability** | Higher utilisation; consider Graviton instances |
+- **Operational Excellence:** define clusters and add-ons as code ([5.3](../unit5/topic3.md)) and enable control plane logging (at least `audit` and `authenticator`) before you need it.
+- **Security:** grant cluster access through access entries with least privilege, and keep cluster-admin for a small break-glass role.
+- **Security:** give each workload its own IAM role through Pod Identity or IRSA, and require IMDSv2 with a hop limit of 1 on nodes in private subnets.
+- **Reliability:** spread nodes and at least two replicas of every important service across three Availability Zones, with health probes and PodDisruptionBudgets ([3.2](topic2.md)).
+- **Reliability:** size subnets for Pod count rather than node count, so IP exhaustion never blocks scale-out.
+- **Performance Efficiency:** use IP-mode targets and instance types that fit both the workload and the required Pod density.
+- **Cost Optimization:** stay in standard support, avoid unnecessary clusters and share one ALB across Services through Ingress.
+- **Sustainability:** raise node utilisation and consider Graviton instances.
 
-## Security Considerations
-
-- **Per-Pod identity + IMDS hop limit 1.** Without both, a compromised Pod can use the node's IAM role.
-- **Separate authentication from authorisation.** Grant the narrowest access policy, scoped to a namespace; keep cluster-admin for a small break-glass role.
-- **Admission control.** Pod Security Admission blocks privileged Pods per namespace; Kyverno or OPA Gatekeeper add organisational rules.
-- **Network segmentation.** NetworkPolicies for Pod-to-Pod rules; security groups for VPC boundaries such as database access.
-- **Supply chain.** Scan images in ECR, deploy by digest or immutable tag, keep node AMIs current.
-- **Audit.** CloudTrail records **EKS API** calls (clusters, node groups, access entries). Only the control plane `audit` log records **Kubernetes API** activity inside the cluster.
-
-Deeper treatment: IAM in [8.1](../unit8/topic1.md), network security in [8.2](../unit8/topic2.md), KMS and Secrets Manager in [8.3](../unit8/topic3.md).
-
-## Operating It: Performance, Cost and Monitoring
-
-**Performance.** Use IP-mode targets to remove a hop. Keep images small so Pods start fast. Remember a node can run out of IPs before CPU.
-
-**Cost.** The control plane fee is usually the smallest part of the bill.
-
-| Cost driver | How to control it |
-|---|---|
-| Control plane fee | Stay in standard support; avoid unnecessary clusters |
-| Compute (EC2 or Fargate) | Right-size requests; Spot above an On-Demand base ([3.3](topic3.md)) |
-| Load balancers | Share one ALB across Services with Ingress |
-| NAT and data transfer | VPC endpoints; watch cross-AZ traffic |
-| Logs and storage | Set log retention; delete unused volumes |
-| Idle clusters | Delete lab clusters when not in use |
-
-**Monitoring.**
+## Monitoring and Observability
 
 | Signal | Source | Tells you |
 |---|---|---|
@@ -457,35 +380,6 @@ Deeper treatment: IAM in [8.1](../unit8/topic1.md), network security in [8.2](..
 | EKS API activity | CloudTrail | Changes to clusters, node groups, access entries |
 
 Observability is covered fully in Unit 7.
-
-## Integration with Other AWS Services
-
-| Service | Why it integrates with EKS |
-|---|---|
-| **Amazon EC2** | Instances behind node groups |
-| **Amazon VPC** | The network Pods live in |
-| **Elastic Load Balancing** | ALBs for Ingress, NLBs for Services |
-| **IAM and STS** | Cluster authentication and per-Pod roles |
-| **Amazon ECR** | Image registry ([2.1](../unit2/topic1.md)) |
-| **EBS, EFS, S3** | Persistent storage via CSI drivers ([6.1](../unit6/topic1.md)) |
-| **RDS, DynamoDB** | Managed databases ([6.2](../unit6/topic2.md)) |
-| **SQS, SNS, EventBridge** | Messaging with per-Pod roles ([6.3](../unit6/topic3.md)) |
-| **KMS and Secrets Manager** | Secrets encryption and injection |
-| **CloudWatch and CloudTrail** | Logs, metrics, Container Insights, audit |
-| **ACM and Route 53** | TLS certificates and DNS for load balancers |
-| **CodePipeline, CodeBuild, CloudFormation** | Delivery and infrastructure as code (Unit 5) |
-
-<figure markdown="span">
-    ![Integration with other services](../img/U3/t1/integrationwithOtherService.png){width="80%"}
-    <figcaption>Integration with other AWS services</figcaption>
-    <p align='right' style="font-size:0.8em"><i>Image Source: AI Generated (Google Gemini)</i></p>
-</figure>
-
-The diagram shows three flows:
-
-- **Delivery flow** (commit → ECR → API server) changes what runs.
-- **Runtime flow** (Route 53 → ALB → Pod → AWS services) never touches the control plane, which is why apps survive a control plane problem.
-- **Identity flow** connects each Pod to its own IAM role.
 
 ## Advantages
 
@@ -505,31 +399,6 @@ The diagram shows three flows:
 - **Per-cluster fee** pushes towards shared clusters and shared blast radius.
 - **The control-plane-to-VPC path can break.** Security group changes can stop webhooks, `kubectl logs` and `kubectl exec`.
 
-## Common Mistakes
-
-### Beginner Mistakes
-
-| Mistake | Why it is wrong | Do instead |
-|---|---|---|
-| "EKS manages everything" | EKS manages the control plane; the data plane depends on your compute model | Know which side each component is on |
-| "A node is a Pod" | A node is capacity; a Pod is scheduled onto it | Keep the terms distinct |
-| "IAM permission = Kubernetes permission" | IAM authenticates; RBAC authorises; an access entry connects them | Create an access entry and policy |
-| Creating the cluster with a pipeline role only | Only the creator is admin | Add a human admin access entry at once |
-| Putting app permissions on the node role | Every Pod inherits them | Pod Identity or IRSA per workload |
-| "Several nodes = high availability" | Nodes in one AZ fail together | Spread nodes and replicas across AZs |
-| Small subnets or tiny instance types | Pods run out of IPs before CPU | Size for Pod density |
-| Nodes in public subnets | Data plane exposed | Private subnets with NAT or endpoints |
-
-### Production Mistakes
-
-| Mistake | Consequence | Remedy |
-|---|---|---|
-| Tightening the cluster security group blindly | Deployments fail with webhook errors | Allow control plane to node traffic; test after changes |
-| Falling into extended support | Several times the control plane price | Annual upgrade rehearsed in non-production |
-| Private-only endpoint with no access path | Engineers and CI/CD locked out | VPN, bastion or in-VPC runners first |
-| Not monitoring free IPs | Scale-out fails without warning | Alarm on free subnet addresses |
-| Deleting the cluster's customer managed KMS key | Cluster data unreadable; cluster unrecoverable | Protect the key from deletion and disablement |
-
 ## Summary
 
 Amazon EKS = Kubernetes orchestration + AWS-managed infrastructure. The central idea is the **boundary through the cluster**: AWS runs the control plane across multiple AZs in its own account; you choose and run the data plane in your VPC. A control plane problem stops change, not traffic.
@@ -540,7 +409,7 @@ Amazon EKS = Kubernetes orchestration + AWS-managed infrastructure. The central 
 | **Networking** | VPC CNI gives each Pod a real VPC IP: great for load balancing, but **IP space limits capacity**. Spread across AZs |
 | **Cluster access** | IAM authenticates, access entry maps, RBAC authorises. `Unauthorized` vs `Forbidden` |
 | **Workload identity** | Pod Identity (EC2) or IRSA (Fargate), plus IMDS hop limit 1. Never the node role |
-| **Operations** | Annual upgrades; cost is mostly compute, networking and logs, not the control plane fee |
+| **Operations** | Annual upgrades to stay in standard support; watch node health, free subnet IPs and the audit log |
 
 **Next:** with the cluster's architecture understood, [3.2](topic2.md) shows how to create a cluster and deploy applications onto it.
 

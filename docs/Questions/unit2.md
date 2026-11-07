@@ -158,18 +158,18 @@
         - **Honest containerisation:** the application must become stateless, log to stdout, and take configuration from the environment so one image is promoted everywhere.
         - **Refuse to skip:** externalising session state, because ECS replaces tasks on every deployment, scale-in, failed health check and host retirement; with local-disk sessions each routine event becomes a user-visible failure.
 
-14. An organisation running forty services on Fargate observes that scale-out during traffic spikes takes ninety seconds from alarm to serving capacity, and users experience errors during that window. Decompose the ninety seconds into its contributing phases, identify which phases you can influence and by how much, propose specific changes ordered by expected effect, and state which part of the problem cannot be solved by making the image smaller and what you would do about that instead.
+14. A production web API on Fargate needs an init container that must finish fetching configuration before the application starts, a FireLens log-router sidecar, a database password, and graceful handling of in-flight requests during deployments. Specify the task definition field by field, justify each value, and distinguish the mistakes ECS rejects at registration from those that surface only when the task runs.
 
     ??? success "Check your answer"
 
         A good answer covers:
 
-        - **Decomposition (measured from task timestamps):** scaling reaction about 5-15 s; Fargate microVM and ENI provisioning about 10-20 s (not controllable); image pull about 20-30 s; application start about 20-30 s; health check and registration about 15-30 s.
-        - **Change 1, health checks:** shorter interval and lower healthy threshold with a cheap readiness path; largest saving, configuration only, applies to all forty services.
-        - **Change 2, image:** multi-stage minimal images, same-Region ECR, `ecr.api`/`ecr.dkr` and S3 gateway endpoints, zstd compression, SOCI lazy loading for large images.
-        - **Change 3 and 4:** faster application start (CDS, lazy initialisation, adequate vCPU) and a tighter scaling reaction (short scale-out cooldown, `ALBRequestCountPerTarget`, step scaling for large jumps).
-        - **What image size cannot fix:** reactive scaling is inherently late, since metric publication and alarm evaluation add time before the ninety seconds even start; the errors are a headroom problem.
-        - **Instead:** lower utilisation target and higher minimum, scheduled and predictive scaling, high-resolution leading metrics, load shedding, circuit breakers and jittered retries, validated by a load test.
+        - **Task level:** `requiresCompatibilities: FARGATE`, `networkMode: awsvpc`, task `cpu` and `memory` from the Fargate valid matrix, `runtimePlatform` set explicitly to match the image architecture, and separate `executionRoleArn` and `taskRoleArn`.
+        - **Containers and ordering:** the application is `essential` with its image pinned by digest; the init container is non-essential and the application `dependsOn` it with condition `SUCCESS`; the log router starts first and the application's `logConfiguration` uses `awsfirelens`.
+        - **Secret:** the password goes in the `secrets` block, fetched from Secrets Manager or Parameter Store by the execution role before the code runs, never in `environment`, which anyone with `ecs:DescribeTaskDefinition` can read.
+        - **Lifecycle and hardening:** a container `healthCheck` whose `startPeriod` exceeds the cold start, `stopTimeout` above the p99 request duration (at most 120 seconds) with the application handling `SIGTERM`, a non-root `user`, and `readonlyRootFilesystem: true`.
+        - **Rejected at registration:** an invalid Fargate CPU and memory pair, or a `FARGATE` task definition with a network mode other than `awsvpc`.
+        - **Surface only at run time:** a container exceeding its hard `memory` limit (`OOMKilled`), an execution role lacking permission for the secret or the image pull (the task stops before the code starts), and a `stopTimeout` shorter than in-flight requests (cut connections on every deployment).
 
 15. Critique the following proposal: "We will use a single shared base image for all services, containing our standard JDK, our monitoring agent, our logging library, curl, the AWS CLI, and a shell, so that every team gets the same tooling and debugging is easy. We will tag it `company/base:latest` and rebuild it nightly so it is always patched." Identify at least five specific defects, propose a corrected design, and state which parts of the original intent you would preserve and how.
 
@@ -513,17 +513,17 @@
         - **Where to apply it:** user-facing, high-risk services such as checkout or payments where a bad release is expensive and validation hooks will be written.
         - **Cheaper intervention for all forty:** circuit breaker with rollback plus alarm-based rollback on 5xx and latency, `100/200` deployment settings, and feature flags, all in a shared IaC module.
 
-14. An organisation's ECS estate suffers a full outage. The trigger was a deployment of a service whose new revision passed all health checks. The outage lasted fifty minutes and affected services that were not deployed. Explain a plausible mechanism in detail, identify every design defect that must have been present, and specify the changes  with configuration specifics  that would have bounded the incident to a degraded few minutes for one service.
+14. A service on EC2 capacity scales out promptly according to its auto scaling activity history, yet during every traffic spike new tasks wait several minutes before serving and users see errors in that window. Explain the interaction between the two scaling layers that produces this, specify the settings on each layer that must change, state the trade-off each setting carries, and explain why the same symptom does not take this form on Fargate and what limits scale-out there instead.
 
     ??? success "Check your answer"
 
         A good answer covers:
 
-        - **Plausible mechanism:** the new revision opened far more database connections, or retried aggressively without backoff, exhausting a shared database or downstream service; every other service using that dependency then failed while the deployed service's shallow `/health` still passed.
-        - **Defects:** shallow health checks only; no alarm-based rollback; all traffic shifted at once; a shared dependency with no per-service limits (bulkheads); no timeouts, circuit breakers or retry budgets in callers; detection and rollback left to humans, hence fifty minutes.
-        - **Deployment changes:** alarm-based rollback on 5xx rate and p99 latency for the deployed service and its key dependencies, canary shifting with a validation hook, circuit breaker with rollback.
-        - **Isolation changes:** per-service connection limits (for example RDS Proxy), client timeouts, circuit breakers and retries with exponential backoff and jitter, so a dependency under stress degrades one path rather than the estate.
-        - **Outcome:** the regression is caught within the bake period and rolled back by routing or redeployment in minutes.
+        - **Mechanism:** service auto scaling raises `desiredCount` immediately, but the new tasks stay in `PROVISIONING` because no instance has room; capacity provider managed scaling only reacts once `CapacityProviderReservation` rises above its target, and every task then waits for an instance launch and agent registration.
+        - **Capacity layer:** set the capacity provider's target capacity below 100 per cent so standing headroom allows immediate placement; the trade-off is paying for idle instances.
+        - **Task layer:** set the task scaling target below saturation so the service asks for capacity before it is in trouble, and add scheduled scaling to raise the floor ahead of known peaks; the trade-off is running more tasks than strictly necessary.
+        - **Diagnosis:** a sustained gap between `desiredCount` and `runningCount` with tasks in `PROVISIONING` points at the capacity layer, not the scaling policy.
+        - **Fargate:** there is no instance layer and no capacity to wait for, so the second loop disappears; scale-out time is instead set by microVM and ENI provisioning, the full image pull, application start and health-check confirmation, which is why image size and health-check settings matter more there.
 
 15. Critique the following configuration standard proposed by a platform team: "All services will use `binpack` on CPU for cost efficiency, scale on CPU utilisation at a 60 per cent target with 300-second cooldowns in both directions, deploy with `minimumHealthyPercent: 50` and `maximumPercent: 100` to avoid extra capacity cost, rely on the deployment circuit breaker for safety, and set scaling maximum to 1000 so we never run out of capacity." Identify at least six specific defects, propose a corrected standard, and state which parts of the original intent are legitimate and how you would satisfy them.
 

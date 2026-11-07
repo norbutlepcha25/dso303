@@ -149,18 +149,18 @@
         - **48-hour patching:** continuous rescanning, automated base-image rebuilds through the same pipeline, and a measured lead time well below 48 hours; break-glass is a time-bounded, two-person, alarmed role followed by review and reconciliation into Git.
         - **Auditor questions:** instantly answerable are which digest ran when, from which commit, approved by whom; requiring investigation are runtime configuration at a past moment, actions taken under break-glass, and whether a known vulnerability was exploitable.
 
-3. A monorepo of twenty services builds everything on every commit, taking 55 minutes. Developers now merge once a week. Design the remediation covering change detection, artefact identity, caching, compute selection, pipeline structure and the failure modes your change detection introduces. Explain how you would detect that change detection has gone wrong, given that its failure is silent.
+3. A customer-facing ECS service must rename a database column, and the business wants the feature that depends on the rename enabled gradually for selected customers. Design the sequence of releases using expand and contract, feature flags and CodeDeploy blue/green with a canary configuration. For each release, state what is deployed, what is released to users, how rollback works at that point, and what evidence allows the next step to proceed.
 
     ??? success "Check your answer"
 
         A good answer covers:
 
-        - **Change detection:** path-filtered triggers per service, driven by a dependency graph (from the build tool) so a shared-library change rebuilds every dependant.
-        - **Artefact identity:** each image tagged with the monorepo commit SHA; unchanged services keep their previous digest; promotion by digest.
-        - **Caching and compute:** dependency cache keyed on the lockfile, Docker layer caching, a build tool with remote cache; parallel batch builds, ARM compute, Lambda compute for lint and unit tests, reserved fleets only if queueing dominates.
-        - **Pipeline structure:** one pipeline per service generated from a shared definition, with verification actions in parallel.
-        - **Failure mode:** an incorrect dependency graph leaves a service unrebuilt and running stale shared code, silently.
-        - **Detecting it:** a periodic full build compared against what change detection chose, recording input hashes per image, and alerting when a deployed image's inputs differ from the current source.
+        - **Release 1 (expand):** add the new column and write to both columns while still reading the old one; deployed blue/green with a canary, so rollback is a traffic shift back and the schema remains compatible with the previous version.
+        - **Release 2 (deploy without release):** ship code that reads the new column behind a feature flag in AWS AppConfig, disabled by default; deployment and release are now separate events.
+        - **Release to users:** enable the flag for internal users, then a percentage of customers, then everyone; disabling the flag is the fastest mitigation and needs no deployment.
+        - **Release 3 (contract):** stop writing the old column and drop it only once no running version reads it; from this point rollback to the earliest version is no longer possible, which is why contract comes last.
+        - **Evidence to proceed:** a `BeforeAllowTraffic` smoke test over the test listener, and a CloudWatch alarm on the new version's error rate or latency with a bake time longer than the alarm's evaluation window, driving automatic rollback.
+        - **Flag hygiene:** the flag has an owner and an expiry date, and removing it is part of the work.
 
 4. Critique the following pipeline: "Every push to any branch triggers a build. The build runs `docker build` and pushes to ECR with the tag `latest`. A second CodeBuild project runs the tests. Deployment uses `aws ecs update-service --force-new-deployment` from a shell script in the build, with `AdministratorAccess` on the build role. Database migrations run as the first step of the new container's startup. We deploy to production twice a day, so we are doing continuous deployment." Identify at least eight distinct defects, rank them by the severity and reversibility of the damage each would cause, propose a corrected design, and describe how you would verify each correction.
 
@@ -362,18 +362,18 @@
         - **Instant versus investigation:** digest, commit and approver are instant if records were retained; vulnerability state and full runtime configuration require reconstruction.
         - **Weakest link:** configuration and secrets changed outside IaC, and break-glass actions, which leave the thinnest record.
 
-5. Your organisation wants a single delivery platform used by thirty teams. Design the governance model: what is centrally defined and enforced, what teams control, how a team onboards a new service, how a change to the shared pipeline definition is rolled out safely across thirty consumers, and what you would do when a team's requirements genuinely do not fit the standard. Address the failure mode where a central platform becomes a bottleneck that teams route around.
+5. A payments team's V2 pipeline deploys one ECS service through staging and production. Every merged change must reach production individually with its own verification record, deployments are allowed only between 09:00 and 16:00 on weekdays, and no deployment may start while production is unhealthy. The team currently implements these rules with three hand-written Lambda gates and the default execution mode. Redesign the pipeline using execution modes and stage conditions, state the configuration of each stage, explain what changes if the team later moves to high-frequency trunk-based development, and identify the failure that `PARALLEL` mode would introduce.
 
     ??? success "Check your answer"
 
         A good answer covers:
 
-        - **Central and enforced:** a versioned shared pipeline construct; mandatory controls (review, scanning, signing, per-stage roles, account separation, SCPs, policy as code) enforced as guardrails rather than by convention.
-        - **Team-controlled:** service code, tests, deployment parameters (canary size, alarms, schedule) within the guardrails.
-        - **Onboarding:** self-service creation of repository, ECR repository, pipeline and roles from a template, in minutes rather than by ticket.
-        - **Rolling out shared changes:** semantic versioning, a pilot group first, then waves, backward compatibility, monitoring of pipeline failure rates and a way to pin or roll back the version.
-        - **Exceptions:** documented extension points and time-bound, reviewed waivers; recurring needs are absorbed into the platform rather than forked.
-        - **Avoiding the bottleneck:** run the platform as a product with measured lead time and adoption; enforce outcomes (controls) rather than tooling, so the paved road is the easiest path rather than a gate to route around.
+        - **Execution mode:** `QUEUED`, so executions run one at a time in order and every change reaches production individually; the default `SUPERSEDED` cancels older executions waiting to enter a stage, so some changes would only ever reach production bundled with a newer one.
+        - **Production entry condition:** a CloudWatch alarm rule (no production alarm in ALARM) and a deployment window rule (weekdays, 09:00 to 16:00), replacing two of the Lambda gates with built-in rule types.
+        - **Staging and production verification:** an on-success condition with a CodeBuild or Commands rule for smoke tests in staging, and an on-success alarm-monitoring window in production before the execution counts as successful; an on-failure condition rolls the stage back automatically.
+        - **Record:** the execution history, approvals and CloudTrail give each change its own verification record.
+        - **Trunk-based development:** with many merges a day and a restricted window, the queue grows; `SUPERSEDED` would keep only the newest change moving but loses the per-change guarantee, so the requirement must be renegotiated rather than silently dropped.
+        - **`PARALLEL`:** concurrent executions would deploy different artefacts to the same production service, and which one ends up running is a race.
 
 ---
 
@@ -514,18 +514,18 @@
         - **Measuring progress:** managed resources as a proportion of the Config inventory per account, share of changes made through the pipeline, drift count, and human write events in CloudTrail.
         - **Message to the auditor:** from the programme's start, Git, change sets and CloudTrail evidence every change; before it, only whatever CloudTrail and Config retained exists, and that gap is stated rather than reconstructed.
 
-2. Design the complete guardrail architecture preventing a merge to the infrastructure repository from escalating a developer to account administrator. Cover review, policy as code, permission boundaries, service control policies, account separation and detection. For each layer, state what it catches that the others do not, and identify the one layer whose removal would be most damaging.
+2. An engineer edits the identifier of a production RDS instance in an infrastructure definition, and the code review approves it as a one-word rename. Trace the change through the lifecycle of a change in both CloudFormation (including CDK) and Terraform: what the change set or plan shows, which controls should stop it and at which step, and what happens to the data if it proceeds with and without deletion and replacement protection. Explain why the code review was not the right control.
 
     ??? success "Check your answer"
 
         A good answer covers:
 
-        - **Review:** non-author approval catches intent and context, but depends on attention.
-        - **Policy as code:** automatically and uniformly catches known-bad patterns (wildcards, missing boundary) that a reviewer missed.
-        - **Permission boundary:** the deploy role can create roles only with the boundary attached, capping their power even if a policy passes the checks.
-        - **SCPs:** deny changing or removing the boundary, disabling CloudTrail or leaving the organisation; they bind even account administrators.
-        - **Account separation and detection:** developer credentials cannot reach production; CloudTrail alarms on `CreateRole`, `AttachRolePolicy` and `PutRolePolicy` and IAM Access Analyzer catch whatever got through, including break-glass use.
-        - **Most damaging removal:** the permission boundary with its SCP protection is a strong answer, as the only layer that bounds what the deploy role can grant; any choice must be argued.
+        - **What the change really is:** changing an RDS instance identifier forces replacement, so the engine will destroy the instance and create a new one.
+        - **What the preview shows:** the CloudFormation change set marks the resource `Replacement: True`; the Terraform plan shows `-/+` and "forces replacement".
+        - **Controls and where they act:** at Planned to Approved, a named approver reading the plan; a pipeline policy check that fails any change set containing a replacement of a stateful resource; a stack policy denying `Update:Replace`, or `prevent_destroy`, which makes the plan fail rather than execute.
+        - **If it proceeds:** with `UpdateReplacePolicy: Snapshot` (or `Retain`) the old instance's data survives as a snapshot or retained resource; without it the data is lost. `DeletionPolicy` alone does not help, because a forced replacement is not a deletion request; in CDK, an L2 construct whose removal policy defaults to destroy makes this worse.
+        - **Availability:** `create_before_destroy` in Terraform avoids an availability gap but does not preserve data.
+        - **Why review failed:** the diff shows intent (a rename); only the plan shows consequence (replace the database), which is why plan review is a separate gate.
 
 3. Critique the following setup: "All infrastructure is in one CloudFormation template of 2,800 lines, applied by an engineer from their laptop with administrator credentials. Database passwords are template parameters with `NoEcho`. There is no `DeletionPolicy` because we are careful. Drift detection was run once last year. Staging and production use the same template with different parameter values, applied at different times. Terraform is used for the monitoring vendor's configuration, with state in a shared S3 bucket without versioning and with no locking." Identify at least nine distinct defects, rank them by the severity and reversibility of the damage each would cause, propose a corrected architecture, and describe how you would verify each correction.
 

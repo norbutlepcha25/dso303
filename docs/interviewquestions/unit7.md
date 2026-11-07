@@ -184,11 +184,11 @@
 
     Clock skew between hosts. Each service timestamps its own spans using its local clock, so a host whose clock is ahead or behind produces misaligned bars. On EC2 use the Amazon Time Sync Service, check that containers are not running on hosts with drifted clocks, and interpret small offsets with care. Lambda and Fargate hosts are synchronised by AWS.
 
-**3. An ECS task restarts under peak load and the logs show the collector sidecar consuming all task memory. Why, and how do you fix it?**
+**3. After Transaction Search is enabled, engineers can find every span in the visual editor and in Logs Insights, but X-Ray trace analytics and filter expressions return only a small fraction of traces. Is something broken?**
 
 ??? success "Model answer"
 
-    The collector's export queue or tail-sampling buffer grew without bound, perhaps because X-Ray export was slow or throttled, or because the decision window multiplied by throughput exceeded the memory reservation. Add the `memory_limiter` processor, bound queue sizes, reduce `num_traces` or the decision window, give the sidecar an explicit memory reservation and limit, and mark it non-essential if the application should survive a collector failure. Consider moving tail sampling to a dedicated gateway tier.
+    Probably not. Transaction Search ingests all spans sent to X-Ray as structured log events in the `aws/spans` log group, but only a configurable percentage, 1 per cent by default and at no additional cost, is indexed as X-Ray trace summaries. Classic trace search, analytics and filter expressions operate on those summaries, while the visual editor and Logs Insights search the complete span data. If more traces must be available to the classic tools, raise the indexing percentage with `update-indexing-rule`, accepting the extra cost; otherwise use Transaction Search or Logs Insights for complete searches. Also confirm that head sampling in the applications is not discarding spans before they reach X-Ray.
 
 ### 7.1.3 Health Checks and Readiness Probes on AWS
 

@@ -14,7 +14,7 @@
     [tasks, services and the reconciliation loop](../unit2/topic2.md#tasks-services-and-the-reconciliation-loop) ·
     [Fargate](../unit2/topic2.md#aws-fargate) ·
     [task network modes](../unit2/topic2.md#task-network-modes) ·
-    [ECS roles](../unit2/topic2.md#security-considerations) ·
+    [ECS roles](../unit2/topic2.md#architecture-components) ·
     [service roles](../unit8/topic1.md#service-roles-instance-profiles-and-service-linked-roles) ·
     [security group referencing](../unit1/topic6.md#security-group-referencing-the-cloud-native-idiom) ·
     [NAT gateway](../unit1/topic6.md#nat-gateway) ·
@@ -517,7 +517,7 @@ One row, `Retention` exactly `7`. If it is `None`, re-run `put-retention-policy`
     | Used by | ECS/Fargate, **before** your container starts: image pull, log stream, secrets | Your application code, **inside** the container: S3, DynamoDB, SQS |
     | Symptom if wrong | The task **never starts**; `stoppedReason` mentions the image pull or logs | The task starts, then the code gets `AccessDenied` |
 
-    See [ECS security considerations](../unit2/topic2.md#security-considerations).
+    See [ECS security considerations](../unit2/topic2.md#architecture-components).
 
 ### Step 6 - Create the task execution role
 

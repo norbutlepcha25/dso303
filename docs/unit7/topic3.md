@@ -40,7 +40,7 @@ The [Section Summary](#section-summary) maps each part to its arc of the loop, i
 
 **A CloudWatch dashboard is a customisable, shareable page in the CloudWatch console that displays metrics, alarms, logs query results and other widgets, possibly from several accounts and Regions, in a single view.** A dashboard is a **read-only visualisation**: it never changes the system and never notifies anyone. Its purpose is shared situational awareness.
 
-==A CloudWatch alarm is a managed rule that continuously evaluates a metric, a metric math expression, a query or a combination of other alarms against a condition, maintains a state (`OK`, `ALARM` or `INSUFFICIENT_DATA`), and performs actions when that state changes.== An alarm is the point at which telemetry becomes a **decision**: someone or something must act.
+A CloudWatch alarm is a managed rule that continuously evaluates a metric, a metric math expression, a query or a combination of other alarms against a condition, maintains a state (`OK`, `ALARM` or `INSUFFICIENT_DATA`), and performs actions when that state changes. An alarm is the point at which telemetry becomes a **decision**: someone or something must act.
 
 | Construct | Input | Output | Changes the system? | Typical consumer |
 |-----------|-------|--------|---------------------|------------------|
@@ -81,40 +81,11 @@ flowchart LR
 
 ### Why This Service or Concept Exists
 
-#### The problem: too much data, too little attention
-
-A modest cloud-native application of twelve microservices on Amazon ECS, a dozen Lambda functions, an API Gateway, three SQS queues, an Aurora cluster and a DynamoDB table easily publishes several thousand metric time series. [Section 7.1](../unit7/topic1.md) showed how to produce them. No human can watch several thousand lines, and the scarce resource in operations is not data but **human attention**. Dashboards and alarms exist to spend that attention wisely:
-
-1. **Dashboards compress** thousands of time series into a small number of views that answer specific questions ("Is checkout healthy?", "Which dependency is slow?").
-2. **Alarms filter**: they stay silent while the system is healthy and interrupt a human, or trigger automation, only when a condition matters.
-3. **Service level objectives prioritise**: they translate "healthy" into a business-agreed number, so that alarms fire when users are harmed rather than whenever a resource looks busy.
-
-#### Why AWS provides managed dashboards and alarms
-
-Before managed monitoring, operations teams ran tools such as Nagios, Zabbix or a self-hosted Prometheus with Alertmanager and Grafana. These tools remain valuable, but the team had to:
-
-- run and patch the monitoring servers, and make them highly available (a monitoring system that fails with the application is useless),
-- store and down-sample time series data and plan disk capacity,
-- configure agents or exporters on every host to collect data,
-- write their own integrations to notification and paging systems,
-- keep alert rules synchronised with a fleet whose resources changed constantly.
-
-CloudWatch alarms and dashboards are **regional, managed and integrated with every AWS service**. Service metrics arrive without agents, alarms evaluate on AWS infrastructure independent of your workloads, and alarm actions integrate natively with SNS, Lambda, Auto Scaling, EC2, Systems Manager and EventBridge. Because alarms are API resources, they can be created by the same CloudFormation or CDK stack that creates the service, so the alarm lifecycle follows the resource lifecycle.
-
-#### Benefits over older methods
-
-| Concern | Self-hosted monitoring stack | CloudWatch dashboards and alarms |
-|---------|------------------------------|----------------------------------|
-| Infrastructure | Monitoring servers, storage, HA design | None; regional managed service |
-| AWS metric collection | Exporters or polling of AWS APIs | Automatic for most AWS services |
-| Dynamic fleets | Service discovery configuration | Metrics Insights and tag-based queries follow new resources automatically |
-| Notification integration | Custom scripts or plugins | Native actions: SNS, Lambda, Auto Scaling, EC2, Systems Manager, investigations, EventBridge |
-| Multi-account view | Federation or central Prometheus | Cross-account observability through a monitoring account ([Section 7.1](../unit7/topic1.md#infrastructure-and-application-monitoring-with-amazon-cloudwatch)) |
-| Lifecycle | Alert rules managed separately from resources | Alarms defined in the same IaC stack as the resource |
-| Cost model | Pay for servers continuously | Pay per dashboard, per alarm metric, per query; small free tier |
-
-!!! tip "When another tool is still the right answer"
-    Organisations that already standardise on Prometheus and Grafana often use **Amazon Managed Service for Prometheus** with **Amazon Managed Grafana**, particularly for EKS ([Chapter 3.3](../unit3/topic3.md)). CloudWatch itself now ingests OpenTelemetry metrics through an OTLP endpoint and supports PromQL queries and PromQL alarms, which narrows the gap. Many estates run both: CloudWatch for AWS service metrics and alarms that drive AWS actions, Prometheus and Grafana for in-cluster Kubernetes metrics. The design principle is the same regardless of tool: few, symptom-based, actionable alerts.
+- **Attention is the scarce resource.** A modest application publishes thousands of metric time series, which no human can watch.
+- **Dashboards compress** those series into a few views that answer specific questions, such as whether checkout is healthy or which dependency is slow.
+- **Alarms filter.** They stay silent while the system is healthy and interrupt a human, or trigger automation, only when a condition matters.
+- **Service level objectives prioritise** by turning "healthy" into a business-agreed number, so alarms fire when users are harmed rather than whenever a resource looks busy.
+- **Managed and integrated.** CloudWatch alarms evaluate on AWS infrastructure independent of your workloads, act natively on SNS, Lambda, Auto Scaling, EC2, Systems Manager and EventBridge, and are defined in the same IaC stack as the resources they watch.
 
 ### Core Concepts
 
@@ -842,230 +813,15 @@ Metric, namespace, dimension, statistic, percentile, resolution and Embedded Met
 | Annotations | Horizontal annotations for thresholds; vertical annotations for deployments |
 | Text widgets | Ownership, escalation, runbook, "how to read" |
 
-### Design Considerations
-
-#### Scalability
-
-Design alarms and dashboards as **products of templates**, not handcrafted artefacts. A CDK construct or Terraform module named, for example, `StandardServiceMonitoring` creates the RED alarms, the burn-rate composite, the DLQ alarm and a dashboard for any new service. Query alarms and tag-based selection extend coverage to resources created later.
-
-#### Availability
-
-Alarm evaluation is independent of the workload, but the **notification path** is part of your availability design: SNS topics, subscriptions, chat integrations and paging tools. Use at least two independent channels for critical pages (for example a paging tool and a chat channel) and test them regularly.
-
-#### Reliability
-
-Reliable detection depends on correct missing-data treatment, alarms on absence, appropriate periods, and alarms that are tested. A useful practice is **alarm testing in CI/CD**: after deploying monitoring changes, call `SetAlarmState` to force a test alarm into `ALARM` and confirm that the expected notification or automation runs, then return it to `OK`.
-
-#### Durability
-
-Metrics are retained by CloudWatch according to their resolution ([Section 7.1](../unit7/topic1.md#infrastructure-and-application-monitoring-with-amazon-cloudwatch)), but alarm **history** is retained for a limited period (historically two weeks). Export alarm state-change events through EventBridge to a log group or S3 if you need a long-term record for post-incident reviews and reliability reporting.
-
-#### Latency
-
-Detection latency is the sum of metric delay, the evaluation window and action delivery. For a checkout flow with a fast-burn page, aim for detection within a few minutes. For a nightly batch job, a daily evaluation is acceptable. Match the alarm to the business consequence of delay rather than making every alarm as fast as possible.
-
-#### Cost
-
-Observability cost grows with alarm count, custom metrics, dashboards, query scans and high resolution. The cost of alarms is usually small compared with custom metrics and log ingestion, so do not economise on the few alarms that matter; economise by removing the many that do not. The Cost Optimization subsection below gives specific levers.
-
-#### Performance
-
-Large dashboards with long time ranges and many series load slowly and discourage use. Keep operational dashboards under a few dozen widgets, move deep detail to linked drill-down dashboards, and use appropriate periods (a 1-minute period over 30 days is thousands of points per line).
-
-#### Maintainability
-
-Store dashboards and alarms in version control, review changes like code, and generate them from service metadata. Include the runbook link and owner in every alarm description, and keep naming conventions strict: `<env>-<service>-<signal>-<window>`, for example `prod-orders-availability-burn-1h`.
-
-#### Operational Complexity
-
-The complexity of alerting is mostly organisational: agreeing SLOs with product owners, assigning ownership, running on-call rotations and reviewing alarms. Managed features (composite alarms, mute rules, SLOs) reduce technical complexity but cannot replace these decisions.
-
-!!! question "Architect's checklist before adding an alarm"
-    What user-visible symptom or unavoidable future harm does it detect? Who is notified, and what will they do? Is there a runbook? What severity is it, and does it need to wake someone? What happens when the metric is missing? How will you know it works? Will it duplicate an existing alarm during the same incident?
-
 ### AWS Best Practices
 
-| Pillar | Dashboards and alarms practice |
-|--------|--------------------------------|
-| Operational Excellence | Define SLOs for critical journeys; derive paging alarms from burn rates; runbook link and owner on every alarm; dashboards and alarms in IaC; regular alarm reviews; test alarms in the pipeline |
-| Security | Least-privilege separation of view and change permissions; alarm on security-relevant metrics such as root account usage via CloudTrail metric filters; restrict public dashboard sharing; encrypt SNS topics |
-| Reliability | Symptom-based alarms; alarms on absence; composite alarms to avoid storms; alarms per Region for multi-Region designs; monitor the notification path |
-| Performance Efficiency | Percentile latency alarms; anomaly detection for seasonal traffic; high resolution only where needed; dashboards that show saturation next to latency |
-| Cost Optimization | Query alarms instead of per-resource alarms; template dashboards with variables; delete orphaned alarms; standard resolution by default; control `GetMetricData` polling |
-| Sustainability | Fewer, better alarms and dashboards reduce computation and, more importantly, human interruption; avoid high-resolution metrics and polling that nobody uses |
-
-### Security Considerations
-
-#### IAM and least privilege
-
-Separate three groups of permissions: **viewing** (`cloudwatch:GetDashboard`, `ListDashboards`, `GetMetricData`, `DescribeAlarms`), **managing monitoring** (`PutMetricAlarm`, `PutCompositeAlarm`, `PutDashboard`, `PutAlarmMuteRule`, `DeleteAlarms`) and **silencing** (`DisableAlarmActions`, `SetAlarmState`). Silencing is a privileged operation, because an attacker who can disable alarms can hide their activity. Grant it narrowly and alarm on it through CloudTrail.
-
-```json
-{
-  "Version": "2012-10-17",
-  "Statement": [
-    {
-      "Sid": "ManageOwnTeamAlarms",
-      "Effect": "Allow",
-      "Action": ["cloudwatch:PutMetricAlarm", "cloudwatch:DeleteAlarms", "cloudwatch:TagResource"],
-      "Resource": "arn:aws:cloudwatch:us-east-1:111122223333:alarm:prod-orders-*"
-    },
-    {
-      "Sid": "DenySilencingOutsideBreakGlass",
-      "Effect": "Deny",
-      "Action": ["cloudwatch:DisableAlarmActions", "cloudwatch:DeleteAlarmMuteRule"],
-      "Resource": "*",
-      "Condition": {"StringNotLike": {"aws:PrincipalArn": "arn:aws:iam::111122223333:role/ops-break-glass"}}
-    }
-  ]
-}
-```
-
-#### Encryption and SNS
-
-Alarm notifications may contain resource names, metric values and descriptions. Encrypt SNS topics with SSE-KMS. When using a customer managed key, the key policy must allow the CloudWatch service principal to use the key, otherwise publishes fail silently from the alarm's point of view. The same principle was explained for SNS and SQS in [Chapter 6.3](../unit6/topic3.md#message-queues-with-amazon-sqs).
-
-#### Private and public resources
-
-Dashboards shared publicly expose the underlying metrics to anyone with the URL. Share with specific users or through SSO wherever possible, and never share dashboards that include logs widgets with personal data.
-
-#### Logging and compliance
-
-CloudTrail records every alarm and dashboard change. Build a CloudTrail-based alarm or EventBridge rule for `DisableAlarmActions`, `DeleteAlarms` and `PutAlarmMuteRule` in production accounts. Many compliance frameworks (for example CIS AWS Foundations benchmarks, implemented as AWS Security Hub controls) require specific metric filters and alarms on CloudTrail logs, such as unauthorised API calls, console sign-in without MFA and root account usage.
-
-### Performance Optimization
-
-Dashboards and alarms are themselves part of performance work: they reveal where time goes and they drive scaling decisions. This subsection covers the monitoring-specific aspects; the Performance Optimization part of this section covers the tools in depth.
-
-#### Caching and dashboards
-
-Dashboards query CloudWatch on every refresh. Very large dashboards viewed by many people on one-minute refresh generate substantial query load and, when accessed through APIs, `GetMetricData` cost. Keep the Level 0 and Level 1 dashboards small, and avoid building "wallboards" that refresh dozens of heavy widgets continuously.
-
-#### Auto scaling and alarms
-
-Target tracking policies for EC2 Auto Scaling, ECS services and DynamoDB create and manage their own CloudWatch alarms. Do not edit or delete those alarms by hand, and do not add paging actions to them: they fire constantly by design, because scaling is normal behaviour. Your paging alarms should watch the **symptom** that scaling is meant to protect (latency, errors, backlog age), so that you are notified only when scaling fails to keep up.
-
-#### Load balancing and health
-
-ALB `UnHealthyHostCount` and `HealthyHostCount` ([Section 7.1](../unit7/topic1.md) and [Chapter 2.2](../unit2/topic2.md)) are cause signals. Alarm on `HealthyHostCount` falling below the minimum needed to serve peak traffic, not on a single unhealthy target that the load balancer and ECS already replaced.
-
-#### Parallelism and connection reuse in custom metrics
-
-Publishing custom metrics synchronously with `PutMetricData` inside a request path adds latency and API calls. Use the Embedded Metric Format in logs ([Section 7.1](../unit7/topic1.md#infrastructure-and-application-monitoring-with-amazon-cloudwatch)) so that metrics are extracted asynchronously, or batch `PutMetricData` calls with up to many values per request from a background thread.
-
-#### Monitoring the right percentiles
-
-Averages hide tail latency. Show p50, p90 and p99 on the same graph, and alarm on the percentile that corresponds to your SLO. When p99 diverges from p50 while traffic is steady, the cause is usually contention (locks, connection pool exhaustion, garbage collection) rather than general overload, which points the investigation in the right direction.
-
-### Cost Optimization
-
-| Lever | Practice |
-|-------|----------|
-| Pricing model | Understand per-dashboard, per-alarm-metric and per-query charges; composite alarms are priced per alarm, not per child |
-| Pay-as-you-go | Alarms and dashboards have no upfront commitment; delete what is not used |
-| Reserved capacity and Savings Plans | Not applicable to CloudWatch alarms and dashboards; savings apply to the monitored compute |
-| Consolidation | One multi time series query alarm replaces many per-resource alarms; one template dashboard with variables replaces many copies |
-| Resolution | Standard resolution alarms and metrics by default; high resolution only for latency-critical signals |
-| Lifecycle | Alarms and dashboards in the same IaC stack as resources, so they are removed with them; periodic report of alarms in `INSUFFICIENT_DATA` for more than 30 days |
-| Metric math instead of new metrics | Compute ratios at query time rather than publishing derived custom metrics |
-| Rightsizing observability | Remove dashboards not viewed in 90 days; review high-cardinality custom metrics feeding dashboards |
-| Cost Explorer | Filter by service CloudWatch and usage type (for example alarm, dashboard, metrics, `GMD-Metrics`) to see what drives cost |
-| Trusted Advisor and Cost Optimization Hub | Review recommendations; combine with CloudWatch usage metrics in the `AWS/Usage` namespace |
-
-!!! example "Cost comparison: per-resource alarms versus a query alarm"
-    A platform runs 400 Lambda functions in production and wants an error alarm on each. With one static alarm per function, the cost is 400 alarm metrics, about 40 USD per month, plus the operational burden of creating an alarm whenever a function is added. A single multi time series Metrics Insights alarm grouped by `FunctionName` costs the alarm price plus query charges based on the number of metrics analysed, follows new functions automatically, and still reports each failing function as a separate contributor. The larger saving is operational: no function is ever deployed without an alarm. Verify current query-alarm pricing before comparing precisely.
-
-!!! info "The cost of observability itself"
-    In many organisations the CloudWatch bill is dominated not by alarms and dashboards but by **custom metric cardinality** ([Section 7.1](../unit7/topic1.md#infrastructure-and-application-monitoring-with-amazon-cloudwatch)), **log ingestion and storage** ([Section 7.2](../unit7/topic2.md)) and **trace volume**. The Performance Optimization part of this section returns to the cost of observability as a whole and how to control it without losing visibility.
-
-### Integration with Other AWS Services
-
-#### Amazon SNS: the notification hub
-
-SNS topics decouple alarms from recipients. An alarm publishes to `ops-page-prod`; subscriptions deliver to email, SMS, an HTTPS endpoint of a paging service, an SQS queue for auditing, a Lambda function for enrichment, and chat channels through Amazon Q Developer in chat applications. Changing who is notified never requires touching the alarm. [Chapter 6.3](../unit6/topic3.md) covered SNS in depth.
-
-#### AWS Lambda: custom actions
-
-A Lambda alarm action runs code on every state change: enrich the notification with recent logs and a dashboard link, open a ticket, or remediate. Because the alarm invokes the function asynchronously, Lambda's asynchronous retry and on-failure destination settings apply. The next part is devoted to this integration.
-
-#### Amazon EventBridge: routing alarm events
-
-Every alarm state change arrives on the default event bus. EventBridge rules can match on `detail.alarmName` prefixes, `detail.state.value` and other fields to route alarms to Step Functions workflows, SSM Automation, SQS queues or a central operations bus in another account ([Chapter 6.3](../unit6/topic3.md#event-routing-with-amazon-eventbridge)).
-
-```json
-{
-  "source": ["aws.cloudwatch"],
-  "detail-type": ["CloudWatch Alarm State Change"],
-  "detail": {
-    "alarmName": [{"prefix": "prod-"}],
-    "state": {"value": ["ALARM"]}
-  }
-}
-```
-
-#### Amazon ECS and Amazon EKS
-
-For ECS services, the key paging symptoms are ALB 5xx rate and p99 `TargetResponseTime` per target group, plus application-level RED metrics from Application Signals or EMF. Cause dashboards use Container Insights ([Section 7.1](../unit7/topic1.md#infrastructure-and-application-monitoring-with-amazon-cloudwatch)): running versus desired task count, CPU and memory utilisation, and restart counts. ECS deployment circuit breakers and CodeDeploy blue/green deployments can use CloudWatch alarms to trigger **automatic rollback** (Chapters [2.3](../unit2/topic3.md) and [5.1](../unit5/topic1.md#aws-codedeploy)), which makes alarm quality a deployment-safety concern.
-
-For EKS, Container Insights with enhanced observability provides cluster, node, pod and container metrics; PromQL alarms and Amazon Managed Service for Prometheus alerting rules cover Kubernetes-native metrics. Keep one principle: page on service symptoms, not on individual pod restarts that Kubernetes already handles.
-
-#### AWS Lambda functions as monitored resources
-
-Key signals are `Errors` (with `notBreaching` missing data), `Throttles`, `Duration` p99 relative to the configured timeout, `ConcurrentExecutions` relative to reserved or account concurrency, and `IteratorAge` or `OffsetLag` for stream sources. A multi time series alarm on `Errors` grouped by `FunctionName` gives fleet coverage.
-
-#### Amazon API Gateway
-
-Alarm on `5XXError` rate and `Latency` p99 per stage and, where detailed metrics are enabled, per resource and method. `4XXError` includes throttling (429) responses; alarm on 429 specifically if your usage plans might be throttling legitimate clients ([Chapter 1.7](../unit1/topic7.md)).
-
-#### AWS CodeDeploy, CodePipeline and ECS deployments
-
-Alarm-based rollback connects this part to Unit V: a CodeDeploy deployment group lists CloudWatch alarms and rolls back if any enters `ALARM` during the deployment (the mechanics are in [Chapter 5.1](../unit5/topic1.md#aws-codedeploy)). Lambda alias traffic shifting and ECS blue/green deployments depend on these alarms being **fast and specific to the new version** (for example using the `ExecutedVersion` dimension for Lambda or the green target group for ECS).
-
-#### Summary of integrations
-
-| Service | Integration | Why |
-|---------|-------------|-----|
-| SNS | Alarm action | Decouple alarms from recipients; fan-out to many channels |
-| Lambda | Alarm action; also monitored resource | Custom responses; serverless fleet monitoring |
-| EventBridge | Receives all alarm state changes | Route to any target, centralise across accounts |
-| Auto Scaling | Alarm action; target tracking alarms | Elasticity driven by metrics |
-| EC2 | Alarm actions | Recover, reboot, stop or terminate instances |
-| Systems Manager | OpsItem action; Automation via EventBridge | Tracking and runbook execution |
-| CloudWatch investigations | Alarm action | Automatic AI-assisted diagnosis |
-| CodeDeploy and ECS | Alarm-based rollback | Deployment safety |
-| Application Signals | SLOs and burn-rate alarms | User-centric alerting |
-| Synthetics and RUM | Canary and app monitor alarms and SLOs | Outside-in detection |
-| Amazon Q Developer in chat applications | Alarm notifications in Slack or Microsoft Teams | ChatOps |
-
-### Common Architecture Patterns
-
-#### Symptom-first alerting with cause dashboards
-
-Page on a small number of symptom alarms per service (availability burn rate, latency burn rate, backlog age, canary failure). Put cause metrics on the Level 2 and Level 3 dashboards linked from the alarm description. When the page arrives, the responder moves from symptom to cause by following links.
-
-#### Composite alarm as an alert aggregator
-
-Many specific child alarms, none with actions; one composite alarm per service and severity that notifies. The composite becomes the unit of ownership and the unit of paging.
-
-#### SLO burn-rate alerting
-
-Define SLOs per critical journey in Application Signals, create multi-window burn-rate alarms, combine them in composite alarms for page and ticket severities, and exclude planned maintenance with SLO exclusion windows and alarm mute rules.
-
-#### Dependency-aware suppression
-
-A shared-dependency alarm (database failover, third-party outage detected by a canary) acts as an actions suppressor for downstream services' composite alarms, so only the owning team is paged for a shared failure.
-
-#### Monitoring account hub-and-spoke
-
-All workload accounts link to a monitoring account through Observability Access Manager. Organisation-wide dashboards and fleet query alarms live in the monitoring account; service-specific alarms remain in workload accounts with the services, deployed by the same pipelines. This mirrors the EventBridge hub-and-spoke pattern of [Chapter 6.3](../unit6/topic3.md#event-routing-with-amazon-eventbridge).
-
-#### Alarm-gated deployment
-
-Deployment stages (CodeDeploy, Lambda alias shifting, ECS blue/green, Argo Rollouts on EKS) consult alarms and roll back automatically when they fire. This is the Circuit Breaker idea of [Chapter 4.3](../unit4/topic3.md) applied to releases. The traffic-shifting and rollback mechanics are covered in [Chapter 5.1](../unit5/topic1.md#aws-codedeploy); the alarm-design requirement here is that the gating alarm evaluates **only the new version** (for example the `ExecutedVersion` dimension) with an M of N window short enough to breach within the deployment's bake time.
-
-#### Heartbeat or dead man's switch
-
-A scheduled job publishes a `JobSucceeded` metric of 1 on success. An alarm with `breaching` missing data and a period slightly longer than the schedule fires if the metric does not arrive. This detects jobs that silently stop running, which no error alarm can.
+- **Operational Excellence:** define SLOs for critical journeys and derive paging alarms from burn rates.
+- **Operational Excellence:** give every alarm an owner and a runbook link, define dashboards and alarms in IaC, and review alarms regularly.
+- **Security:** separate permissions to view and change alarms, and restrict public dashboard sharing.
+- **Reliability:** alarm on symptoms and on absence of data, and use composite alarms to avoid alarm storms.
+- **Reliability:** create alarms per Region in multi-Region designs and monitor the notification path itself.
+- **Performance Efficiency:** alarm on latency percentiles and use anomaly detection for seasonal traffic.
+- **Cost Optimization:** prefer Metrics Insights query alarms and dashboards with variables over per-resource copies, and delete orphaned alarms.
 
 ### Industry Use Cases
 
@@ -1103,36 +859,6 @@ A scheduled job publishes a `JobSucceeded` metric of 1 on success. An alarm with
 | Query alarm quotas and limited aggregations | Mix query alarms with static alarms; use Application Signals for percentiles |
 | Dashboards are operational, not analytical | Use OpenSearch, Athena or a data warehouse for long-range analysis |
 | Regional scope | Deploy alarms per Region; use cross-Region canaries as watchdogs |
-
-### Common Mistakes
-
-#### Beginner Mistakes
-
-| Mistake | Consequence | Correction |
-|---------|-------------|------------|
-| Alarming on average latency | Tail latency problems go unnoticed | Alarm on p95 or p99 |
-| Using `Average` for error counts | Misleading values | Use `Sum` for counts and compute rates with metric math |
-| One-minute period on a five-minute metric | Constant `INSUFFICIENT_DATA` or flapping | Period at least equal to the publishing interval |
-| Wrong dimensions | Alarm stuck in `INSUFFICIENT_DATA` | Check the alarm graph shows data after creation |
-| Default missing-data treatment everywhere | Silent failures or false alarms | Decide per metric what absence means |
-| Email-only notifications to one person | Alerts missed on holidays and at night | SNS to a team channel and a paging tool |
-| No `OK` action | Responders do not know when impact ended | Add `OKActions` to paging alarms |
-| Dashboards with 80 widgets | Nobody can read them in an incident | Layered dashboards; answer at the top-left |
-
-#### Production Mistakes
-
-| Mistake | Consequence | Correction |
-|---------|-------------|------------|
-| Paging on CPU and memory | Alert fatigue; ignored pages | Page on symptoms and burn rate; cause metrics on dashboards |
-| No alarm on absence | Producer stops, everything looks green | Heartbeat alarms with `breaching`, canaries, anomaly detection on drops |
-| Alarm storms during shared failures | Responders overwhelmed | Composite alarms and actions suppressors |
-| `DisableAlarmActions` never reverted | Next incident undetected | Mute rules with end times; compliance check for disabled actions |
-| Alarms without runbooks or owners | Slow, inconsistent response | Owner, severity, runbook and dashboard links in every description |
-| Low-traffic ratio alarms | Flapping at night | Minimum-traffic guards, longer periods, trimmed means |
-| Paging actions on target tracking alarms | Pages on every scale-out | Leave scaling alarms alone; page on user symptoms |
-| Monitoring created by hand in the console | Drift, orphaned alarms, missing coverage for new services | Dashboards and alarms as code, per-service templates |
-| Untested notification path | Chat integration broken for weeks | Scheduled test alarms; alarm on SNS delivery failures |
-| SLO set at 100 per cent or copied from the SLA | Constant pages or no early warning | SLO stricter than SLA, looser than 100 per cent, agreed with product owners |
 
 ### Summary
 
@@ -1201,57 +927,11 @@ In the AWS architecture map, automated incident response spans **Management and 
 
 ### Why This Service or Concept Exists
 
-#### The problem: humans are slow, expensive and inconsistent at 03:00
-
-Consider what happens without automation when a bad deployment raises the error rate of an order API:
-
-| Phase | Manual timeline |
-|-------|-----------------|
-| Alarm fires and pages the on-call engineer | 0 minutes |
-| Engineer wakes, acknowledges, finds a laptop, signs in with MFA | 5 to 15 minutes |
-| Engineer opens dashboards, reads logs, correlates with the deployment | 10 to 20 minutes |
-| Engineer decides to roll back and finds the procedure | 5 to 10 minutes |
-| Rollback executes and the error rate recovers | 5 minutes |
-| Total customer impact | 25 to 50 minutes |
-
-An automated response that recognises "error-rate alarm on a version deployed less than 30 minutes ago" and shifts traffic back to the previous version can reduce impact to a few minutes. The human is still paged, but to confirm and investigate rather than to perform a well-understood mechanical action under stress.
-
-Automation addresses four weaknesses of purely manual response:
-
-1. **Speed.** Machines react in seconds; humans in tens of minutes, especially outside working hours.
-2. **Consistency.** A runbook executed by code performs the same steps every time; a tired human skips steps or makes typing errors, a common cause of incidents becoming worse.
-3. **Scale.** A security finding affecting 300 instances, or a fleet of 600 Lambda functions, cannot be handled by hand.
-4. **Evidence.** Automation captures diagnostic data at the moment of failure (logs, metrics, process lists, configuration) before auto scaling or restarts destroy it.
-
-#### Why AWS provides the building blocks rather than one product
-
-Incident response differs greatly between organisations, and AWS provides composable primitives: alarms and service events as triggers, EventBridge as the router, Lambda for custom code, Systems Manager Automation for executable runbooks, Step Functions for multi-step workflows with approval, SNS and Amazon Q Developer in chat applications for communication, OpsCenter for tracking and CloudWatch investigations for AI-assisted diagnosis. This mirrors the cloud-native philosophy of the whole module: small managed components composed through events and IAM.
-
-!!! info "Incident Manager availability"
-    AWS Systems Manager Incident Manager, which provided response plans, on-call schedules and engagement, has been **closed to new customers since 7 November 2025** and receives no new features; existing customers can continue to use it. AWS recommends Systems Manager OpsCenter for tracking operational issues and AWS Partner solutions (for example PagerDuty, ServiceNow or Jira Service Management) for paging, on-call and escalation. Designs in this part therefore treat paging as an external integration reached through SNS, EventBridge API destinations or webhooks.
-
-#### Benefits over older methods
-
-| Concern | Manual runbooks on a wiki | Scripts on an operations server | Event-driven automation on AWS |
-|---------|---------------------------|---------------------------------|--------------------------------|
-| Trigger | Human reads the alert | Cron or human | Event within seconds |
-| Consistency | Varies by person | Good, if maintained | Good; versioned in IaC and tested in the pipeline |
-| Availability | Depends on the on-call human | Operations server is a single point of failure | Regional managed services, no servers |
-| Credentials | Human's own, often over-privileged | Long-lived keys on a server | Short-lived role credentials scoped per responder |
-| Audit | Chat history, if any | Script logs, if kept | CloudTrail, CloudWatch Logs, execution history |
-| Cost | Human time | Server running continuously | Pay per invocation or step |
-
-!!! warning "Automation is also a source of incidents"
-    Automation does not only shorten incidents; badly designed automation causes them. A responder that restarts every task whenever latency rises can turn a slow database into a total outage by multiplying connection storms. A remediation that "fixes" a security group can remove access that a legitimate batch job needed. The question an architect asks is therefore never "can we automate this?" but **is this response well understood, safe to repeat, bounded in impact and reversible?** Only responses that pass that test should run without a human.
-
-#### When to automate and when not to
-
-| Automate fully | Automate with human approval | Keep manual, automate only the evidence |
-|----------------|------------------------------|-----------------------------------------|
-| Response is well understood and has been performed manually many times | Response is well understood but has significant blast radius | Cause is ambiguous or novel |
-| Action is reversible (roll back, scale out, restart one task) | Action is costly or hard to reverse (fail over a database, isolate a production instance) | Several plausible actions with opposite effects |
-| False positive does little harm | False positive would cause customer impact | Action requires business judgement (communicate with customers, legal) |
-| Examples: roll back a canary deployment, re-drive a DLQ after a fix, enable S3 Block Public Access on a non-exempt bucket | Examples: Regional failover, revoking all sessions of an IAM role, quarantining an instance serving traffic | Examples: data corruption, suspected insider threat, multi-service cascading failure |
+- **Humans are slow at 03:00.** Paging, signing in, diagnosing and finding the rollback procedure typically produce 25 to 50 minutes of customer impact; an automated rollback can reduce this to a few minutes.
+- **Speed, consistency, scale and evidence.** Automation reacts in seconds, performs the same steps every time, handles hundreds of resources at once, and captures diagnostic data before restarts destroy it.
+- **Composable building blocks.** AWS provides alarms and service events as triggers, EventBridge as the router, Lambda, Systems Manager Automation and Step Functions as executors, and SNS, chat integrations and OpsCenter for communication and tracking.
+- **Paging is external.** Systems Manager Incident Manager has been closed to new customers since 7 November 2025, so on-call paging is reached through partner tools such as PagerDuty or ServiceNow.
+- **Automation can also cause incidents.** A responder should run without a human only if the response is well understood, safe to repeat, bounded in impact and reversible; costly or ambiguous actions need approval or stay manual.
 
 ### Core Concepts
 
@@ -1858,249 +1538,16 @@ Alarm, composite alarm, SLO and burn rate were defined in [Part 7.3.1](#creating
 | `approve` | Prepares the action and requests human approval | High blast radius actions |
 | `enforce` | Acts automatically within guardrails | Proven, reversible, low blast radius actions |
 
-### Design Considerations
-
-#### Scalability
-
-Responders scale automatically with Lambda, but correlated failures produce bursts. Upstream aggregation (composite alarms, deduplication in EventBridge patterns), reserved concurrency and queue buffering keep a thousand alarms from becoming a thousand simultaneous remediations.
-
-#### Availability
-
-Responders must be more available than the systems they protect. Keep them free of dependencies on the application, deploy them per Region for multi-Region workloads, and prefer data-plane mechanisms for the most critical actions such as failover.
-
-#### Reliability
-
-Reliability of automation comes from idempotency, verification and escalation. A responder that performs an action but does not check the outcome, or that fails without telling anyone, reduces reliability by creating false confidence. Test responders with fault injection: AWS Fault Injection Service experiments ([Chapter 4.3](../unit4/topic3.md)) can deliberately trigger the alarms that responders react to, in a controlled environment.
-
-#### Durability
-
-Incident evidence (captured logs, snapshots, memory dumps, investigation reports, action records) must outlive the resources involved. Store it in S3 with appropriate retention and, for security incidents, object lock; send action records to CloudWatch Logs with retention matching audit requirements.
-
-#### Latency
-
-Automation latency is small compared with detection latency. To shorten end-to-end response, first improve alarm detection ([Part 7.3.1](#creating-cloudwatch-dashboards-and-alarms)), then remove human waiting from well-understood responses, and finally optimise responder code.
-
-#### Cost
-
-Direct costs are minimal. The economic case rests on reduced downtime and reduced engineering toil. Avoid costly behaviours such as enrichment functions that scan large log groups on every flapping alarm.
-
-#### Performance
-
-Responders should do one thing quickly. Initialise SDK clients outside the handler, avoid large dependencies, and keep cold starts short, particularly for Java responders (SnapStart can help, [Chapter 1.3](../unit1/topic3.md)).
-
-#### Maintainability
-
-Treat responders as production software: in version control, deployed through CI/CD (Unit V), with unit tests using recorded sample events, integration tests in non-production accounts, and documentation linked from the alarm description. A responder that nobody has run for a year should be exercised in a game day.
-
-#### Operational Complexity
-
-Every responder adds a control loop that people must understand during an incident. Keep the catalogue small, document each responder's trigger, action, guardrails and kill switch, and publish automated actions to the same channel humans use so that nobody is surprised by what the automation did.
-
 ### AWS Best Practices
 
-| Pillar | Practice for automated incident response |
-|--------|------------------------------------------|
-| Operational Excellence | Codify runbooks as executable automation; start in dry-run; review every automated action in post-incident reviews; run game days to exercise responders; keep runbook links in alarm descriptions |
-| Security | One least-privilege role per responder; cross-account roles with organisation conditions; chat guardrail policies; approvals for high blast radius actions; CloudTrail for every automated change; automate security containment for well-understood findings |
-| Reliability | Idempotency, verification and escalation; automate mitigation (rollback, failover) before resolution; prefer built-in self-healing; protect responders with reserved concurrency; test with Fault Injection Service |
-| Performance Efficiency | Use the right executor (Lambda for logic, SSM for procedures, Step Functions for orchestration); keep responders small and fast; aggregate events upstream |
-| Cost Optimization | Automate shutdown of idle non-production resources and responses to cost anomalies; avoid expensive per-invocation queries; rely on free AWS service events |
-| Sustainability | Event-driven responders consume nothing between incidents; automation that stops idle resources reduces energy use; avoid polling loops that keep functions running |
-
-!!! tip "Start with the top three"
-    For a DSO303 project, three automated responses deliver most of the value: **automatic rollback of bad deployments** (CodeDeploy or ECS with alarms), **enriched notifications in chat** with dashboard and runbook links, and **automatic remediation of one or two security misconfigurations** such as public S3 buckets. Build these well before attempting anything more ambitious.
-
-### Security Considerations
-
-#### IAM and least privilege
-
-Responders hold privileges that attackers would value: the ability to modify security groups, IAM policies or deployments. Design their permissions as carefully as those of administrators. Policy structure, evaluation logic, condition keys and cross-account role trust are explained in [Chapter 8.1](../unit8/topic1.md#iam-policies-and-permissions); this subsection covers only what is specific to responders.
-
-```json
-{
-  "Version": "2012-10-17",
-  "Statement": [
-    {
-      "Sid": "RollbackOnlyTaggedAliases",
-      "Effect": "Allow",
-      "Action": ["lambda:UpdateAlias", "lambda:GetAlias", "lambda:ListVersionsByFunction"],
-      "Resource": "arn:aws:lambda:us-east-1:111122223333:function:prod-*",
-      "Condition": {
-        "StringEquals": { "aws:ResourceTag/auto-remediate": "true" }
-      }
-    },
-    {
-      "Sid": "IdempotencyAndCooldown",
-      "Effect": "Allow",
-      "Action": ["dynamodb:PutItem", "dynamodb:UpdateItem", "dynamodb:GetItem"],
-      "Resource": "arn:aws:dynamodb:us-east-1:111122223333:table/responder-state"
-    },
-    {
-      "Sid": "ReadKillSwitch",
-      "Effect": "Allow",
-      "Action": "ssm:GetParameter",
-      "Resource": "arn:aws:ssm:us-east-1:111122223333:parameter/responders/*"
-    },
-    {
-      "Sid": "Notify",
-      "Effect": "Allow",
-      "Action": "sns:Publish",
-      "Resource": "arn:aws:sns:us-east-1:111122223333:ops-automation"
-    }
-  ]
-}
-```
-
-Principles:
-
-- **One role per responder.** A shared "automation" role with broad permissions turns any bug in any responder into a platform-wide risk.
-- **No wildcard actions on IAM, KMS or Organizations.** Security containment responders that must modify IAM should be limited to specific actions (for example attaching a named deny policy) and protected by approvals.
-- **Protect the kill switch and mode parameters.** Whoever can change `/responders/*/mode` from `dry-run` to `enforce` controls the automation; restrict and audit it.
-- **Cross-account roles** in workload accounts should trust only specific responder role ARNs from the automation account, with `aws:PrincipalOrgID` conditions.
-
-#### Encryption and secrets
-
-Encrypt SNS topics, DLQs, DynamoDB tables and evidence buckets with KMS keys whose policies allow the relevant service principals. Tokens for partner paging APIs belong in Secrets Manager or in EventBridge connections (which store credentials in Secrets Manager), never in environment variables or code.
-
-#### Protecting automation from abuse
-
-Automation is an attack surface. An attacker who can create alarms, publish to the incident SNS topic or put events on the operations bus might trigger responders deliberately, for example to cause a rollback or to disable a security control.
-
-| Threat | Control |
-|--------|---------|
-| Forged events on a custom bus | Bus resource policies limited to known accounts; responders validate `source` and `account` fields |
-| Forged messages on SNS topics | Topic policies restricting publishers; responders prefer EventBridge events from `aws.cloudwatch`, which producers cannot forge (`PutEvents` rejects `aws.` sources) |
-| Unauthorised alarm creation to trigger responders | Restrict `cloudwatch:PutMetricAlarm` for alarms with responder actions; responders act only for alarms matching an allow-listed name prefix or tag |
-| Chat-based privilege escalation | Guardrail policies, private channels, user-level roles |
-| Disabling automation before an attack | Alarm on changes to kill-switch parameters and on `PutFunctionConcurrency` for responders, via CloudTrail-based EventBridge rules |
-
-#### Private and public resources
-
-Responders that call only AWS APIs do not need VPC attachment. Attach them to a VPC only when they must reach private resources, and then provide VPC endpoints for the AWS APIs they call, so that the responder does not depend on NAT gateways that may be part of the failure.
-
-#### Logging and compliance
-
-Every automated action should produce a structured record containing the triggering event ID, the decision and its reason, the action, the prior state and the result. Combined with CloudTrail (which records the API calls under the responder's role), this satisfies audit requirements in regulated industries and provides the timeline for post-incident reviews. For security containment, preserve evidence before changing anything: snapshot volumes and capture metadata before isolating an instance.
-
-### Cost Optimization
-
-The response stack is inexpensive; the cost questions are mostly about what automation can save.
-
-| Opportunity | Implementation |
-|-------------|----------------|
-| Stop idle non-production resources | Scheduled or event-driven Lambda stopping resources tagged `auto-stop=true` outside working hours |
-| React to cost anomalies | AWS Cost Anomaly Detection and AWS Budgets notifications through SNS to a responder that notifies owners and, for sandbox accounts, stops resources |
-| Avoid paging costs | Route ticket-severity alerts to chat and ticketing rather than SMS or voice |
-| Reduce responder log costs | Set retention on responder log groups; log decisions, not entire payloads |
-| Keep responders on arm64 | Lower price per GB-second for the same work |
-
-### Integration with Other AWS Services
-
-#### Amazon ECS
-
-Native mechanisms come first: the ECS deployment circuit breaker rolls back deployments whose tasks fail to reach a steady state, ECS deployments can be configured with CloudWatch alarms that trigger rollback, and CodeDeploy blue/green deployments roll back on alarms (Chapters [2.3](../unit2/topic3.md) and [5.1](../unit5/topic1.md#aws-codedeploy)). Custom responders add application-aware actions, for example capturing a heap dump through ECS Exec before a task is replaced, or reducing traffic weight on a degraded service by adjusting ALB listener rule weights.
-
-#### Amazon EKS
-
-Kubernetes already restarts containers and reschedules pods. Responders for EKS typically operate at the AWS level (node groups, load balancers, IAM) or call the Kubernetes API using an EKS access entry mapped to a narrowly scoped Kubernetes role, for example to scale a deployment's HPA minimum or to cordon a node flagged by GuardDuty Runtime Monitoring. Within the cluster, progressive delivery controllers such as Argo Rollouts provide alarm- or metric-driven rollback natively.
-
-#### AWS Lambda
-
-Lambda is both executor and protected resource. For Lambda workloads, CodeDeploy alias traffic shifting with alarms provides automatic rollback; responders can additionally reduce reserved concurrency on a function that is overwhelming a downstream dependency (a form of load shedding), or disable an event source mapping that is repeatedly failing on poison messages until the team investigates.
-
-#### Amazon API Gateway
-
-Responders can protect back ends during overload by lowering stage or usage-plan throttling limits temporarily, or switch a route to a static maintenance response. These actions should be time-limited and automatically reverted.
-
-#### Amazon SQS and dead-letter queues
-
-DLQ alarms ([Chapter 6.3](../unit6/topic3.md#message-queues-with-amazon-sqs)) often trigger a two-step response: notify immediately, then, once the downstream cause is fixed and verified healthy, redrive messages at a controlled rate using the SQS redrive API. Automating the redrive without verifying the fix simply moves messages back into the DLQ.
-
-#### AWS CodePipeline and CodeDeploy
-
-A rollback responder should also **stop the pipeline** from redeploying the failed version, for example by disabling the stage transition and posting the reason, so that the rollback is not immediately undone.
-
-#### Amazon GuardDuty, AWS Security Hub and AWS Config
-
-Security findings arrive as EventBridge events and are routed by severity and resource type to containment workflows. Config rules can use native remediation actions backed by SSM Automation. [Chapter 6.3](../unit6/topic3.md) showed organisation-wide routing of these events to a security account.
-
-#### AWS Health
-
-AWS Health events describe AWS-side issues and scheduled changes affecting your resources. A responder can map affected resources to owners through tags and notify them, or correlate an active Health event with an alarm to tell responders that the cause is probably upstream. CloudWatch investigations also consult Health events.
-
-#### Summary of integrations
-
-| Service | Role in response | Why |
-|---------|------------------|-----|
-| CloudWatch alarms | Trigger | Detect symptoms |
-| EventBridge | Router | Decouple, filter, centralise |
-| Lambda | Executor | Custom logic |
-| SSM Automation | Executor | Standard procedures, approvals, fleets |
-| Step Functions | Orchestrator | Multi-step workflows, approvals, compensation |
-| SNS | Notifier | Fan-out to people and tools |
-| Amazon Q Developer in chat applications | Collaboration | ChatOps, one-click actions |
-| CloudWatch investigations | Diagnosis | AI-assisted correlation |
-| OpsCenter | Tracking | Operational work items |
-| DynamoDB and Parameter Store | State and control | Idempotency, cool-downs, kill switches |
-| CodeDeploy and ECS | Native rollback | Deployment safety |
-| Fault Injection Service | Testing | Exercise responders safely |
-
-### Common Architecture Patterns
-
-#### Enrich-then-notify
-
-An alarm publishes to EventBridge; a Lambda function gathers context (owner and runbook from tags or the alarm description, a graph link, deployments in the last hour from CodeDeploy or ECS, the top error messages from a narrow Logs Insights query, links to exemplar traces) and publishes a rich message to SNS for chat and paging. This is maturity level 1 and the safest, highest-value first responder.
-
-#### Deployment-aware rollback
-
-The responder checks whether the alarming service was deployed within a recent window. If so, it rolls back (alias shift, previous task definition, CodeDeploy stop with rollback), blocks the pipeline and notifies. If not, it escalates to humans, because rolling back an old version is unlikely to help. This pattern embodies the most common cause of incidents: change.
-
-```mermaid
-sequenceDiagram
-    participant CW as CloudWatch alarm prod-orders-5xx
-    participant EB as EventBridge
-    participant R as Rollback responder
-    participant D as DynamoDB responder-state
-    participant E as ECS orders service
-    participant CP as CodePipeline
-    participant C as Chat via SNS
-    CW->>EB: ALARM
-    EB->>R: Invoke with alarm detail
-    R->>D: Conditional put of idempotency key
-    D-->>R: Accepted
-    R->>E: Describe service deployments
-    E-->>R: Current deployment 12 minutes old, previous task definition revision 41
-    R->>E: Update service to revision 41
-    R->>CP: Disable transition into Production stage
-    R->>C: Rolled back orders to revision 41, pipeline paused, verifying
-    R->>CW: After 5 minutes, check alarm state
-    CW-->>R: OK
-    R->>C: Recovery verified
-```
-
-#### Security containment workflow
-
-GuardDuty or Security Hub findings are routed by severity to a Step Functions workflow: capture evidence, isolate (quarantine security group, revoke sessions), notify security, and open a case. Approval gates protect production resources. This is the pattern from [Chapter 6.3](../unit6/topic3.md), with this part adding guardrails, evidence handling and verification.
-
-#### Auto-remediation with exemptions
-
-Config rules or Security Hub controls detect misconfiguration; SSM Automation remediates automatically unless the resource carries an approved exemption tag. The exemption list itself is governed and reviewed.
-
-#### Circuit breaker for automation
-
-The responder counts its own actions in DynamoDB. After K actions within a window, it stops acting and pages humans, on the basis that repeated automated fixes indicate a problem the automation does not understand. This applies the Circuit Breaker pattern of [Chapter 4.3](../unit4/topic3.md) to the automation itself.
-
-#### Evidence capture before self-healing
-
-When an unhealthy ECS task or EC2 instance is about to be replaced, a responder captures diagnostics first: thread dumps, recent logs, process lists, a volume snapshot. Auto Scaling lifecycle hooks and ECS task state change events provide the moment to do this. Without it, self-healing destroys the evidence needed to fix the root cause.
-
-#### ChatOps approval
-
-Automation posts a proposed action with evidence and a custom action button to the incident channel; the on-call engineer approves with one click; the action executes under guardrails; the outcome is posted back. The channel becomes the incident timeline.
-
-#### Central response hub
-
-All workload accounts forward alarm and security events to an operations automation account, where responders assume scoped roles into workload accounts. This mirrors the monitoring-account pattern of [Part 7.3.1](#creating-cloudwatch-dashboards-and-alarms) and the EventBridge hub-and-spoke of [Chapter 6.3](../unit6/topic3.md#event-routing-with-amazon-eventbridge).
+- **Operational Excellence:** codify runbooks as executable automation and start new responders in dry-run mode.
+- **Operational Excellence:** review every automated action in post-incident reviews and exercise responders in game days.
+- **Security:** give each responder its own least-privilege role, and require approval for high blast-radius actions.
+- **Security:** record every automated change in CloudTrail.
+- **Reliability:** make responders idempotent, verify their effect and escalate when it fails.
+- **Reliability:** prefer built-in self-healing and protect responders with reserved concurrency.
+- **Performance Efficiency:** choose the executor by task: Lambda for logic, SSM Automation for procedures, Step Functions for orchestration.
+- **Sustainability:** prefer event-driven responders, which consume nothing between incidents, over polling loops.
 
 ### Industry Use Cases
 
@@ -2140,35 +1587,6 @@ All workload accounts forward alarm and security events to an operations automat
 | No native on-call management for new customers | Partner paging tools |
 | AI diagnosis is probabilistic and quota-bound | Human validation, good telemetry |
 | Security risk of privileged automation | Least privilege, approvals, abuse protections |
-
-### Common Mistakes
-
-#### Beginner Mistakes
-
-| Mistake | Consequence | Correction |
-|---------|-------------|------------|
-| Forgetting the Lambda resource-based policy for the alarm or rule | Responder never runs | Add permission for `lambda.alarms.cloudwatch.amazonaws.com` or `events.amazonaws.com` with `SourceArn` |
-| Parsing only one event format | Responder fails when triggered through a different path or by `SetAlarmState` tests | Normalise alarm action, EventBridge and SNS formats |
-| Using the alarm name as idempotency key | Second incident on the same alarm is ignored | Alarm name plus state timestamp |
-| Responding to `OK` and `INSUFFICIENT_DATA` as if they were `ALARM` | Actions on recovery or on missing data | Check `state.value` explicitly |
-| Using the `LabRole` or an administrator role pattern in production | Excessive privilege | One least-privilege role per responder |
-| No on-failure destination | Failures unnoticed | Destination plus alarm |
-| Testing only with `SetAlarmState` | Real metric paths untested | Also test with real failures in non-production |
-
-#### Production Mistakes
-
-| Mistake | Consequence | Correction |
-|---------|-------------|------------|
-| Restarting on capacity symptoms | Restart storms, total outage | Scale or shed load; never restart on saturation |
-| Changing desired count while auto scaling is active | Automation fights the scaler | Change scaling inputs such as minimum capacity |
-| Rollback without blocking the pipeline | Bad version redeployed | Pause pipeline stage as part of rollback |
-| No cool-down or action budget | Remediation loops | DynamoDB cool-downs, circuit breaker |
-| No kill switch | Cannot stop automation during a major incident | Parameter or AppConfig flag; reserved concurrency 0 |
-| Automation without notification | Humans surprised by changes, duplicate manual actions | Post every action to the incident channel |
-| Broad chat channel permissions | Anyone in the channel can change production | Guardrail policies, private channels |
-| Responders depending on the failing system | Automation fails exactly when needed | Minimal, independent dependencies |
-| Destroying evidence | Root cause cannot be found | Capture diagnostics before replacement |
-| Automating a response nobody has performed manually | Unknown side effects | Perform manually, document, dry-run, then automate |
 
 ### Summary
 
@@ -2228,37 +1646,12 @@ In the AWS architecture map these tools span **Management and Governance** (Clou
 
 ### Why This Service or Concept Exists
 
-#### The problem: guesswork is expensive in both directions
-
-In a data centre, capacity was bought in advance for the peak, and performance problems were solved by buying bigger servers. Waste was hidden in capital budgets. The cloud changes the economics: every idle vCPU is billed every hour, and every slow request is visible in latency percentiles. Two failures are common:
-
-1. **Over-provisioning.** Teams choose large instance types, generous Fargate task sizes and 3 GB Lambda functions "to be safe". Utilisation of 10 to 20 per cent is typical of unmanaged estates, which means most of the compute bill buys nothing.
-2. **Under-investigated slowness.** When a service is slow, teams add capacity without knowing the cause. If the bottleneck is a missing database index, a lock, an N+1 query pattern or a chatty network call, more capacity costs more and changes nothing.
-
-Both failures have the same root: decisions made without evidence. The cloud makes evidence cheap: utilisation, latency, traces and query statistics are already collected ([Section 7.1](../unit7/topic1.md#distributed-tracing-with-aws-x-ray)). What is missing is the discipline and the tools to turn that evidence into decisions.
-
-#### Why AWS provides optimisation tools
-
-AWS benefits when customers run efficiently, because efficient customers grow on the platform instead of leaving it for cost reasons, and because idle capacity in customer accounts is capacity AWS could sell elsewhere. It therefore offers:
-
-- **Analysis at fleet scale** that no team could perform by hand: Compute Optimizer analyses the utilisation history of every instance, volume, function and Fargate service in an organisation and compares it with the performance characteristics of hundreds of instance types.
-- **Deep, engine-aware database diagnostics**: Database Insights understands wait events, SQL digests and execution plans for each supported engine.
-- **Curated best-practice checks**: Trusted Advisor encodes lessons from many customers into checks across cost, performance, security, fault tolerance, service limits and operational excellence.
-- **ML-based anomaly detection and AI-assisted analysis**: DevOps Guru and CloudWatch investigations correlate signals that humans would take hours to join.
-
-#### Benefits over older methods
-
-| Concern | Traditional approach | AWS tool-assisted approach |
-|---------|----------------------|----------------------------|
-| Sizing | Estimate the peak, add a margin, buy hardware | Measure utilisation over 14 to 93 days, receive per-resource recommendations with estimated savings and performance risk |
-| Finding slow code paths | Add timing logs, reproduce locally | Traces, service operation metrics and continuous profiling in production |
-| Database tuning | DBA runs ad hoc queries against system views | DB load decomposed by wait, SQL, host and user; execution plans captured automatically; fleet-wide view |
-| Load testing | Dedicated test lab, scarce and expensive | On-demand distributed load generation from multiple Regions, paid per test |
-| Best-practice review | Periodic manual audits | Continuous automated checks with organisational views |
-| Cost of mistakes | Sunk capital | Change the instance type or memory setting and pay the new price from the next hour |
-
-!!! tip "Performance and cost are the same conversation"
-    In the cloud, **performance efficiency and cost optimisation are two views of one quantity: useful work per unit of resource**. Removing a bottleneck often allows the same load to be served by fewer resources; rightsizing often reveals which resources were never the bottleneck. A useful unifying metric for DSO303 projects is **cost per successful request** (or per order, per student record processed), tracked alongside latency percentiles.
+- **Over-provisioning wastes money.** Instances, Fargate tasks and Lambda functions sized "to be safe" commonly run at 10 to 20 per cent utilisation, so most of the compute bill buys nothing.
+- **Unexplained slowness wastes effort.** Adding capacity without finding the cause does not help when the bottleneck is a missing index, a lock, an N+1 query or a chatty network call.
+- **Evidence is already collected.** Utilisation, latency, traces and query statistics exist ([Section 7.1](../unit7/topic1.md#distributed-tracing-with-aws-x-ray)); what is missing is the discipline and tooling to turn them into decisions.
+- **Analysis at fleet scale.** Compute Optimizer, Database Insights, Trusted Advisor, DevOps Guru and CloudWatch investigations perform analyses that no team could do by hand.
+- **Cheap experiments.** In the cloud a mistaken size is corrected by changing an instance type or memory setting and paying the new price from the next hour.
+- **Performance and cost are one conversation.** Both measure useful work per unit of resource; a useful unifying metric for DSO303 projects is cost per successful request, tracked alongside latency percentiles.
 
 ### Core Concepts
 
@@ -2889,173 +2282,15 @@ Latency, percentile, throughput, utilisation, saturation and the USE and RED met
 | Regions | Match user geography when latency matters |
 | Success criteria | Written in advance: SLO latency percentiles, error rate, cost per request |
 
-### Design Considerations
-
-#### Scalability
-
-Optimise the bottleneck that limits scaling. Stateless compute scales horizontally; relational primaries, hot partitions, shared locks and third-party rate limits do not. Load tests at increasing scale reveal which constraint appears first. Rightsizing should preserve the ability to scale out: smaller tasks with more replicas usually scale more smoothly than a few large ones.
-
-#### Availability
-
-Rightsizing must not remove failure headroom. A service spread over three Availability Zones must be able to absorb the loss of one; utilisation targets of 60 to 70 per cent rather than 90 per cent leave room for that. Compute Optimizer does not know about these requirements; architects must.
-
-#### Reliability
-
-Performance changes are changes: deploy them through the pipeline with canaries and alarms ([Part 7.3.1](#creating-cloudwatch-dashboards-and-alarms)). A memory reduction that causes occasional out-of-memory failures reduces reliability even if the average improves. Soak tests catch leaks that short tests miss.
-
-#### Durability
-
-Optimisation rarely affects durability directly, but storage optimisations can: moving data to cheaper storage classes, shortening backup retention or changing replication must be reviewed against recovery objectives ([Chapter 6.1](../unit6/topic1.md)).
-
-#### Latency
-
-Tail latency matters most. Optimise p99 for user-facing paths, and remember that a request fanning out to ten services experiences roughly the worst of ten tail latencies. Caching, parallelism and removing round trips usually improve latency more than faster hardware.
-
-#### Cost
-
-Measure cost per unit of work before and after each optimisation. Combine rightsizing with commercial levers (Savings Plans, Reserved Instances, Spot) in the right order: rightsize first, then commit, otherwise the organisation commits to paying for waste.
-
-#### Performance
-
-Different workloads optimise for different metrics: latency for interactive APIs, throughput for batch and streaming, cost per job for analytics. State the goal before optimising.
-
-#### Maintainability
-
-Prefer optimisations that keep the system simple. A cache adds invalidation logic, a new data store adds operations, and hand-tuned configurations drift. Capture tuning decisions in IaC with comments explaining the evidence behind them.
-
-#### Operational Complexity
-
-Every tool adds dashboards and recommendations to review. Integrate them into existing processes: recommendations into the team backlog, performance tests into the pipeline, database reviews into the release checklist, instead of creating separate rituals.
-
 ### AWS Best Practices
 
-| Pillar | Practice for performance optimisation |
-|--------|---------------------------------------|
-| Operational Excellence | Treat performance as a continuous process with baselines, dashboards and regular reviews; automate performance tests in CI/CD; record decisions and evidence |
-| Security | Restrict access to SQL text and profiles that may contain sensitive data; run load tests with synthetic data in isolated accounts; avoid production credentials in test tools |
-| Reliability | Keep failure headroom when rightsizing; roll out performance changes with canaries and alarms; soak test for leaks; combine load tests with fault injection |
-| Performance Efficiency | Select resource types by measurement (Graviton, instance families, Lambda memory); use caching and asynchronous designs; review new AWS capabilities periodically; experiment often because cloud experiments are cheap |
-| Cost Optimization | Rightsize before committing to Savings Plans; delete idle resources; track cost per request; govern the cost of observability |
-| Sustainability | Maximise utilisation of provisioned resources; prefer Graviton and managed services; scale to zero where possible; reduce data transferred and stored, including telemetry that nobody uses |
-
-!!! tip "Sustainability and performance align"
-    The Sustainability pillar asks architects to **maximise utilisation and minimise the resources required per unit of work**. Rightsizing, Graviton adoption, deleting idle resources and removing unnecessary telemetry are simultaneously performance, cost and sustainability improvements, which makes them easy to justify.
-
-### Security Considerations
-
-- **Least privilege for optimisation data.** Recommendations reveal architecture and cost; SQL text and profiles may reveal data and code. Grant read access by team and restrict SQL text visibility in Database Insights.
-- **Delegated administration.** Use a delegated administrator account for Compute Optimizer and Trusted Advisor organisation views rather than the management account.
-- **Load test safety.** Generators must target only approved endpoints; store scripts and results in encrypted buckets; never embed real user credentials; use test tenants and payment sandboxes.
-- **Change control.** Applying recommendations changes production; route changes through IaC review and CI/CD, and log them in CloudTrail.
-- **Profiling agents.** Treat agents as dependencies: pin versions, review permissions (they need only to submit profiles), and send data over encrypted channels.
-- **Trusted Advisor security checks** complement, not replace, Security Hub and GuardDuty ([Part 7.3.2](#automated-incident-response-with-aws-lambda)).
-
-### Cost Optimization
-
-Performance tools are also the main instruments of cost optimisation. A structured order of operations avoids common mistakes:
-
-| Step | Action | Tools |
-|------|--------|-------|
-| 1. Eliminate | Delete idle and orphaned resources: unattached volumes, idle load balancers, stopped instances with volumes, unused Elastic IPs, forgotten test stacks | Compute Optimizer idle findings, Trusted Advisor, Cost Explorer |
-| 2. Rightsize | Match instance types, task sizes, Lambda memory and volume types to measured need | Compute Optimizer, Container Insights, Lambda Power Tuning, Database Insights |
-| 3. Modernise | Graviton, gp3 volumes, serverless or managed services where they fit, newer instance generations | Compute Optimizer architecture recommendations |
-| 4. Scale with demand | Auto scaling, scheduled scaling, scale to zero for non-production | CloudWatch alarms and target tracking |
-| 5. Commit | Savings Plans and Reserved Instances for the stable baseline after rightsizing | Cost Explorer recommendations, Cost Optimization Hub |
-| 6. Use Spot | Interruption-tolerant workloads such as batch, CI runners and stateless workers | EC2 Spot, Fargate Spot |
-| 7. Govern | Budgets, anomaly detection, tagging, monthly reviews including observability cost | AWS Budgets, Cost Anomaly Detection, Cost Explorer |
-
-!!! warning "Commit after rightsizing, not before"
-    A Savings Plan purchased for an over-provisioned fleet locks in the waste for one or three years. Rightsize and modernise first, observe the new baseline for a few weeks, then commit to the stable portion.
-
-### Integration with Other AWS Services
-
-#### AWS Lambda
-
-Lambda performance work combines Lambda Insights (memory and initialisation evidence in production), Power Tuning (controlled experiments), Compute Optimizer (fleet recommendations), X-Ray or Application Signals (downstream latency) and SnapStart or provisioned concurrency (cold starts). A typical architecture runs Power Tuning in the pipeline for changed functions and records the chosen memory in the SAM or CDK definition.
-
-#### Amazon ECS
-
-For ECS on Fargate, Container Insights shows task and container utilisation, Compute Optimizer recommends task and container CPU and memory, and load tests validate scaling policies. For ECS on EC2, Compute Optimizer also rightsizes the underlying instances or Auto Scaling groups, and capacity providers with managed scaling keep the cluster sized to tasks.
-
-#### Amazon EKS
-
-Container Insights with enhanced observability provides pod and container utilisation; Karpenter consolidates nodes when pod requests are reduced ([Chapter 3.3](../unit3/topic3.md)); Compute Optimizer can rightsize node instances and Auto Scaling groups, while pod requests are tuned from observed usage. PromQL queries in CloudWatch or Amazon Managed Service for Prometheus support Kubernetes-native analysis.
-
-#### Amazon API Gateway and CloudFront
-
-Compare API Gateway `Latency` with `IntegrationLatency` to separate API layer overhead from back-end time. Enable API caching or CloudFront caching for cacheable responses; RUM and Internet Monitor show whether edge caching improves user-perceived latency in the regions that matter.
-
-#### Amazon Aurora, RDS, DynamoDB and ElastiCache
-
-Database Insights diagnoses relational databases; Compute Optimizer rightsizes RDS and Aurora instances and identifies idle ones; Contributor Insights and CloudWatch metrics diagnose DynamoDB hot keys and throttling; ElastiCache metrics (hit ratio, evictions, CPU) show whether a cache is effective. RDS Proxy reduces connection overhead for serverless clients.
-
-#### Amazon SQS, Kinesis and EventBridge
-
-For asynchronous systems, optimisation targets throughput and backlog age: consumer concurrency, batch sizes, visibility timeouts and Lambda event source mapping settings ([Chapter 6.3](../unit6/topic3.md#message-queues-with-amazon-sqs)). Load tests should include message bursts to validate backlog recovery time.
-
-#### AWS CodePipeline and CodeBuild
-
-Performance tests and Power Tuning become pipeline stages. A stage deploys to staging, runs a load test, compares results with the stored baseline and fails on regression, turning performance into a quality gate like unit tests (Unit V).
-
-#### Cost Explorer, Cost Optimization Hub and AWS Budgets
-
-Cost tools translate performance findings into money: Cost Optimization Hub aggregates Compute Optimizer and other recommendations with discounts applied; Cost Explorer shows spend by service, usage type and tag, including CloudWatch usage types for observability cost; Budgets alert on overruns.
-
-#### Summary of integrations
-
-| Service | Integration | Why |
-|---------|-------------|-----|
-| CloudWatch metrics and agent | Input to Compute Optimizer and DevOps Guru | Utilisation evidence, including memory |
-| Container Insights and Lambda Insights | Resource-level evidence | Rightsizing containers and functions |
-| Application Signals and X-Ray | Service and dependency latency | Find the slow operation and span |
-| Database Insights | Database load analysis | Find the slow SQL and wait |
-| RUM and Internet Monitor | User-side performance | Measure what users experience |
-| Compute Optimizer and Cost Optimization Hub | Recommendations and savings | Fleet-wide rightsizing |
-| Trusted Advisor and EventBridge | Best-practice findings routed to owners | Governance at scale |
-| CodePipeline | Performance test stage | Prevent regressions |
-| Fault Injection Service | Faults during load tests | Validate headroom and resilience |
-| AWS Budgets and Cost Explorer | Cost tracking | Observability and infrastructure cost governance |
-
-### Common Architecture Patterns
-
-#### Measure, change one thing, verify
-
-The optimisation loop implemented as a team habit: every performance change references a baseline dashboard and a test result, and is rolled out with a canary. This is the performance equivalent of test-driven development.
-
-#### Performance gate in the pipeline
-
-A pipeline stage runs a short, repeatable load test and Power Tuning for changed functions, compares percentiles and cost per request with the previous release, and blocks promotion on regression beyond a tolerance.
-
-```mermaid
-flowchart LR
-    B["Build and unit tests"] --> D["Deploy to staging with IaC"]
-    D --> L["Load test: 10 minutes at expected peak"]
-    D --> P["Power Tuning for changed Lambda functions"]
-    L --> C{"p99 and error rate within SLO and within 10 percent of baseline?"}
-    P --> C
-    C -->|"Yes"| PR["Canary to production with alarms"]
-    C -->|"No"| X["Fail build, attach report"]
-```
-
-#### Cache-aside with measured hit ratio
-
-Introduce ElastiCache or DAX only when Database Insights shows repeated reads dominating load, and measure cache hit ratio and database load before and after. A cache with a 30 per cent hit ratio adds complexity for little benefit.
-
-#### Asynchronous offloading
-
-Move work that users do not need to wait for (sending emails, generating PDFs, resizing images) to SQS or EventBridge consumers, reducing user-facing latency and allowing consumers to be scaled and sized independently ([Chapter 6.3](../unit6/topic3.md#event-routing-with-amazon-eventbridge)).
-
-#### Continuous rightsizing
-
-A scheduled process exports Compute Optimizer recommendations for the organisation, filters by low performance risk and significant savings, creates tickets for owning teams by tag and tracks implementation. For non-production accounts, selected recommendations can be applied automatically through Compute Optimizer automation or IaC pull requests.
-
-#### Edge acceleration driven by user telemetry
-
-RUM and Internet Monitor identify regions and networks with poor performance; CloudFront caching, edge functions or an additional Region are introduced for those users and verified with the same telemetry.
-
-#### Observability tiering
-
-Critical services receive full telemetry (Application Signals, traces with higher sampling, Database Insights Advanced, Lambda Insights); ordinary services receive standard metrics, structured logs and sampled traces; non-production receives minimal telemetry with short retention. The tier is a tag that IaC modules read.
+- **Operational Excellence:** treat performance as a continuous process with baselines, dashboards and regular reviews.
+- **Operational Excellence:** automate performance tests in CI/CD and record decisions with their evidence.
+- **Security:** restrict access to SQL text and profiles, and run load tests with synthetic data in isolated accounts.
+- **Reliability:** keep failure headroom when rightsizing and roll out performance changes with canaries and alarms.
+- **Performance Efficiency:** select resource types by measurement (Graviton, instance families, Lambda memory) and experiment often.
+- **Cost Optimization:** rightsize before committing to Savings Plans and track cost per request.
+- **Sustainability:** maximise utilisation of provisioned resources and scale to zero where possible.
 
 ### Industry Use Cases
 
@@ -3092,33 +2327,6 @@ Critical services receive full telemetry (Application Signals, traces with highe
 | Load tests require realistic environments and data | IaC-built staging, synthetic data generation, budgeted test windows |
 | Some services changing or retiring (Performance Insights console, CodeGuru family changes, Support plan changes) | Check current documentation; design around durable concepts |
 | Optimisation can add complexity | Prefer simple remedies; measure benefit before adding caches or new stores |
-
-### Common Mistakes
-
-#### Beginner Mistakes
-
-| Mistake | Consequence | Correction |
-|---------|-------------|------------|
-| Optimising without a baseline | Cannot prove improvement | Record percentiles, throughput and cost first |
-| Looking at average latency | Tail problems hidden | Compare p95 and p99 |
-| Adding capacity to fix slowness | Higher cost, same latency when the bottleneck is elsewhere | Find the bottleneck with traces and DB load |
-| Choosing Lambda memory by guess | Paying more for slower functions or overpaying for idle memory | Power Tuning and Lambda Insights |
-| Load testing only the health check or one endpoint | False confidence | Realistic traffic mix |
-| Changing several things at once | Unclear cause of improvement or regression | One change per experiment |
-| Ignoring the database | Compute tuned while queries dominate latency | Start with Database Insights when traces point to the database |
-
-#### Production Mistakes
-
-| Mistake | Consequence | Correction |
-|---------|-------------|------------|
-| Applying every Compute Optimizer recommendation automatically | Standby capacity removed; failover fails | Review performance risk and intent; exclude by tag |
-| Rightsizing to 90 per cent utilisation | No headroom for AZ failure or spikes | Target 60 to 70 per cent for critical services |
-| Buying Savings Plans before rightsizing | Locked-in waste | Eliminate and rightsize first |
-| Load testing production without coordination | Self-inflicted outage, third-party bans | Staging account, coordinated windows |
-| Load generators saturated | Results measure the generator | Monitor generators; scale them out |
-| Cutting telemetry to save cost | Next incident undiagnosable | Cut noise, not signals that drive alarms and SLOs |
-| Tight CPU limits on latency-sensitive containers | Throttling appears as latency | Set limits from evidence; watch throttling metrics |
-| One-off tuning never revisited | Drift as code and traffic change | Performance gates in CI/CD and periodic reviews |
 
 ### Summary
 

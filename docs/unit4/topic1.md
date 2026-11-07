@@ -25,31 +25,12 @@ A fourth principle, **design for failure**, is covered in [4.3](topic3.md).
 
 ## Why This Service or Concept Exists
 
-### Where microservices programmes fail
-
-[1.7](../unit1/topic7.md) introduced microservices as a pattern. In practice, adoptions rarely fail because of container orchestration, which is a solved problem. They fail at boundary-drawing and data ownership, in four recognisable shapes:
-
-| Failure shape | What it looks like | Root cause |
-|---|---|---|
-| **Distributed monolith** | Twelve services, one release train, a shared library bumped everywhere at once | Boundaries without ownership; implicit contracts |
-| **Shared database** | Three services on one Aurora cluster; nobody can change a column | Data ownership never assigned |
-| **Chatty chain** | One user request fans into fourteen sequential internal calls | Over-splitting on technical lines |
-| **Aggregation bottleneck** | One "API service" every team must modify to expose a field | A central team owns the edge |
-
-No container platform can detect or repair any of these. They are design failures.
-
-### What AWS changed
-
-Managed services make each principle **affordable** to follow:
-
-| Principle | Before managed cloud | On AWS today |
-|---|---|---|
-| Database per service | Run N database servers; most teams gave up and shared one | Create N DynamoDB tables or Aurora Serverless clusters through IaC |
-| Federated GraphQL across teams | Run a schema-stitching gateway with its own team | AppSync **Merged APIs** |
-| Reliable event publication | Build an outbox poller and run a broker | DynamoDB Streams or database CDC into EventBridge or SQS |
-
-!!! warning "Managed services make a principle cheaper; they do not enforce it"
-    AWS will happily let four ECS services share one Aurora cluster, or let one team own an AppSync API that eleven teams queue to modify. Every anti-pattern in this chapter is fully supported by the platform. The discipline is the architect's job.
+- **Orchestration is not the hard part.** Microservices adoptions, introduced as a pattern in [1.7](../unit1/topic7.md), rarely fail on containers; they fail at boundary-drawing and data ownership.
+- **Distributed monolith.** Services without real ownership still ship on one release train because their contracts are implicit and their libraries shared.
+- **Shared database and chatty chains.** Unassigned data ownership freezes schemas, and splitting on technical lines turns one user request into many sequential internal calls.
+- **Aggregation bottleneck.** A single centrally owned API layer becomes the queue every team waits in to expose a field.
+- **Managed services make the principles affordable.** Per-service DynamoDB tables or Aurora Serverless clusters, AppSync Merged APIs, and Streams or CDC into EventBridge remove the operational cost that once forced shortcuts.
+- **Affordable is not enforced.** AWS supports every anti-pattern in this chapter equally well, so the discipline remains the architect's job.
 
 ## Core Concepts
 
@@ -438,8 +419,6 @@ A dependency graph shows what the system **does**, not what it **should** do; it
 | **IAM** | Per-service workload identity: the real boundary between services |
 | **CloudWatch, X-Ray, ADOT** | Traces and service maps: the only complete record of a request |
 
-The [reference architecture](#integration-with-other-aws-services) below shows how they fit together.
-
 ## Important AWS Terminology
 
 | Term | Meaning |
@@ -478,71 +457,19 @@ The [reference architecture](#integration-with-other-aws-services) below shows h
 | **Temporary shared-database access** | Only with a named owner, a removal ticket and a date |
 | **Isolation level** | Account for regulated boundaries; VPC or namespace for convenience |
 
-## Design Considerations
-
-Use this flow to test whether a candidate boundary is viable:
-
-```mermaid
-flowchart TD
-    A["Can you name the capabilities<br/>in the business's language?"] -->|"no"| B["Run event storming first"]
-    A -->|"yes"| C["Can each candidate name<br/>the data it owns exclusively?"]
-    C -->|"no"| D["Not a real boundary yet.<br/>Keep it in the monolith"]
-    C -->|"yes"| E["Does a mandatory atomic<br/>operation span two candidates?"]
-    E -->|"yes, undo not acceptable"| F["Merge them:<br/>the aggregate cannot be split"]
-    E -->|"yes, undo acceptable"| G["Saga with compensations"]
-    E -->|"no"| H["Boundary is viable"]
-    G --> H
-    H --> I["Does a consumer need this data<br/>on a synchronous hot path?"]
-    I -->|"small, slow-changing"| J["Replicate reference data"]
-    I -->|"large or fast-changing"| K["Synchronous call with timeout<br/>and circuit breaker (4.3)"]
-    I -->|"no"| L["Publish a domain event"]
-```
-
-!!! danger "Two pieces of arithmetic govern every decomposition"
-    **Availability multiplies.** Six services in a synchronous chain, each 99.9 per cent available, give about 99.4 per cent: roughly three and a half hours of downtime a month.
-
-    **Latency adds.** Six 50 ms p99s do not give a 50 ms p99; tail latencies compound.
-
-    Every synchronous call replaced by a local projection or an event removes a term from both. This is why asynchronous is the default.
-
 ## AWS Best Practices
 
-| Pillar | Practice specific to microservice design |
-|---|---|
-| **Operational Excellence** | Keep each service's code, infrastructure, API schema, event schemas and runbook in one repository. Register event schemas in the EventBridge schema registry. Use contract tests between consumers and providers |
-| **Security** | One IAM role per service naming exactly its own tables, queues and keys, so data ownership is enforced, not hoped for |
-| **Reliability** | Idempotent consumers, a DLQ per consumer, no dual writes, reconciliation jobs from day one (details in [4.3](topic3.md)) |
-| **Performance Efficiency** | Shape the edge to the client; batch under list fields; choose the database from the access pattern |
-| **Cost Optimization** | Serverless per-service stores; one shared ALB; VPC endpoints instead of NAT for AWS API calls; per-service cost tags |
-| **Sustainability** | Higher utilisation and fewer redundant calls; local projections reduce total work per request |
+- **Operational Excellence:** keep each service's code, infrastructure, API schema, event schemas and runbook in one repository, with schemas registered in the EventBridge schema registry.
+- **Operational Excellence:** run contract tests between consumers and providers so that a provider change cannot silently break a consumer.
+- **Security:** give each service one IAM role naming exactly its own tables, queues and keys, so data ownership is enforced rather than hoped for.
+- **Reliability:** make consumers idempotent, give each consumer a DLQ, never dual-write, and run reconciliation jobs from day one ([4.3](topic3.md)).
+- **Performance Efficiency:** shape the edge to the client, batch resolvers under list fields, and choose each database from its access pattern.
+- **Cost Optimization:** prefer serverless per-service stores and per-service cost tags, because fixed per-service costs multiply with the number of services.
+- **Sustainability:** replace repeated cross-service calls with local projections to reduce the total work per request.
 
-## Security Considerations
+## Monitoring and Observability
 
-**Identity is the boundary.** All services sit in private subnets and can reach one another, so the network says little. What separates them is that the Orders role can call `dynamodb:GetItem` on exactly one table. A shared "application role" makes any compromised container as powerful as all services combined. IAM itself is covered in [8.1](../unit8/topic1.md).
-
-**Condition keys refine least privilege:**
-
-- `dynamodb:LeadingKeys` limits a role to items whose partition key matches, enforcing tenant isolation at the credential level.
-- `events:source` limits which `source` a service may publish, so one service cannot impersonate another on the event bus.
-
-**GraphQL-specific risks:**
-
-| Risk | Control |
-|---|---|
-| Deeply nested queries as a denial-of-service amplifier | Depth and complexity limits |
-| API-wide auth does not protect sensitive fields | Per-field directives or a pipeline authorisation function |
-| Introspection reveals the whole domain | Consider disabling it on public production APIs |
-| Over-broad AppSync data-source roles | Scope each role to one table and the actions used |
-
-**Events are a data-exfiltration surface.** A thick event with personal data is copied into every consumer's queue, logs and DLQ. Use [thin events](#thin-events-with-callback) for sensitive data. The cheapest way to keep a service out of audit scope is for it never to receive regulated data at all.
-
-## Operating It: Performance, Cost and Monitoring
-
-**Performance.** Remove synchronous hops before optimising them; reference-data replication is usually the biggest win. Fan independent calls out in parallel (three 40 ms calls cost 40 ms in parallel, 120 ms in series). Test GraphQL with realistic list sizes, because a three-record test dataset hides N+1 completely. Design DynamoDB keys from the access patterns before writing code; no capacity setting fixes a hot partition. Cache in one place per piece of data, with an explicit invalidation strategy.
-
-**Cost.** The structural lesson is that **fixed per-service costs multiply**: a database, pipeline, log group, dashboard and alarm set per service. That is the argument against nano-services and for serverless stores with a near-zero floor. Frequently overlooked drivers: backgrounded mobile clients holding AppSync subscriptions open, Lambda resolvers that could be direct DynamoDB data sources, NAT gateway charges for AWS API calls without VPC endpoints, and AppSync logging at `ALL` in production.
-
-**Monitoring.** In a decomposed system, failures live in the **composition**, not in any one service's logs. Carry a trace ID and a business correlation ID (such as the order ID) in every log line, in EventBridge event detail and in SQS message attributes, or the trace breaks at the async boundary. Full monitoring is covered in [7.1](../unit7/topic1.md). The metrics specific to this chapter:
+In a decomposed system, failures live in the **composition**, not in any one service's logs. Carry a trace ID and a business correlation ID (such as the order ID) in every log line, in EventBridge event detail and in SQS message attributes, or the trace breaks at the async boundary. Full monitoring is covered in [7.1](../unit7/topic1.md). The metrics specific to this chapter:
 
 | Metric | What it tells you |
 |---|---|
@@ -554,60 +481,6 @@ flowchart TD
 
 !!! danger "The HTTP 200 blind spot"
     A GraphQL response with one failed field returns **HTTP 200**. Every dashboard counting non-200 responses reports perfect health while a feature is broken. Create a metric filter on the AppSync log group for error entries, dimensioned by field path, and alarm on it.
-
-## Integration with Other AWS Services
-
-The shop's reference architecture brings the chapter together:
-
-```mermaid
-flowchart TD
-    WEB["Web and mobile clients"] --> CF["CloudFront with AWS WAF"]
-    PARTNER["Partner systems"] --> APIGW["API Gateway REST<br/>usage plans and API keys"]
-    CF --> AS["AppSync Merged API"]
-    AS --> SA["Catalogue source API"]
-    AS --> SB["Orders source API"]
-    SA --> DDB1["DynamoDB catalogue table"]
-    SB --> LORD["Orders service on ECS"]
-    APIGW --> LORD
-    LORD --> AUR["Aurora Serverless v2<br/>with outbox table"]
-    AUR --> DMS["AWS DMS change data capture"]
-    DDB1 --> STR["DynamoDB Streams"]
-    DMS --> EB["EventBridge domain bus<br/>with schema registry"]
-    STR --> EB
-    EB --> SF["Step Functions order saga"]
-    EB --> Q1["SQS shipping queue"]
-    EB --> Q2["SQS projection queue"]
-    Q1 --> SHIP["Fulfilment service"]
-    Q2 --> PROJ["Projection worker"]
-    PROJ --> OSS["OpenSearch read model"]
-    EB --> ATH["Analytical plane:<br/>S3, Athena, Redshift"]
-```
-
-Read it in four planes:
-
-- **Client plane**: GraphQL for first-party clients, REST with usage plans for partners.
-- **Ownership plane**: each service has exactly one store, and there are **no arrows between stores**. That absence is the design.
-- **Event plane**: changes leave each store through its own log (Streams, CDC), so there is no dual write, and each consumer has its own queue.
-- **Analytical plane**: where the cross-service join went.
-
-## Common Architecture Patterns
-
-| Pattern | Problem it solves | AWS implementation |
-|---|---|---|
-| Decompose by business capability | Where to draw boundaries | One service and store per capability |
-| Core / supporting / generic subdomains | Where to invest effort | Cognito, SES and payment providers for generic subdomains |
-| [Strangler fig](#strangler-fig) | Migrating a monolith safely | API Gateway or ALB routing; DMS for data |
-| [Branch by abstraction, parallel run](#branch-by-abstraction-and-parallel-run) | De-risking a cutover | Feature flags in AppConfig; async comparison |
-| Self-contained systems | Removing the aggregation layer entirely | Each service owns its UI too; integration by links |
-| [API composition and BFF](#api-composition-and-backend-for-frontend) | Building views across services | AppSync; per-client BFF services |
-| [Database per service](#database-per-service-with-polyglot-persistence) | Coupling through a shared schema | Separate DynamoDB tables or Aurora clusters |
-| [Transactional outbox and CDC](#transactional-outbox-and-change-data-capture) | Unsafe dual writes | DynamoDB Streams; DMS CDC; outbox table |
-| Saga | Lost cross-service transaction | Step Functions ([4.3](topic3.md#saga-with-compensating-transactions)) |
-| [CQRS and event sourcing](#cqrs-and-event-sourcing) | Lost cross-service joins | Projectors into DynamoDB or OpenSearch |
-| [Reference-data replication](#reference-data-replication) | Chatty synchronous hot paths | EventBridge to SQS to a local table |
-| [Anti-corruption layer](#anti-corruption-layer) | Foreign models leaking inward | An adapter service per legacy system or supplier |
-| [Thin events with callback](#thin-events-with-callback) | Coupling and sensitive data in events | Identifier-only events; callback API |
-| [Zero-ETL analytical plane](#zero-etl-and-the-analytical-plane) | Cross-service reporting | Zero-ETL into Redshift; S3 with Athena |
 
 ## Industry Use Cases
 
@@ -631,38 +504,6 @@ Read it in four planes:
 | **Partial failure is first-class.** You choose what breaks first | **Latency adds and availability multiplies** along synchronous chains |
 | **Compliance scope is designable.** Keep regulated data out of most services | **GraphQL has its own traps**: N+1, complexity attacks, the HTTP 200 blind spot |
 | **Attributable cost.** Per-service tags give each team its own bill | **Testing and observability become preconditions**: contract tests and tracing are not optional |
-
-## Common Mistakes
-
-### Beginner Mistakes
-
-| Mistake | Why it is wrong | Do instead |
-|---|---|---|
-| Expecting microservices to make the system faster | Network hops usually **add** latency; the gains are independent deployment, scaling and smaller blast radius | Adopt them for organisational and scaling reasons, not speed |
-| Splitting along technical layers | Services must all deploy together | Split vertically by capability |
-| Treating separate schemas on one Aurora cluster as database-per-service | Capacity, failover and maintenance are still shared | Use it only as a stepping stone to separate stores |
-| Sharing a database "just for reads" | Couples as tightly as a write, less visibly | API, events or a local projection |
-| Dual-writing to database and event bus | A crash between the two cannot be repaired | Outbox or CDC |
-| Naming events as commands (`SendEmail`) | Coupling with an event's syntax | Past-tense facts: `OrderPlaced` |
-| Assuming event-driven means no synchronous calls | Some answers must be authoritative while the user waits | Async by default, sync where justified |
-| Referencing a value that should be a snapshot | An order's price changes when the catalogue does | Copy agreed values into the order |
-| A shared `company-common` library | Every version bump needs a coordinated deploy | Prefer duplication across boundaries |
-| Using a new engine per service because "polyglot" | Each engine adds skills, backups and upgrades | Own store per service; engine by access pattern |
-
-### Production Mistakes
-
-| Mistake | Consequence | Remedy |
-|---|---|---|
-| One AppSync API owned by a platform team | Every team queues to add a field | Merged API with auto-merge |
-| No batching under list fields | Latency and cost grow with list size | `maxBatchSize`; test with production-sized lists |
-| Monitoring only HTTP status on GraphQL | Broken fields invisible | Metric filter on `errors` |
-| Thick events with personal data | Regulated data in every queue and log | Thin events |
-| No `events:source` condition | Services can impersonate each other | Condition key per service role |
-| Non-idempotent consumers | Duplicate orders and double charges | Idempotency keys ([4.3](topic3.md#idempotency)) |
-| No reconciliation jobs | Divergence found by customers months later | Scheduled comparison with an alarm |
-| Read model with no rebuild path | A projector bug becomes permanent | Retain events; test the rebuild |
-| Reading an Aurora replica on a read-your-writes path | Users do not see their own change | Read from the writer, or show pending state |
-| No trace propagation across async boundaries | The service map breaks where it matters | Trace ID in event detail and message attributes |
 
 ## Summary
 

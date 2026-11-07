@@ -27,86 +27,11 @@ A fourth concern, **load balancing** (which instance handles this request?), app
 
 ## Why This Service or Concept Exists
 
-### The API management problem
-
-Before managed gateways, every team exposing an API rebuilt the same concerns, each slightly differently:
-
-| Concern | What each team built | Consequence |
-|---|---|---|
-| Authentication | A bespoke token check | Many implementations, many bugs, no central revocation |
-| Rate limiting | An in-process counter, or nothing | One abusive consumer saturates the service |
-| Per-consumer quotas | Usually nothing | No tiered access, no billing by usage |
-| Request validation | Inside the handler | Malformed requests consume compute before rejection |
-| Versioning and documentation | A path prefix and a wiki page | Old versions live forever; docs go stale |
-
-None of these differentiate a business. API Gateway turns them into **configuration**, and rejects bad or excessive traffic **before** it costs you compute.
-
-### The service-discovery problem
-
-On physical servers, service B's address sat in service A's config file because it never changed. Containers broke that assumption:
-
-- a Fargate task in `awsvpc` mode gets a fresh private IP each time it starts;
-- a Kubernetes Pod's IP lives only as long as the Pod;
-- an Auto Scaling group replaces instances continuously.
-
-The set of valid addresses for one logical service changes many times a day. Something must keep track of it.
-
-Plain DNS is a poor fit for three reasons:
-
-1. It carries no metadata beyond an address.
-2. Clients control caching and frequently ignore TTLs.
-3. It expresses health only by removing records, which clients notice late.
-
-AWS Cloud Map exists to fix this: a queryable registry with health state and **custom attributes**, which can also publish DNS records for clients that want them.
-
-### The service-mesh problem
-
-With many services calling each other, every service needs the same network behaviour:
-
-- mutual TLS (mTLS), where both sides present automatically rotated certificates, so the callee can authenticate the caller;
-- timeouts, retries and circuit breaking (semantics in [4.3](topic3.md#timeout-retry-with-backoff-and-jitter-circuit-breaker-bulkhead));
-- connection pooling, because TLS handshakes dominate small internal calls;
-- weighted traffic splitting, so a new version can take five per cent of traffic by changing route weights, with no deployment;
-- consistent telemetry per caller–callee pair.
-
-Implemented in code, these become a **shared library**. It must exist for every language, and upgrading it requires coordinated redeploys of every service. That reintroduces the coupling microservices were meant to remove.
-
-A mesh moves this behaviour **out of the process** and into a proxy that intercepts the workload's traffic. The application makes a plain HTTP call; the proxy does the rest.
-
-```mermaid
-flowchart LR
-    subgraph WITHOUT["Without a mesh: behaviour lives in a shared library"]
-        A1["Service A<br/>Java + resilience library v3.4"] -->|"plain HTTP"| B1["Service B<br/>Go + a different library"]
-        A1 -.->|"upgrade requires<br/>coordinated redeploys"| L1["company-common v3.5"]
-        B1 -.-> L1
-    end
-    subgraph WITH["With a mesh: behaviour lives in the proxy"]
-        A2["Service A<br/>any language"] --> P2["Sidecar proxy"]
-        P2 -->|"mTLS, retry, timeout,<br/>circuit break, telemetry"| P3["Sidecar proxy"]
-        P3 --> B2["Service B<br/>any language"]
-        CP["Mesh control plane"] -.->|"pushes configuration"| P2
-        CP -.-> P3
-    end
-```
-
-### Why AWS moved away from App Mesh
-
-AWS App Mesh implemented the classic model: an AWS-managed control plane configuring Envoy sidecars. Its concepts are still the standard concepts. But the sidecar model has real costs:
-
-- a proxy container per task or Pod, multiplied by every replica;
-- an extra hop and longer start-up time;
-- a new failure surface where a misconfigured proxy silently breaks traffic.
-
-App Mesh also did not solve connectivity **across** VPCs and accounts, where large organisations struggle most. AWS split the problem in two:
-
-| Need | Current AWS answer |
-|---|---|
-| Service-to-service inside ECS | **ECS Service Connect**: a managed proxy AWS injects and configures |
-| Across VPCs, accounts and compute types | **Amazon VPC Lattice**: built into the VPC data plane, no sidecars, IAM auth |
-| Full mesh features on Kubernetes | **Istio or Linkerd on EKS** (open source) |
-
-!!! warning "App Mesh is past end of support"
-    AWS ended support for App Mesh on 30 September 2026. It appears here only to explain what a mesh does. Do not choose it for new work. Existing estates should migrate by **traffic path** (in-ECS, cross-boundary, full-mesh), not by mapping resources one-for-one, because the successors use different models.
+- **API management was rebuilt by every team.** Authentication, rate limiting, per-consumer quotas, validation and versioning were reimplemented inconsistently; API Gateway turns them into configuration and rejects bad traffic before it costs compute.
+- **Addresses stopped being stable.** Fargate tasks, Kubernetes Pods and Auto Scaling instances receive new IPs many times a day, so something must track where each logical service currently lives.
+- **Plain DNS is a poor registry.** It carries no metadata, clients cache it beyond its TTL, and it signals health only by removing records; Cloud Map adds a queryable registry with health state and custom attributes.
+- **Shared resilience libraries recouple services.** Implementing mTLS, timeouts, retries, traffic splitting and telemetry in a library per language forces coordinated redeploys, so a mesh moves that behaviour into a proxy outside the process.
+- **AWS moved away from App Mesh.** Sidecars add per-replica cost, an extra hop and a new failure surface, and App Mesh never solved cross-VPC connectivity, so AWS now answers with ECS Service Connect inside ECS, VPC Lattice across VPCs and accounts, and Istio or Linkerd on EKS; App Mesh reached end of support on 30 September 2026.
 
 ## Core Concepts
 
@@ -358,7 +283,7 @@ For teams on EKS that need full mesh features (header-based routing, fault injec
 |---|---|
 | **Do you need a mesh at all?** | Start with none. Service Connect for ECS, Lattice across boundaries, a full mesh only for a named requirement |
 | **mTLS mode** | Permissive during migration; strict once every workload is enrolled, verified with a negative test |
-| **Retries and timeouts** | Configure retries in **one** layer only (mesh or application), and fit them inside the caller's deadline ([4.3](topic3.md#timeout-retry-with-backoff-and-jitter-circuit-breaker-bulkhead)) |
+| **Retries and timeouts** | Configure retries in **one** layer only (mesh or application), and fit them inside the caller's deadline ([4.3](topic3.md#retries-with-backoff-and-jitter)) |
 | **Outlier detection** | Always cap the maximum ejection percentage |
 | **Connection pool limits** | Per-destination caps act as a bulkhead |
 | **Traffic split weights** | Start at 1–5%, watch errors and latency, automate the abort |
@@ -369,74 +294,17 @@ For teams on EKS that need full mesh features (header-based routing, fault injec
 
     **Outlier detection without an ejection cap**: when a shared dependency degrades, every endpoint errors, every endpoint is ejected, and no healthy targets remain.
 
-## Design Considerations
-
-### Choosing the right tool
-
-```mermaid
-flowchart TD
-    A["Who is the caller?"] -->|"a consumer you do not operate"| B["Need per-consumer quotas,<br/>keys, validation or metering?"]
-    A -->|"your own web or mobile client"| F["API Gateway HTTP API,<br/>or ALB at very high volume"]
-    A -->|"another of your services"| D["Does the call cross a VPC,<br/>account or compute boundary?"]
-    B -->|"yes"| E["API Gateway REST API"]
-    B -->|"no"| F
-    D -->|"no, inside ECS"| H["ECS Service Connect"]
-    D -->|"no, inside EKS"| I["Kubernetes Service"]
-    D -->|"yes"| J["Amazon VPC Lattice"]
-    H --> K["Need header routing, fault injection<br/>or fine-grained L7 policy?"]
-    I --> K
-    K -->|"yes, and a platform team exists"| L["Istio or Linkerd on EKS"]
-    K -->|"no"| M["Stop. Do not install a mesh"]
-```
-
-| | **API Gateway** | **ECS Service Connect** | **VPC Lattice** | **Istio / Linkerd** |
-|---|---|---|---|---|
-| Traffic | North–south | East–west, inside ECS | East–west, across VPCs, accounts, compute | East–west, inside EKS |
-| Proxy in your workload | No | Yes, AWS-managed | No | Yes, you operate it |
-| Authorisation | Authorisers, keys, WAF | Security groups; no L7 policy | IAM auth policies | mTLS identity and L7 policy |
-| Traffic shifting | Canary stages | ECS native blue/green, linear and canary deployments, with header-based test traffic to the new revision | Weighted target groups | Rich, header-aware |
-| Choose when | External consumers need governance | ECS services call each other | Calls cross boundaries or need IAM-based auth | A named requirement only a full mesh meets |
-| Main cost | Per request (REST > HTTP) | Proxy CPU and memory | Hourly plus data processed | Proxies plus a platform team |
-
-AppSync for first-party clients with over-fetching problems is covered in [4.1](topic1.md).
-
 ## AWS Best Practices
 
-| Pillar | Practice |
-|---|---|
-| **Operational Excellence** | Define APIs contract-first in OpenAPI, held in version control. Use one access-log format across all APIs. Measure usage per API key per version before retiring a version |
-| **Security** | Authenticate at the edge, authorise at both rings. Keep backends private behind VPC links. Express east–west permission as identity, not CIDR ranges |
-| **Reliability** | Set throttles from measured capacity. Timeouts everywhere, retries in one layer. Never put a discovery API call on the request path |
-| **Performance Efficiency** | Cache authoriser results. Reuse connections. Use direct service integrations instead of pass-through Lambdas |
-| **Cost Optimization** | HTTP over REST where features allow. No internal traffic through the gateway. Share one ALB across services |
+- **Operational Excellence:** define APIs contract-first in OpenAPI under version control, and use one access-log format across all APIs.
+- **Operational Excellence:** measure usage per API key per version before retiring a version, so no consumer is cut off unannounced.
+- **Security:** authenticate at the edge and authorise in both rings, keeping backends private behind VPC links.
+- **Security:** express east-west permission as service identity (IAM or mTLS), not as CIDR ranges.
+- **Reliability:** set throttles from measured capacity, put timeouts everywhere and retries in one layer only, and never place a discovery API call on the request path.
+- **Performance Efficiency:** cache authoriser results, reuse connections, and prefer direct service integrations to pass-through Lambda functions.
+- **Cost Optimization:** choose HTTP APIs over REST APIs where the features allow, and keep internal traffic out of the gateway.
 
-## Security Considerations
-
-- **API keys are not credentials.** They travel in a header and can be extracted from any client. A method protected only by a key is effectively public. Always pair keys with a real authoriser.
-- **Authoriser cache TTL is a security setting.** A longer TTL lowers latency but extends how long a revoked token still works. Choose it from the revocation requirement; use short-lived tokens where revocation must be immediate.
-- **Private needs two parts.** A private endpoint type plus a resource policy restricting `aws:SourceVpce`.
-- **The cache key is a security control.** Caching a per-user response without identity in the key serves one user's data to another, and is invisible when testing with one account.
-- **East–west authorisation differs by model.** An App Mesh backend list is a coarse allow-list; an Istio `AuthorizationPolicy` is per path and method; a Lattice auth policy is an IAM policy with CloudTrail and condition keys. All require **one IAM role per service**: you cannot authorise by principal if services share one.
-
-## Operating It: Performance, Cost and Monitoring
-
-### Performance
-
-- **Cache the Lambda authoriser.** Without caching, its full latency (including cold starts) is added to every request. This is often the single largest latency win.
-- **Reuse connections and remove hops.** Service Connect and mesh proxies pool connections, and client-side balancing removes the internal load balancer hop.
-- **Compare `Latency` with `IntegrationLatency`.** The difference is the gateway's own overhead. If `Latency` grows and `IntegrationLatency` does not, look at the authoriser or mapping template.
-- **Watch the proxy itself.** An under-provisioned Envoy causes application latency with no application cause.
-
-### Cost: three lessons
-
-!!! tip "The structural cost lessons"
-    1. **The gateway is for external traffic.** Routing internal calls through it is the most expensive mistake available here; per-request cost at internal volume can exceed the compute behind it.
-    2. **REST versus HTTP has a real price difference.** Ask whether you need keys, usage plans, validation, caching, resource policies or WAF. If not, use HTTP.
-    3. **Sidecar overhead is invisible in the bill.** It appears as ordinary Fargate or EC2 cost. Multiply the proxy's CPU and memory reservation by the replica count before adopting a mesh.
-
-Other common leaks: an API Gateway cache that is rarely hit (charged per hour regardless), one ALB per service instead of a shared one, `DiscoverInstances` per request, and execution logs with no retention policy.
-
-### Monitoring
+## Monitoring and Observability
 
 | Metric | Source | What it tells you |
 |---|---|---|
@@ -449,31 +317,6 @@ Other common leaks: an API Gateway cache that is rarely hit (charged per hour re
 
 !!! tip "The most useful east–west dashboard"
     A caller-by-callee grid of request rate, error rate and p99 latency, available from Service Connect, mesh or Lattice metrics without touching application code. It turns "the catalogue service is unhealthy" into "the orders service is causing it". Propagate X-Ray trace context through every hop so traces start at the gateway ([7.1](../unit7/topic1.md)).
-
-## Integration with Other AWS Services
-
-| Service | Why it integrates |
-|---|---|
-| **CloudFront, WAF, Shield** | Edge caching and protection; required for WAF on HTTP APIs |
-| **ECS, EKS** | Workloads behind the gateway; Service Connect and the Gateway API Controller |
-| **SQS, DynamoDB, Step Functions** | Direct API Gateway integrations without Lambda |
-| **Resource Access Manager** | Shares Lattice service networks across accounts |
-| **PrivateLink** | One-to-one private exposure; Lattice is the many-to-many generalisation |
-| **CodeDeploy, CodePipeline** | Deployment strategies that use traffic shifting ([5.2](../unit5/topic2.md)) |
-
-## Common Architecture Patterns
-
-| Pattern | What it is | AWS implementation |
-|---|---|---|
-| **API gateway** | One managed entry point for auth, throttling, validation and routing. Avoid one central team owning all config | API Gateway with per-team base-path mappings on a custom domain |
-| **BFF at the edge** | A client-specific API per frontend, owned by the client team (defined in [4.1](topic1.md)) | Separate HTTP APIs or AppSync per client type |
-| **Gateway offloading** | Move TLS, auth, validation, caching and filtering to the edge | CloudFront, WAF, API Gateway authorisers and validators |
-| **Canary / traffic shifting** | Send a small share of traffic to a new version; automate the abort | API Gateway canary stages, ALB weighted target groups, Lattice weights, mesh routes |
-| **Sidecar** | Helper container for cross-cutting concerns | Service Connect proxy, Envoy, log routers |
-| **Client-side discovery and balancing** | Caller's proxy holds healthy endpoints | Service Connect, mesh sidecars |
-| **Ambassador** | A proxy giving an unmodifiable legacy app TLS, retries and telemetry | A sidecar in front of outbound calls |
-
-Strangler fig and anti-corruption layer are covered in [4.1](topic1.md); circuit breakers, retries, bulkheads and timeouts in [4.3](topic3.md#timeout-retry-with-backoff-and-jitter-circuit-breaker-bulkhead). A mesh, Service Connect or Lattice can enforce timeouts, retries, outlier ejection (a circuit breaker) and connection-pool limits (a bulkhead) at the network layer, but each must be implemented **once**.
 
 ## Industry Use Cases
 
@@ -496,38 +339,6 @@ Strangler fig and anti-corruption layer are covered in [4.1](topic1.md); circuit
 | **Service Connect** | Discovery, balancing, pooling and per-caller metrics with no proxy config | ECS only; limited L7 features |
 | **VPC Lattice** | Cross-account, cross-VPC, overlapping CIDRs, IAM auth, no sidecars | Not a full mesh; hourly charges uneconomic for small single-VPC estates |
 | **Full mesh** | Uniform mTLS, resilience and telemetry in any language; traffic shifting in seconds | Proxy per replica, control plane, CA and upgrades; harder debugging (failures look like connection resets) |
-
-## Common Mistakes
-
-### Beginner Mistakes
-
-| Mistake | Why it is wrong | What to do instead |
-|---|---|---|
-| Routing internal traffic through API Gateway | Doubles cost, adds a hop, consumes external quotas | Service Connect, an internal ALB, or VPC Lattice |
-| Choosing HTTP API, then needing usage plans or caching | HTTP APIs lack them | Decide from the feature list first |
-| Treating an API key as authentication | It is a metering identity | Pair with IAM, Cognito, JWT or a Lambda authoriser |
-| Expecting to attach WAF directly to an HTTP API | Not supported | Put CloudFront in front and attach WAF there |
-| Planning a REST API VPC link to a Cloud Map service | REST VPC links reach an NLB or ALB only | Use an HTTP API, or front the service with an NLB/ALB |
-| Lambda authoriser with no result caching | Full latency and cost on every request | Set a TTL from the revocation requirement |
-| Caching per-user responses without identity in the key | Serves one user's data to another | Include identity in the cache key, or do not cache |
-| "Private" endpoint with no resource policy | Not private as assumed | Add a resource policy on `aws:SourceVpce` |
-| Trusting DNS TTL to refresh clients | Many clients cache for the process lifetime | Proxy-based discovery for high-churn services |
-| Treating VPC Lattice as a mesh, or as the same as PrivateLink | Lattice lacks mesh features; PrivateLink is one-to-one exposure | Pick by requirement: Lattice for many-to-many routing with IAM auth |
-| Installing a mesh with no named requirement | Large permanent cost for unused features | Start with none; add only for a specific need |
-| Choosing App Mesh for new work | Past end of support | Service Connect, VPC Lattice, or Istio/Linkerd |
-
-### Production Mistakes
-
-| Mistake | Consequence | Remedy |
-|---|---|---|
-| Throttles set to round numbers | A stampede reaches an exhausted backend | Derive from concurrency, connections and load tests |
-| Retries in both mesh and application | Multiplied load during failures | Choose one layer; disable the other explicitly |
-| Outlier detection with no ejection cap | A correlated failure ejects the whole fleet | Cap ejection well below half |
-| Switching mTLS to strict before full enrolment | Silent breakage of unenrolled callers | Enrol, run a negative test, then switch |
-| Lattice auth policy deployed without checks | Legitimate callers denied at cutover | Stage it, alarm on denials, test with real caller roles |
-| Execution logging with data tracing in production | Request bodies in logs: cost and data-protection risk | Access logs with reviewed fields; `ERROR` level |
-| No canary on partner-facing changes | A breaking change reaches every integrator at once | Canary stages with automatic rollback |
-| Retiring an API version without usage data | An unknown partner breaks | Meter per key per version; publish a deprecation window |
 
 ## Architecture Diagrams
 

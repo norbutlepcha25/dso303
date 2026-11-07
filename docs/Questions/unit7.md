@@ -151,41 +151,41 @@
         - **Query model:** Athena (with Glue tables) for occasional regulatory queries; CloudWatch remains the operational store.
         - **Cost:** stream charge per metric update plus Firehose and very low archive storage; queries are paid per scan, so partitioning matters.
 
-3. Evaluate the risks of publishing telemetry through a NAT gateway from private subnets for a fleet of 500 Fargate tasks, and design a private, resilient telemetry path.
+3. A university portal serves students in several countries. Design a user-experience monitoring approach that combines CloudWatch Synthetics (including multilocation canaries), CloudWatch RUM and Internet Monitor. For each, state a failure it detects that the others miss, and describe the privacy controls RUM requires.
 
     ??? success "Check your answer"
 
         A good answer covers:
 
-        - **NAT risks:** a single NAT gateway is an AZ failure point; data processing charges per GB on large telemetry volumes; port exhaustion at high connection counts.
-        - **Security:** telemetry leaves through the public endpoint path and depends on internet routing.
-        - **Design:** interface VPC endpoints for CloudWatch Logs, monitoring, X-Ray and other telemetry APIs in every AZ, with endpoint policies.
-        - **Resilience:** asynchronous, bounded telemetry buffers (non-blocking log drivers, collector queues) so telemetry failure never blocks requests.
-        - **Cost:** compare endpoint hourly and per-GB charges with NAT processing; endpoints are usually cheaper at this scale.
+        - **Synthetics:** scheduled canaries (API and GUI workflow blueprints) on log-in and results journeys detect DNS, certificate, CDN and dependency failures even with zero users; multilocation canaries that require failures from more than one location reduce false alarms.
+        - **RUM:** real users' page loads, Core Web Vitals and JavaScript errors segmented by browser, device and country reveal slow experience for particular networks or devices that a scripted canary never exercises.
+        - **Internet Monitor:** health events by city-network answer "is it us or the internet?" when an ISP or regional network problem affects users while the application itself is healthy.
+        - **Privacy:** RUM data is personal data; mask form fields, sample sessions, use a narrowly scoped Cognito unauthenticated role, and state collection in the privacy policy, especially if session replay is used.
+        - **Cost:** canary cost is fixed and controllable, RUM cost grows with traffic and is controlled by session sampling.
 
-4. A company is migrating from a self-hosted Prometheus and Grafana stack to AWS. Compare three target architectures: CloudWatch-native (Container Insights and Application Signals), Amazon Managed Service for Prometheus with Amazon Managed Grafana, and CloudWatch OpenTelemetry metrics with PromQL. Recommend one for a team of five engineers and justify it.
-
-    ??? success "Check your answer"
-
-        A good answer covers:
-
-        - **CloudWatch-native:** least operations and fastest start, AWS-integrated alarms; requires relearning dashboards and queries.
-        - **AMP with Managed Grafana:** keeps PromQL, existing dashboards and exporters; managed scaling; two more services to pay for and integrate with CloudWatch alarms.
-        - **CloudWatch OpenTelemetry metrics with PromQL:** keeps PromQL on a CloudWatch-native backend with OTLP ingestion; newer, so feature parity must be verified.
-        - **Recommendation for five engineers:** minimise operational load; for example AMP with Managed Grafana if existing dashboards and alerts are a large investment, otherwise CloudWatch-native; justify by migration effort, skills and cost.
-        - **Criteria:** query language continuity, alerting, multi-account support, cost per series and team capacity.
-
-5. After an incident, you discover that a canary had been failing for three weeks because its test account password expired, and nobody noticed. Perform a post-incident analysis and propose technical and organisational controls to ensure that monitoring itself is monitored.
+4. Explain how CloudWatch Application Signals produces RED metrics, an application map and SLOs for services on Amazon ECS, Amazon EKS and AWS Lambda, and evaluate which monitoring needs of a microservices platform still require EMF or OpenTelemetry custom metrics.
 
     ??? success "Check your answer"
 
         A good answer covers:
 
-        - **Timeline and impact:** establish when the canary started failing, why its failures paged nobody and what it would have caught.
-        - **Root causes:** credential with expiry and no rotation, alarm missing or routed to an unwatched channel, failures accepted as noise.
-        - **Technical controls:** store test credentials in Secrets Manager with rotation; alarm on canary `SuccessPercent` and on missing canary runs; meta-monitoring of alarm states and canary health.
-        - **Organisational controls:** owner for every monitor, periodic review of alarms in `ALARM` or `INSUFFICIENT_DATA`, game days that confirm monitors fire.
-        - **Blameless review:** actions tracked to completion.
+        - **Mechanism:** ADOT auto-instrumentation in the service sends OTLP spans and metrics to the CloudWatch agent, which publishes call volume, latency percentiles, faults, errors and availability per service and operation in the `ApplicationSignals` namespace.
+        - **Platforms:** the CloudWatch Observability add-on on EKS, the ADOT SDK plus an agent sidecar or daemon on ECS and EC2, and an ADOT Lambda layer enabled per function.
+        - **Outputs:** an automatically discovered application map, SLOs and burn rates on the standard signals, and correlation with X-Ray traces, canaries, RUM and change events.
+        - **Value:** consistent names and dimensions across languages and platforms, replacing hand-built RED metrics on every endpoint.
+        - **Remaining gaps:** business KPIs such as orders placed or payments declined, and domain-specific counters, still need EMF or OpenTelemetry custom metrics with bounded dimensions.
+
+5. Design the CloudWatch agent deployment for 300 EC2 instances in 20 Auto Scaling groups that need memory and disk alarms. Cover the metrics collected, the use of `append_dimensions` and `aggregation_dimensions`, the cardinality and cost effect of each, and how the configuration is stored and distributed.
+
+    ??? success "Check your answer"
+
+        A good answer covers:
+
+        - **Why the agent:** the hypervisor cannot see guest memory or file-system usage, so `mem_used_percent` and disk `used_percent` require the agent.
+        - **append_dimensions:** adding `InstanceId` and `AutoScalingGroupName` creates one series per instance (about 300 per metric), useful for drill-down but multiplying custom metric cost.
+        - **aggregation_dimensions:** `[["AutoScalingGroupName"]]` also publishes 20 fleet-level series, which are what alarms should use; consider dropping per-instance series if drill-down is not needed.
+        - **Interval:** a 60-second collection interval matches standard resolution; local aggregation in the agent controls cost.
+        - **Distribution:** store the JSON configuration in Systems Manager Parameter Store and apply it with Run Command or State Manager, or bake it into the launch template, so new instances are configured automatically.
 
 ### 7.1.2 Distributed Tracing with AWS X-Ray
 
@@ -328,17 +328,17 @@
         - **Retention:** classic X-Ray keeps 30 days; Transaction Search retention follows the `aws/spans` log group setting.
         - **Recommendation:** tail sampling in a gateway (or Transaction Search at 100 per cent span ingestion) for the payment path, with error traces retained 30 days; adaptive sampling elsewhere.
 
-3. A saga spanning Step Functions, EventBridge and three microservices occasionally leaves orders in an inconsistent state. Explain how you would use tracing, annotations and correlation IDs to reconstruct failed sagas, and what changes to instrumentation are required.
+3. An order pipeline uses API Gateway, a Lambda function, an SNS topic fanning out to two SQS queues, an EventBridge bus, a Kinesis data stream and a Lambda consumer that reads SQS messages in batches of ten. Explain, hop by hop, how trace context travels or fails to travel, where manual propagation is required, how the batch consumer should be represented, and how X-Ray groups and Insights can monitor the pipeline.
 
     ??? success "Check your answer"
 
         A good answer covers:
 
-        - **Correlation:** a saga or correlation ID generated at the start and carried through every event, message and state machine execution.
-        - **Tracing:** enable Step Functions tracing and EventBridge propagation; annotate spans with `order_id` and `saga_id`.
-        - **Reconstruction:** query traces by annotation, and logs by correlation ID, to see which steps and compensations ran.
-        - **Instrumentation changes:** propagate context through all producers, log every state transition with the ID, record compensation outcomes and use span links for asynchronous hops.
-        - **Detection:** alarm on sagas that start but do not complete within the expected time.
+        - **Synchronous hops:** API Gateway and Lambda propagate the trace header automatically when tracing is enabled.
+        - **SNS and SQS:** enable active tracing on the topic; the header travels to SQS in the `AWSTraceHeader` system attribute, which custom consumers must request and extract.
+        - **EventBridge and Kinesis:** EventBridge passes the trace header to supported targets; Kinesis has no automatic propagation, so context must be written into the record payload and extracted manually.
+        - **Batch consumer:** one span cannot have ten parents, so the batch span uses span links to each producer span.
+        - **Monitoring:** a group defined by a filter expression for the pipeline's services gets its own trace map and metrics, and X-Ray Insights detects anomalous fault rates for the group and notifies through EventBridge.
 
 4. Estimate the monthly span ingestion volume for a service handling 2,000 requests per second with 25 spans per request at an average of 1 KB per span under 100 per cent sampling, and propose a sampling and indexing strategy that balances completeness and cost.
 
@@ -483,29 +483,30 @@
 
 #### Advanced Questions
 
-1. Design health checks and failover for an active-active two-Region API on API Gateway, Lambda and DynamoDB global tables, including how a partial Regional failure (one dependency degraded) should or should not trigger failover.
+1. A three-AZ ALB service must stop sending traffic to a zone in which fewer than half of the targets are healthy. Explain how the unhealthy state routing threshold, the DNS failover threshold, fail-open behaviour and automatic target weights work together to achieve this, and what capacity the design requires.
 
     ??? success "Check your answer"
 
         A good answer covers:
 
-        - **Health checks:** Route 53 checks or alarm-based checks on each Region's API symptom metrics (5xx rate, latency) and a canary per Region.
-        - **Routing:** latency or weighted records with health checks, so an unhealthy Region is removed automatically.
-        - **Partial failure:** a degraded dependency should trigger failover only if customers in that Region cannot be served; use symptom-based thresholds and calculated checks to avoid failing over for a minor feature.
-        - **Data:** DynamoDB global tables accept writes in both Regions; design for conflict resolution and replication lag.
-        - **Safety:** avoid flapping with sufficient thresholds; test failover regularly.
+        - **Per-target checks:** remove individual unhealthy targets, but cannot express a zone-level decision.
+        - **Unhealthy state routing threshold:** when the healthy count or percentage in a zone falls below it, the load balancer fails open within that zone and routes to all its targets.
+        - **DNS failover threshold:** when healthy targets fall below it, the load balancer node's IP is marked unhealthy in DNS so Route 53 stops returning that zone's node and clients move to other zones; setting it at 50 per cent implements the requirement.
+        - **Fail open:** if every target in the target group is unhealthy, the ALB routes to all targets, which is why the checks must not depend on shared dependencies.
+        - **Automatic target weights:** reduce traffic to targets with anomalous error rates even while they pass health checks.
+        - **Capacity:** the remaining zones need enough headroom (static stability) to absorb the shifted traffic.
 
-2. Analyse a gray failure in which one Availability Zone's targets pass health checks but return errors for 10 per cent of requests. Which AWS mechanisms detect and mitigate it, and how would you design alarms and automation around them?
+2. A serverless API on API Gateway and Lambda is deployed in two Regions behind Route 53 failover routing. Lambda has no health checks. Design how the health of each Region is established and supplied to Route 53, comparing an endpoint check on a `GET /health` route, CloudWatch alarm-based health checks and calculated health checks, and explain how Route 53 decides that an endpoint is healthy.
 
     ??? success "Check your answer"
 
         A good answer covers:
 
-        - **Problem:** target health checks pass because they do not exercise the failing path; only 10 per cent of real requests fail.
-        - **Detection:** per-AZ ALB metrics (`HTTPCode_Target_5XX_Count`, latency), Application Signals, canaries per AZ, CloudWatch zonal autoshift or outlier detection.
-        - **Mitigation:** ARC zonal shift to move traffic away from the AZ; ALB automatic target weights (anomaly mitigation).
-        - **Alarms:** compare AZ error rates with the others, composite alarms for one AZ diverging.
-        - **Automation:** responder or zonal autoshift that shifts traffic and notifies, with static stability capacity in remaining AZs.
+        - **No instances to probe:** Lambda replaces unhealthy execution environments itself, so Regional health comes from metrics (`Errors`, `Throttles`, `Duration` p99, API Gateway `5XXError`) and canaries.
+        - **Endpoint check:** a mock `GET /health` integration proves only that API Gateway, the custom domain and TLS work; a Lambda integration performs a deeper check of the Regional stack.
+        - **Alarm-based checks:** CloudWatch alarm health checks on each Region's 5xx rate and Lambda errors capture user-visible harm and work for resources global checkers cannot reach.
+        - **Calculated check:** combine the children so that a Region is unhealthy only when, for example, two of three signals fail, avoiding failover for a minor feature.
+        - **Route 53 decision:** checkers in several Regions probe every 30 or 10 seconds with a failure threshold (default 3), and the endpoint is healthy if more than 18 per cent of checkers report healthy.
 
 3. A team proposes that the ALB health check should verify the database, the cache and two downstream services "to be safe". Write the architectural review response, including a failure scenario, the correct alternative design and the metrics that will show it works.
 
@@ -715,17 +716,18 @@
         - **Saving estimate:** if ERROR and WARN are about 10 per cent of 100 GB per day, CloudWatch ingestion drops from about USD 1,500 to about USD 150 per month; Firehose and S3 add a much smaller per-GB cost.
         - **Trade-off:** full-text search of all events now requires Athena rather than Logs Insights.
 
-5. A security team wants automatic blocking of IP addresses after 20 failed logins in five minutes across 30 services. Compare a metric filter with an alarm, a subscription filter with Lambda, and a Logs Insights scheduled query, and design the preferred solution with its failure modes.
+5. A legacy Java application writes unstructured text logs that occasionally contain email addresses and card numbers, and it cannot be modified for six months. Design how CloudWatch Logs log transformation, data protection policies, metric filters, subscription filters and a log anomaly detector should be combined so that the logs are normalised, sensitive data is masked, errors drive alarms and a copy reaches a central security pipeline. State the limits of each feature.
 
     ??? success "Check your answer"
 
         A good answer covers:
 
-        - **Metric filter with alarm:** counts failures but cannot identify which IP or act per IP.
-        - **Subscription filter with Lambda:** near real time per-event processing; can count by IP (in DynamoDB with TTL) and update a WAF IP set.
-        - **Scheduled query:** simple, but delay of the schedule interval and per-GB scan cost.
-        - **Preferred:** subscription filter to Lambda (or Kinesis) feeding a counter and blocking through AWS WAF IP sets with expiry, or WAF rate-based rules where possible.
-        - **Failure modes:** Lambda throttling, false positives behind NAT, blocking legitimate users; include allow lists, expiry and alerts.
+        - **Transformation:** a transformer with a Grok or key-value parser converts text lines to JSON at ingestion, so metric filters, subscription filters, field indexes and queries see structured fields without redeploying the application.
+        - **Data protection:** a data protection policy with managed identifiers masks emails and card numbers for anyone without `logs:Unmask`, with findings sent to an audit destination; it is probabilistic, charged per GB scanned and a safety net, not a design.
+        - **Metric filters:** count ERROR events into a metric that drives an alarm.
+        - **Subscription filters:** stream a copy to a cross-account destination (Kinesis or Firehose) for the security pipeline; the payload is gzip-compressed and Base64-encoded.
+        - **Anomaly detector:** learns normal patterns and flags new error patterns, complementing alarms on known errors.
+        - **Remediation:** treat every masking finding as a defect to fix when the application can be changed.
 
 ### 7.2.2 Log Analysis with Amazon CloudWatch Logs Insights
 
@@ -1416,17 +1418,17 @@
         - **Harm detection:** incidents where automation worsened impact, loops, action counts per hour, alerts when actions exceed limits.
         - **Review:** post-incident reviews include automation behaviour.
 
-4. A GuardDuty finding triggers isolation of an EKS worker node. Design the full workflow, including Kubernetes-level actions, evidence preservation, capacity replacement and the permissions required.
+4. Design a ChatOps capability with Amazon Q Developer in chat applications for a production incident channel. Include the notification sources, custom action buttons that invoke responders, the permission model, and the risks of omitting guardrail policies, and explain how the design affects MTTA and MTTM.
 
     ??? success "Check your answer"
 
         A good answer covers:
 
-        - **Trigger:** GuardDuty finding through EventBridge to Step Functions.
-        - **Kubernetes actions:** cordon the node, label or isolate pods with network policies, drain or evict non-affected workloads.
-        - **Evidence:** EBS snapshots, memory capture if possible, retain the node with an isolating security group; preserve logs.
-        - **Capacity:** Auto Scaling or Karpenter replaces the node; detach from the node group without terminating.
-        - **Permissions:** EC2 (security groups, snapshots, tags), EKS access for cordon and drain, least privilege and audit.
+        - **Notifications:** alarms, composite alarms, EventBridge rules (GuardDuty, Health, CodePipeline) and responder outcomes published to SNS topics subscribed by the channel, with custom notifications carrying runbook and dashboard links.
+        - **Custom actions:** buttons that invoke named Lambda responders (roll back, scale, capture evidence) or run defined CLI commands, turning an alert into a one-click response.
+        - **Permissions:** a channel role shared by all members or user-level roles for attributable actions, always intersected with channel guardrail policies restricted to read-only actions plus the intended remediation actions.
+        - **Risk without guardrails:** every member, including guests or compromised chat accounts, effectively holds the channel role's permissions.
+        - **Effect:** shared context and one-click actions shorten acknowledgement and mitigation, and the channel provides a timeline for the post-incident review; keep production channels small and private.
 
 5. Explain how you would use AWS Fault Injection Service, EventBridge archive and replay, and recorded events to build a continuous test suite for responders, and how that suite fits into the CI/CD pipeline from Unit V.
 
@@ -1579,16 +1581,18 @@
         - **Rollout:** apply to non-production first, then canary groups in production with monitoring and rollback.
         - **Governance:** change records and owner approval for each change.
 
-3. A multi-tenant SaaS platform wants to report cost per tenant and latency per tenant. Design the telemetry, dimensions and analysis without creating a cardinality explosion.
+3. An Aurora PostgreSQL production cluster with 8 vCPUs shows DB load of 14 average active sessions during peak hours, and API p99 latency has doubled. Explain how you would interpret this with CloudWatch Database Insights, the likely remedies if the dominant wait category is CPU, I/O reads or locks, and whether Standard or Advanced mode is justified.
 
     ??? success "Check your answer"
 
         A good answer covers:
 
-        - **Tenant ID:** in logs and trace annotations, not as a metric dimension for all tenants.
-        - **Aggregated metrics:** dimensions such as tenant tier, not tenant ID.
-        - **Analysis:** Logs Insights or Contributor Insights for per-tenant latency and top tenants.
-        - **Cost per tenant:** combine usage logs with cost allocation tags and the Cost and Usage Report, processed in Athena.
+        - **Interpretation:** DB load above the vCPU count means sessions are queuing; the dominant wait category decides whether more CPU would help at all.
+        - **CPU:** find top SQL by CPU for missing indexes, full scans or inefficient joins, then consider a larger or Graviton instance.
+        - **I/O reads:** the working set exceeds memory; add indexes, cache with ElastiCache, scale memory or add read replicas.
+        - **Locks:** look for long transactions, hot rows and missing indexes on foreign keys.
+        - **Workflow:** start from the Application Signals latency alarm, slice DB load by SQL and host, compare with a baseline period, apply the remedy through IaC and verify.
+        - **Mode:** Advanced mode is justified for a production database behind a customer-facing SLO because it adds execution plans, per-query statistics and lock analysis; Standard suits development databases.
 
 4. Design a CI/CD performance gate that is reliable despite natural variance in load-test results. Discuss baselines, statistical thresholds, test duration and false failures.
 

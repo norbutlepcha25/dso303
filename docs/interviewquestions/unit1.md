@@ -20,13 +20,13 @@
 
     The constant responsible is the speed of light in optical fibre, roughly two thirds of its speed in a vacuum, adding about 5 microseconds per kilometre each way. No engineering removes it, so multi-Region data designs accept asynchronous replication with an RPO above zero (for example Aurora Global Database or S3 Cross-Region Replication), or accept slow cross-Region writes.
 
-**3. What is static stability, and why does it matter during an AZ event?**
+**3. Distinguish high availability, fault tolerance and disaster recovery, and explain how RTO and RPO decide which disaster-recovery strategy to use.**
 
 ??? success "Model answer"
 
-    Static stability means a system keeps working through a failure without needing to change anything: no new launches, no configuration updates and no control-plane API calls. Capacity and routing that will be needed during the failure are already in place before it happens.
+    High availability means the system keeps operating when a component fails, possibly with brief degradation; a multi-AZ deployment behind a load balancer or an RDS Multi-AZ failover is the typical mechanism. Fault tolerance is stricter: the system keeps operating with no user-visible interruption, which requires active-active redundancy, as S3 achieves by storing every object across at least three AZs. Disaster recovery is different in kind: it restores service in another location, normally another Region, after a large-scale event that multi-AZ design cannot absorb.
 
-    It matters during an AZ event because the control planes you would rely on to recover (Auto Scaling launches, DNS record changes, new instance capacity) may themselves be impaired or congested as every customer tries to recover at once. A statically stable design runs enough spare capacity in the remaining AZs to absorb the lost AZ's share, and relies on data-plane mechanisms such as load balancer health checks to stop sending traffic to the failed zone.
+    Two objectives size the DR design. RTO is how long recovery may take; RPO is how much data loss is tolerable. The strategies form a ladder: backup and restore (hours of RTO, cheapest), pilot light (data replicated, minimal compute), warm standby (a scaled-down full stack) and active-active (a full stack in two Regions, most expensive). The architect picks the cheapest rung that meets both objectives for each workload, rather than one strategy for everything.
 
 ### Scenario Questions
 
@@ -34,19 +34,21 @@
 
 ??? success "Model answer"
 
-    Deploy in the Africa (Cape Town) Region, `af-south-1`, so customer data stays in South Africa, and enforce that with an SCP using `aws:RequestedRegion` so resources cannot be created elsewhere. Run the application across all three AZs in that Region, and use a Multi-AZ database (RDS Multi-AZ or Aurora) whose synchronous replication to another AZ means a fire in one data centre loses no committed data.
+    Deploy in the Africa (Cape Town) Region, `af-south-1`, so customer data stays in South Africa; a Region is an explicit, auditable data boundary, and data does not leave it unless you replicate or move it. Run the application across all three AZs in that Region, and use a Multi-AZ database (RDS Multi-AZ or Aurora) whose synchronous replication to another AZ means a fire in one data centre loses no committed data.
 
-    Host the marketing site in a private S3 bucket served globally through CloudFront with Origin Access Control, so it is fast worldwide without exposing the bucket. Confirm that the marketing site contains no customer data, because CloudFront caches content at edge locations outside the country.
+    Host the marketing site in S3 served globally through CloudFront, so cached copies are delivered from edge locations near users worldwide. Confirm that the marketing site contains no customer data, because CloudFront caches content at edge locations outside the country.
 
     **In short:** af-south-1, Multi-AZ synchronous DB, private S3 + CloudFront for the site.
 
-**5. Your CloudFront hit ratio is 12%. What are the three most likely configuration causes and their fixes?**
+**5. A team runs its production database on a single EC2 instance with one EBS volume, arguing that "EBS is durable, so we are safe". Evaluate the claim.**
 
 ??? success "Model answer"
 
-    The most likely cause is an over-broad cache key: forwarding all cookies, all query strings or headers such as `User-Agent` fragments the cache so almost every request is unique. The fix is a cache policy that includes only the values that actually change the response.
+    The claim confuses durability with availability. An EBS volume is replicated within its Availability Zone, so it is unlikely to lose data through hardware failure, but both the EC2 instance and the volume are zonal resources. If that AZ fails, the database becomes unreachable until the AZ recovers, so the application is down even though the data still exists. Zonal building blocks make multi-AZ resilience the architect's job; AWS does not provide it.
 
-    The second cause is short or zero TTLs, often because the origin sends `Cache-Control: no-cache` or `max-age=0`. Fix the origin headers or set minimum and default TTLs in the cache policy, and use versioned file names so long TTLs are safe. The third cause is that dynamic, uncacheable paths share a behaviour with static content; split them into separate behaviours (for example `/static/*` with long caching and `/api/*` with caching disabled) so the hit ratio of cacheable content is measured and optimised separately. Enabling Origin Shield can also raise the effective hit ratio for globally distributed users.
+    Durability also does nothing against deletion: a `DROP TABLE` or a deleted volume is carried out durably. The fix is a Regional, multi-AZ design: a managed database such as RDS Multi-AZ or Aurora, whose synchronous standby in another AZ takes over automatically, plus automated backups with point-in-time recovery for human error. If self-management must continue, snapshots copied to another Region at least provide disaster recovery.
+
+    **In short:** durable is not available; zonal resources need explicit multi-AZ design and backups.
 
 ### Architecture Questions
 
@@ -58,13 +60,13 @@
 
     For relational data, use Aurora Global Database: storage-level asynchronous replication with typical lag under a second comfortably meets a one-minute RPO, and a secondary cluster can be promoted in minutes. The failover trigger should be health checks on a deep application endpoint feeding Route 53 failover routing (or Application Recovery Controller routing controls), with a documented and rehearsed runbook that promotes the database, scales the standby compute and shifts traffic. Raise service quotas in the standby Region in advance so it can scale when needed.
 
-**7. How would you guarantee that _only_ CloudFront can reach your ALB origin?**
+**7. Walk through how a request from a user in another continent reaches an application running in one AWS Region, naming the role each infrastructure layer plays.**
 
 ??? success "Model answer"
 
-    Put the ALB in a security group that allows inbound HTTPS only from the AWS-managed prefix list for CloudFront origin-facing servers (`com.amazonaws.global.cloudfront.origin-facing`). This blocks direct internet access at the network layer while letting CloudFront reach the origin.
+    The user's browser first asks Route 53, whose DNS servers sit at the edge, to resolve the domain; it returns the address of the CloudFront distribution. The request then reaches the nearest Edge Location, where CloudFront terminates TLS close to the user, AWS WAF and Shield filter malicious traffic, and cacheable content is served immediately from the edge cache. On a miss, CloudFront checks the larger Regional Edge Cache, and only then goes to the origin.
 
-    Because other CloudFront distributions also use those addresses, add a second check: configure CloudFront to send a secret custom header and add an ALB listener rule that forwards only requests carrying that header, returning 403 otherwise, and rotate the secret regularly. Alternatively, CloudFront VPC origins let CloudFront reach an internal ALB in a private subnet, so the load balancer has no public exposure at all. Attaching AWS WAF to the distribution adds application-layer filtering.
+    The origin fetch travels over the AWS private backbone rather than the public Internet, which helps even uncached, dynamic requests. In the Region, an Application Load Balancer spanning several Availability Zones sends the request to a healthy target in one of them, so the failure of one AZ does not stop service. Each layer answers a different problem: the edge answers latency, Availability Zones answer failure, and the Region answers law and geography, because the data stays in the Region chosen for it.
 
 ### Troubleshooting Questions
 
@@ -218,11 +220,13 @@
 
     This is a scaling or health-check thrash loop. The common causes are a health check grace period shorter than the application's boot time, so instances are terminated before they become healthy; a failing user-data bootstrap script; an `ELB` health check pointing at a path that the application does not serve, or one that requires authentication; step or simple scaling policies without adequate cooldown fighting each other; or an unhealthy AMI. Inspect the Auto Scaling activity history, the target group health-check reason codes, and the instance console output.
 
-**5. An EKS pod cannot assume its IAM role and receives `AccessDenied` from the AWS SDK.**
+**5. During a product launch, several unrelated Lambda functions start failing with throttling errors, although none of them changed. What is happening and how do you fix it?**
 
 ??? success "Model answer"
 
-    Verify the full IRSA or EKS Pod Identity chain: the cluster has an OIDC identity provider registered in IAM; the IAM role's trust policy references that provider and constrains the `sub` claim to the correct namespace and service account; the Kubernetes ServiceAccount carries the `eks.amazonaws.com/role-arn` annotation; the pod spec sets `serviceAccountName`; and the SDK version supports web identity token credentials. A frequent error is a trust policy that matches the wrong namespace, which fails silently and falls back to the node instance role.
+    Lambda concurrency is the number of execution environments running at once, and the default limit of 1,000 concurrent executions per account per Region is shared by every function. A launch-day surge in one busy function can consume most of that pool, so other functions are throttled even though their own traffic is normal. CloudWatch confirms this: the `Throttles` metric rises and `ConcurrentExecutions` at account level sits at the limit.
+
+    The immediate fix is to set reserved concurrency on the busy function, which caps its share and guarantees capacity for the others, and to request a quota increase through Service Quotas. For the future, raise the limit before launches and alarm on `Throttles` and account-level `ConcurrentExecutions`. Reserved concurrency on functions that call a relational database also protects the database from connection exhaustion.
 
 ---
 
@@ -262,11 +266,15 @@
 
 ### Scenario Questions
 
-**1. A team stores ten million one-kilobyte log files per day in S3 Standard and complains the bill is dominated by requests. What do you recommend?**
+**1. A web application stores users' uploaded documents on the instance store of its EC2 instances. After a scale-in event, users report that documents have disappeared. Explain and redesign.**
 
 ??? success "Model answer"
 
-    Aggregate the logs into larger compressed objects, ideally per five-minute or hourly window, before writing. This reduces `PUT` request count by orders of magnitude, reduces per-object overheads, and makes subsequent analytics far cheaper because Athena scans fewer, larger files. Kinesis Data Firehose performs this buffering natively.
+    Instance store is disk physically attached to the host. It is fast but ephemeral: its data is lost when the instance stops or terminates. When the Auto Scaling group scaled in, it terminated instances and their documents with them. The design also made the web tier stateful, which defeats elasticity, because no instance could be removed safely.
+
+    Store uploads in Amazon S3, which is Regional across three or more AZs, has no capacity to provision, and is designed for eleven nines of durability. Enable versioning so accidental deletion or overwriting is recoverable, with a lifecycle rule to expire noncurrent versions. If the application needs a shared POSIX directory instead, use EFS with a mount target in each AZ. Instance store should hold only scratch data that can be recreated.
+
+    **In short:** instance store is ephemeral; externalise state to S3 (or EFS) so the tier is stateless.
 
 **2. A relational database on EC2 shows increasing query latency during nightly batch jobs. `BurstBalance` on the gp2 data volume drops to zero at 02:00. What is happening and how do you fix it?**
 
@@ -312,11 +320,13 @@
 
     Stateless services keep no volumes and externalise state to S3 and RDS. Prometheus runs as a StatefulSet with EBS `ReadWriteOnce` persistent volumes provisioned by the EBS CSI driver, using `WaitForFirstConsumer` binding so the volume is created in the zone the pod is scheduled into. Shared configuration or plugin directories used by multiple replicas use an EFS `ReadWriteMany` volume through the EFS CSI driver with an access point per claim. Long-term metrics are shipped to S3 through Thanos or Amazon Managed Service for Prometheus.
 
-**4. A media company must serve five hundred terabytes of video globally at minimum cost while keeping the origin private.**
+**4. Design the storage for a containerised application running in three Availability Zones that has a single-writer database, user-uploaded media shared by all tasks, and backups that must survive both an AZ failure and accidental deletion.**
 
 ??? success "Model answer"
 
-    Store the renditions in S3 with Intelligent-Tiering, serve through CloudFront with Origin Access Control so the bucket is never public, use signed URLs or signed cookies for entitlement enforcement, and set a long cache TTL so the origin request rate and egress cost collapse. Archive masters to Glacier Deep Archive. The dominant saving comes from CloudFront egress pricing being lower than S3 internet egress plus the near-elimination of origin requests.
+    Match each data set to its access pattern and required scope. The database needs low-latency block storage for one writer, so it belongs on EBS (gp3, encrypted) or, better, in a managed database such as RDS Multi-AZ, because a single EBS volume is bound to one AZ. Uploaded media written whole and read by name belongs in S3, which is Regional and survives an AZ failure; if the application genuinely needs a shared file path, EFS with a mount target in every AZ provides shared POSIX access across all tasks.
+
+    Backups address deletion, which durability does not. Automate EBS snapshots with Data Lifecycle Manager or AWS Backup, enable versioning on the media bucket with a lifecycle rule for noncurrent versions, and use Object Lock where records must be immutable. Copy backups to another Region and account so they survive both a Regional event and compromised credentials, and test restores regularly.
 
 **5. Design the storage layer for an IoT platform ingesting one million messages per second.**
 
@@ -344,11 +354,13 @@
 
     Volumes created from snapshots are lazily loaded; blocks are fetched from S3 on first access, so initial reads incur additional latency. Enable Fast Snapshot Restore for that snapshot in the target Availability Zone, or force hydration by sequentially reading the whole device with a tool such as `dd` or `fio` before putting the volume into service.
 
-**4. A user reports `AccessDenied` on `ListObjectsV2` but can successfully `GetObject` on known keys. Why?**
+**4. After an Auto Scaling group replaces a failed instance, the new instance cannot attach the EBS data volume that the old instance used. Why, and how should the design change?**
 
 ??? success "Model answer"
 
-    `s3:ListBucket` is a bucket-level action whose resource must be the bucket ARN, whereas `s3:GetObject` is an object-level action whose resource is the object ARN. The policy almost certainly grants both actions against the object ARN pattern only. Add a statement granting `s3:ListBucket` on the bucket ARN, optionally constrained with the `s3:prefix` condition key.
+    An EBS volume lives in one Availability Zone and can be attached only to an instance in that same AZ. If the Auto Scaling group launched the replacement in a different AZ, the attach fails. Even in the same AZ, a volume can be attached to only one instance at a time in the normal case, and the volume may still be held by the old instance until it is fully detached.
+
+    The immediate workaround is to snapshot the volume and restore a new volume in the replacement instance's AZ, because snapshots are Regional. The better design removes the dependency: keep the instances stateless, and put durable data in S3, EFS or a managed database, all of which are Regional and survive the loss of an AZ.
 
 **5. Storage costs for a bucket are far higher than the sum of visible object sizes. What do you investigate?**
 
@@ -800,21 +812,21 @@
 
     For isolation, use a bridge model: pooled compute and data for standard tenants, with per-tenant concurrency limits or separate queues so one tenant's burst cannot consume shared capacity; dedicated (siloed) stacks or cells for premium or noisy tenants. In data stores, prefix partition keys with the tenant ID and enforce access with IAM conditions such as `dynamodb:LeadingKeys`. For cost attribution, emit tenant-tagged metrics and structured logs, meter usage per tenant (requests, compute duration, storage) and allocate shared costs proportionally, using cost allocation tags for siloed resources.
 
-**3. Design an order-fulfilment system implementing the Saga pattern. Specify compensating actions and how you would make the workflow auditable.**
+**3. Design an event-driven notification architecture for a university in which an `EnrolmentConfirmed` event must reach the email, billing and analytics services. Justify the broker choice, explain how you handle duplicates and failures, and describe what you would monitor.**
 
 ??? success "Model answer"
 
-    Model the order flow as a Step Functions state machine (orchestrated saga): reserve inventory, authorise payment, create shipment, then confirm the order. Each step is a local transaction in its owning service, called through an idempotent API or task with an idempotency key.
+    The enrolment service publishes `EnrolmentConfirmed` once, without knowing its consumers, which removes temporal and location coupling. Either SNS with one SQS queue per consumer (fan-out), or an EventBridge bus with one rule per consumer, routes a copy to each service. EventBridge suits content-based routing and offers archive and replay; SNS with SQS gives each consumer its own buffer so a slow or failed consumer does not affect the others.
 
-    Each step has a compensating action: release the inventory reservation, void or refund the payment, cancel the shipment, and mark the order as cancelled. `Catch` blocks route failures to the compensations in reverse order, and `Retry` with backoff handles transient errors before compensating. Compensations must themselves be idempotent and retriable, with a dead-letter path and alarm for any that cannot complete. For auditability, retain the Step Functions execution history, publish each state transition as an event to an append-only store (for example DynamoDB with streams to S3), log with correlation IDs, and run reconciliation reports confirming every order reached a terminal state.
+    Because SNS, SQS standard queues and EventBridge deliver at least once, every consumer must be idempotent, for example recording processed event IDs with a DynamoDB conditional write so a duplicate never sends a second email or bill. Failures retry and then land in a dead-letter queue. Monitoring treats silent failure as the main risk: alarm on DLQ depth above zero, `ApproximateAgeOfOldestMessage`, Lambda `Errors` and `Throttles`, and EventBridge `FailedInvocations`, and include a correlation ID in structured logs and X-Ray traces so one enrolment can be followed across services.
 
-**4. You must migrate a monolithic Java application to cloud-native over 18 months without a feature freeze. Present your migration strategy.**
+**4. Decompose a monolithic student-information system into microservices. Explain how you choose service boundaries, how data is owned, how you verify that you have not built a distributed monolith, and how the four cloud-native patterns combine in the result.**
 
 ??? success "Model answer"
 
-    Use the strangler fig pattern. Put an API Gateway or ALB in front of the monolith as a routing façade, then move capabilities out one at a time, routing their paths to the new services while everything else still goes to the monolith. Start by rehosting or containerising the monolith so it runs on the same platform and pipeline as the new services.
+    Boundaries follow bounded contexts from Domain-Driven Design: Admissions, Enrolment, Fees and Timetabling each have their own vocabulary and model, and each becomes a service with high cohesion owned by one team. Each service owns its database and exposes data only through its API or its events; a shared database would couple schemas and releases.
 
-    Choose the first extractions by business value and low coupling (for example notifications or catalogue reads), establish observability and CI/CD foundations early, and give each extracted service its own data, synchronised from the monolith through change data capture or events during the transition. Use feature flags and parallel runs to compare outputs before switching traffic. Feature delivery continues throughout because new features are built either in new services or, if necessary, in the monolith, and progress is measured by traffic share moved and deployment frequency. Stop extracting when the remaining monolith is stable and cheap to maintain.
+    The test for a distributed monolith is independent deployability: can each service be deployed to production now without coordinating with another team? Long synchronous call chains and joint releases are warning signs. In the result the patterns interlock: API-first defines what each service promises through contracts enforced at API Gateway; microservices define the decomposition; event-driven communication (for example `EnrolmentConfirmed` on EventBridge) connects services without temporal coupling; and serverless or Fargate capacity provisions compute without managing servers. The trade-off is eventual consistency between services and a greater need for observability.
 
 **5. Design the observability strategy for a system with 30 microservices and heavy asynchronous messaging. Specify metrics, alarms, tracing, and log structure.**
 

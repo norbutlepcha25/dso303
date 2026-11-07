@@ -1,10 +1,5 @@
 # Implementing CI/CD Pipelines on AWS: CodePipeline, ECR and Container Deployment
 
-!!! tip "Classroom demo files"
-    [Download CI/CD source](../downloads/pipeline-source.zip){ download } · [All classroom files](../downloads/cloudboard-classroom.zip){ download }
-
----
-
 ## Definition
 
 **AWS CodePipeline** is a fully managed continuous delivery service that models a release process as a **sequence of stages**, each containing **actions**, with **artefacts** passed between them. It does not build, test or deploy anything itself; it invokes services that do, holds their outputs, and enforces the ordering, the gates and the failure behaviour.
@@ -32,46 +27,12 @@ Around it sit the two other subjects of this chapter. **Amazon ECR** is the arte
 
 ## Why This Service or Concept Exists
 
-### The problem: orchestration is where delivery systems actually fail
-
-[Chapter 5.1](topic1.md)'s three services can be wired together with a shell script: build, then if that succeeded, deploy. Teams do exactly this, and it fails in predictable ways.
-
-**There is no durable state.** If the machine running the script dies mid-release, the release is in an unknown state and nobody knows which environments got the change. **There is no artefact identity.** The script's "the thing we just built" is a local file, so the staging deployment and the production deployment may not be the same bytes. **There is no gate.** Inserting an approval means blocking a shell script on human input, which is neither auditable nor resumable. **There is no failure model.** What happens when stage three fails after stage two succeeded is whatever the script's author thought about, which is usually nothing. And **there is no history**: "what was deployed to production on 14 March and by whom" is answerable only if someone kept the logs.
-
-These are precisely the problems [chapter 4.3](../unit4/topic3.md) identified for business processes and solved with an orchestrator. The same argument applies: **a multi-step process spanning services must live somewhere explicit, with durable state and declarative failure handling**, or it exists only as emergent behaviour that nobody can reason about during an incident.
-
-### The problem: container artefacts need custody, not just storage
-
-A container registry looks like a file store, and treating it as one causes a specific class of incident. The failure is that **tags are mutable pointers**. `myapp:v1.2` can be made to point at different content tomorrow; `myapp:latest` almost certainly will. So "we deployed v1.2 to staging and v1.2 to production" can be true and still describe two different images.
-
-ECR's answer is a set of custody properties rather than storage features: **immutable tags** so a tag once written cannot be repointed, **digests** so an artefact can be named by its content, **scanning** so the artefact's vulnerability state is known and recorded, **lifecycle policies** so accumulation is bounded, and **registry-level replication and permissions** so the same artefact can be consumed across accounts and Regions without being rebuilt.
-
-### The problem: Kubernetes does not want to be deployed to
-
-ECS and EKS both run containers, and the naive conclusion is that they need the same pipeline. They do not, and the reason is structural.
-
-ECS has a **service** resource with a deployment controller. Updating it is an API call against a Regional AWS endpoint, authenticated with IAM. A pipeline can push a change to it from outside using the same identity model as everything else in AWS. This is a natural fit for a push-based pipeline.
-
-Kubernetes has an **API server** holding declared state, and controllers inside the cluster that continuously reconcile actual state toward it. Pushing to it from outside requires network reachability to that API server  frequently private  and an identity mapping between IAM and Kubernetes RBAC. More importantly, pushing fights the model: the cluster is *already* a reconciliation loop, and a push-based pipeline is a second, competing source of truth that cannot detect or correct drift.
-
-The pattern that fits is **GitOps**: the desired state lives in Git, an agent inside the cluster watches it and reconciles continuously. The pipeline's job ends at updating the manifest repository. [Push versus pull deployment](#push-versus-pull-deployment) develops both approaches, because both are legitimate and the choice has real consequences.
-
-### What AWS provides, and what it does not
-
-| Concern | Without an orchestrator | With CodePipeline and ECR |
-|---|---|---|
-| Release state | A shell script's local variables | Durable execution state, resumable, with history |
-| Artefact identity across stages | "The file we just built" | A versioned artefact in the artefact store, referenced by every stage |
-| Approval gates | A blocked script, or nothing | A first-class approval action with IAM-scoped approvers, recorded in CloudTrail |
-| Failure behaviour | Whatever the author considered | Declarative: stage conditions, retry, rollback, skip |
-| Cross-account deployment | Long-lived credentials copied between accounts | Cross-account role assumption with KMS-encrypted artefacts |
-| Artefact immutability | Discipline | Tag immutability enforced by the registry |
-| Vulnerability state of an artefact | A scan someone ran once | Continuous rescanning through Amazon Inspector, with findings attached to the image |
-| Registry sprawl | Manual deletion, eventually | Lifecycle policies evaluated automatically |
-| Multi-Region artefact availability | Rebuild per Region, violating build-once | Cross-Region replication of the identical image |
-| Audit | Log archaeology | Execution history plus CloudTrail, per action and per identity |
-
-What AWS does **not** provide is the promotion policy: what evidence justifies moving an artefact from staging to production is yours to define, and a pipeline whose only gate is "the previous stage exited zero" has automated a process with no opinion.
+- **A release needs durable state:** a shell script that chains build and deploy loses track of which environments received a change when the machine running it fails.
+- **Every stage must deploy the same artefact:** without a versioned artefact referenced by each stage, staging and production may not receive the same bytes.
+- **Gates and failure handling must be declarative:** approvals, retries and rollbacks belong in an orchestrator with recorded history, not in the assumptions of a script's author.
+- **Container tags are mutable pointers:** a registry must provide custody (immutable tags, digests, scanning, lifecycle policies and replication) rather than plain storage.
+- **ECS and EKS are deployed differently:** ECS suits a push-based pipeline calling an AWS API, whereas Kubernetes already reconciles declared state and suits GitOps, as developed in [Push versus pull deployment](#push-versus-pull-deployment).
+- **AWS provides the mechanism, not the policy:** CodePipeline and ECR supply orchestration and custody, but deciding what evidence justifies promoting an artefact to production remains the team's responsibility.
 
 ---
 
@@ -447,125 +408,16 @@ Repository settings  tag mutability, scan configuration, lifecycle rules, encryp
 
 ---
 
-## Design Considerations
-
-```mermaid
-flowchart TD
-    A["Does every stage either gather evidence<br/>or advance the artefact?"] -->|"no"| B["Delete the stage.<br/>It is latency and a failure point"]
-    A -->|"yes"| C["Does any stage rebuild?"]
-    C -->|"yes"| D["The promotion guarantee is void.<br/>Build once, promote a digest"]
-    C -->|"no"| E["Do actions run in parallel<br/>where they have no ordering dependency?"]
-    E -->|"no"| F["Set equal runOrder.<br/>Pipeline duration drives batch size"]
-    E -->|"yes"| G["Is the deployment target<br/>Kubernetes?"]
-    G -->|"yes"| H["Prefer GitOps: the cluster pulls.<br/>No cluster credentials outside the cluster"]
-    G -->|"no"| I["Push with an ECS deploy action"]
-    H --> J["Do build and deploy actions<br/>use different roles?"]
-    I --> J
-    J -->|"no"| K["A build compromise is a deploy compromise"]
-    J -->|"yes"| L["Is there an entry condition<br/>on the production stage?"]
-    L -->|"no"| M["A release can land<br/>in the middle of an incident"]
-    L -->|"yes"| N["Promote continuously"]
-```
-
-| Quality | What it means here | Design levers | The trade-off you accept |
-|---|---|---|---|
-| **Pipeline latency** | Merge to production | Parallel actions, caching, fewer stages, Lambda compute | Fewer gates means less evidence; the answer is faster gates, not fewer |
-| **Promotion integrity** | The thing in production is the thing you tested | One build, digest references, immutable tags | Environment differences must move entirely into configuration |
-| **Blast radius** | How much a bad execution can affect | Per-service pipelines, per-environment accounts, canary deployment | More pipelines and accounts to operate |
-| **Drift resistance** | Whether actual state matches declared | GitOps reconciliation, `selfHeal`, IaC for infrastructure | Reconciliation will revert emergency manual changes  which is the point, and occasionally inconvenient |
-| **Identity separation** | What a compromised component can reach | Per-action roles, cross-account deploy roles | More IAM to design and maintain |
-| **Auditability** | Who released what, when, and on what evidence | Execution history, CloudTrail, Git history as deployment history | Requires that out-of-band changes are prevented, not merely discouraged |
-| **Availability of delivery** | Can you ship during an incident | Simple pipelines, a documented manual path | A manual path is a control you must audit |
-| **Cost** | Action minutes, storage, transfer | V2 pricing, lifecycle policies, replication instead of cross-Region pulls | Replication duplicates storage  usually cheaper than repeated transfer |
-| **Operational complexity** | What an engineer faces when delivery breaks | Fewer moving parts; good failure messages | GitOps adds a controller and a repository to understand |
-
-!!! danger "Pipeline duration is a reliability metric, not a convenience metric"
-
-    A pipeline that takes forty minutes changes developer behaviour: people batch changes to avoid waiting. Batch size then grows, and change failure rate rises months later for reasons nobody connects back to pipeline duration. This is the same mechanism as [chapter 5.1](topic1.md)'s argument about release size, arriving through a different door. It means **pipeline latency deserves an alarm and a budget**, exactly like application latency  and that the fix is parallel actions and faster gates, never fewer gates.
-
----
-
 ## AWS Best Practices
 
-### Operational Excellence
-
-Define pipelines in code  CDK, CloudFormation or Terraform  and review changes to them as you review application changes; a pipeline edited in the console is an undocumented production control. Prefer many small pipelines over one large one, because a failing deployment of one service should not block another's release, and because V2's per-minute pricing no longer penalises pipeline count. Give every stage a name that states what it verifies rather than what it runs, so a failed execution communicates something to someone who did not build it. Route pipeline state changes through EventBridge to a channel the team reads, and alarm on pipeline duration as well as on failure. And keep a tested manual deployment path, because the pipeline will eventually be unavailable at exactly the moment you need to ship a fix.
-
-### Security
-
-Use per-action role overrides so the build action cannot deploy and the deploy action cannot build; put production in a separate account so that separation is an account boundary rather than a policy statement. Encrypt the artefact store with a customer-managed KMS key and grant decrypt only to the roles that need it  and remember that this key policy is part of every cross-account artefact read. Enable ECR tag immutability and enhanced scanning, and gate promotion on scan findings rather than reporting them. Grant cross-account ECR access through repository policies rather than by broadening IAM. Scope approval actions to a named IAM group that excludes the change's author. And alarm on any production mutation performed by an identity other than the deploy role, because every control in this chapter can be walked around with one CLI call otherwise.
-
-### Reliability
-
-Promote one artefact by digest; never rebuild in a later stage. Put an entry condition with an alarm rule on the production stage so a release cannot land mid-incident. Configure on-failure rollback on deployment stages and an on-success monitoring window afterwards, because a deployment completing and a change being good are different claims. For ECS, deploy blue/green with a canary and an alarm dimensioned on the green target group. For EKS, verify rollout status rather than trusting `kubectl apply`  or use GitOps, where health assessment is the controller's job by construction. Ensure lifecycle policies cannot expire an image any live task definition references. And confirm that the image pull path  VPC endpoints, replication, pull-through cache  is as available as the workload, since pod and task replacement depend on it.
-
-### Performance Efficiency
-
-Run actions in parallel wherever there is no ordering dependency; this is usually the largest single improvement available. Keep artefacts small  a container pipeline should pass a few kilobytes of JSON, not the image  because every artefact is uploaded and downloaded at every stage boundary. Filter triggers by branch and file path so unaffected pipelines do not run. Use replication rather than cross-Region pulls, both for latency and for cost. And keep images small and layer-ordered, since image size directly determines task and pod start time, and therefore how fast you can scale out and how fast a rollback takes effect.
-
-### Cost Optimization
-
-V2's per-action-minute pricing rewards short actions and many pipelines, so splitting a monolithic pipeline is often cheaper as well as safer. Apply ECR lifecycle policies at repository creation rather than at the first cost review; per-commit images accumulate invisibly. Prefer replication over repeated cross-Region pulls, since storage is usually cheaper than transfer at any meaningful pull volume. Use pull-through cache to avoid paying for  and depending on  repeated public-registry pulls. Set build timeouts tightly. And review enhanced scanning scope: continuous rescanning is charged per image, so a repository holding 30 retained images costs a fraction of one holding 3,000.
-
-### Sustainability
-
-The efficiency measures here are the sustainability measures: not running pipelines for unaffected components, not rebuilding artefacts that already exist, not transferring images repeatedly across Regions, and not retaining artefacts nobody will ever pull. Smaller images reduce transfer and storage across every pull for the life of a service, which aggregates to far more than the build-time saving.
-
----
-
-## Security Considerations
-
-**The artefact store is a cross-pipeline read surface.** Every build output of every pipeline in a Region lands in one bucket. Anyone with read access to it has read access to compiled artefacts, configuration files and anything a build inadvertently wrote there. Restrict it, encrypt it with a customer-managed key, and remember that granting a cross-account role decrypt access grants it read access to every artefact in that store, not only the one it needs.
-
-**Per-action roles are the difference between a boundary and a diagram.** The default  one pipeline service role holding the union of all permissions  means the build action runs with production deployment rights it never uses, and therefore that every dependency in the build has them too. Override the role per action, and put production in its own account so the strongest boundary AWS offers is doing the work.
-
-**Tag immutability is a security control, not housekeeping.** Without it, an attacker with push access can repoint a tag at a malicious image, and any deployment that resolves a tag at launch time will run it. With immutability plus digest-based deployment, the attacker must compromise the pipeline itself to change what runs.
-
-**Scanning must gate rather than report.** An Inspector finding that appears on a dashboard nobody reads changes nothing. The pipeline should fail on critical findings, and enhanced scanning matters specifically because it rescans images already pushed  the vulnerability that affects you is usually disclosed after your build, not before it.
-
-**GitOps moves the trust boundary to the manifest repository.** In a pull model the cluster applies whatever the repository declares, so **write access to that repository is production deployment access**. It needs branch protection, required reviews and signed commits at least as strict as the application repository  and teams routinely apply less, because it "only contains YAML".
-
-**Push-based EKS deployment requires care in two places.** The pipeline's role must be mapped into Kubernetes RBAC through an access entry, and that mapping should grant permission over specific namespaces and object kinds rather than `cluster-admin`, which is the path of least resistance and the wrong one. And the pipeline must be able to reach a frequently private API server  the native EKS action handles this without you placing build compute in the VPC, which is both simpler and smaller as an attack surface.
-
-**Approvals must carry evidence.** An approval action whose approver sees only "approve or reject" is a signature, not a decision. Attach the external URL to the build report, the scan findings and the change diff, so the approver can exercise judgement  and scope the approver group in IAM so that self-approval is impossible.
-
----
-
-## Performance Optimization
-
-**Parallelise within stages first.** Actions sharing a `runOrder` run concurrently, so a build followed by three verification actions costs the build plus the slowest verification, not the sum. In a typical pipeline this single change removes a third to a half of total duration and costs nothing.
-
-**Keep artefacts tiny.** Every artefact is written to S3 at the end of one action and read back at the start of the next. A container pipeline should pass `imagedefinitions.json`, `taskdef.json` and `appspec.yaml`  a few kilobytes  while the image itself stays in ECR. Pipelines that pass build directories around pay that transfer at every boundary.
-
-**Filter triggers.** In a monorepo, unfiltered triggers mean twenty pipelines run on every commit, most of them building nothing that changed. Branch and file-path filters eliminate the work rather than making it faster, which is always the better saving.
-
-**Make images small and correctly layered.** Image size determines pull time, and therefore how quickly every deployment, scale-out and rollback takes effect; the techniques are in [2.1 Performance Optimization](../unit2/topic1.md#performance-optimization).
-
-**Replicate rather than pull across Regions.** A cross-Region pull pays transfer cost and latency on every task launch; replication pays storage once. At any real scale-out volume, replication wins on both.
-
-**Choose the ECS deployment mechanism for the recovery you need, not the speed you want.** A [rolling update](../unit2/topic3.md#deployment-the-rolling-update) deploys quickly with no capacity dip but recovers slowly. Blue/green costs double capacity for the deployment window and recovers in seconds. The second is almost always the better purchase for production, because the expensive resource is the duration of a bad change.
-
-**Measure the stage breakdown before optimising.** CodePipeline's execution history shows time per action. The answer is frequently not the build: it is a test stage that has accumulated slow integration tests, an approval that sits for hours, or a deployment waiting on a health check with a long interval and a high threshold.
-
----
-
-## Cost Optimization
-
-| What you pay for | Dimension | Frequently overlooked |
-|---|---|---|
-| **CodePipeline V1** | Per active pipeline per month | Many small pipelines are penalised; this is the main reason to move to V2 |
-| **CodePipeline V2** | Per action execution minute | Long-running actions, and unfiltered triggers running pipelines that build nothing |
-| **CodeBuild minutes** | Per build-minute by compute type | Rebuilding unchanged components; uncached dependencies |
-| **ECR storage** | Per GB-month | **The classic**: per-commit images retained for years with no lifecycle policy |
-| **ECR enhanced scanning** | Per image scanned and rescanned | Continuous rescanning of thousands of retained images that will never be pulled |
-| **ECR data transfer** | Cross-Region and internet egress | Serving several Regions from one registry instead of replicating |
-| **ECR replication** | Storage in each destination | Cheaper than repeated cross-Region pulls at any meaningful volume |
-| **S3 artefact store** | Storage and requests | Artefacts retained indefinitely with no lifecycle rule |
-| **KMS** | Per request | High-frequency pipelines generating large numbers of decrypt calls |
-| **Blue/green capacity** | Duplicate tasks during deployment | Real, bounded, and almost always worth it; long termination waits extend it |
-| **Cross-Region pulls at scale** | Transfer per task launch | An autoscaling event pulling a 1.2 GB image a hundred times |
-
-**The structural lesson** is that a delivery estate's cost is dominated by **accumulation** and by **repetition**. Accumulation: images, artefacts and logs retained forever because nothing deletes them. Repetition: rebuilding what has not changed, pulling across Regions what could have been replicated, and running pipelines for components a commit did not touch. Both are configuration rather than architecture, and both are invisible until someone reads the bill  which is why lifecycle policies belong in the same template that creates the repository.
+- **Operational Excellence:** define pipelines in code, prefer many small per-service pipelines over one large one, and name each stage after what it verifies.
+- **Operational Excellence:** route pipeline state changes through EventBridge, alarm on duration as well as failure, and keep a tested manual deployment path for when the pipeline is unavailable.
+- **Security:** use per-action roles so the build action cannot deploy, and place production in a separate account so that separation is an account boundary.
+- **Security:** encrypt the artefact store with a customer-managed KMS key, enable ECR tag immutability and enhanced scanning, and gate promotion on scan findings.
+- **Reliability:** promote one artefact by digest, never rebuild in a later stage, and put an alarm-based entry condition on the production stage so a release cannot land mid-incident.
+- **Reliability:** configure on-failure rollback and an on-success monitoring window, and ensure lifecycle policies cannot expire an image that a live task definition still references.
+- **Performance Efficiency:** run independent actions in parallel, pass small artefacts between stages rather than images, and filter triggers by branch and file path.
+- **Cost Optimization and Sustainability:** apply ECR lifecycle policies at repository creation, replicate images rather than pulling them across Regions, and use pull-through cache for public images.
 
 ---
 
@@ -616,102 +468,6 @@ flowchart LR
 
 ---
 
-## Integration with Other AWS Services
-
-| Service | Why it integrates with pipelines |
-|---|---|
-| **AWS CodeBuild** | Build, test and arbitrary custom actions; the general-purpose action provider |
-| **AWS CodeDeploy** | Blue/green and canary traffic shifting for ECS, Lambda and EC2 |
-| **AWS CodeConnections** | Source from GitHub, GitLab and Bitbucket without personal access tokens |
-| **Amazon ECR** | Container artefact custody, scanning, lifecycle and replication |
-| **Amazon ECS and AWS Fargate** | Push-based deployment target with rolling, native blue/green or CodeDeploy blue/green |
-| **Amazon EKS** | Deployment target via the native EKS action or, preferably at scale, GitOps |
-| **Amazon EKS Capabilities** | Managed Argo CD, ACK and KRO, removing the operational cost of running the GitOps controller |
-| **AWS Lambda** | Deployment target with alias canaries; also an action provider for custom gates |
-| **AWS Step Functions** | An invoke action for orchestration too complex for a stage, such as a multi-Region rollout |
-| **AWS CloudFormation and CDK** | Deploy infrastructure from the same pipeline, and define the pipeline itself ([chapter 5.3](topic3.md)) |
-| **Amazon EventBridge** | Source detection, state-change events, and cross-account pipeline triggering |
-| **Amazon Inspector** | Continuous image scanning; findings that should gate promotion |
-| **AWS Security Hub** | Aggregated findings across repositories and accounts |
-| **AWS Signer** | Image signing, verified before deployment |
-| **Amazon CloudWatch** | Metrics and the alarms behind stage conditions and automatic rollback |
-| **AWS CloudTrail** | Who executed, approved and deployed what, with which identity |
-| **AWS Secrets Manager and Parameter Store** | Build-time and runtime configuration, injected rather than baked into artefacts |
-| **AWS AppConfig** | Feature flags, separating release from deployment |
-| **AWS Organizations** | The multi-account structure that makes environment boundaries real |
-| **Amazon SNS and AWS Chatbot** | Approval notifications and pipeline outcome reporting |
-
-```mermaid
-flowchart TD
-    GH["GitHub via CodeConnections"] --> CP["CodePipeline V2 (tooling account)"]
-    CP --> CB["CodeBuild  BUILD role"]
-    CB --> ECR["ECR: immutable tags, enhanced scanning"]
-    ECR --> REPL["Replication: eu-west-1 + prod account"]
-    ECR --> INS["Amazon Inspector"] --> SH["Security Hub"]
-    CP --> STG["Staging account: ECS rolling"]
-    STG --> IT["Integration tests action"]
-    IT --> COND["Production ENTRY condition:<br/>alarm rule + deployment window"]
-    COND --> APV["Manual approval:<br/>IAM-scoped approvers, evidence link"]
-    APV --> PROD["Production account:<br/>ECS blue/green + canary"]
-    CWA["CloudWatch alarm on the GREEN target group"] -.->|"automatic rollback"| PROD
-    APV --> MAN["Manifest repository:<br/>write the new digest"]
-    MAN --> ARGO["Argo CD (EKS Capability)"]
-    ARGO --> EKS["EKS clusters: reconcile + selfHeal"]
-    EKS -.->|"drift detected and corrected"| ARGO
-    PROD --> OBS["CloudWatch, X-Ray, Application Signals"]
-    EKS --> OBS
-    OBS --> CWA
-    CT["CloudTrail"] -.-> AUD["Audit"]
-```
-
-Read architecturally, the diagram shows the chapter's three arguments at once. **One artefact, many destinations**: a single build produces one digest, which ECR replicates rather than anyone rebuilding, and which both the ECS and the EKS paths consume unchanged  build-once-deploy-many holding across accounts, Regions and orchestrators. **Two delivery directions**: the ECS path is a push, with the pipeline holding a cross-account deploy role; the EKS path is a pull, with the pipeline holding no cluster credentials at all and writing only to a repository, while the reconciliation arrow back from EKS to Argo CD is the drift correction a push model cannot provide. And **gates fed by production's own telemetry**: the entry condition reads the same CloudWatch alarms that drive rollback, so the system's knowledge of its own health governs both whether a change may enter and whether it may stay.
-
----
-
-## Common Architecture Patterns
-
-### The promotion pipeline
-
-One build, then a sequence of environments, each gated by evidence. The canonical shape, and the one every other pattern here modifies. Its defining rule is that nothing after the build stage may produce a new artefact.
-
-### Per-service pipelines with a shared definition
-
-One pipeline per deployable component rather than one pipeline for everything, so that one service's failure does not block another's release  with the definitions generated from a shared construct in CDK so twenty pipelines are one piece of reviewed code. V2's per-minute pricing removed the cost argument against this.
-
-### Multi-account promotion
-
-A tooling account holding the pipeline, and separate accounts per environment, with cross-account deploy roles. The strongest blast-radius and separation-of-duties control available in AWS, and the one that makes "a developer cannot deploy to production" an enforced fact.
-
-### Fan-out to multiple Regions
-
-ECR replication plus either cross-Region deploy actions or a Step Functions invoke action orchestrating a staged regional rollout  one Region, bake, then the rest. The pattern that turns a global deployment from a single event into a progressive one.
-
-### GitOps with an application-of-applications
-
-The pipeline writes digests into a manifest repository; Argo CD reconciles. An "App of Apps" root application declares the others, so bootstrapping a new cluster is a single application definition rather than a runbook. The pattern that scales Kubernetes delivery across many clusters and teams.
-
-### Image promotion by digest across registries
-
-Rather than rebuilding per environment, the identical digest is replicated or re-tagged into the environment's registry. Some organisations promote by copying the image into a production-only registry that only the production account can write to, which makes "an artefact that reached production" a physically distinct set.
-
-### Stage conditions as deployment gates
-
-Alarm rules, deployment windows and verification builds expressed as declarative conditions rather than as Lambda functions. The V2 feature that removes most bespoke glue from mature pipelines.
-
-### The pipeline that deploys itself
-
-A pipeline whose first stages update its own definition from source before running the rest, so a change to the delivery process follows the same review and promotion path as a change to the application. [Chapter 5.3](topic3.md) implements this with CDK Pipelines.
-
-### Progressive delivery on Kubernetes
-
-Argo Rollouts or Flagger performing canary and blue/green analysis inside the cluster, using metrics from Prometheus or CloudWatch to decide whether to proceed. The Kubernetes equivalent of CodeDeploy's traffic shifting, and the reason a GitOps pipeline does not have to give up canary deployment.
-
-### Ephemeral preview environments
-
-A pipeline triggered by pull-request open, deploying to a short-lived namespace or service, and destroyed on merge or close. Expensive if unbounded and extremely valuable when scoped, because it moves review from reading a diff to using the change.
-
----
-
 ## Industry Use Cases
 
 | Sector | Delivery requirement | How the services meet it |
@@ -737,7 +493,7 @@ A pipeline triggered by pull-request open, deploying to a short-lived namespace 
 
 **Identity separation that is actually enforceable.** Per-action role overrides plus cross-account deployment turn "the build cannot deploy" from a principle into an account-level fact. Very few CI systems make this as straightforward, and it addresses the single largest security exposure identified in [chapter 5.1](topic1.md).
 
-**Artefact custody that removes a class of incident.** ECR's immutable tags and digests make "what is running in production" a fact rather than a query evaluated at task launch. The mutable-tag incidents in the motivation section are structurally impossible under this configuration.
+**Artefact custody that removes a class of incident.** ECR's immutable tags and digests make "what is running in production" a fact rather than a query evaluated at task launch. The mutable-tag failures described in [Container artefact identity](#container-artefact-identity-tag-versus-digest) are structurally impossible under this configuration.
 
 **Continuous knowledge of artefact vulnerability state.** Enhanced scanning rescans images after push, which matters because the CVE that affects you is almost always disclosed after your build. A build-time-only scan tells you about the past.
 
@@ -764,45 +520,6 @@ A pipeline triggered by pull-request open, deploying to a short-lived namespace 
 **Pipeline latency degrades silently.** Nothing announces that a pipeline has grown from eight minutes to forty; developers simply start batching, and the consequence appears months later as a change failure rate nobody attributes to pipeline duration.
 
 **A pipeline cannot substitute for a promotion policy.** CodePipeline will happily promote an artefact on no evidence at all. What justifies moving from staging to production is a decision the organisation must make and encode; the service provides the mechanism and no opinion.
-
----
-
-## Common Mistakes
-
-### Beginner Mistakes
-
-| Mistake | Why it is wrong | What to do instead |
-|---|---|---|
-| Rebuilding in the production stage | Voids every guarantee earlier stages provided | Promote the artefact; never rebuild |
-| Deploying by tag rather than digest | A tag resolves at task launch; the fleet becomes non-deterministic | Reference `repo@sha256:…` in the task definition |
-| Tag mutability left enabled | A tag can be repointed at different content | `IMMUTABLE` on every repository |
-| No ECR lifecycle policy | Silent, unbounded accumulation and cost | Lifecycle rules configured when the repository is created |
-| All actions sequential | Pipeline duration is the sum instead of the maximum | Equal `runOrder` for actions with no dependency |
-| Unfiltered triggers in a monorepo | Every pipeline runs on every commit | Branch and file-path filters |
-| One pipeline service role for everything | The build action holds production deployment rights | Per-action `roleArn` overrides |
-| `kubectl apply` treated as a successful deployment | It means the API server accepted the object, nothing more | `kubectl rollout status`, or GitOps health assessment |
-| `cluster-admin` for the pipeline's EKS access entry | Far more than the deployment needs | Namespace- and kind-scoped RBAC |
-| Passing the build directory as an artefact | Uploaded and downloaded at every stage boundary | Pass a few kilobytes of JSON; keep the image in ECR |
-| `PARALLEL` execution mode against one environment | Two executions race to deploy different artefacts | `SUPERSEDED` or `QUEUED` for a shared target |
-| Approval action with no evidence attached | The approver cannot exercise judgement | Link the test report, scan findings and diff |
-| Missing the `ecr.dkr` or S3 endpoint in a private subnet | Authentication succeeds, layer download times out | All three: `ecr.api`, `ecr.dkr`, and S3 gateway |
-| V1 pipeline type for a new pipeline | No variables, conditions, rollback or retry | V2 |
-
-### Production Mistakes
-
-| Mistake | Consequence | Remedy |
-|---|---|---|
-| Lifecycle policy expiring a referenced image | Scaling and task replacement fail; capacity is lost permanently | Exclude images referenced by live task definitions; retain by count generously |
-| No entry condition on the production stage | A release lands in the middle of an unrelated incident | An alarm rule as an entry condition |
-| KMS key policy omitting the cross-account role | Cross-account deployment fails with a misleading S3 error | Grant `kms:Decrypt` on the artefact key to every deploying role |
-| Rollback never exercised | It does not work, discovered during an incident | Deliberately deploy a known-bad change to pre-production on a schedule |
-| Manifest repository with weaker protection than the app repository | Write access to it is production deployment access | Equal or stricter branch protection and review requirements |
-| `selfHeal` enabled with no documented suspension procedure | Reconciliation fights incident response | A break-glass procedure that includes suspending sync deliberately |
-| Serving several Regions from one ECR registry | Transfer cost and latency on every task launch | Replication rules |
-| Pipeline duration unmonitored | Batching grows; change failure rate rises months later | An alarm on execution duration, treated as a reliability metric |
-| Scan findings reported but not gating | Known-critical images reach production | Fail the pipeline on critical findings |
-| Approval stages used to compensate for missing tests | Slower releases and no additional safety | Approvals for business timing; tests for correctness |
-| Out-of-band `aws ecs update-service` tolerated | The audit chain and artefact guarantee are broken | Alarm on production mutations by non-deploy identities |
 
 ---
 

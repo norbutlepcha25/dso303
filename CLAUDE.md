@@ -1131,7 +1131,7 @@ deployments, technical interviews, real-world cloud engineering jobs.
 
 Students are **not** preparing for any AWS certification exam; the notes are for learning. Never
 frame content around certification exams (no "exam traps", "on the exam", "certification tip").
-Where an old trap held a genuine design insight, state it as a learning point in Common Mistakes.
+Where an old trap held a genuine design insight, fold it into Core Concepts or Limitations.
 
 ## Teaching philosophy
 
@@ -1165,24 +1165,19 @@ rather than silently dropping it).
 ## Architecture Components
 ## Important AWS Terminology
 ## Configuration Options (if applicable)
-## Design Considerations
 ## AWS Best Practices
-## Security Considerations
-## Performance Optimization
-## Cost Optimization
 ## Monitoring and Observability
-## Integration with Other AWS Services
-## Common Architecture Patterns
 ## Industry Use Cases
 ## Advantages
 ## Limitations
-## Common Mistakes
 ## Architecture Diagrams
 ## Summary
 ```
 
 Do **not** add Learning Objectives, Real-World Motivation, Internal Working, Request Lifecycle,
-Hands-on Lab, Code Examples, AWS Certification Tips or Certification Traps (exam tips, frequently
+Hands-on Lab, Code Examples, Design Considerations, Security Considerations, Performance
+Optimization, Cost Optimization, Integration with Other AWS Services, Common Architecture Patterns,
+Common Mistakes, AWS Certification Tips or Certification Traps (exam tips, frequently
 confused pairs, memory aids), or "Where this topic sits in DSO303" boxes — these were deliberately removed from all notes.
 Short inline snippets inside other sections are fine where they explain a concept.
 
@@ -1197,8 +1192,8 @@ the body wherever they add value — not only in a dedicated section.
 **Definition** — precise definition; what the service/concept is; where it fits inside AWS
 architecture.
 
-**Why This Service or Concept Exists** — what problem it solves, why AWS introduced it, benefits
-over older methods.
+**Why This Service or Concept Exists** — brief bullet list only (about 4-6 one-sentence bullets,
+no sub-headings): the problem it solves, why AWS introduced it, benefits over older methods.
 
 **Core Concepts** — every important related concept, terminology introduced carefully, relationships
 between concepts.
@@ -1222,36 +1217,17 @@ whichever are relevant to this topic).
 **Configuration Options** — launch types, storage classes, instance types, scaling policies,
 networking modes, IAM permissions, deployment types, runtime options, as relevant.
 
-**Design Considerations** — scalability, availability, reliability, durability, latency, cost,
-performance, maintainability, operational complexity.
-
-**AWS Best Practices** — Well-Architected Framework pillars where applicable: Operational
-Excellence, Security, Reliability, Performance Efficiency, Cost Optimization, Sustainability.
-
-**Security Considerations** — IAM, least privilege, encryption, KMS, Secrets Manager, security
-groups, network ACLs, private vs public resources, logging, compliance.
-
-**Performance Optimization** — caching, auto scaling, load balancing, parallelism, connection reuse,
-storage optimization, monitoring.
-
-**Cost Optimization** — pricing model, pay-as-you-go, reserved capacity, savings plans, spot,
-storage classes, lifecycle policies, rightsizing, Cost Explorer, Trusted Advisor.
+**AWS Best Practices** — one flat bullet list (about 5-8 one-sentence bullets, no sub-headings),
+optionally tagged with the Well-Architected pillar in bold. Omit the section if nothing
+topic-specific applies.
 
 **Monitoring and Observability** — CloudWatch, CloudTrail, X-Ray, logs, metrics, dashboards, tracing,
 alarms.
-
-**Integration with Other AWS Services** — which services commonly integrate with this topic, why,
-with architecture examples.
-
-**Common Architecture Patterns** — as relevant: serverless, microservices, event-driven, CQRS,
-pub/sub, saga, API Gateway pattern, circuit breaker, retry, bulkhead, fan-out, fan-in.
 
 **Industry Use Cases** — where companies use this service, multiple examples.
 
 **Advantages** / **Limitations** — detailed, realistic; limitations include trade-offs, not just
 weaknesses.
-
-**Common Mistakes** — beginner mistakes and production mistakes, kept distinct.
 
 **Architecture Diagrams** — Mermaid diagrams used extensively: `flowchart`, `sequenceDiagram`,
 `graph TD`, `stateDiagram`, `journey`, ER diagrams where applicable.

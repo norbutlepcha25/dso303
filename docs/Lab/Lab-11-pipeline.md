@@ -13,7 +13,7 @@
 !!! info "Concepts used in this lab"
     Read these first if a term is new: [AWS CodeBuild](../unit5/topic1.md#aws-codebuild) ·
     [build reproducibility](../unit5/topic1.md#build-reproducibility-and-the-supply-chain) ·
-    [separate build and deploy identities](../unit5/topic1.md#separation-of-build-and-deploy-identities) ·
+    [separate build and deploy identities](../unit5/topic1.md#build-reproducibility-and-the-supply-chain) ·
     [AWS CodePipeline](../unit5/topic2.md#aws-codepipeline) ·
     [stages and actions](../unit5/topic2.md#stages-actions-and-the-parallelism-inside-a-stage) ·
     [S3 versioning](../unit6/topic1.md#the-life-of-an-object-under-versioning-and-lifecycle-rules) ·

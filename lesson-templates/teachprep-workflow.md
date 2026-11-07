@@ -122,7 +122,7 @@ Apply to every `docs/unit<N>/topic<M>.md` in the unit **that is not already refi
 | **Make topics sequential** | Each topic opens by linking back to the previous one and ends with a `**Next:**` line to the following topic (or the next unit) |
 | **Merge boilerplate** | Generic Security / Performance / Cost / Monitoring / Best Practices sections become short, topic-specific sections; merge Performance, Cost and Monitoring into one "Operating It: Performance, Cost and Monitoring" section |
 | **Student friendly** | Short paragraphs, comparison tables, MkDocs admonitions for key points, and a key-lesson summary table at the end |
-| **No exam framing** | Remove "Certification Traps", exam tips and "on the exam" wording. Fold real design insights into Common Mistakes |
+| **No exam framing** | Remove "Certification Traps", exam tips and "on the exam" wording. Fold real design insights into Core Concepts or Limitations |
 | **Questions never inline** | Practice and interview questions live in `docs/Questions/unit<N>.md` and `docs/interviewquestions/unit<N>.md`. Move any found in a note there. Multiple-choice blocks are headed `### Multiple-Choice Questions` |
 | **Target length** | Roughly 40–55% of the original; a little over is fine when the material is owned by that topic |
 

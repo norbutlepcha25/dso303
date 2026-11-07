@@ -34,25 +34,12 @@ Route 53 turns a name such as `api.example.com` into an address. The VPC decides
 
 ## Why This Service or Concept Exists
 
-### Why Amazon VPC
-
-The original EC2 network (**EC2-Classic**) put every customer on one flat shared network. There was no customer-defined address space, no subnets, no route tables and no private-only instances. Enterprises could not accept this:
-
-1. **No network isolation.** Regulated workloads need a database to be *unreachable* from the internet as a property of the network, not just of a firewall rule.
-2. **No address planning.** Connecting to an on-premises data centre over VPN or Direct Connect requires addresses that do not collide.
-3. **No tiering.** The classic three-tier design depends on saying "this subnet has no route to the internet".
-
-Amazon VPC (launched 2009, the default since 2013) gave customers a network they could design. Compared with a data centre, a subnet is an API call rather than a VLAN change, the router is built in and free, and the firewall is enforced at every network interface rather than in a shared appliance.
-
-### Why Route 53
-
-Running authoritative DNS yourself is hard: it needs globally distributed infrastructure, DDoS resistance and near-perfect availability, because **when DNS fails, everything fails**.
-
-Route 53 also turns DNS into a **traffic-management tool**. Classic DNS answers "what is the address of this name?" Route 53 can answer "what is the *best* address for this user, given health, latency, location and weighting?" That makes DNS a mechanism for global failover and gradual releases.
-
-### Why API Gateway
-
-Before managed API front doors, every service re-implemented authentication, rate limiting, request validation, CORS and per-route metrics. This code was duplicated, drifted between services and caused many security incidents. API Gateway moves these concerns into a managed tier **in front of** your code. It also makes serverless HTTP possible: a Lambda function has no listening port, so something must terminate TLS and invoke it.
+- **Network isolation (Amazon VPC):** the original EC2-Classic network was flat and shared, while regulated workloads need a database to be unreachable from the internet as a property of the network itself.
+- **Address planning and tiering:** a VPC gives customer-defined, non-colliding address space for hybrid connectivity, and subnets whose route tables decide whether a tier can reach the internet.
+- **Networking at software speed:** a subnet is an API call rather than a VLAN change, the router is built in, and the firewall is enforced at every network interface.
+- **Reliable DNS without running it (Route 53):** authoritative DNS needs global, DDoS-resistant infrastructure, because when DNS fails everything fails.
+- **DNS as traffic control:** Route 53 answers with the best address given health, latency, location and weighting, which enables global failover and gradual releases.
+- **A managed front door (API Gateway):** authentication, rate limiting, validation, CORS and per-route metrics are handled once in front of the code, and a Lambda function, which has no listening port, can serve HTTP.
 
 ## Core Concepts
 
@@ -295,7 +282,7 @@ DNS is a distributed, hierarchical, cached database: resolution goes from the ro
 
 **Useful features beyond the basics.** **Flow Logs** (metadata of accepted and rejected flows), **prefix lists** (named CIDR sets reusable in routes and rules), **VPC sharing** through Resource Access Manager (a network team owns the VPC; application accounts deploy into it), **Reachability Analyzer** (tells you from configuration whether A can reach B, and what blocks it), and **AWS Network Firewall** for egress filtering ([8.2](../unit8/topic2.md)).
 
-**Pricing.** The VPC, subnets, route tables, Internet Gateways, security groups and NACLs are **free**. You pay for NAT gateways, Interface endpoints, Transit Gateway, data transfer, and every public IPv4 address (hourly since 2024, attached or idle). See the [cost table](#operating-it-performance-cost-and-monitoring).
+**Pricing.** The VPC, subnets, route tables, Internet Gateways, security groups and NACLs are **free**. You pay for NAT gateways, Interface endpoints, Transit Gateway, data transfer, and every public IPv4 address (hourly since 2024, attached or idle).
 
 **Availability.** The router and Internet Gateways are highly available by design. **NAT gateways, Interface endpoint interfaces and subnets are zonal**: here your design, not AWS, decides availability.
 
@@ -411,77 +398,17 @@ Only the settings that affect network design. Authorizer, throttling and logging
 | Caching | Off, or a sized cache per stage (REST only) | Charged per hour; justify with a measured hit rate |
 | CORS | Per API or per route | Configure at the gateway, not in every handler |
 
-## Design Considerations
-
-<figure markdown="span">
-    ![Decision framework for choosing an entry point: CloudFront, API Gateway, ALB or NLB](../img/U1/decisionFramework.png){width="80%"}
-    <figcaption>Entry-point decision framework</figcaption>
-    <p align='right' style="font-size:0.8em"><i>Image Source: AI Generated (Chatgpt)</i></p>
-</figure>
-
-| Quality | What to design for |
-|---|---|
-| **Scalability** | The fabric scales itself; **address space**, NAT capacity and downstream capacity do not. EKS is the usual cause of IP exhaustion: 300 nodes with 30 Pods each need about 9,000 addresses. Bound API Gateway with throttling so scaling does not just move the failure to the database |
-| **Availability** | List the zonal components and make each loss survivable: one NAT gateway per AZ, Interface endpoints in every AZ used, load balancers in at least two (preferably three) subnets, Multi-AZ RDS, Route 53 failover records |
-| **Latency** | Every hop adds latency and a failure mode. Terminate TLS at the edge, reuse connections, remove components that exist only by habit |
-| **Cost** | Charges are per gigabyte and invisible in code: NAT processing, cross-AZ traffic, internet egress, endpoint hours, public IPv4 |
-| **Maintainability** | Prefer fewer parts; reference security groups instead of CIDRs; define everything in code |
-
-!!! danger "The single NAT gateway anti-pattern"
-    Routing every private subnet to one NAT gateway saves one hourly charge but causes two problems. If that AZ fails, **every** private subnet loses outbound access, so a zonal failure becomes a VPC-wide failure. And traffic from other AZs pays cross-AZ charges on top of NAT processing.
-
 ## AWS Best Practices
 
-| Pillar | Network-specific practice |
-|---|---|
-| **Operational Excellence** | Define the network in code ([5.3](../unit5/topic3.md)), in a stack separate from applications; tag every resource; check paths with Reachability Analyzer |
-| **Security** | Private by default; security groups reference security groups; restrict endpoint policies; enable Flow Logs |
-| **Reliability** | Three AZs where available (two minimum); one NAT gateway per AZ; recovery that does not depend on control-plane calls in the failed Region |
-| **Performance Efficiency** | CloudFront in front of user-facing traffic; Gateway endpoints for S3 and DynamoDB; connection reuse |
-| **Cost Optimization** | Audit NAT traffic and move top talkers to endpoints; release idle Elastic IPs; prefer HTTP APIs |
-| **Sustainability** | Less data moved means less energy: cache at the edge, compress, remove unnecessary hops |
+- **Operational Excellence:** define the network in code ([5.3](../unit5/topic3.md)) in a stack separate from applications, and tag every resource.
+- **Operational Excellence:** check paths with Reachability Analyzer rather than by trial and error.
+- **Security:** keep resources private by default, let security groups reference security groups, restrict endpoint policies and enable Flow Logs.
+- **Reliability:** use three AZs where available (two minimum) with one NAT gateway per AZ.
+- **Performance Efficiency:** put CloudFront in front of user-facing traffic and use Gateway endpoints for S3 and DynamoDB.
+- **Cost Optimization:** audit NAT traffic and move top talkers to endpoints, release idle Elastic IPs and prefer HTTP APIs.
+- **Sustainability:** move less data by caching at the edge, compressing and removing unnecessary hops.
 
-## Security Considerations
-
-<figure markdown="span">
-    ![Layers of defence in depth applied to an AWS network](../img/U1/AppliedDefence.png){width="80%"}
-    <figcaption>Defence in depth applied to the network</figcaption>
-    <p align='right' style="font-size:0.8em"><i>Image Source: AI Generated (Chatgpt)</i></p>
-</figure>
-
-- **Nothing public by default.** Only load balancers and NAT gateways belong in public subnets.
-- **No open SSH.** Port 22 open to `0.0.0.0/0` is the most common finding in AWS security reviews. Use **Systems Manager Session Manager**, which needs no inbound port and no bastion host.
-- **Network permissions are dangerous IAM permissions.** `ec2:AuthorizeSecurityGroupIngress` can open a database to the world; keep it out of application deployment roles ([8.1](../unit8/topic1.md)).
-- **Keep service calls private.** Reach Secrets Manager, KMS and S3 through endpoints, and use the `aws:SourceVpce` condition so leaked credentials do not work outside your network ([8.3](../unit8/topic3.md)).
-- **Encrypt in transit.** Terminate TLS at CloudFront or the load balancer with ACM certificates; CloudFront certificates must be in `us-east-1`.
-- **Log everything.** Flow Logs, CloudTrail, Resolver query logs and access logs answer who did what and which flows were rejected.
-
-WAF, Shield and detailed security group and NACL design are covered in [8.2](../unit8/topic2.md).
-
-## Operating It: Performance, Cost and Monitoring
-
-**Performance.**
-
-- **Cache** at CloudFront (design the cache key; forwarding every header destroys the hit rate) and, for REST APIs, at the API Gateway stage. DNS TTL is also a cache.
-- **Reuse connections** at every layer: HTTP keep-alive, database pools, SDK clients created outside the Lambda handler.
-- **Lambda in a VPC** gets no internet access unless its subnet routes to a NAT gateway; attach a function to a VPC only when it must reach a private resource (see [1.3](topic3.md)).
-
-**Cost.**
-
-| Cost driver | How to control it |
-|---|---|
-| NAT gateway processing | Gateway endpoints for S3 and DynamoDB; Interface endpoints for ECR, CloudWatch Logs, Secrets Manager |
-| NAT gateway hours | One per AZ in production; fewer in development only |
-| Cross-AZ data transfer | Keep chatty traffic within an AZ where availability allows |
-| Internet egress | CloudFront and compression |
-| Public IPv4 addresses | Remove unnecessary public IPs; release idle Elastic IPs; consider IPv6 |
-| Interface endpoints | Create only for services called at volume; share centrally in large estates |
-| Transit Gateway | Justify against peering below about five VPCs |
-
-!!! example "A real cost investigation"
-    A team's NAT data-processing charge exceeded its whole ECS compute bill. Flow Logs analysed in Athena showed 78 percent of NAT bytes went to S3 and Amazon ECR. A free S3 Gateway endpoint plus Interface endpoints for `ecr.api`, `ecr.dkr` and `logs` cut the NAT charge by more than 80 percent. You cannot optimise what you have not measured.
-
-**Monitoring.**
+## Monitoring and Observability
 
 | Signal | Source | Tells you |
 |---|---|---|
@@ -492,38 +419,6 @@ WAF, Shield and detailed security group and NACL design are covered in [8.2](../
 | Security group and route changes | CloudTrail | Who changed what; alert on rules opening `0.0.0.0/0` |
 
 Flow Log fields and security use are in [8.2](../unit8/topic2.md#network-acls-and-vpc-flow-logs); CloudWatch and X-Ray are covered in [7.1](../unit7/topic1.md).
-
-## Integration with Other AWS Services
-
-| Service | Network integration |
-|---|---|
-| **ECS** | `awsvpc` mode gives each task its own interface, IP and security groups ([2.2](../unit2/topic2.md)) |
-| **EKS** | VPC CNI gives each Pod a VPC IP, so subnets must be sized for Pod count ([3.1](../unit3/topic1.md)) |
-| **Lambda** | Optional VPC attachment for private resources ([1.3](topic3.md)) |
-| **S3, DynamoDB** | Gateway endpoints; `aws:SourceVpce` in bucket policies |
-| **RDS, ElastiCache** | Subnet groups across AZs; security group referencing the app's group ([6.2](../unit6/topic2.md)) |
-| **SQS, SNS, EventBridge** | Interface endpoints; direct API Gateway integration ([6.3](../unit6/topic3.md)) |
-| **CloudFormation, CDK, Terraform** | The network defined as code (Unit 5) |
-
-## Common Architecture Patterns
-
-**Three-tier web application.** Internet-facing ALB in public subnets, an Auto Scaling group or ECS service in private subnets, Multi-AZ RDS in isolated subnets, a Route 53 alias to the ALB, and CloudFront in front. This remains the right default for many workloads.
-
-**Serverless API.** Route 53 alias to an API Gateway custom domain, an HTTP API with a JWT authorizer, Lambda proxy integration, and DynamoDB. If the functions need no private resources, the compute tier may need no VPC at all.
-
-**Private microservices.** ECS services in `awsvpc` mode behind an internal ALB, discovered through private DNS, exposed externally only through API Gateway with a VPC Link. Each service has its own security group, so policy reads like the architecture diagram: "orders may call payments on port 8443".
-
-**Hub-and-spoke multi-account network.** A network account owns a Transit Gateway shared through Resource Access Manager. Workload VPCs attach to it, an inspection VPC filters traffic, and a shared-services VPC hosts central endpoints so many accounts share one set.
-
-<figure markdown="span">
-    ![Hub-and-spoke network with a shared Transit Gateway connecting workload, inspection and shared-services VPCs](../img/U1/hubandSpoke.png){width="80%"}
-    <figcaption>Hub-and-spoke multi-account network</figcaption>
-    <p align='right' style="font-size:0.8em"><i>Image Source: AI Generated (Chatgpt)</i></p>
-</figure>
-
-**Centralised egress.** Instead of NAT gateways in every VPC, send internet-bound traffic through the Transit Gateway to one egress VPC. This saves NAT hours at scale but adds Transit Gateway processing charges and a hop; model the crossover.
-
-Network-level releases use weighted Route 53 records, weighted ALB target groups or API Gateway canary stages ([5.2](../unit5/topic2.md)). Retries, circuit breakers and bulkheads are covered in [4.3](../unit4/topic3.md); event-driven decoupling in [1.7](topic7.md).
 
 ## Industry Use Cases
 
@@ -553,30 +448,6 @@ Network-level releases use weighted Route 53 records, weighted ALB target groups
 - **DNS failover is limited by caching.**
 - **API Gateway limits** (timeout, payload) force asynchronous designs for long or large operations; HTTP APIs lack some REST features, and the type cannot be changed.
 - **Multi-account designs grow complex** and need documentation and automated checks.
-
-## Common Mistakes
-
-### Beginner Mistakes
-
-| Mistake | Why it is wrong | Do instead |
-|---|---|---|
-| Calling a subnet public because of its name | Only an IGW route makes it public | Check the route table |
-| Instance in a public subnet with no public IP | The IGW has nothing to translate to | Assign a public or Elastic IP, or use a load balancer |
-| Application policy in NACLs | Stateless rules break ephemeral-port replies | Security groups for policy, NACLs as guardrails |
-| Sizing subnets by instance count | Reserved addresses, ALB and container IPs are forgotten | Size for peak tasks or Pods plus headroom |
-| Hard-coding a load balancer IP | Its addresses change | Use its DNS name or an alias record |
-| Overlapping CIDRs across environments | Peering becomes impossible | Plan ranges centrally |
-
-### Production Mistakes
-
-| Mistake | Consequence | Remedy |
-|---|---|---|
-| One NAT gateway for the VPC | Zonal failure becomes VPC-wide; cross-AZ charges | One per AZ |
-| No S3 Gateway endpoint | NAT processing charges on object traffic | Add the free endpoint |
-| Security groups built from CIDR lists | Rules drift as the fleet changes | Reference security groups |
-| No Flow Logs | Cost and incident analysis become guesswork | Enable and centralise them |
-| Interface endpoints in one AZ | A "private" design depends on one zone | Create in every AZ used |
-| DR plans needing control-plane calls in the failed Region | Recovery fails when needed | Pre-provision and use health-check failover |
 
 ## Summary
 

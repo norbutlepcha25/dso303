@@ -29,28 +29,12 @@ Three AWS services anchor the chapter:
 
 ## Why This Service or Concept Exists
 
-### The failure modes that distribution introduces
-
-A monolith fails in one simple way: the process dies and everything stops. Distribution replaces that with several harder problems.
-
-| Failure mode | What it means | Why it is hard |
-|---|---|---|
-| **Partial failure** | Some components work, others do not | The system is neither up nor down |
-| **Ambiguous outcome** | A call timed out; did it succeed? | Retrying may duplicate the effect; only idempotency resolves this |
-| **Gray failure** | A component is degraded but reports healthy | Health checks pass while users suffer |
-| **Metastable failure** | The system stays broken after the trigger is gone | The recovery mechanism (retries) now sustains the failure |
-| **Correlated failure** | Many components fail together | Redundancy assumed independence: same AZ, same dependency, same bad deployment |
-| **Cascading failure** | One failure overloads the next service | Spreads along the dependency graph faster than humans react |
-| **Poison message** | One malformed item blocks a queue forever | Without a dead-letter path, everything behind it stops |
-
-!!! danger "Metastable failure surprises people"
-    A brief latency spike causes timeouts. Timeouts cause retries. Retries multiply load. The extra load keeps latency high **after the original cause has gone**. The system is now stably broken, and restarting services often makes it worse because they come back to a backlog of retries. The exits are shedding load, opening circuits or draining the retry backlog, and all three must be designed in beforehand.
-
-### What AWS provides, and what it does not
-
-AWS supplies the building blocks: SQS and SNS for buffering and isolation, dead-letter queues for poison messages, Step Functions for durable multi-step state with declarative retries, SDK retry modes and mesh proxies for backoff and circuit breaking, Lambda reserved concurrency for bulkheads, and FIS for fault injection.
-
-What AWS does **not** provide is the design. Retries at three layers, no timeouts, a DLQ nobody owns: the platform supports all of these at no extra cost. AWS makes correct designs cheap; it does not make incorrect ones impossible.
+- **Partial and ambiguous failure.** A distributed system is rarely simply up or down, and a timed-out call leaves the caller unsure whether the effect happened, which only idempotency resolves.
+- **Gray failure.** A degraded component can keep passing its health checks while users suffer.
+- **Correlated and cascading failure.** Redundancy assumes independence that a shared AZ, dependency or deployment can break, and one overloaded service can overload the next faster than humans react.
+- **Metastable failure.** Timeouts trigger retries that sustain high load after the original trigger has gone, so the system stays broken until load is shed, circuits open or the retry backlog drains.
+- **Poison messages.** One malformed item can block a queue indefinitely unless a dead-letter path removes it.
+- **AWS supplies building blocks, not the design.** SQS, SNS, DLQs, Step Functions, SDK retry modes, reserved concurrency and FIS make correct designs cheap, but they equally support retries at three layers, missing timeouts and unowned DLQs.
 
 ## Core Concepts
 
@@ -401,43 +385,19 @@ A design missing a group fails in a characteristic way: no absorbers, it falls o
 | **Cell-based architecture** | Independent stacks, each serving a shard of customers |
 | **Shuffle sharding** | Each customer gets a random subset of workers, so no two share all of them |
 
-## Design Considerations
-
-```mermaid
-flowchart TD
-    A["Does the caller need the answer<br/>before replying to its own caller?"] -->|"no"| B["Make it asynchronous:<br/>SQS or EventBridge"]
-    A -->|"yes"| C["Timeout below the caller's<br/>remaining budget"]
-    C --> D["Idempotent, or carries<br/>an idempotency key?"]
-    D -->|"no"| E["Do not retry; fix idempotency first"]
-    D -->|"yes"| F["Retry with backoff and FULL jitter,<br/>at ONE layer, under a budget"]
-    F --> G["Unreliable, third-party<br/>or expensive dependency?"]
-    G -->|"yes"| H["Circuit breaker with half-open state<br/>plus an agreed fallback"]
-    G -->|"no"| I["Network-layer outlier detection"]
-    B --> J["One queue per consumer,<br/>DLQ alarmed and owned"]
-    J --> N["Multi-step process across services?"]
-    H --> N
-    I --> N
-    N -->|"yes"| O["Step Functions saga<br/>with Retry, Catch, compensations"]
-    N -->|"no"| P["Verify with AWS FIS"]
-    O --> P
-```
-
-Every lever has a cost: isolation adds components, a fallback is a rarely run code path that must be tested, shedding rejects real users, and compensation windows are visible to customers. These are business decisions as much as technical ones.
-
 ## AWS Best Practices
 
-- **Operational excellence:** every DLQ has a named owner, a depth alarm and a tested redrive. Write runbooks as Systems Manager Automation documents triggered from alarms. Run game days regularly and record results. Alarms and incident response are covered in [7.3](../unit7/topic3.md).
-- **Reliability:** a timeout on every outbound call; retries at one layer with full jitter under a budget; idempotent consumers; a DLQ on every queue and event target; multiple AZs, verified with FIS.
-- **Security:** scope the FIS role to a chaos tag; treat DLQs and execution history as data stores (same encryption and access as the source); fail closed for security dependencies.
-- **Cost and sustainability:** deadline propagation, breakers and budgets avoid wasted work. A retry storm multiplies invocations and reads while delivering nothing.
+- **Operational Excellence:** give every DLQ a named owner, a depth alarm and a tested redrive procedure.
+- **Operational Excellence:** write runbooks as Systems Manager Automation documents triggered from alarms, and run regular game days with recorded results ([7.3](../unit7/topic3.md)).
+- **Reliability:** set a timeout on every outbound call and retry at one layer only, with full jitter, under a retry budget.
+- **Reliability:** make every consumer idempotent and attach a DLQ to every queue and event target.
+- **Reliability:** run across multiple AZs and verify the assumption with FIS experiments rather than trusting it.
+- **Security:** scope the FIS role to a chaos tag, and protect DLQs and execution history with the same encryption and access controls as the source data.
+- **Cost Optimization and Sustainability:** use deadline propagation, circuit breakers and retry budgets to avoid work whose result nobody will use.
 
-## Operating It: Performance, Cost and Monitoring
+## Monitoring and Observability
 
-**Performance.** A timeout set from measured p99 cuts the long tail users feel, and an open breaker fails in microseconds instead of blocking a thread. Batch SQS reads only with `ReportBatchItemFailures` enabled. Use RDS Proxy and reserved concurrency so many small consumers cannot exhaust database connections, and add jitter to cache TTLs so mass expiry does not stampede the origin.
-
-**Cost.** Most mechanisms in this chapter are free or nearly so: a DLQ, a correct visibility timeout, partial batch responses, jitter, reserved concurrency. The expensive ones are redundancy and pre-provisioned capacity, and how much to buy is a business decision about which failures to survive. FIS is charged per action-minute, which encourages short, targeted experiments. Step Functions Standard is charged per transition, including retries.
-
-**Monitoring.** A breaker that opens invisibly or a DLQ nobody watches creates confidence without evidence. Metric and tracing fundamentals are in [7.1](../unit7/topic1.md).
+A breaker that opens invisibly or a DLQ nobody watches creates confidence without evidence. Metric and tracing fundamentals are in [7.1](../unit7/topic1.md).
 
 | Metric | Source | What it tells you |
 |---|---|---|
@@ -450,55 +410,6 @@ Every lever has a cost: isolation adds components, a fallback is a rarely run co
 | Error-budget burn rate | CloudWatch Application Signals | User harm; the right trigger for paging |
 
 Propagate trace IDs through asynchronous hops (SQS message attributes, EventBridge event detail), or the service map breaks exactly where you need it.
-
-## Integration with Other AWS Services
-
-```mermaid
-flowchart TD
-    U["Users"] --> CF["CloudFront and WAF: rate-based shedding"]
-    CF --> AG["API Gateway: throttling"]
-    AG --> ORD["Orders service, three AZs"]
-    ORD -->|"timeout, breaker, fallback"| FRD["Third-party fraud API"]
-    ORD --> AUR["Aurora via RDS Proxy"]
-    AUR --> EB["Outbox to Amazon EventBridge"]
-    EB --> Q1["SQS shipping queue"]
-    EB --> Q2["SQS analytics queue"]
-    Q1 --> SHIP["Shipping consumer<br/>reserved concurrency 20"]
-    Q2 --> ANA["Analytics consumer<br/>reserved concurrency 5"]
-    Q1 --> D1["shipping-dlq + alarm + owner"]
-    EB --> SFN["Step Functions saga:<br/>Retry with FULL jitter, Catch to compensations"]
-    FIS["AWS FIS"] -.->|"AZ power interruption,<br/>API latency injection"| ORD
-    CWA["CloudWatch alarms on customer harm"] -.->|"stop conditions"| FIS
-```
-
-The front end absorbs load, separate queues with their own reserved concurrency isolate consumers (an analytics backlog cannot affect shipping), owned DLQs and saga compensations recover, and breaker state shared through DynamoDB contains the one synchronous external call to the fraud API. FIS tests the arrangement using the same customer-harm alarms as stop conditions.
-
-## Common Architecture Patterns
-
-| Pattern | Failure it handles | AWS implementation |
-|---|---|---|
-| Timeout, retry, breaker, bulkhead | Slow or failing dependency | Mesh or Service Connect, SDK retry modes, reserved concurrency |
-| Queue-based load levelling | Spiky producer, slower consumer | SQS between services; scale on backlog per consumer |
-| Fan-out with per-consumer queues | One slow consumer affecting others | SNS or EventBridge to one SQS queue per consumer |
-| Saga | Partial completion of a cross-service process | Step Functions `Retry` and `Catch` ([above](#saga-with-compensating-transactions)) |
-| Transactional outbox | State change and event diverging | See [4.1](topic1.md#transactional-outbox-and-change-data-capture) |
-| DLQ with owned redrive | Poison messages | `maxReceiveCount`, DLQ, alarm, redrive |
-| Graceful degradation | Non-critical dependency down | Fallbacks switched by AWS AppConfig feature flags |
-| Static stability | Control plane unavailable during failure | Pre-provisioned capacity across AZs |
-| Cells and shuffle sharding | One customer's workload harming all | Independent stacks per customer shard |
-| Chaos engineering | Untested recovery paths | AWS FIS experiments and game days |
-
-### Timeout, retry with backoff and jitter, circuit breaker, bulkhead
-
-Together these make a failure **bounded and local**. Implement each exactly once per call path: in the network layer ([4.2](topic2.md)), the SDK or the application, not in two of them. Duplicating them is how retry storms start.
-
-### Dead-letter queue with owned redrive
-
-Every consumer has a DLQ. Every DLQ has a depth alarm, a named owning team, 14-day retention and a tested redrive procedure. This turns a poison message from an outage into a ticket. SQS redrive mechanics are in [6.3](../unit6/topic3.md).
-
-### Cell-based architecture and shuffle sharding
-
-**Cells** are independent copies of the stack, each serving a subset of customers, so a failure affects one cell rather than everyone. **Shuffle sharding** gives each customer a random subset of workers, so one customer's poison workload degrades only a small, overlapping fraction of others. Large AWS services are built this way.
 
 ## Industry Use Cases
 
@@ -519,41 +430,6 @@ Every consumer has a DLQ. Every DLQ has a depth alarm, a named owning team, 14-d
 | Bulkheads make multi-tenant and mixed workloads safe | Redundancy assumes independence you may not have (shared pipeline, config, cache) |
 | Chaos engineering turns belief into evidence | Chaos experiments carry real risk and need observability and stop conditions |
 | Most mechanisms cost almost nothing | Redundancy and pre-provisioned capacity cost money continuously |
-
-## Common Mistakes
-
-### Beginner Mistakes
-
-| Mistake | Why it is wrong | Do instead |
-|---|---|---|
-| No timeout on an outbound call | One slow dependency exhausts every thread | Timeout on every call, from measured p99 |
-| Retrying non-idempotent writes | Double orders and charges | Idempotency keys first, then retry |
-| Retrying 4xx errors | Wastes capacity; delays the real error | Retry only 5xx, 429, timeouts, connection errors |
-| Retries at several layers | Up to 27 requests per logical call | One layer only; disable the rest |
-| No dead-letter queue | One poison message stalls the consumer (a whole group on FIFO) | DLQ on every queue, alarmed and owned |
-| Visibility timeout below processing time | Random-looking duplicates | Above p99; six times the Lambda timeout |
-| Assuming FIFO or ordering removes the need for idempotency | FIFO deduplicates only within a window; standard queues are best-effort order | Idempotent consumers everywhere |
-| No `ReportBatchItemFailures` | One bad message redelivers the batch | Enable partial batch responses |
-| SNS directly to Lambda for important work | No buffer, DLQ or redrive | SNS to SQS to Lambda |
-| Breaker with no half-open state | Never recovers on its own | All three states |
-| Expecting an AWS circuit breaker service, or confusing it with the ECS deployment circuit breaker | Neither protects the request path | Breaker in the mesh, SDK or workflow state |
-| `States.ALL` as the first retrier | Swallows every specific policy | Specific errors first, `States.ALL` last |
-| Assuming Step Functions retries are jittered by default | `JitterStrategy` defaults to none | Set `JitterStrategy: FULL` explicitly |
-| Idempotency key generated inside the handler | Each delivery gets a new key | Caller-supplied, stable key |
-
-### Production Mistakes
-
-| Mistake | Consequence | Remedy |
-|---|---|---|
-| DLQ with no alarm and no owner | Silent loss of business events | Alarm at depth above zero; owner; tested redrive |
-| No reserved concurrency on batch functions | User-facing functions throttle | Reserved concurrency on non-interactive functions |
-| Scaling consumers on raw queue depth | Oscillating scaling | Backlog per consumer |
-| Assuming multi-AZ means surviving an AZ loss | Failover time and correlated dependencies decide that | Test with FIS AZ power-interruption scenarios |
-| Chaos experiment without stop conditions, or alarming on the injected fault | A scheduled outage, or false confidence | Alarms on customer harm |
-| Chaos experiment without telling on-call | A real concurrent incident is misattributed | Announce; use change management |
-| FIFO queue with a single message group | One bad message blocks everything | Group by customer or entity |
-| Non-idempotent compensation | A retried refund pays twice | Conditional writes on compensations |
-| No reconciliation jobs | Divergence found months later by a customer | Scheduled comparison with an alarm |
 
 ## Summary
 

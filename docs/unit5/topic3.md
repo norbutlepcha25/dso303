@@ -28,46 +28,12 @@ The three tools this chapter covers occupy different positions:
 
 ## Why This Service or Concept Exists
 
-### The problem: manual infrastructure does not survive contact with reality
-
-Four failures recur, and they are the whole case for IaC.
-
-**Environments diverge.** Staging and production are built by hand months apart, by different people. They differ in ways nobody documented, so "it worked in staging" stops being evidence. This is the same defect as [chapter 5.1](topic1.md)'s per-environment builds, one layer down  and it is worse, because infrastructure differences are harder to see than artefact differences.
-
-**Nothing is reproducible.** An account is lost, a Region becomes unavailable, or a new customer requires an isolated deployment. Rebuilding requires reconstructing decisions from memory and from resources that no longer exist. Organisations discover this precisely when they have the least time.
-
-**Changes are unreviewable and untraceable.** A console change leaves a CloudTrail record of an API call, which tells you what happened but not why, not what else was considered, and not who agreed. There is no diff, no reviewer, and no revert.
-
-**Drift accumulates silently.** Someone widens a security group during an incident. Someone raises a limit to unblock a demo. Nobody reverts either. Six months later the environment differs from every document describing it, and nobody knows in how many ways.
-
-IaC addresses all four with one mechanism: **the file is the source of truth, and changes to infrastructure are changes to the file**  reviewed like code, versioned like code, tested like code, and applied by a machine.
-
-### The problem: the API is imperative and humans are not reliable state machines
-
-AWS APIs are imperative: create this, modify that, delete the other. To reach a desired configuration you must know the current one, compute the difference and issue the right calls in the right order  including the order dependencies, such as a subnet requiring a VPC, and the awkward ones, such as replacing a resource that others reference.
-
-A declarative engine inverts this. You describe the **desired state**; the engine determines current state, computes the difference, orders the operations by dependency, and applies them. That gives you two properties you cannot practically hand-write:
-
-- **Idempotency**: applying the same definition repeatedly produces the same result. Running it twice is safe, which means automation can retry.
-- **Convergence**: whatever the current state, the engine moves toward the declared state  so a partially-applied change can simply be re-applied.
-
-These are the same properties that make Kubernetes controllers work ([chapter 3.1](../unit3/topic1.md)) and that make GitOps reconciliation possible ([chapter 5.2](topic2.md)). IaC is the same idea applied to cloud resources, and recognising it as one idea rather than three is worth more than memorising any individual tool's syntax.
-
-### What AWS provides, and what it does not
-
-| Concern | Manual / scripted | With IaC |
-|---|---|---|
-| Reproducing an environment | Reconstruct from memory and documentation | Apply the same definition with different parameters |
-| Knowing what exists | Click through consoles across Regions | Read the repository |
-| Reviewing a change | A screenshot in a ticket, if you are lucky | A pull request with a diff and a plan |
-| Ordering of operations | Hand-maintained scripts that break when resources change | A dependency graph computed by the engine |
-| Partial failure | Resources half-created, cleaned up by hand | Automatic rollback (CloudFormation) or a re-runnable plan (Terraform) |
-| Detecting manual changes | Nothing detects them | Drift detection, or continuous reconciliation |
-| Deleting an environment cleanly | Hunt for orphans for weeks | Delete the stack; dependencies are resolved in reverse |
-| Multi-account, multi-Region rollout | Repeat by hand, accept divergence | StackSets, or a Terraform module applied per account |
-| Auditing who changed what and why | CloudTrail API calls with no intent | Git history with a reviewer and a message |
-
-What no tool provides is **the discipline**. Every failure in this chapter  drift, stuck stacks, a state file in someone's home directory, a `terraform destroy` on production  is fully supported by the tooling. IaC makes the correct approach cheap; it does not make the incorrect one impossible.
+- **Environments diverge:** staging and production built by hand months apart differ in undocumented ways, so "it worked in staging" stops being evidence.
+- **Nothing is reproducible:** rebuilding a lost account or a new Region from memory fails precisely when there is least time to do it.
+- **Console changes are unreviewable:** CloudTrail records what API call was made, but not why, who agreed, or how to revert it.
+- **Drift accumulates silently:** emergency changes that are never reverted leave the environment different from every document describing it.
+- **Imperative APIs demand a reliable state machine:** a declarative engine computes and orders the changes itself, giving idempotency and convergence that hand-written scripts cannot practically provide.
+- **The tooling does not supply the discipline:** IaC makes the correct approach cheap, but only if the file becomes the single way infrastructure changes.
 
 ---
 
@@ -307,7 +273,7 @@ flowchart LR
 
 The value concentrates in **L2**, and specifically in the `grant*` methods: `bucket.grantRead(lambdaFunction)` writes the correct IAM policy, on the correct principal, with the correct resource ARNs including the `/*` suffix people forget. A very large share of real-world IAM defects are policies written by hand; this removes that category.
 
-**Important features.** `constructs` as reusable, testable, publishable units  the abstraction that made the logistics migration in the motivation section possible. **Aspects**, which visit every node in the tree and can enforce or mutate  the mechanism behind `cdk-nag`'s security rules. **Assets**, bundling and uploading Lambda code and Docker images automatically. **Context and environment-aware synthesis.** **`cdk diff`**, which shows the change-set difference before deploying. **CDK Pipelines**, a self-mutating CodePipeline construct. **`assertions`** for unit testing the synthesised template. And **`cdk import`** and **`cdk migrate`** for bringing existing resources or templates under CDK management.
+**Important features.** `constructs` as reusable, testable, publishable units  the abstraction that lets one change to a shared construct reach every service that uses it. **Aspects**, which visit every node in the tree and can enforce or mutate  the mechanism behind `cdk-nag`'s security rules. **Assets**, bundling and uploading Lambda code and Docker images automatically. **Context and environment-aware synthesis.** **`cdk diff`**, which shows the change-set difference before deploying. **CDK Pipelines**, a self-mutating CodePipeline construct. **`assertions`** for unit testing the synthesised template. And **`cdk import`** and **`cdk migrate`** for bringing existing resources or templates under CDK management.
 
 **Bootstrapping** is a prerequisite that trips everyone once: `cdk bootstrap` provisions a **CDKToolkit** stack in each target account and Region containing an S3 bucket and ECR repository for assets, plus IAM roles used for deployment. Without it, `cdk deploy` fails. The bootstrap roles are also a security consideration in their own right: the default deployment role is powerful, and in a multi-account setup you should understand which roles trust which accounts.
 
@@ -522,119 +488,16 @@ Read structurally, these divide into three groups. The **describers**  templates
 
 ---
 
-## Design Considerations
-
-```mermaid
-flowchart TD
-    A["Is infrastructure ever changed<br/>outside the tool?"] -->|"yes"| B["Remove human write access.<br/>Detection alone will not fix drift"]
-    A -->|"no"| C["Is the plan or change set reviewed<br/>separately from the code?"]
-    C -->|"no"| D["'Replacement: True' reaches<br/>production unread"]
-    C -->|"yes"| E["Do stateful resources have<br/>Retain/Snapshot on BOTH policies?"]
-    E -->|"no"| F["A routine update can<br/>destroy the database"]
-    E -->|"yes"| G["Are stacks split by lifecycle<br/>and blast radius?"]
-    G -->|"no"| H["Every app change risks the VPC"]
-    G -->|"yes"| I["Multi-cloud or non-AWS<br/>providers required?"]
-    I -->|"yes"| J["Terraform / OpenTofu"]
-    I -->|"no"| K["Does the team want abstraction,<br/>types and unit tests?"]
-    K -->|"yes"| L["AWS CDK"]
-    K -->|"no"| M["CloudFormation, with modules"]
-```
-
-| Quality | What it means here | Design levers | The trade-off you accept |
-|---|---|---|---|
-| **Reproducibility** | A new environment from nothing | Parameterised definitions, no manual steps, no hand-created dependencies | Everything must be in code, including the awkward parts |
-| **Blast radius** | What one bad apply can affect | Stack and module boundaries, separate accounts, stack policies | More units to coordinate; cross-unit references add coupling |
-| **Reviewability** | Whether a human can judge a change | Small stacks, plan review, policy checks, readable abstractions | CDK abstraction can hide consequence; the diff must still be read |
-| **Drift resistance** | Whether reality stays aligned | Remove write access, drift detection, Config rules, Hooks | Break-glass access becomes a designed, audited path rather than a habit |
-| **Recoverability** | Rebuilding after loss | IaC coverage of everything, tested restore, state backups | Coverage requires discipline where the console is faster |
-| **Safety of data** | Whether an update can destroy it | Deletion and update-replace policies, stack policies, `prevent_destroy` | Protected resources need deliberate handling when they genuinely must change |
-| **Change velocity** | How fast infrastructure changes safely | Automation, modules, small units | More gates and smaller units mean more coordination per change |
-| **Portability** | Whether the definition survives a platform change | Terraform's provider model; avoiding features unique to one tool | Abstraction over clouds usually costs access to the best of each |
-| **Operational complexity** | What an engineer faces when it breaks | Fewer tools, consistent patterns, good error paths | Every additional tool is another failure mode and another thing to learn |
-
-!!! danger "The failure mode that makes all of this pointless"
-
-    **Partial coverage.** An estate where 70 per cent is in code and 30 per cent was created by hand has the costs of IaC and few of its benefits: you still cannot rebuild, still cannot enumerate, and the hand-made resources are exactly the ones nobody documented. Worse, the IaC-managed resources often *depend* on the hand-made ones, so the templates only work in an account that already has the undocumented parts. Coverage is not a nice-to-have percentage; it is the property that makes the claim "we can rebuild this" either true or false, and it has no partial credit.
-
----
-
 ## AWS Best Practices
 
-### Operational Excellence
-
-Keep infrastructure definitions in version control alongside  or beside  the application they support, and apply them through the same reviewed pipeline path that [chapter 5.2](topic2.md) built for application code. Split stacks by lifecycle and blast radius so routine application changes cannot touch the network. Review the **plan or change set**, not only the diff, and make that a named step with a named approver rather than something that happens if someone thinks of it. Run drift detection on a schedule and alarm on the result, treating a drift finding as an incident to investigate rather than a report to file. Tag everything through a single mechanism  CDK Aspects, Terraform `default_tags`, or a Stack-level tag  so cost attribution and ownership are properties of the system rather than of people's memory. And keep a tested rebuild: an environment that has never been created from its definition is a hypothesis.
-
-### Security
-
-Never put secrets in templates, configuration or variables files; reference them from Secrets Manager or Parameter Store, and treat the **Terraform state file as a secret store** with encryption, versioning and tight access control. Run policy as code in the pipeline  `cfn-guard`, `cdk-nag`, Checkov or OPA  so that encryption, public-access and tagging rules are enforced uniformly rather than at a reviewer's discretion, and use **CloudFormation Hooks** where you want prevention rather than detection. Give CloudFormation a **stack service role** so a human with narrow permissions can trigger a privileged deployment without holding those permissions themselves. Restrict infrastructure write access to the deployment role and make human access read-only with a time-bounded, alarmed break-glass path. And review what the CDK bootstrap roles trust in a multi-account setup, because they are among the most powerful roles in the organisation and they are created by a command most people run without reading.
-
-### Reliability
-
-Set `DeletionPolicy` and `UpdateReplacePolicy`  or `RemovalPolicy` and `prevent_destroy`  on every stateful resource, and verify the defaults rather than assuming them, since several CDK L2 constructs default to destruction. Use stack policies or `prevent_destroy` on databases so that an unintended replacement fails the plan rather than executing it. Read every plan for replacement markers. Prefer `create_before_destroy` where a replacement would otherwise cause an availability gap. Keep foundation stacks small, protected and rarely changed. Test the disaster path: deploy the whole estate into an empty account periodically, because that is the only way to discover the undocumented manual dependency before you need it to not exist.
-
-### Performance Efficiency
-
-Split stacks by lifecycle, avoid defensive `DependsOn`, and cache providers and modules in CI; the details are in [Performance Optimization](#performance-optimization).
-
-### Cost Optimization
-
-Treat the definition as a cost document that is reviewed in the pull request; the cost dimensions and practices are in [Cost Optimization](#cost-optimization).
-
-### Sustainability
-
-Right-sizing expressed in code is right-sizing that persists, because it is reviewed and reapplied rather than drifting upward through successive incidents. Automatically destroying ephemeral environments removes idle capacity that otherwise runs indefinitely. And consolidating duplicated stacks into shared modules reduces both the resources provisioned and the review effort spent on each of them.
-
----
-
-## Security Considerations
-
-**Secrets in IaC are a permanent disclosure.** A password committed to a template is in Git history forever, readable by everyone with repository access, and typically also visible in the CloudFormation console's parameter list. Removing it from the current file removes nothing. The patterns that work: generate the secret in Secrets Manager and reference it, use dynamic references so the value resolves at deployment, and grant the runtime identity read permission rather than passing the value through the deployment at all.
-
-**The Terraform state file is the most under-protected secret store in most organisations.** It contains resource attributes, and those include generated passwords, private keys and connection strings  including secrets you never wrote into your configuration. `sensitive = true` redacts a value from console output and does nothing to what is stored. The state bucket needs KMS encryption, versioning, restrictive policies, and access logging, and it should be treated in a security review exactly as you would treat a database of credentials.
-
-**The deployment role is the most powerful identity in the account.** It can create IAM roles, modify networking and delete data. It should be assumable only by the pipeline, scoped as tightly as the work allows, and monitored  any use of it outside a pipeline execution should alarm. The same applies to the **CDK bootstrap roles**, which are created by a single command and are rarely reviewed afterwards despite being exactly this kind of identity.
-
-**Policy as code is the only control that scales.** A reviewer will not consistently notice an unencrypted volume in a 400-line diff at 5 p.m. A rule will, every time, identically. Run `cfn-guard`, `cdk-nag`, Checkov or OPA in the pipeline and fail the build; use **CloudFormation Hooks** when the requirement is that a non-compliant resource cannot be created at all, even outside the pipeline.
-
-**Drift is a security problem.** The retail example in the motivation section  a security group open to the internet for eight months while the template said otherwise  is the canonical case. Detection is necessary and insufficient; the structural answer is that humans do not have write access to production infrastructure, so drift has no route in.
-
-**IaC can encode a privilege escalation.** A template creating an IAM role with `AdministratorAccess`, applied by a pipeline that any developer can trigger through a merge, is a path from repository write access to account administration. Policy checks should refuse over-broad policies, and **IAM permission boundaries** should limit what roles created by the pipeline can themselves do.
-
-**A custom resource runs your code with the deployment role's permissions.** A Lambda-backed custom resource is arbitrary code invoked during provisioning, with whatever permissions its execution role carries. It deserves the same scrutiny as a build script  [chapter 5.1](topic1.md)'s argument about the build role, arriving in a different costume.
-
----
-
-## Performance Optimization
-
-**Split stacks.** Deployment time grows with resource count, and a stack's critical path is the longest dependency chain in it. A 400-resource stack that takes 25 minutes usually contains three or four independent subgraphs that would deploy concurrently as separate stacks  and separating them also reduces blast radius, which is the rare optimisation that improves safety at the same time.
-
-**Remove unnecessary `DependsOn`.** Every explicit dependency serialises work the engine would otherwise parallelise. Implicit dependencies created by `Ref` and `Fn::GetAtt` already capture the real ordering; `DependsOn` is for the cases where a genuine ordering requirement is invisible to the graph, and it is routinely added defensively where no requirement exists.
-
-**Keep Terraform configurations small enough to refresh quickly.** `plan` queries the current state of every managed resource, so a configuration with 2,000 resources spends most of its time on API calls. Splitting by lifecycle  one state for the network, one per application  usually reduces plan time by an order of magnitude and improves the blast radius at the same time. `-refresh=false` skips the refresh in tight development loops, but use it deliberately: it also hides drift.
-
-**Cache providers, modules and CDK dependencies in CI.** `terraform init` downloading providers on every run, or `npm ci` reinstalling the CDK library, is often the largest single component of an infrastructure pipeline's duration.
-
-**Be careful with wait conditions and custom resources.** A `CreationPolicy` waiting for a signal that never arrives, or a custom resource that fails to respond, blocks a stack until its timeout  potentially hours. Set timeouts deliberately and ensure custom resources signal on failure paths as well as success paths, which is the bug that causes most of these.
-
-**For CDK, watch synthesis time.** A large app with expensive context lookups can take minutes to synthesise before anything is deployed. Cache `cdk.context.json` in the repository so AZ and AMI lookups are not repeated, and remember that an uncached lookup in a pipeline is both slow and a source of non-determinism.
-
----
-
-## Cost Optimization
-
-| What you pay for | Dimension | Frequently overlooked |
-|---|---|---|
-| **CloudFormation** | Free for AWS resource types | Third-party registry handler operations are charged |
-| **AWS CDK** | Free | The bootstrap S3 bucket and ECR repository accumulate assets from every deployment |
-| **Terraform CLI / OpenTofu** | Free | HCP Terraform and Terraform Enterprise are charged per managed resource, and free-tier caps have changed |
-| **Terraform state backend** | S3 storage and requests, KMS requests | Versioning retains every state revision indefinitely without a lifecycle rule |
-| **The resources themselves** | Everything you declare | **The real cost.** IaC is where it becomes reviewable |
-| **Ephemeral environments** | Full environment cost while they exist | Environments created by automation and destroyed by nobody |
-| **Over-provisioned non-production** | Production-sized instances in dev | A copied template with the sizing parameter left at its default |
-| **Idle infrastructure** | NAT gateways, load balancers, provisioned capacity | Declared once for a workload that has since gone away |
-| **CDK asset accumulation** | S3 and ECR storage in the bootstrap stack | `cdk gc` exists for this and is rarely run |
-
-**The structural lesson** is that IaC does not reduce cost by itself  it makes cost **legible and reviewable**. A pull request adding three NAT gateways is the cheapest possible moment to ask whether one would do, and it is the only moment at which the answer changes the outcome. Organisations that get cost benefit from IaC do so by treating the definition as a cost document: mappings that genuinely size non-production smaller, tags applied by one mechanism so showback works, automatic destruction of ephemeral environments, and a habit of asking cost questions in review rather than in the monthly bill meeting.
+- **Operational Excellence:** keep infrastructure definitions in version control and apply them through the same reviewed pipeline path that [chapter 5.2](topic2.md) built for application code.
+- **Operational Excellence:** review the plan or change set as a named step with a named approver, and run scheduled drift detection with an alarm on the result.
+- **Security:** never place secrets in templates or variables files, and treat the Terraform state file as a secret store with encryption, versioning and tight access control.
+- **Security:** enforce policy as code (`cfn-guard`, `cdk-nag`, Checkov or OPA) in the pipeline, and give CloudFormation a stack service role so humans need not hold deployment permissions.
+- **Reliability:** set `DeletionPolicy` and `UpdateReplacePolicy` (or `RemovalPolicy` and `prevent_destroy`) on every stateful resource, and read every plan for replacement markers.
+- **Reliability:** periodically deploy the whole estate into an empty account, because an environment never created from its definition is only a hypothesis.
+- **Performance Efficiency:** split stacks by lifecycle and blast radius, avoid defensive `DependsOn`, and cache providers and modules in CI.
+- **Cost Optimization and Sustainability:** review the definition as a cost document in the pull request, tag everything through one mechanism, and destroy ephemeral environments automatically.
 
 ---
 
@@ -678,102 +541,6 @@ flowchart LR
 
 ---
 
-## Integration with Other AWS Services
-
-| Service | Why it integrates with IaC |
-|---|---|
-| **AWS CodePipeline and CodeBuild** | Applying infrastructure changes through the same reviewed path as application code |
-| **AWS CDK Pipelines** | A self-mutating pipeline that deploys the CDK app, including changes to itself |
-| **AWS Secrets Manager and Parameter Store** | Where secrets live; referenced via dynamic references rather than embedded |
-| **AWS Config** | Continuous compliance of live resources, and the inventory for measuring IaC coverage |
-| **AWS Security Hub** | Aggregated findings from policy checks and Config rules |
-| **CloudFormation Hooks** | Preventive validation that blocks non-compliant resources at provisioning time |
-| **AWS Organizations and SCPs** | The outer boundary within which any IaC change must remain |
-| **AWS Control Tower** | Landing zones and guardrails, themselves deployed as StackSets |
-| **AWS Service Catalog** | Curated, pre-approved templates that teams may self-serve |
-| **Amazon EventBridge** | Stack and drift events for notification and automated response |
-| **AWS CloudTrail** | Who changed infrastructure, with which identity  the drift detector of last resort |
-| **AWS Systems Manager** | Parameter Store for configuration; Automation runbooks triggered by stack events |
-| **Amazon S3 and AWS KMS** | Terraform state storage, encryption and versioning |
-| **Amazon ECS, EKS and Lambda** | The workloads being provisioned; also CDK asset targets |
-| **AWS Controllers for Kubernetes (ACK)** | Managing AWS resources from Kubernetes manifests  an EKS Capability since November 2025 |
-| **AWS Resource Groups and Tag Editor** | Finding and grouping what IaC created, provided tagging is consistent |
-| **AWS Backup** | The restore path for data that deletion policies protected |
-
-```mermaid
-flowchart TD
-    DEV["Engineer"] --> PR["Pull request"]
-    PR --> REV["Review: INTENT"]
-    REV --> CP["CodePipeline"]
-    CP --> LINT["cfn-lint / terraform validate"]
-    CP --> POL["cfn-guard / cdk-nag / Checkov"]
-    CP --> UT["Unit and snapshot tests<br/>on the synthesised template"]
-    POL --> CS["Change set / saved plan"]
-    CS --> APV["Approval: CONSEQUENCE<br/>(look for Replacement: True)"]
-    APV --> DEPLOY["Apply as the DEPLOYMENT ROLE"]
-    DEPLOY --> AWS["AWS resources"]
-    HOOK["CloudFormation Hooks"] -.->|"prevent non-compliant<br/>resources at creation"| AWS
-    SCP["Organizations SCPs"] -.->|"outer boundary"| AWS
-    AWS --> CONF["AWS Config rules"]
-    CONF --> SH["Security Hub"]
-    AWS --> DD["Scheduled drift detection"]
-    DD --> ALM["Alarm: drift detected"]
-    CT["CloudTrail"] -.->|"change by a non-pipeline identity"| ALM
-    ALM --> ONCALL["On-call"]
-```
-
-Read architecturally, the diagram shows defence in depth around a single claim: that the repository describes reality. **Before provisioning**, linting, policy checks and unit tests judge the definition, and the approval step judges the *consequence* rather than the code  a distinction the two review boxes make deliberately. **At provisioning**, the deployment role is the only identity permitted to act, Hooks refuse non-compliant resources even when they arrive by another route, and SCPs bound everything. **After provisioning**, Config rules assess live resources independently of how they were created, drift detection compares reality against the declaration, and CloudTrail catches the one thing none of the others can: a change made outside the pipeline entirely. That last arrow is the most important in the diagram, because every control to its left can be bypassed by one person with console access and a good reason.
-
----
-
-## Common Architecture Patterns
-
-### Layered stacks by lifecycle
-
-Foundation (VPC, DNS, transit), shared services (clusters, databases), application (services, alarms)  each a separate stack with its own change frequency and blast radius. The single most valuable structural decision in this chapter, because it stops routine application changes from carrying network risk.
-
-### Pipeline-applied infrastructure
-
-Infrastructure changes reach production only through the reviewed pipeline path, applied by a deployment role no human holds. This converts "we have IaC" into "the file is the only way infrastructure changes", which is the property that actually delivers the benefits.
-
-### Plan review as a distinct gate
-
-A named step where a human reads the change set or saved plan, specifically for replacement markers. Distinct from code review because it answers a different question: not "is this what we meant?" but "what will this do to what exists?"
-
-### Policy as code in the pipeline
-
-`cfn-guard`, `cdk-nag`, Checkov or OPA failing the build on encryption, exposure and tagging violations. Uniform where reviewers are inconsistent, and it converts a security standard from a document into a mechanism.
-
-### Preventive controls with Hooks and SCPs
-
-Where detection is insufficient, prevent: Hooks refuse to provision non-compliant resources regardless of the route taken, and SCPs bound what any identity in the account can do. The layer that survives someone bypassing the pipeline.
-
-### StackSets for organisation-wide baselines
-
-One definition of logging, guardrails, baseline roles and Config rules, deployed to every account and Region, and automatically applied to new accounts. The pattern that makes an organisation's floor consistent without per-account work.
-
-### Shared constructs and modules
-
-One reviewed definition of "a service", instantiated many times  the pattern behind the logistics migration from 54,000 lines to 4,000. Its value is that a new requirement is one change and one review rather than sixty, and sixty reviews means one of them will be wrong.
-
-### Self-mutating pipelines (CDK Pipelines)
-
-A pipeline whose first stages update its own definition from source before running the rest, so a change to the delivery process follows the same review and promotion path as everything else. The infrastructure equivalent of [chapter 5.2](topic2.md)'s pipeline-as-code argument, taken to its conclusion.
-
-### Ephemeral environments from the same definition
-
-A pull request provisions a complete environment from the same code that builds production, destroyed on merge. High value for review  it moves review from reading a diff to using the change  and expensive if destruction is not automatic.
-
-### Importing an existing estate
-
-The **IaC generator** scans an account and produces templates; resource import brings them under stack management; Terraform's `import` blocks do the equivalent. The realistic path out of a hand-built estate, and the one that makes the fintech's eleven-month migration in the motivation section avoidable next time.
-
-### Immutable infrastructure
-
-Never modify a running resource; replace it from a new definition. The infrastructure counterpart to [chapter 5.1](topic1.md)'s immutable artefacts, and the reason containers and Auto Scaling groups pair naturally with IaC.
-
----
-
 ## Industry Use Cases
 
 | Sector | Requirement | How IaC meets it |
@@ -813,7 +580,7 @@ Never modify a running resource; replace it from a new definition. The infrastru
 
 ## Limitations
 
-**IaC is only as good as its coverage, and coverage has no partial credit**  see the partial-coverage warning under [Design Considerations](#design-considerations).
+**IaC is only as good as its coverage, and coverage has no partial credit.** An estate that is 70 per cent in code and 30 per cent hand-made still cannot be rebuilt or enumerated, and the templates often depend on exactly the hand-made resources nobody documented.
 
 **Drift is not solved by any tool.** Detection is retrospective and correction is manual; the structural fix described under [Drift](#drift)  removing human write access  is an organisational change rather than a technical one, and many organisations are unwilling to make it.
 
@@ -828,45 +595,6 @@ Never modify a running resource; replace it from a new definition. The infrastru
 **The abstraction layers can obscure the platform.** Engineers who learn CDK L3 constructs without CloudFormation are effective until something fails, at which point the error messages are CloudFormation's and the mental model is missing. This is a real training cost and it is the reason this chapter teaches CloudFormation first.
 
 **Licensing and governance are now live architectural variables.** Terraform's BSL change, the OpenTofu fork, the IBM acquisition and HCP's changing free-tier limits mean the tool choice has a commercial dimension that did not exist a few years ago. This is not a reason to avoid Terraform; it is a reason to treat the choice as revisable and to avoid depending on features unique to either fork.
-
----
-
-## Common Mistakes
-
-### Beginner Mistakes
-
-| Mistake | Why it is wrong | What to do instead |
-|---|---|---|
-| Secrets in templates or `.tfvars` | Permanently in Git history and in the console | Secrets Manager with dynamic references |
-| Applying without reading the change set or plan | `Replacement: True` on a database reaches production unread | Plan review as a named, separate gate |
-| No `DeletionPolicy` on stateful resources | Deleting the stack deletes the data | `Retain` or `Snapshot` on everything stateful |
-| `UpdateReplacePolicy` omitted | A forced replacement destroys data during a routine update | Set both policies, always |
-| Assuming CDK L2 defaults are safe | Several default to `RemovalPolicy.DESTROY` | Check the synthesised template; set `RETAIN` explicitly |
-| Terraform state stored locally | Lost with the laptop; no locking; duplicate environments | S3 backend with versioning, encryption and `use_lockfile` |
-| Workspaces as the only environment separation | A wrong workspace destroys production | Separate state, separate credentials, separate accounts |
-| One stack for everything | Every application change risks the VPC | Split by lifecycle and blast radius |
-| Unnecessary `DependsOn` | Serialises work the engine would parallelise | Rely on implicit references |
-| Unpinned providers or CDK versions | The same code produces different infrastructure | Pin, and commit lock files |
-| No `cdk diff` in the pipeline | Synthesis bugs deploy silently | `cdk diff` as a pipeline step |
-| Manual console changes to IaC-managed resources | Drift, and a rollback that may later fail | Change the definition; remove console write access |
-| Creating resources by hand "just this once" | The 30 per cent that blocks every future rebuild | Everything through the definition, without exception |
-| Not bootstrapping a CDK target account | `cdk deploy` fails confusingly | `cdk bootstrap` per account and Region |
-
-### Production Mistakes
-
-| Mistake | Consequence | Remedy |
-|---|---|---|
-| Humans with write access to production infrastructure | Drift accumulates; rollbacks eventually fail | Read-only human access; a time-bounded, alarmed break-glass path |
-| No drift detection | Divergence found by an auditor or an attacker | Scheduled detection with an alarm, treated as an incident |
-| No alarm on non-pipeline infrastructure changes | Every other control is bypassable and you never know | CloudTrail alarm on infrastructure mutations by non-deploy identities |
-| Terraform state bucket without versioning | A corrupted state is unrecoverable | Versioning, KMS encryption, tight access control, and tested restore |
-| Cross-stack exports used widely | An exported value cannot change while imported; stacks become undeletable | Prefer parameters or Parameter Store lookups for loose coupling |
-| Foundation and application in one stack | The network's blast radius is every deployment | Layer by lifecycle |
-| Custom resource without failure signalling | The stack hangs until timeout, potentially hours | Signal on every path; set a deliberate timeout |
-| The estate never rebuilt from its definition | The rebuild claim is untested and usually false | Periodically deploy the whole estate into an empty account |
-| `-target` used routinely | Parts of the estate are never converged | Emergency use only, followed by a full apply |
-| No permission boundary on pipeline-created roles | A merge can escalate to account administration | Permission boundaries plus policy checks on IAM resources |
-| CDK bootstrap trust relationships never reviewed | Among the most powerful roles in the organisation, unexamined | Review them as part of any multi-account design |
 
 ---
 
